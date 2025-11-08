@@ -3,20 +3,40 @@ from flask_cors import CORS
 import sys
 import os
 
-# Add backend to path
+# Add backend to sys.path
 backend_path = os.path.join(os.path.dirname(__file__), 'backend')
 if backend_path not in sys.path:
     sys.path.insert(0, backend_path)
 
-from database_models import DatabaseManager
+# Import with error handling
+try:
+    from database_models import DatabaseManager, SwapRate
+except ImportError as e:
+    raise RuntimeError(f"Could not import from backend/database_models.py: {e}")
 
-app = Flask(__name__)
+# Initialize Flask with explicit paths
+app = Flask(__name__,
+            template_folder='templates',
+            static_folder='static')
 CORS(app)
 
-# Database setup - ABSOLUTE PATH for Azure
-db_path = '/home/site/wwwroot/database/swap_rates.db'
+# Database setup - flexible path
+db_path = os.environ.get("RATEEDGE_DB_PATH") or '/home/site/wwwroot/database/swap_rates.db'
 os.makedirs(os.path.dirname(db_path), exist_ok=True)
+
+# Initialize database
 db = DatabaseManager(f'sqlite:///{db_path}')
+
+# Create tables if they don't exist
+try:
+    from sqlalchemy import inspect
+    inspector = inspect(db.engine)
+    if not inspector.has_table('swap_rates'):
+        print("Creating database tables...")
+        SwapRate.__table__.create(db.engine, checkfirst=True)
+        print("Tables created successfully")
+except Exception as e:
+    print(f"Database initialization: {e}")
 
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
@@ -37,14 +57,6 @@ def relative_value_page():
 def cross_currency_page():
     return render_template('cross_currency.html')
 
-@app.route('/analytics/butterfly')
-def butterfly_page():
-    return render_template('butterfly.html')
-
-@app.route('/analytics/yield-curve')
-def yield_curve_page():
-    return render_template('yield_curve.html')
-
 @app.route('/data/view')
 def data_view_page():
     return render_template('data_view.html')
@@ -53,125 +65,57 @@ def data_view_page():
 def data_import_page():
     return render_template('data_import.html')
 
-@app.route('/data/pivot')
-def data_pivot_page():
-    return render_template('pivot_table.html')
-
-@app.route('/analytics/charts')
-def analytics_charts_page():
-    return render_template('analytics_charts.html')
-
 # ===== API ROUTES =====
-@app.route('/api/health')
-def health():
-    return jsonify({'status': 'healthy', 'service': 'RateEdge API', 'version': '1.0'})
-
-@app.route('/api/statistics')
-def statistics():
-    try:
-        from database_models import SwapRate
-        from sqlalchemy import func
-        
-        total = db.session.query(SwapRate).count()
-        currencies = db.session.query(SwapRate.currency, func.count(SwapRate.id).label('count')).group_by(SwapRate.currency).all()
-        currency_counts = {curr: count for curr, count in currencies}
-        
-        min_date = db.session.query(func.min(SwapRate.date)).scalar()
-        max_date = db.session.query(func.max(SwapRate.date)).scalar()
-        
-        return jsonify({
-            'success': True,
-            'data': {
-                'total_records': total,
-                'currencies': len(currencies),
-                'currency_breakdown': currency_counts,
-                'date_range': {
-                    'start': str(min_date) if min_date else None,
-                    'end': str(max_date) if max_date else None
-                }
-            }
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/currencies')
-def get_currencies():
-    try:
-        from database_models import SwapRate
-        currencies = db.session.query(SwapRate.currency).distinct().all()
-        currency_list = sorted([c[0] for c in currencies])
-        return jsonify({'success': True, 'data': currency_list})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/tenors/<currency>')
-def get_tenors(currency):
-    try:
-        tenors = db.get_available_tenors(currency=currency)
-        return jsonify({'success': True, 'data': tenors})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/rates')
-def get_rates():
+@app.route('/api/data', methods=['GET'])
+def get_data():
     try:
         currency = request.args.get('currency')
         tenor = request.args.get('tenor')
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
-        limit = request.args.get('limit', 1000, type=int)
         
-        rates = db.get_rates(currency=currency, tenor=tenor, start_date=start_date, end_date=end_date)
-        rates = rates[:limit]
+        rates = db.get_rates(currency, tenor, start_date, end_date)
         
-        rate_data = []
-        for rate in rates:
-            rate_data.append({
-                'date': rate.date.isoformat(),
-                'currency': rate.currency,
-                'tenor': rate.tenor,
-                'floating_rate': rate.floating_rate,
-                'rate': float(rate.rate),
-                'rate_percent': float(rate.rate * 100)
-            })
+        data = [{
+            'id': r.id,
+            'date': r.date.isoformat(),
+            'currency': r.currency,
+            'tenor': r.tenor,
+            'floating_rate': r.floating_rate,
+            'rate': r.rate
+        } for r in rates]
         
-        return jsonify({'success': True, 'data': rate_data, 'count': len(rate_data)})
+        return jsonify({'success': True, 'data': data})
     except Exception as e:
+        print(f"Error in get_data: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route('/api/latest/<currency>')
-def get_latest(currency):
+@app.route('/api/stats', methods=['GET'])
+def get_stats():
     try:
-        rates = db.get_latest_rates(currency=currency)
-        
-        rate_data = []
-        for rate in rates:
-            rate_data.append({
-                'date': rate.date.isoformat(),
-                'currency': rate.currency,
-                'tenor': rate.tenor,
-                'floating_rate': rate.floating_rate,
-                'rate': float(rate.rate),
-                'rate_percent': float(rate.rate * 100)
-            })
-        
-        return jsonify({'success': True, 'data': rate_data, 'count': len(rate_data)})
+        stats = db.get_statistics()
+        return jsonify({'success': True, 'data': stats})
     except Exception as e:
+        print(f"Error in get_stats: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route('/api/forward-pricing', methods=['POST'])
-def forward_pricing():
+@app.route('/api/currencies', methods=['GET'])
+def get_currencies():
     try:
-        data = request.json
-        from swap_pricer import SwapPricer
-        pricer = SwapPricer(db)
-        result = pricer.calculate_forward_rate(
-            currency=data['currency'],
-            start_tenor=data['start_tenor'],
-            end_tenor=data['end_tenor']
-        )
-        return jsonify({'success': True, 'data': result})
+        currencies = db.get_currencies()
+        return jsonify({'success': True, 'data': currencies})
     except Exception as e:
+        print(f"Error in get_currencies: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/tenors', methods=['GET'])
+def get_tenors():
+    try:
+        currency = request.args.get('currency')
+        tenors = db.get_tenors(currency)
+        return jsonify({'success': True, 'data': tenors})
+    except Exception as e:
+        print(f"Error in get_tenors: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/import', methods=['POST'])
@@ -190,17 +134,63 @@ def import_data():
             file.save(tmp.name)
             tmp_path = tmp.name
         
+        print(f"Importing file: {file.filename} from {tmp_path}")
+        
         # Import the file
         from excel_importer import ExcelImporter
         importer = ExcelImporter(db)
         result = importer.import_from_excel(tmp_path)
         
         # Clean up temp file
-        import os
         os.unlink(tmp_path)
+        
+        print(f"Import result: {result}")
+        
+        # Verify data was saved
+        from database_models import SwapRate
+        count = db.session.query(SwapRate).count()
+        print(f"Total records in database after import: {count}")
         
         return jsonify({'success': True, 'data': result})
     except Exception as e:
+        print(f"Error in import_data: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/forward-rate', methods=['POST'])
+def calculate_forward_rate():
+    try:
+        data = request.json
+        currency = data.get('currency')
+        start_tenor = data.get('start_tenor')
+        end_tenor = data.get('end_tenor')
+        
+        from swap_pricer import ForwardSwapPricer
+        pricer = ForwardSwapPricer(db)
+        
+        result = pricer.calculate_forward_rate(currency, start_tenor, end_tenor)
+        
+        return jsonify({'success': True, 'data': result})
+    except Exception as e:
+        print(f"Error in calculate_forward_rate: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/analytics/spread', methods=['GET'])
+def get_spread_analysis():
+    try:
+        currency = request.args.get('currency')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        from analytics import SpreadAnalyzer
+        analyzer = SpreadAnalyzer(db)
+        
+        result = analyzer.analyze_spreads(currency, start_date, end_date)
+        
+        return jsonify({'success': True, 'data': result})
+    except Exception as e:
+        print(f"Error in get_spread_analysis: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.errorhandler(404)
@@ -212,5 +202,12 @@ def server_error(e):
     return jsonify({'success': False, 'error': 'Internal server error'}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    try:
+        port = int(os.environ.get('PORT', 8000))
+        print(f"Starting RateEdge on port {port}")
+        print(f"Database path: {db_path}")
+        app.run(host='0.0.0.0', port=port, debug=False)
+    except Exception as exc:
+        print(f"Failed to launch RateEdge: {exc}")
+        import traceback
+        traceback.print_exc()
