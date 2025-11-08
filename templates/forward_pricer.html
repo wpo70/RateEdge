@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block title %}Forward Swap Pricer - RateEdge{% endblock %}
+
+{% block content %}
+<div class="tool-page">
+    <div class="tool-header">
+        <h1>📊 Forward Swap Pricer</h1>
+        <p>Calculate forward swap rates using cubic spline interpolation</p>
+    </div>
+
+    <div class="tool-content">
+        <div class="input-section">
+            <h2>Calculate Forward Rate</h2>
+            
+            <div class="form-group">
+                <label for="currency">Currency</label>
+                <select id="currency" class="form-control">
+                    <option value="">Loading...</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="start-tenor">Start Tenor</label>
+                <select id="start-tenor" class="form-control">
+                    <option value="">Select currency first</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="end-tenor">End Tenor</label>
+                <select id="end-tenor" class="form-control">
+                    <option value="">Select currency first</option>
+                </select>
+            </div>
+
+            <button id="calculate-btn" class="btn-primary">Calculate Forward Rate</button>
+        </div>
+
+        <div class="result-section">
+            <h2>Results</h2>
+            <div id="result-container" class="result-box">
+                <p class="placeholder">Select parameters and click calculate to see results</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.tool-page { padding: 2rem; }
+.tool-header { margin-bottom: 2rem; text-align: center; }
+.tool-header h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
+.tool-header p { color: #666; font-size: 1.1rem; }
+.tool-content { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; max-width: 1400px; margin: 0 auto; }
+.input-section, .result-section { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+.form-group { margin-bottom: 1.5rem; }
+.form-group label { display: block; margin-bottom: 0.5rem; font-weight: 600; color: #333; }
+.form-control { width: 100%; padding: 0.75rem; border: 1px solid #ddd; border-radius: 8px; font-size: 1rem; }
+.form-control:focus { outline: none; border-color: #4f46e5; }
+.btn-primary { width: 100%; padding: 1rem; background: #4f46e5; color: white; border: none; border-radius: 8px; font-size: 1.1rem; font-weight: 600; cursor: pointer; }
+.btn-primary:hover { background: #4338ca; }
+.btn-primary:disabled { background: #ccc; cursor: not-allowed; }
+.result-box { min-height: 200px; padding: 1.5rem; background: #f9fafb; border-radius: 8px; }
+.placeholder { text-align: center; color: #999; padding: 3rem 0; }
+.result-item { margin-bottom: 1rem; padding: 1rem; background: white; border-radius: 8px; }
+.result-item strong { color: #4f46e5; }
+.error { color: #dc2626; padding: 1rem; background: #fee2e2; border-radius: 8px; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currencies = [];
+let tenors = {};
+
+// Load currencies
+async function loadCurrencies() {
+    try {
+        const response = await fetch('/api/currencies');
+        const data = await response.json();
+        if (data.success) {
+            currencies = data.data;
+            const select = document.getElementById('currency');
+            select.innerHTML = '<option value="">Select Currency</option>' +
+                currencies.map(c => `<option value="${c}">${c}</option>`).join('');
+        }
+    } catch (error) {
+        console.error('Error loading currencies:', error);
+    }
+}
+
+// Load tenors for selected currency
+async function loadTenors(currency) {
+    try {
+        const response = await fetch(`/api/tenors/${currency}`);
+        const data = await response.json();
+        if (data.success) {
+            tenors[currency] = data.data;
+            const startSelect = document.getElementById('start-tenor');
+            const endSelect = document.getElementById('end-tenor');
+            const options = data.data.map(t => `<option value="${t}">${t}</option>`).join('');
+            startSelect.innerHTML = '<option value="">Select Start Tenor</option>' + options;
+            endSelect.innerHTML = '<option value="">Select End Tenor</option>' + options;
+        }
+    } catch (error) {
+        console.error('Error loading tenors:', error);
+    }
+}
+
+// Calculate forward rate
+async function calculateForward() {
+    const currency = document.getElementById('currency').value;
+    const startTenor = document.getElementById('start-tenor').value;
+    const endTenor = document.getElementById('end-tenor').value;
+    const resultContainer = document.getElementById('result-container');
+    const btn = document.getElementById('calculate-btn');
+
+    if (!currency || !startTenor || !endTenor) {
+        resultContainer.innerHTML = '<div class="error">Please select all parameters</div>';
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Calculating...';
+
+    try {
+        const response = await fetch('/api/forward-pricing', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({currency, start_tenor: startTenor, end_tenor: endTenor})
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            const result = data.data;
+            resultContainer.innerHTML = `
+                <div class="result-item"><strong>Currency:</strong> ${currency}</div>
+                <div class="result-item"><strong>Forward Period:</strong> ${startTenor} to ${endTenor}</div>
+                <div class="result-item"><strong>Forward Rate:</strong> ${(result.forward_rate * 100).toFixed(4)}%</div>
+                <div class="result-item"><strong>Start Rate:</strong> ${(result.start_rate * 100).toFixed(4)}%</div>
+                <div class="result-item"><strong>End Rate:</strong> ${(result.end_rate * 100).toFixed(4)}%</div>
+            `;
+        } else {
+            resultContainer.innerHTML = `<div class="error">${data.error || 'Calculation failed'}</div>`;
+        }
+    } catch (error) {
+        resultContainer.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Calculate Forward Rate';
+    }
+}
+
+// Event listeners
+document.getElementById('currency').addEventListener('change', (e) => {
+    if (e.target.value) loadTenors(e.target.value);
+});
+
+document.getElementById('calculate-btn').addEventListener('click', calculateForward);
+
+// Initialize
+loadCurrencies();
+</script>
+{% endblock %}

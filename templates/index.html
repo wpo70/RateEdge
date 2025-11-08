@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RateEdge - Professional IRS Swap Analytics</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <h1>RateEdge</h1>
+                <span class="nav-subtitle">Professional IRS Swap Analytics</span>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="active">Dashboard</a>
+                <a href="/analytics/forward-pricer">Forward Pricer</a>
+                <a href="/analytics/relative-value">Relative Value</a>
+                <a href="/analytics/cross-currency">Cross-Currency</a>
+                <a href="/data/view">Data</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
+    <div class="container">
+        <!-- Hero Section -->
+        <section class="hero">
+            <h1>Multi-Currency Interest Rate Swap Analytics</h1>
+            <p>Professional-grade tools for forward pricing, relative value analysis, and cross-currency strategies</p>
+            <div class="hero-stats">
+                <div class="stat-card">
+                    <div class="stat-number" id="totalRecords">-</div>
+                    <div class="stat-label">Total Records</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="currencies">-</div>
+                    <div class="stat-label">Currencies</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="latestDate">-</div>
+                    <div class="stat-label">Latest Data</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Quick Access Tools -->
+        <section class="tools-grid">
+            <div class="tool-card">
+                <div class="tool-icon">📊</div>
+                <h3>Forward Swap Pricer</h3>
+                <p>Calculate forward swap rates using cubic spline interpolation</p>
+                <a href="/analytics/forward-pricer" class="btn-primary">Launch Tool</a>
+            </div>
+
+            <div class="tool-card">
+                <div class="tool-icon">🎯</div>
+                <h3>Relative Value Analyzer</h3>
+                <p>Identify steepening/flattening opportunities with scatter plots</p>
+                <a href="/analytics/relative-value" class="btn-primary">Launch Tool</a>
+            </div>
+
+            <div class="tool-card">
+                <div class="tool-icon">🌐</div>
+                <h3>Cross-Currency Analysis</h3>
+                <p>Compare basis relationships between AUD, NZD, USD, JPY, EUR</p>
+                <a href="/analytics/cross-currency" class="btn-primary">Launch Tool</a>
+            </div>
+
+            <div class="tool-card">
+                <div class="tool-icon">🦋</div>
+                <h3>Butterfly Spreads</h3>
+                <p>Analyze butterfly strategies and curve positioning</p>
+                <a href="/analytics/butterfly" class="btn-primary">Launch Tool</a>
+            </div>
+
+            <div class="tool-card">
+                <div class="tool-icon">📈</div>
+                <h3>Yield Curve Viewer</h3>
+                <p>Interactive yield curve visualization with historical overlay</p>
+                <a href="/analytics/yield-curve" class="btn-primary">Launch Tool</a>
+            </div>
+
+            <div class="tool-card">
+                <div class="tool-icon">📊</div>
+                <h3>Data Management</h3>
+                <p>Import, export, and manage swap rate data</p>
+                <a href="/data/view" class="btn-primary">View Data</a>
+            </div>
+        </section>
+
+        <!-- Market Overview -->
+        <section class="market-overview">
+            <h2>Market Overview</h2>
+            <div class="market-grid">
+                <div class="market-card" id="audCard">
+                    <h4>AUD BBSW</h4>
+                    <div class="market-rate">-</div>
+                    <div class="market-tenor">10Y</div>
+                </div>
+                <div class="market-card" id="usdCard">
+                    <h4>USD SOFR</h4>
+                    <div class="market-rate">-</div>
+                    <div class="market-tenor">10Y</div>
+                </div>
+                <div class="market-card" id="jpyCard">
+                    <h4>JPY TIBOR</h4>
+                    <div class="market-rate">-</div>
+                    <div class="market-tenor">10Y</div>
+                </div>
+                <div class="market-card" id="nzdCard">
+                    <h4>NZD BKBM</h4>
+                    <div class="market-rate">-</div>
+                    <div class="market-tenor">10Y</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Features -->
+        <section class="features">
+            <h2>Platform Features</h2>
+            <div class="feature-list">
+                <div class="feature-item">
+                    <span class="feature-icon">✅</span>
+                    <div>
+                        <h4>Multi-Currency Support</h4>
+                        <p>AUD, USD, JPY, NZD, EUR with 95,000+ data points</p>
+                    </div>
+                </div>
+                <div class="feature-item">
+                    <span class="feature-icon">✅</span>
+                    <div>
+                        <h4>Advanced Analytics</h4>
+                        <p>Forward pricing, RV analysis, cross-currency, butterflies</p>
+                    </div>
+                </div>
+                <div class="feature-item">
+                    <span class="feature-icon">✅</span>
+                    <div>
+                        <h4>Interactive Visualizations</h4>
+                        <p>Hover tooltips, scatter plots, time series, correlations</p>
+                    </div>
+                </div>
+                <div class="feature-item">
+                    <span class="feature-icon">✅</span>
+                    <div>
+                        <h4>Professional Tools</h4>
+                        <p>9 specialized analysis tools for institutional trading</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-container">
+            <div class="footer-section">
+                <h4>RateEdge</h4>
+                <p>Professional IRS Swap Analytics Platform</p>
+            </div>
+            <div class="footer-section">
+                <h4>Tools</h4>
+                <a href="/analytics/forward-pricer">Forward Pricer</a>
+                <a href="/analytics/relative-value">Relative Value</a>
+                <a href="/analytics/cross-currency">Cross-Currency</a>
+            </div>
+            <div class="footer-section">
+                <h4>Data</h4>
+                <a href="/data/view">View Data</a>
+                <a href="/data/import">Import Data</a>
+                <a href="/api/export">Export Data</a>
+            </div>
+            <div class="footer-section">
+                <h4>Contact</h4>
+                <p>www.rateedge.au</p>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>&copy; 2025 RateEdge. All rights reserved.</p>
+        </div>
+    </footer>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+
+{% block title %}View Data - RateEdge{% endblock %}
+
+{% block content %}
+<div class="tool-page">
+    <div class="tool-header">
+        <h1>📊 Swap Rate Data</h1>
+        <p>View and filter swap rate data</p>
+    </div>
+
+    <div class="data-controls">
+        <div class="filter-section">
+            <h2>Filters</h2>
+            <div class="filters">
+                <div class="form-group">
+                    <label>Currency</label>
+                    <select id="filter-currency" class="form-control">
+                        <option value="">All Currencies</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Tenor</label>
+                    <select id="filter-tenor" class="form-control">
+                        <option value="">All Tenors</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Start Date</label>
+                    <input type="date" id="filter-start-date" class="form-control">
+                </div>
+                <div class="form-group">
+                    <label>End Date</label>
+                    <input type="date" id="filter-end-date" class="form-control">
+                </div>
+            </div>
+            <button id="apply-filters" class="btn-primary">Apply Filters</button>
+            <button id="clear-filters" class="btn-secondary">Clear</button>
+        </div>
+
+        <div class="stats-section">
+            <h2>Statistics</h2>
+            <div id="stats-container" class="stats-box">
+                <p class="placeholder">Loading statistics...</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="data-table-section">
+        <h2>Data</h2>
+        <div id="table-container" class="table-box">
+            <p class="placeholder">Loading data...</p>
+        </div>
+    </div>
+</div>
+
+<style>
+.data-controls { display: grid; grid-template-columns: 2fr 1fr; gap: 2rem; margin-bottom: 2rem; max-width: 1400px; margin-left: auto; margin-right: auto; }
+.filter-section, .stats-section { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+.filters { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+.btn-secondary { margin-left: 0.5rem; padding: 0.75rem 1.5rem; background: #6b7280; color: white; border: none; border-radius: 8px; cursor: pointer; }
+.btn-secondary:hover { background: #4b5563; }
+.stats-box { padding: 1rem; background: #f9fafb; border-radius: 8px; }
+.stat-item { padding: 0.75rem; margin-bottom: 0.5rem; background: white; border-radius: 6px; }
+.stat-item strong { color: #4f46e5; }
+.data-table-section { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); max-width: 1400px; margin: 0 auto; }
+.table-box { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid #e5e7eb; }
+th { background: #f9fafb; font-weight: 600; color: #374151; }
+tr:hover { background: #f9fafb; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentData = [];
+
+async function loadStatistics() {
+    try {
+        const response = await fetch('/api/statistics');
+        const data = await response.json();
+        if (data.success) {
+            const stats = data.data;
+            const statsContainer = document.getElementById('stats-container');
+            statsContainer.innerHTML = `
+                <div class="stat-item"><strong>Total Records:</strong> ${stats.total_records.toLocaleString()}</div>
+                <div class="stat-item"><strong>Currencies:</strong> ${stats.currencies}</div>
+                <div class="stat-item"><strong>Date Range:</strong> ${stats.date_range.start || 'N/A'} to ${stats.date_range.end || 'N/A'}</div>
+            `;
+        }
+    } catch (error) {
+        console.error('Error loading statistics:', error);
+    }
+}
+
+async function loadCurrencies() {
+    try {
+        const response = await fetch('/api/currencies');
+        const data = await response.json();
+        if (data.success) {
+            const select = document.getElementById('filter-currency');
+            select.innerHTML = '<option value="">All Currencies</option>' +
+                data.data.map(c => `<option value="${c}">${c}</option>`).join('');
+        }
+    } catch (error) {
+        console.error('Error loading currencies:', error);
+    }
+}
+
+async function loadData() {
+    const currency = document.getElementById('filter-currency').value;
+    const tenor = document.getElementById('filter-tenor').value;
+    const startDate = document.getElementById('filter-start-date').value;
+    const endDate = document.getElementById('filter-end-date').value;
+
+    const params = new URLSearchParams();
+    if (currency) params.append('currency', currency);
+    if (tenor) params.append('tenor', tenor);
+    if (startDate) params.append('start_date', startDate);
+    if (endDate) params.append('end_date', endDate);
+    params.append('limit', '100');
+
+    const tableContainer = document.getElementById('table-container');
+    tableContainer.innerHTML = '<p class="placeholder">Loading...</p>';
+
+    try {
+        const response = await fetch(`/api/rates?${params}`);
+        const data = await response.json();
+
+        if (data.success) {
+            currentData = data.data;
+            if (currentData.length === 0) {
+                tableContainer.innerHTML = '<p class="placeholder">No data found</p>';
+            } else {
+                tableContainer.innerHTML = `
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Currency</th>
+                                <th>Tenor</th>
+                                <th>Floating Rate</th>
+                                <th>Rate (%)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${currentData.map(row => `
+                                <tr>
+                                    <td>${row.date}</td>
+                                    <td>${row.currency}</td>
+                                    <td>${row.tenor}</td>
+                                    <td>${row.floating_rate}</td>
+                                    <td>${row.rate_percent.toFixed(4)}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                    <p style="margin-top: 1rem; color: #666;">Showing ${currentData.length} records</p>
+                `;
+            }
+        }
+    } catch (error) {
+        tableContainer.innerHTML = `<div class="error">Error loading data: ${error.message}</div>`;
+    }
+}
+
+document.getElementById('filter-currency').addEventListener('change', async (e) => {
+    if (e.target.value) {
+        const response = await fetch(`/api/tenors/${e.target.value}`);
+        const data = await response.json();
+        if (data.success) {
+            const select = document.getElementById('filter-tenor');
+            select.innerHTML = '<option value="">All Tenors</option>' +
+                data.data.map(t => `<option value="${t}">${t}</option>`).join('');
+        }
+    }
+});
+
+document.getElementById('apply-filters').addEventListener('click', loadData);
+document.getElementById('clear-filters').addEventListener('click', () => {
+    document.getElementById('filter-currency').value = '';
+    document.getElementById('filter-tenor').value = '';
+    document.getElementById('filter-start-date').value = '';
+    document.getElementById('filter-end-date').value = '';
+    loadData();
+});
+
+loadStatistics();
+loadCurrencies();
+loadData();
+</script>
+{% endblock %}

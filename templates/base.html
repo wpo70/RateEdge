@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}RateEdge - Professional IRS Swap Analytics{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    {% block extra_css %}{% endblock %}
+<style>
+.dropdown { position: relative; display: inline-block; }
+.dropdown-content { display: none; position: absolute; background: white; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border-radius: 8px; z-index: 1000; margin-top: 0.5rem; }
+.dropdown-content a { color: #333; padding: 12px 16px; text-decoration: none; display: block; border-radius: 6px; margin: 4px; }
+.dropdown-content a:hover { background: #f3f4f6; color: #4f46e5; }
+.dropdown:hover .dropdown-content { display: block; }
+</style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <a href="/">
+                    <h1>RateEdge</h1>
+                    <p>Professional IRS Swap Analytics</p>
+                </a>
+            </div>
+            <div class="nav-links">
+                <a href="/" class="{% if request.endpoint == 'index' %}active{% endif %}">Dashboard</a>
+                <a href="/analytics/forward-pricer" class="{% if 'forward' in request.endpoint %}active{% endif %}">Forward Pricer</a>
+                <a href="/analytics/relative-value" class="{% if 'relative' in request.endpoint %}active{% endif %}">Relative Value</a>
+                <a href="/analytics/cross-currency" class="{% if 'cross' in request.endpoint %}active{% endif %}">Cross-Currency</a>
+                <div class="dropdown">
+                    <a href="/data/view" class="{% if 'data' in request.endpoint %}active{% endif %}">Data ?</a>
+                    <div class="dropdown-content">
+                        <a href="/data/view">View Data</a>
+                        <a href="/data/import">Import Data</a>
+                        <a href="/data/pivot">Pivot Table</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer>
+        <div class="footer-container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3>RateEdge</h3>
+                    <p>Professional-grade interest rate swap analytics</p>
+                </div>
+                <div class="footer-section">
+                    <h4>Tools</h4>
+                    <a href="/analytics/forward-pricer">Forward Pricer</a>
+                    <a href="/analytics/relative-value">Relative Value</a>
+                    <a href="/analytics/cross-currency">Cross-Currency</a>
+                    <a href="/data/view">View Data</a>
+                    <a href="/data/import">Import Data</a>
+                </div>
+                <div class="footer-section">
+                    <h4>About</h4>
+                    <p>Built for professional swap rate analysis</p>
+                    <p>&copy; 2025 RateEdge. All rights reserved.</p>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>
+
+
+

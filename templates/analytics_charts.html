@@ -1,0 +1,473 @@
+{% extends "base.html" %}
+
+{% block title %}Charts & Analytics - RateEdge{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/c3/0.7.20/c3.min.css">
+<style>
+.charts-container { max-width: 1600px; margin: 0 auto; padding: 2rem; }
+.chart-controls {
+    background: white;
+    padding: 2rem;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    margin-bottom: 2rem;
+}
+.control-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+.chart-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
+    gap: 2rem;
+    margin-bottom: 2rem;
+}
+.chart-card {
+    background: white;
+    padding: 2rem;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+.chart-card h3 {
+    margin-top: 0;
+    margin-bottom: 1.5rem;
+    color: #374151;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.chart-card .chart { min-height: 400px; }
+.btn-chart-export {
+    padding: 0.5rem 1rem;
+    background: #6b7280;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+.btn-chart-export:hover { background: #4b5563; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="charts-container">
+    <div class="tool-header">
+        <h1>📈 Charts & Analytics</h1>
+        <p>Interactive visualizations of swap rate data</p>
+    </div>
+
+    <div class="chart-controls">
+        <h2>Chart Configuration</h2>
+        <div class="control-row">
+            <div class="form-group">
+                <label>Currency</label>
+                <select id="chart-currency" class="form-control">
+                    <option value="">Select Currency</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Tenors (multi-select)</label>
+                <select id="chart-tenors" class="form-control" multiple size="5">
+                    <option>Select currency first</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Start Date</label>
+                <input type="date" id="chart-start-date" class="form-control">
+            </div>
+            <div class="form-group">
+                <label>End Date</label>
+                <input type="date" id="chart-end-date" class="form-control">
+            </div>
+        </div>
+        <button id="generate-charts-btn" class="btn-primary">Generate Charts</button>
+        <button id="export-all-btn" class="btn-secondary" style="margin-left: 0.5rem;">Export All Charts</button>
+    </div>
+
+    <div class="chart-grid">
+        <div class="chart-card">
+            <h3>
+                Time Series
+                <button class="btn-chart-export" onclick="exportChart('time-series-chart')">Export PNG</button>
+            </h3>
+            <div id="time-series-chart" class="chart"></div>
+        </div>
+
+        <div class="chart-card">
+            <h3>
+                Yield Curve (Latest)
+                <button class="btn-chart-export" onclick="exportChart('yield-curve-chart')">Export PNG</button>
+            </h3>
+            <div id="yield-curve-chart" class="chart"></div>
+        </div>
+
+        <div class="chart-card">
+            <h3>
+                Rate Distribution
+                <button class="btn-chart-export" onclick="exportChart('distribution-chart')">Export PNG</button>
+            </h3>
+            <div id="distribution-chart" class="chart"></div>
+        </div>
+
+        <div class="chart-card">
+            <h3>
+                Rate Changes (%)
+                <button class="btn-chart-export" onclick="exportChart('changes-chart')">Export PNG</button>
+            </h3>
+            <div id="changes-chart" class="chart"></div>
+        </div>
+
+        <div class="chart-card">
+            <h3>
+                Tenor Comparison Heatmap
+                <button class="btn-chart-export" onclick="exportChart('heatmap-chart')">Export PNG</button>
+            </h3>
+            <div id="heatmap-chart" class="chart"></div>
+        </div>
+
+        <div class="chart-card">
+            <h3>
+                Statistics Summary
+                <button class="btn-chart-export" onclick="exportChart('stats-table')">Export CSV</button>
+            </h3>
+            <div id="stats-table" class="chart"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://d3js.org/d3.v5.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/c3/0.7.20/c3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+
+<script>
+let currentData = [];
+let charts = {};
+
+// Load currencies
+async function loadCurrencies() {
+    try {
+        const response = await fetch('/api/currencies');
+        const data = await response.json();
+        if (data.success) {
+            const select = document.getElementById('chart-currency');
+            select.innerHTML = '<option value="">Select Currency</option>' +
+                data.data.map(c => `<option value="${c}">${c}</option>`).join('');
+        }
+    } catch (error) {
+        console.error('Error loading currencies:', error);
+    }
+}
+
+// Load tenors for selected currency
+async function loadTenors(currency) {
+    try {
+        const response = await fetch(`/api/tenors/${currency}`);
+        const data = await response.json();
+        if (data.success) {
+            const select = document.getElementById('chart-tenors');
+            select.innerHTML = data.data.map(t => `<option value="${t}">${t}</option>`).join('');
+        }
+    } catch (error) {
+        console.error('Error loading tenors:', error);
+    }
+}
+
+// Generate all charts
+async function generateCharts() {
+    const currency = document.getElementById('chart-currency').value;
+    const tenorSelect = document.getElementById('chart-tenors');
+    const tenors = Array.from(tenorSelect.selectedOptions).map(opt => opt.value);
+    const startDate = document.getElementById('chart-start-date').value;
+    const endDate = document.getElementById('chart-end-date').value;
+
+    if (!currency || tenors.length === 0) {
+        alert('Please select currency and at least one tenor');
+        return;
+    }
+
+    // Fetch data for each tenor
+    currentData = [];
+    for (const tenor of tenors) {
+        const params = new URLSearchParams();
+        params.append('currency', currency);
+        params.append('tenor', tenor);
+        if (startDate) params.append('start_date', startDate);
+        if (endDate) params.append('end_date', endDate);
+        params.append('limit', '10000');
+
+        const response = await fetch(`/api/rates?${params}`);
+        const data = await response.json();
+        if (data.success) {
+            currentData = currentData.concat(data.data);
+        }
+    }
+
+    if (currentData.length === 0) {
+        alert('No data found for selected parameters');
+        return;
+    }
+
+    drawTimeSeriesChart();
+    drawYieldCurveChart();
+    drawDistributionChart();
+    drawChangesChart();
+    drawHeatmap();
+    drawStatsTable();
+}
+
+function drawTimeSeriesChart() {
+    const tenors = [...new Set(currentData.map(d => d.tenor))];
+    const columns = [['x']];
+    
+    tenors.forEach(tenor => {
+        columns.push([tenor]);
+    });
+
+    currentData.forEach(row => {
+        const dateIdx = columns[0].indexOf(row.date);
+        if (dateIdx === -1) {
+            columns[0].push(row.date);
+            tenors.forEach((tenor, idx) => {
+                columns[idx + 1].push(null);
+            });
+        }
+        
+        const rowDateIdx = columns[0].indexOf(row.date);
+        const tenorIdx = tenors.indexOf(row.tenor) + 1;
+        columns[tenorIdx][rowDateIdx] = row.rate_percent;
+    });
+
+    charts.timeSeries = c3.generate({
+        bindto: '#time-series-chart',
+        data: {
+            x: 'x',
+            columns: columns,
+            type: 'line'
+        },
+        axis: {
+            x: {
+                type: 'timeseries',
+                tick: { format: '%Y-%m-%d', rotate: 45 }
+            },
+            y: {
+                label: 'Rate (%)'
+            }
+        },
+        grid: {
+            y: { show: true }
+        }
+    });
+}
+
+function drawYieldCurveChart() {
+    const latestByTenor = {};
+    currentData.forEach(row => {
+        if (!latestByTenor[row.tenor] || row.date > latestByTenor[row.tenor].date) {
+            latestByTenor[row.tenor] = row;
+        }
+    });
+
+    const sortedTenors = Object.keys(latestByTenor).sort((a, b) => {
+        const getVal = t => {
+            const match = t.match(/(\d+)([WOMY])/);
+            if (!match) return 0;
+            const val = parseInt(match[1]);
+            const unit = match[2];
+            return unit === 'W' ? val / 52 : unit === 'M' ? val / 12 : val;
+        };
+        return getVal(a) - getVal(b);
+    });
+
+    const data = [['x'], ['Rate (%)']];
+    sortedTenors.forEach(tenor => {
+        data[0].push(tenor);
+        data[1].push(latestByTenor[tenor].rate_percent);
+    });
+
+    charts.yieldCurve = c3.generate({
+        bindto: '#yield-curve-chart',
+        data: {
+            x: 'x',
+            columns: data,
+            type: 'spline'
+        },
+        axis: {
+            x: { type: 'category' },
+            y: { label: 'Rate (%)' }
+        },
+        grid: {
+            y: { show: true }
+        }
+    });
+}
+
+function drawDistributionChart() {
+    const rates = currentData.map(d => d.rate_percent);
+    const bins = 20;
+    const min = Math.min(...rates);
+    const max = Math.max(...rates);
+    const binSize = (max - min) / bins;
+    
+    const histogram = Array(bins).fill(0);
+    rates.forEach(rate => {
+        const binIdx = Math.min(Math.floor((rate - min) / binSize), bins - 1);
+        histogram[binIdx]++;
+    });
+
+    const categories = histogram.map((_, idx) => 
+        ((min + idx * binSize)).toFixed(2) + '-' + ((min + (idx + 1) * binSize)).toFixed(2)
+    );
+
+    charts.distribution = c3.generate({
+        bindto: '#distribution-chart',
+        data: {
+            columns: [['Frequency', ...histogram]],
+            type: 'bar'
+        },
+        axis: {
+            x: {
+                type: 'category',
+                categories: categories,
+                tick: { rotate: 45, multiline: false }
+            },
+            y: { label: 'Frequency' }
+        }
+    });
+}
+
+function drawChangesChart() {
+    const byTenor = {};
+    currentData.forEach(row => {
+        if (!byTenor[row.tenor]) byTenor[row.tenor] = [];
+        byTenor[row.tenor].push(row);
+    });
+
+    const changes = [];
+    Object.entries(byTenor).forEach(([tenor, data]) => {
+        data.sort((a, b) => new Date(a.date) - new Date(b.date));
+        if (data.length >= 2) {
+            const first = data[0].rate_percent;
+            const last = data[data.length - 1].rate_percent;
+            const change = ((last - first) / first * 100);
+            changes.push({ tenor, change });
+        }
+    });
+
+    changes.sort((a, b) => b.change - a.change);
+
+    charts.changes = c3.generate({
+        bindto: '#changes-chart',
+        data: {
+            columns: [['Change (%)', ...changes.map(c => c.change)]],
+            type: 'bar',
+            colors: {
+                'Change (%)': function(d) {
+                    return d.value > 0 ? '#10b981' : '#ef4444';
+                }
+            }
+        },
+        axis: {
+            x: {
+                type: 'category',
+                categories: changes.map(c => c.tenor)
+            },
+            y: { label: 'Change (%)' }
+        }
+    });
+}
+
+function drawHeatmap() {
+    // Simplified heatmap using HTML table
+    const byTenor = {};
+    currentData.forEach(row => {
+        if (!byTenor[row.tenor]) byTenor[row.tenor] = [];
+        byTenor[row.tenor].push(row.rate_percent);
+    });
+
+    let html = '<table style="width: 100%; border-collapse: collapse;">';
+    html += '<thead><tr><th style="padding: 8px; border: 1px solid #ddd;">Tenor</th><th>Min</th><th>Max</th><th>Avg</th><th>Std Dev</th></tr></thead><tbody>';
+    
+    Object.entries(byTenor).forEach(([tenor, rates]) => {
+        const min = Math.min(...rates);
+        const max = Math.max(...rates);
+        const avg = rates.reduce((a, b) => a + b, 0) / rates.length;
+        const variance = rates.reduce((sum, val) => sum + Math.pow(val - avg, 2), 0) / rates.length;
+        const stdDev = Math.sqrt(variance);
+        
+        html += `<tr>
+            <td style="padding: 8px; border: 1px solid #ddd; font-weight: 600;">${tenor}</td>
+            <td style="padding: 8px; border: 1px solid #ddd;">${min.toFixed(4)}%</td>
+            <td style="padding: 8px; border: 1px solid #ddd;">${max.toFixed(4)}%</td>
+            <td style="padding: 8px; border: 1px solid #ddd;">${avg.toFixed(4)}%</td>
+            <td style="padding: 8px; border: 1px solid #ddd;">${stdDev.toFixed(4)}%</td>
+        </tr>`;
+    });
+    
+    html += '</tbody></table>';
+    document.getElementById('heatmap-chart').innerHTML = html;
+}
+
+function drawStatsTable() {
+    const stats = {
+        totalRecords: currentData.length,
+        currencies: [...new Set(currentData.map(d => d.currency))].length,
+        tenors: [...new Set(currentData.map(d => d.tenor))].length,
+        dateRange: {
+            start: currentData.reduce((min, d) => d.date < min ? d.date : min, currentData[0].date),
+            end: currentData.reduce((max, d) => d.date > max ? d.date : max, currentData[0].date)
+        },
+        rateRange: {
+            min: Math.min(...currentData.map(d => d.rate_percent)),
+            max: Math.max(...currentData.map(d => d.rate_percent)),
+            avg: currentData.reduce((sum, d) => sum + d.rate_percent, 0) / currentData.length
+        }
+    };
+
+    let html = '<table style="width: 100%; border-collapse: collapse;">';
+    html += '<tbody>';
+    html += `<tr><td style="padding: 12px; border: 1px solid #ddd; font-weight: 600;">Total Records</td><td style="padding: 12px; border: 1px solid #ddd;">${stats.totalRecords.toLocaleString()}</td></tr>`;
+    html += `<tr><td style="padding: 12px; border: 1px solid #ddd; font-weight: 600;">Currencies</td><td style="padding: 12px; border: 1px solid #ddd;">${stats.currencies}</td></tr>`;
+    html += `<tr><td style="padding: 12px; border: 1px solid #ddd; font-weight: 600;">Tenors</td><td style="padding: 12px; border: 1px solid #ddd;">${stats.tenors}</td></tr>`;
+    html += `<tr><td style="padding: 12px; border: 1px solid #ddd; font-weight: 600;">Date Range</td><td style="padding: 12px; border: 1px solid #ddd;">${stats.dateRange.start} to ${stats.dateRange.end}</td></tr>`;
+    html += `<tr><td style="padding: 12px; border: 1px solid #ddd; font-weight: 600;">Rate Range</td><td style="padding: 12px; border: 1px solid #ddd;">${stats.rateRange.min.toFixed(4)}% to ${stats.rateRange.max.toFixed(4)}%</td></tr>`;
+    html += `<tr><td style="padding: 12px; border: 1px solid #ddd; font-weight: 600;">Average Rate</td><td style="padding: 12px; border: 1px solid #ddd;">${stats.rateRange.avg.toFixed(4)}%</td></tr>`;
+    html += '</tbody></table>';
+    document.getElementById('stats-table').innerHTML = html;
+}
+
+function exportChart(chartId) {
+    const element = document.getElementById(chartId);
+    html2canvas(element).then(canvas => {
+        const link = document.createElement('a');
+        link.download = `${chartId}_${new Date().toISOString().split('T')[0]}.png`;
+        link.href = canvas.toDataURL();
+        link.click();
+    });
+}
+
+// Event listeners
+document.getElementById('chart-currency').addEventListener('change', (e) => {
+    if (e.target.value) loadTenors(e.target.value);
+});
+document.getElementById('generate-charts-btn').addEventListener('click', generateCharts);
+document.getElementById('export-all-btn').addEventListener('click', () => {
+    ['time-series-chart', 'yield-curve-chart', 'distribution-chart', 'changes-chart', 'heatmap-chart'].forEach(exportChart);
+});
+
+// Initialize
+loadCurrencies();
+
+// Set default dates
+const endDate = new Date();
+const startDate = new Date();
+startDate.setMonth(endDate.getMonth() - 6);
+document.getElementById('chart-end-date').value = endDate.toISOString().split('T')[0];
+document.getElementById('chart-start-date').value = startDate.toISOString().split('T')[0];
+</script>
+{% endblock %}
