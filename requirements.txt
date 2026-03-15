@@ -1,0 +1,9 @@
+streamlit
+pandas
+numpy
+plotly
+openpyxl
+psycopg2-binary
+matplotlib
+streamlit-plotly-events
+streamlit-js-eval

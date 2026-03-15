@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 120" width="320" height="120">
+  <defs>
+    <linearGradient id="curve-grad-dark" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#475569"/>
+      <stop offset="100%" style="stop-color:#cbd5e1"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Arc above text -->
+  <g transform="translate(95, 12)">
+    <path d="M 0 32 Q 35 28, 58 15 Q 80 2, 102 -5" 
+          fill="none" 
+          stroke="url(#curve-grad-dark)" 
+          stroke-width="3" 
+          stroke-linecap="round"/>
+    <circle cx="102" cy="-5" r="5" fill="#ef4444"/>
+  </g>
+  
+  <!-- Text -->
+  <text x="160" y="72" 
+        font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" 
+        font-size="40" 
+        font-weight="600" 
+        text-anchor="middle" 
+        letter-spacing="0.5">
+    <tspan fill="#f1f5f9">Rate</tspan><tspan fill="#ef4444">Edge</tspan>
+  </text>
+  
+  <!-- Underline -->
+  <line x1="52" y1="88" x2="268" y2="88" stroke="#475569" stroke-width="2.5"/>
+</svg>
