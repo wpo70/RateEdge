@@ -11,6 +11,12 @@ except ImportError:
     pass  # python-dotenv not installed — use environment variables directly
 from dataclasses import dataclass
 from datetime import date, timedelta
+try:
+    from zoneinfo import ZoneInfo
+    SYDNEY_TZ = ZoneInfo("Australia/Sydney")
+except ImportError:
+    import pytz
+    SYDNEY_TZ = pytz.timezone("Australia/Sydney")
 from typing import Optional, List, Tuple, Dict
 
 import numpy as np
@@ -274,9 +280,8 @@ def get_db_url():
 
 def get_db_connection():
     """
-    Get Supabase PostgreSQL connection.
-    Uses connection pooling URL (port 5432, Transaction mode).
-    sslmode=require is mandatory for Supabase.
+    Get Supabase PostgreSQL connection via shared pooler URL.
+    sslmode must be in the URL itself, not as a kwarg (avoids psycopg2 conflict).
     """
     if not HAS_POSTGRES:
         return None
@@ -284,10 +289,12 @@ def get_db_connection():
     if not db_url:
         return None
     try:
-        conn = psycopg2.connect(db_url, sslmode="require", connect_timeout=10)
+        # Ensure sslmode=require is in the URL
+        if 'sslmode' not in db_url:
+            db_url = db_url + ('&' if '?' in db_url else '?') + 'sslmode=require'
+        conn = psycopg2.connect(db_url, connect_timeout=10)
         return conn
     except Exception as e:
-        # Silent fail — app works without DB, just no cloud persistence
         return None
 
 
@@ -2376,20 +2383,26 @@ def init_session():
 
 
 def get_timestamp_str(category: str, ccy: str) -> str:
-    """Get formatted timestamp string for a category/currency"""
-    from datetime import datetime
+    """Get formatted timestamp string for a category/currency (Sydney time)"""
+    from datetime import datetime, timezone
     ts = st.session_state.get("load_timestamps", {}).get(category, {}).get(ccy)
     if ts is None:
         return "Not loaded"
-    return ts.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        ts_syd = ts.astimezone(SYDNEY_TZ)
+        return ts_syd.strftime("%Y-%m-%d %H:%M:%S AEST")
+    except:
+        return ts.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def set_timestamp(category: str, ccy: str):
     """Set current timestamp for a category/currency"""
-    from datetime import datetime
+    from datetime import datetime, timezone
     if "load_timestamps" not in st.session_state:
         st.session_state["load_timestamps"] = {"atm": {}, "sabr": {}, "curves": {}}
-    st.session_state["load_timestamps"][category][ccy] = datetime.now()
+    st.session_state["load_timestamps"][category][ccy] = datetime.now(timezone.utc)
 
 
 def get_basis_curve(ccy: str, basis_type: str = "6v3") -> Optional[pd.DataFrame]:
@@ -3506,6 +3519,60 @@ def swaptions_tab(vol_mode: str):
     # Vol source
     st.markdown("---")
     vol_src = st.radio("Vol", ["Surface", "Manual"], horizontal=True, key="sw_volsrc")
+
+    # 3D Vol Surface — collapsible toggle below vol choice
+    with st.expander("📊 3D Vol Surface", expanded=False):
+        atm_3d = get_working_atm_surface(ccy)
+        if atm_3d is not None:
+            try:
+                import plotly.graph_objects as go
+                import numpy as np
+                expiry_labels = [str(e) for e in atm_3d.index if str(e) != "Expiry"]
+                tenor_labels  = [c for c in atm_3d.columns if c not in ["Expiry", "index"]]
+                expiry_order  = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","7y","10y","12y","15y","20y"]
+                def _yrs(lbl):
+                    lbl = str(lbl).strip().lower()
+                    if lbl.endswith("w"): return float(lbl[:-1])/52
+                    if lbl.endswith("m"): return float(lbl[:-1])/12
+                    if lbl.endswith("y"): return float(lbl[:-1])
+                    return 0
+                sorted_exp = sorted(expiry_labels, key=_yrs)
+                sorted_ten = sorted(tenor_labels,  key=_yrs)
+                z_vals = []
+                for exp in sorted_exp:
+                    row = []
+                    for ten in sorted_ten:
+                        try:
+                            v = float(atm_3d.loc[exp, ten]) if exp in atm_3d.index else np.nan
+                        except:
+                            v = np.nan
+                        row.append(v)
+                    z_vals.append(row)
+                fig3d = go.Figure(data=[go.Surface(
+                    x=sorted_ten, y=sorted_exp, z=z_vals,
+                    colorscale="RdYlGn_r",
+                    colorbar=dict(title="Vol (bp)", thickness=12, len=0.7),
+                    hovertemplate="Tenor: %{x}<br>Expiry: %{y}<br>Vol: %{z:.1f} bp<extra></extra>"
+                )])
+                fig3d.update_layout(
+                    scene=dict(
+                        xaxis_title="Tenor", yaxis_title="Expiry", zaxis_title="Vol (bp)",
+                        bgcolor="rgba(15,23,42,0.0)",
+                        xaxis=dict(gridcolor="#334155", color="#94a3b8"),
+                        yaxis=dict(gridcolor="#334155", color="#94a3b8"),
+                        zaxis=dict(gridcolor="#334155", color="#94a3b8"),
+                    ),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    margin=dict(l=0, r=0, t=20, b=0),
+                    height=420,
+                    font=dict(color="#94a3b8", family="Arial")
+                )
+                st.plotly_chart(fig3d, use_container_width=True)
+            except Exception as e:
+                st.warning(f"3D surface error: {e}")
+        else:
+            st.info("Load a vol surface in the Vol/SABR tab to view the 3D surface.")
     
     if vol_src == "Manual":
         vol_input = st.number_input("Vol (bp normal or % Black)", value=80.0, key="sw_volinput")
@@ -3813,6 +3880,66 @@ def swaptions_tab(vol_mode: str):
                             f"{res['bpv']/stored_notional:,.0f}"]
             })
             st.dataframe(greeks_df, use_container_width=True, hide_index=True)
+
+    # 3D Vol Surface with collapse toggle
+    atm_surf = get_working_atm_surface(ccy)
+    if atm_surf is not None:
+        with st.expander("📊 ATM Vol Surface (3D)", expanded=False):
+            try:
+                import plotly.graph_objects as go
+                import numpy as np
+                expiry_labels = list(atm_surf.index) if atm_surf.index.name == "Expiry" else list(atm_surf.index)
+                tenor_labels  = [c for c in atm_surf.columns if c not in ("Expiry",)]
+                
+                def _lbl_to_yr(lbl):
+                    lbl = str(lbl).strip().lower()
+                    if lbl.endswith("w"): return float(lbl[:-1]) / 52
+                    if lbl.endswith("m"): return float(lbl[:-1]) / 12
+                    if lbl.endswith("y"): return float(lbl[:-1])
+                    try: return float(lbl)
+                    except: return 0
+
+                exp_yrs = [_lbl_to_yr(e) for e in expiry_labels]
+                ten_yrs = [_lbl_to_yr(t) for t in tenor_labels]
+                
+                # Build Z matrix
+                Z = []
+                for exp in expiry_labels:
+                    row = []
+                    for ten in tenor_labels:
+                        try:
+                            v = atm_surf.loc[exp, ten] if exp in atm_surf.index else None
+                            row.append(float(v) if v is not None and not pd.isna(v) else None)
+                        except:
+                            row.append(None)
+                    Z.append(row)
+                
+                Z_arr = np.array(Z, dtype=float)
+                
+                fig = go.Figure(data=[go.Surface(
+                    z=Z_arr,
+                    x=ten_yrs,
+                    y=exp_yrs,
+                    colorscale="RdYlGn_r",
+                    colorbar=dict(title="Vol (bp)", thickness=12),
+                    hovertemplate="Tenor: %{x:.1f}y<br>Expiry: %{y:.2f}y<br>Vol: %{z:.1f} bp<extra></extra>"
+                )])
+                fig.update_layout(
+                    scene=dict(
+                        xaxis_title="Tenor (yrs)",
+                        yaxis_title="Expiry (yrs)",
+                        zaxis_title="Vol (bp)",
+                        bgcolor="rgba(0,0,0,0)",
+                    ),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#e5e7eb"),
+                    margin=dict(l=0, r=0, t=20, b=0),
+                    height=420,
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.caption(f"Vol surface chart unavailable: {e}")
 
     # Display portfolio
     if st.session_state["swaption_portfolio"]:
@@ -8548,7 +8675,7 @@ def main():
     st.set_page_config(
         page_title="RateEdge Options",
         layout="wide",
-        page_icon="",
+        page_icon="💎",
         initial_sidebar_state="expanded"
     )
     init_session()
@@ -9005,6 +9132,9 @@ def show_login_page():
     /* Back button styling */
     .back-btn button {
         background: #334155 !important;
+        padding: 14px 24px !important;
+        font-size: 1rem !important;
+        font-weight: 600 !important;
     }
     .back-btn button:hover {
         background: #475569 !important;
