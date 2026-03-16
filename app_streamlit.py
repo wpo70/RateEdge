@@ -198,35 +198,61 @@ def build_au_reset_schedule(start: date, end: date, freq_months: int) -> list:
 # ============================
 # RateEdge Authentication
 # ============================
-# AUTH_API = "https://rateedge-auth.azurewebsites.net"
+# ── Supabase Auth (email OTP) ─────────────────────────────────────
 SITE_ID = "options"
 
-# def verify_token(token):
-#     try:
-#         resp = requests.post(f"{AUTH_API}/api/auth/verify-token",
-#                            json={"token": token, "site": SITE_ID}, timeout=5)
-#         if resp.status_code == 200:
-#             data = resp.json()
-#             return data.get("valid", False), data.get("email", "")
-#     except:
-#         pass
-#     return False, None
+def _supabase_url():
+    """Get Supabase project URL from secrets or env."""
+    try:
+        return st.secrets["SUPABASE_URL"]
+    except Exception:
+        return os.environ.get("SUPABASE_URL", "")
 
-# def request_otp(email):
-#     try:
-#         resp = requests.post(f"{AUTH_API}/api/auth/request-otp",
-#                            json={"email": email, "site": SITE_ID}, timeout=10)
-#         return resp.status_code, resp.json()
-#     except Exception as e:
-#         return 500, {"error": str(e)}
+def _supabase_anon_key():
+    """Get Supabase anon key from secrets or env."""
+    try:
+        return st.secrets["SUPABASE_ANON_KEY"]
+    except Exception:
+        return os.environ.get("SUPABASE_ANON_KEY", "")
 
-# def verify_otp(email, code):
-#     try:
-#         resp = requests.post(f"{AUTH_API}/api/auth/verify-otp",
-#                            json={"email": email, "site": SITE_ID, "code": code}, timeout=5)
-#         return resp.status_code, resp.json()
-#     except Exception as e:
-#         return 500, {"error": str(e)}
+def request_otp(email):
+    """Send OTP to email via Supabase Auth."""
+    url = _supabase_url()
+    key = _supabase_anon_key()
+    if not url or not key:
+        return 500, {"error": "Auth not configured"}
+    try:
+        resp = requests.post(
+            f"{url}/auth/v1/otp",
+            headers={"apikey": key, "Content-Type": "application/json"},
+            json={"email": email, "create_user": True},
+            timeout=10
+        )
+        if resp.status_code == 200:
+            return 200, {"message": "OTP sent"}
+        return resp.status_code, resp.json()
+    except Exception as e:
+        return 500, {"error": str(e)}
+
+def verify_otp(email, code):
+    """Verify OTP code via Supabase Auth."""
+    url = _supabase_url()
+    key = _supabase_anon_key()
+    if not url or not key:
+        return 500, {"error": "Auth not configured"}
+    try:
+        resp = requests.post(
+            f"{url}/auth/v1/verify",
+            headers={"apikey": key, "Content-Type": "application/json"},
+            json={"email": email, "token": code, "type": "email"},
+            timeout=10
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return 200, {"token": data.get("access_token", ""), "email": email}
+        return resp.status_code, resp.json()
+    except Exception as e:
+        return 500, {"error": str(e)}
 
 try:
     from streamlit_plotly_events import plotly_events
@@ -8640,10 +8666,10 @@ def main():
         vol_surface_editor_tab()
         return
 
-    # Check if authenticated - BYPASSED FOR LOCAL TESTING
-    # if not st.session_state.get("authenticated"):
-    #     show_login_page()
-    #     return
+    # Check if authenticated
+    if not st.session_state.get("authenticated"):
+        show_login_page()
+        return
 
     # Only show tabs if authenticated
     tabs = st.tabs(
