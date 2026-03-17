@@ -72,13 +72,18 @@ def surface_vol_to_premium(df: pd.DataFrame, ccy: str = None) -> pd.DataFrame:
             exp_col = df.columns[0]
             if "Expiry" in p.columns:
                 p = p.set_index("Expiry")
+            # Build case-insensitive lookup for expiry labels
+            p.index = p.index.str.lower()
+            # Normalise tenor columns too
+            p.columns = [str(c).upper() for c in p.columns]
             result = df.copy()
             tcols = df.columns[1:].tolist()
             for i, row in df.iterrows():
-                exp_lbl = str(row[exp_col])
+                exp_lbl = str(row[exp_col]).lower()
                 for c in tcols:
+                    c_norm = str(c).upper()
                     try:
-                        result.at[i, c] = round(float(p.loc[exp_lbl, c]), 2)
+                        result.at[i, c] = round(float(p.loc[exp_lbl, c_norm]), 2)
                     except Exception:
                         T = label_to_years(exp_lbl)
                         result.at[i, c] = round(vol_to_premium(float(row[c]), T), 2)
