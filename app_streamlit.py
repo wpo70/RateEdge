@@ -4982,11 +4982,11 @@ def exotics_tab(vol_mode: str):
             long_vol_default  = _get_atm_vol_interp(long_y)
             short_vol_default = _get_atm_vol_interp(short_y)
             vol_long_bp = st.number_input(f"Vol {long_tenor_sel} (bp pa)",
-                                           0.1, 500.0, float(round(long_vol_default, 1)),
+                                           0.1, 2000.0, float(min(round(long_vol_default, 1), 2000.0)),
                                            step=0.5, key="so_vl")
         with vc2:
             vol_short_bp = st.number_input(f"Vol {short_tenor_sel} (bp pa)",
-                                            0.1, 500.0, float(round(short_vol_default, 1)),
+                                            0.1, 2000.0, float(min(round(short_vol_default, 1), 2000.0)),
                                             step=0.5, key="so_vs")
         with vc3:
             # Pull from config matrix, fall back to distance formula
@@ -5239,8 +5239,8 @@ def exotics_tab(vol_mode: str):
                 v = get_matrix_value(atm, exp_lbl, cms_n)
                 return v if v else 35.0
             vol_cms_default = _cms_vol(T0)
-            vol_cms_bp = st.number_input("Vol (bp pa)", 1.0, 500.0,
-                                          float(round(vol_cms_default, 1)),
+            vol_cms_bp = st.number_input("Vol (bp pa)", 1.0, 2000.0,
+                                          float(min(round(vol_cms_default, 1), 2000.0)),
                                           step=0.5, key="cms_vol")
 
         # ── Hagan LSR Convexity Adjustment ──────────────────────────
@@ -5424,8 +5424,8 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
                     ["1Y","2Y","3Y","5Y","10Y"], index=1, key="cms2_tenor")
                 cms2_n = float(cms2_tenor[:-1])
             with ss2:
-                vol_cms2_bp = st.number_input("Vol CMS2 (bp pa)", 1.0, 500.0,
-                    float(round(_cms_vol(T0), 1)), step=0.5, key="cms2_vol")
+                vol_cms2_bp = st.number_input("Vol CMS2 (bp pa)", 1.0, 2000.0,
+                    float(min(round(_cms_vol(T0), 1), 2000.0)), step=0.5, key="cms2_vol")
             with ss3:
                 _t1c = min(_CORR_TENORS, key=lambda t: abs(float(t[:-1]) - cms_n))
                 _t2c = min(_CORR_TENORS, key=lambda t: abs(float(t[:-1]) - cms2_n))
@@ -7812,7 +7812,7 @@ def bond_option_tab():
             vol_input = st.number_input("Price Vol (%)", min_value=0.1, max_value=30.0,
                                          value=6.0, step=0.1, key="bo_vol_price")
         else:
-            vol_input = st.number_input("Yield Vol (bp pa)", min_value=1.0, max_value=500.0,
+            vol_input = st.number_input("Yield Vol (bp pa)", min_value=1.0, max_value=2000.0,
                                          value=80.0, step=1.0, key="bo_vol_yield")
 
     # ── Yield / Repo inputs ──────────────────────────────────────────
