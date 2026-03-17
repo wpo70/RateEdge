@@ -3618,16 +3618,11 @@ def swaptions_tab(vol_mode: str):
                 dots_trace = go.Scatter3d(
                     x=dot_x, y=dot_y, z=dot_z,
                     mode="markers",
-                    marker=dict(size=5, color=dot_z,
-                                colorscale=[
-                                    [0.0,  "#0ea5e9"],
-                                    [0.25, "#22d3ee"],
-                                    [0.5,  "#4ade80"],
-                                    [0.75, "#facc15"],
-                                    [1.0,  "#ef4444"],
-                                ],
-                                opacity=1.0,
-                                line=dict(width=0)),
+                    marker=dict(
+                        size=4,
+                        color="rgba(255,255,255,0.85)",
+                        line=dict(width=0),
+                    ),
                     text=dot_text,
                     hoverinfo="text",
                     showlegend=False
