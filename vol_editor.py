@@ -61,14 +61,35 @@ def premium_to_vol(prem_bp: float, T: float, tenor_years: float = 10.0) -> float
     return vol_bp
 
 
-def surface_vol_to_premium(df: pd.DataFrame) -> pd.DataFrame:
+def surface_vol_to_premium(df: pd.DataFrame, ccy: str = None) -> pd.DataFrame:
+    """Convert vol surface to premium. Uses real prem_matrix from pricer if available,
+    otherwise falls back to the simplified formula."""
+    import streamlit as st
+    if ccy is not None:
+        prem_store = st.session_state.get("prem_matrix", {})
+        if ccy in prem_store:
+            p = prem_store[ccy].copy()
+            exp_col = df.columns[0]
+            if "Expiry" in p.columns:
+                p = p.set_index("Expiry")
+            result = df.copy()
+            tcols = df.columns[1:].tolist()
+            for i, row in df.iterrows():
+                exp_lbl = str(row[exp_col])
+                for c in tcols:
+                    try:
+                        result.at[i, c] = round(float(p.loc[exp_lbl, c]), 2)
+                    except Exception:
+                        T = label_to_years(exp_lbl)
+                        result.at[i, c] = round(vol_to_premium(float(row[c]), T), 2)
+            return result
+    # fallback: simplified formula
     result = df.copy()
     exp_col, tcols = df.columns[0], df.columns[1:].tolist()
     for i, row in df.iterrows():
         T = label_to_years(str(row[exp_col]))
         for c in tcols:
-            tenor_years = label_to_years(c)
-            result.at[i, c] = round(vol_to_premium(float(row[c]), T, tenor_years), 2)
+            result.at[i, c] = round(vol_to_premium(float(row[c]), T), 2)
     return result
 
 
@@ -157,7 +178,7 @@ def _reset(ccy: str) -> None:
 def _create_plotly_surface(df: pd.DataFrame, ccy: str, view_mode: str, changes=None) -> go.Figure:
     exp_col, tcols = df.columns[0], df.columns[1:].tolist()
     expiries = df[exp_col].tolist()
-    display_df = surface_vol_to_premium(df) if view_mode == "fwd_premium" else df
+    display_df = surface_vol_to_premium(df, ccy) if view_mode == "fwd_premium" else df
     z_label = "Fwd Premium (bp)" if view_mode == "fwd_premium" else "Vol (bp)"
     z_vals = display_df[tcols].values.astype(float)
     
@@ -236,8 +257,8 @@ def _render_3d_editor(df, ccy, view_mode, smoothing, base_df, height=580):
     exp_col = df.columns[0]
     expiries, tcols = df[exp_col].tolist(), df.columns[1:].tolist()
     ey = [label_to_years(str(e)) for e in expiries]
-    display_df = surface_vol_to_premium(df) if view_mode == "fwd_premium" else df
-    base_display = surface_vol_to_premium(base_df) if view_mode == "fwd_premium" else base_df
+    display_df = surface_vol_to_premium(df, ccy) if view_mode == "fwd_premium" else df
+    base_display = surface_vol_to_premium(base_df, ccy) if view_mode == "fwd_premium" else base_df
     z_label = "Fwd Premium (bp)" if view_mode == "fwd_premium" else "Vol (bp)"
     z_values = display_df[tcols].values.astype(float).tolist()
     base_vals = base_display[tcols].values.astype(float).tolist()
@@ -734,8 +755,8 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
     st.markdown("#### 📋 Edit Grid")
     
     # Prepare display data
-    display = surface_vol_to_premium(working) if view_mode == "fwd_premium" else working.copy()
-    base_display = surface_vol_to_premium(base) if view_mode == "fwd_premium" else base.copy()
+    display = surface_vol_to_premium(working, ccy) if view_mode == "fwd_premium" else working.copy()
+    base_display = surface_vol_to_premium(base, ccy) if view_mode == "fwd_premium" else base.copy()
     
     # Calculate changes for styling
     tcols = working.columns[1:].tolist()
