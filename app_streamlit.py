@@ -4946,8 +4946,8 @@ def exotics_tab(vol_mode: str):
                     if t0_ <= so_T <= t1_:
                         return v0_ + (so_T-t0_)/(t1_-t0_) * (v1_-v0_)
                 return vals_[0][1] if so_T < vals_[0][0] else vals_[-1][1]
-            st.session_state["so_vl"] = float(round(_pre_vol(long_y), 1))
-            st.session_state["so_vs"] = float(round(_pre_vol(short_y), 1))
+            st.session_state["so_vl2"] = float(round(_pre_vol(long_y), 1))
+            st.session_state["so_vs2"] = float(round(_pre_vol(short_y), 1))
 
         with vc1:
             # Pull vol from ATM surface — try exact expiry then interpolate between neighbours
@@ -4983,11 +4983,11 @@ def exotics_tab(vol_mode: str):
             short_vol_default = _get_atm_vol_interp(short_y)
             vol_long_bp = st.number_input(f"Vol {long_tenor_sel} (bp pa)",
                                            0.1, 2000.0, float(min(round(long_vol_default, 1), 2000.0)),
-                                           step=0.5, key="so_vl")
+                                           step=0.5, key="so_vl2")
         with vc2:
             vol_short_bp = st.number_input(f"Vol {short_tenor_sel} (bp pa)",
                                             0.1, 2000.0, float(min(round(short_vol_default, 1), 2000.0)),
-                                            step=0.5, key="so_vs")
+                                            step=0.5, key="so_vs2")
         with vc3:
             # Pull from config matrix, fall back to distance formula
             def _nearest_tenor(y_):
