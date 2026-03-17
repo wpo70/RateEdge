@@ -217,17 +217,23 @@ def request_otp(email):
     """Send OTP via RateEdge Auth API."""
     try:
         resp = requests.post(f"{_auth_api()}/api/auth/request-otp",
-            json={"email": email, "site": SITE_ID}, timeout=10)
-        return resp.status_code, resp.json()
+            json={"email": email, "site": SITE_ID}, timeout=15)
+        try:
+            return resp.status_code, resp.json()
+        except Exception:
+            return resp.status_code, {"error": "Auth server waking up - try again in 30s"}
     except Exception as e:
-        return 500, {"error": str(e)}
+        return 500, {"error": f"Cannot reach auth server: {str(e)}"}
 
 def verify_otp(email, code):
     """Verify OTP via RateEdge Auth API."""
     try:
         resp = requests.post(f"{_auth_api()}/api/auth/verify-otp",
-            json={"email": email, "site": SITE_ID, "code": code}, timeout=10)
-        return resp.status_code, resp.json()
+            json={"email": email, "site": SITE_ID, "code": code}, timeout=15)
+        try:
+            return resp.status_code, resp.json()
+        except Exception:
+            return resp.status_code, {"error": "Auth server error - try again"}
     except Exception as e:
         return 500, {"error": str(e)}
 
@@ -3378,6 +3384,10 @@ def swaptions_tab(vol_mode: str):
         fwd_source = "default"
 
     fwd_pct = fwd * 100
+    # Safety defaults in case col blocks don't execute
+    eff_disc_rate = 0.035
+    disc_source = "Flat (default)"
+
     col_fwd, col_disc = st.columns(2)
     
     with col_fwd:
@@ -3897,16 +3907,23 @@ def swaptions_tab(vol_mode: str):
             })
             st.dataframe(greeks_df, use_container_width=True, hide_index=True)
 
-    # 3D Vol Surface with collapse toggle
+    # 3D Vol Surface with collapse toggle + Premium/Vol toggle
     atm_surf = get_working_atm_surface(ccy)
     if atm_surf is not None:
         with st.expander("📊 ATM Vol Surface (3D)", expanded=False):
             try:
                 import plotly.graph_objects as go
-                import numpy as np
-                expiry_labels = list(atm_surf.index) if atm_surf.index.name == "Expiry" else list(atm_surf.index)
-                tenor_labels  = [c for c in atm_surf.columns if c not in ("Expiry",)]
-                
+
+                surf_mode = st.radio("Display", ["Vol (bp)", "Premium (bp)"], horizontal=True, key="sw_surf_mode")
+
+                # Normalise index
+                surf = atm_surf.copy()
+                if "Expiry" in surf.columns:
+                    surf = surf.set_index("Expiry")
+
+                expiry_labels = list(surf.index)
+                tenor_labels  = [c for c in surf.columns]
+
                 def _lbl_to_yr(lbl):
                     lbl = str(lbl).strip().lower()
                     if lbl.endswith("w"): return float(lbl[:-1]) / 52
@@ -3917,34 +3934,45 @@ def swaptions_tab(vol_mode: str):
 
                 exp_yrs = [_lbl_to_yr(e) for e in expiry_labels]
                 ten_yrs = [_lbl_to_yr(t) for t in tenor_labels]
-                
+
                 # Build Z matrix
                 Z = []
                 for exp in expiry_labels:
                     row = []
                     for ten in tenor_labels:
                         try:
-                            v = atm_surf.loc[exp, ten] if exp in atm_surf.index else None
-                            row.append(float(v) if v is not None and not pd.isna(v) else None)
+                            v = surf.loc[exp, ten]
+                            val = float(v) if v is not None and not pd.isna(v) else np.nan
+                            if surf_mode == "Premium (bp)":
+                                # Convert ATM vol (bp) to premium using Bachelier approx
+                                expiry_y_ = _lbl_to_yr(exp)
+                                tenor_y_  = _lbl_to_yr(ten)
+                                if expiry_y_ > 0 and tenor_y_ > 0 and not np.isnan(val):
+                                    # ATM straddle premium ≈ vol * sqrt(T) * 0.7979 (normal model)
+                                    val = val * (expiry_y_ ** 0.5) * 0.7979
+                                else:
+                                    val = np.nan
+                            row.append(val)
                         except:
-                            row.append(None)
+                            row.append(np.nan)
                     Z.append(row)
-                
+
                 Z_arr = np.array(Z, dtype=float)
-                
+                zlabel = "Vol (bp)" if surf_mode == "Vol (bp)" else "Premium (bp)"
+
                 fig = go.Figure(data=[go.Surface(
                     z=Z_arr,
                     x=ten_yrs,
                     y=exp_yrs,
                     colorscale="RdYlGn_r",
-                    colorbar=dict(title="Vol (bp)", thickness=12),
-                    hovertemplate="Tenor: %{x:.1f}y<br>Expiry: %{y:.2f}y<br>Vol: %{z:.1f} bp<extra></extra>"
+                    colorbar=dict(title=zlabel, thickness=12),
+                    hovertemplate=f"Tenor: %{{x:.1f}}y<br>Expiry: %{{y:.2f}}y<br>{zlabel}: %{{z:.1f}}<extra></extra>"
                 )])
                 fig.update_layout(
                     scene=dict(
                         xaxis_title="Tenor (yrs)",
                         yaxis_title="Expiry (yrs)",
-                        zaxis_title="Vol (bp)",
+                        zaxis_title=zlabel,
                         bgcolor="rgba(0,0,0,0)",
                     ),
                     paper_bgcolor="rgba(0,0,0,0)",
@@ -8952,7 +8980,7 @@ RateEdge Options Platform""",
             if default_password:
                 st.caption("✅ Password loaded from environment variable EMAIL_PASSWORD")
             else:
-                st.caption("⚠️ Set EMAIL_PASSWORD environment variable in Azure to auto-fill")
+                st.caption("⚠️ Set EMAIL_PASSWORD environment variable in Streamlit secrets to auto-fill")
         
         # Send button
         if st.button("📧 Send Email with Attachments", key="send_email_btn", type="primary", use_container_width=True):
