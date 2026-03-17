@@ -281,7 +281,7 @@ def get_db_url():
 def get_db_connection():
     """
     Get Supabase PostgreSQL connection via shared pooler URL.
-    sslmode must be in the URL itself, not as a kwarg (avoids psycopg2 conflict).
+    Uses urllib to parse URL and pass components to psycopg2 explicitly.
     """
     if not HAS_POSTGRES:
         return None
@@ -289,10 +289,22 @@ def get_db_connection():
     if not db_url:
         return None
     try:
-        # Ensure sslmode=require is in the URL
-        if 'sslmode' not in db_url:
-            db_url = db_url + ('&' if '?' in db_url else '?') + 'sslmode=require'
-        conn = psycopg2.connect(db_url, connect_timeout=10)
+        from urllib.parse import urlparse, parse_qs
+        r = urlparse(db_url)
+        # Extract components
+        host = r.hostname
+        port = r.port or 5432
+        dbname = r.path.lstrip('/')
+        user = r.username
+        password = r.password
+        # Parse sslmode from query string if present
+        qs = parse_qs(r.query)
+        sslmode = qs.get('sslmode', ['require'])[0]
+        conn = psycopg2.connect(
+            host=host, port=port, dbname=dbname,
+            user=user, password=password,
+            sslmode=sslmode, connect_timeout=10
+        )
         return conn
     except Exception as e:
         return None
@@ -3379,16 +3391,20 @@ def swaptions_tab(vol_mode: str):
             disc_method = "Flat"
             st.caption(" No OIS curve")
         
-        if disc_method == "Flat":
+        if disc_method == "Flat" or ois_curve is None:
             flat_rate = st.number_input("Rate (%)", min_value=0.0, max_value=20.0, value=4.0, key="sw_disc_flat")
             eff_disc_rate = flat_rate / 100.0
             disc_source = "Flat"
         else:
-            ois_xs = ois_curve["MaturityY"].to_numpy().astype(float)
-            ois_ys = ois_curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
-            eff_disc_rate = float(np.interp(expiry_y, ois_xs, ois_ys))
-            disc_source = "OIS"
-            st.caption(f"OIS rate: {eff_disc_rate*100:.2f}%")
+            try:
+                ois_xs = ois_curve["MaturityY"].to_numpy().astype(float)
+                ois_ys = ois_curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
+                eff_disc_rate = float(np.interp(expiry_y, ois_xs, ois_ys))
+                disc_source = "OIS"
+                st.caption(f"OIS rate: {eff_disc_rate*100:.2f}%")
+            except Exception:
+                eff_disc_rate = 0.035
+                disc_source = "Flat (fallback)"
 
     # Strike inputs - varies by structure
     st.markdown("---")
@@ -9204,11 +9220,9 @@ def show_login_page():
             col_back, col_verify = st.columns(2)
             
             with col_back:
-                st.markdown('<div class="back-btn">', unsafe_allow_html=True)
-                if st.button(" Back", key="back_btn", use_container_width=True):
+                if st.button("Back", key="back_btn", use_container_width=True, type="secondary"):
                     st.session_state.auth_step = 'email'
                     st.rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
             
             with col_verify:
                 if st.button("Verify", key="verify_btn", use_container_width=True):
