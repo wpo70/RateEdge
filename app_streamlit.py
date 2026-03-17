@@ -3618,9 +3618,16 @@ def swaptions_tab(vol_mode: str):
                 dots_trace = go.Scatter3d(
                     x=dot_x, y=dot_y, z=dot_z,
                     mode="markers",
-                    marker=dict(size=4, color=dot_z, colorscale=[
-                        [0.0, "#0ea5e9"],[0.5, "#4ade80"],[1.0, "#ef4444"]
-                    ], opacity=0.9),
+                    marker=dict(size=5, color=dot_z,
+                                colorscale=[
+                                    [0.0,  "#0ea5e9"],
+                                    [0.25, "#22d3ee"],
+                                    [0.5,  "#4ade80"],
+                                    [0.75, "#facc15"],
+                                    [1.0,  "#ef4444"],
+                                ],
+                                opacity=1.0,
+                                line=dict(width=0)),
                     text=dot_text,
                     hoverinfo="text",
                     showlegend=False
@@ -3628,24 +3635,32 @@ def swaptions_tab(vol_mode: str):
                 fig3d = go.Figure(data=[surf_trace, dots_trace])
                 fig3d.update_layout(
                     scene=dict(
+                        # X = Tenor (left→right, short→long) matching vol editor
                         xaxis=dict(title="Tenor", tickmode="array",
                                    tickvals=ten_yrs, ticktext=sorted_ten,
+                                   tickangle=0, nticks=len(sorted_ten),
                                    gridcolor="#1e3a5f", color="#94a3b8",
                                    backgroundcolor="rgba(2,6,23,0.8)", showbackground=True),
+                        # Y = Expiry (front→back) matching vol editor
                         yaxis=dict(title="Expiry", tickmode="array",
                                    tickvals=exp_yrs, ticktext=sorted_exp,
+                                   nticks=len(sorted_exp),
                                    gridcolor="#1e3a5f", color="#94a3b8",
                                    backgroundcolor="rgba(2,6,23,0.8)", showbackground=True),
-                        zaxis=dict(title=zlabel, gridcolor="#1e3a5f", color="#94a3b8",
+                        zaxis=dict(title=zlabel,
+                                   gridcolor="#1e3a5f", color="#94a3b8",
                                    backgroundcolor="rgba(2,6,23,0.6)", showbackground=True),
                         bgcolor="rgba(2,6,23,0.0)",
-                        camera=dict(eye=dict(x=1.5, y=-1.5, z=1.2)),
+                        # Camera matches vol editor angle — tenor left-right, expiry front-back
+                        camera=dict(eye=dict(x=-1.8, y=-1.8, z=1.0)),
+                        aspectmode="manual",
+                        aspectratio=dict(x=2.0, y=1.5, z=0.8),
                     ),
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(0,0,0,0)",
                     margin=dict(l=0, r=0, t=10, b=0),
-                    height=480,
-                    font=dict(color="#94a3b8", family="Inter, Arial"),
+                    height=520,
+                    font=dict(color="#94a3b8", family="Inter, Arial", size=10),
                 )
                 st.plotly_chart(fig3d, use_container_width=True)
             except Exception as e:
