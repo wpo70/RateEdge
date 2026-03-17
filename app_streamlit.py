@@ -1136,19 +1136,19 @@ def black_swaption_vanilla(ticket: SwaptionTicket) -> dict:
 
     if ticket.side.lower().startswith("payer"):
         price_rate = F * N(d1) - K * N(d2)
-        delta = df * annuity * ticket.notional * N(d1)
+        delta = df * annuity * ticket.notional * N(d1) * 0.0001
     else:
         price_rate = K * N(-d2) - F * N(-d1)
-        delta = -df * annuity * ticket.notional * N(-d1)
+        delta = -df * annuity * ticket.notional * N(-d1) * 0.0001
 
     pv = df * annuity * ticket.notional * price_rate
     bpv = df * annuity * ticket.notional * 0.0001
     pv_bp_spot = pv / (ticket.notional * 0.0001) if ticket.notional > 0 else 0.0
     pv_bp_fwd  = pv_bp_spot / df if df > 0 else pv_bp_spot
     pv_bp = pv_bp_fwd
-    vega = df * annuity * ticket.notional * F * phi(d1) * math.sqrt(T)
-    gamma = df * annuity * ticket.notional * phi(d1) / (F * sigma * math.sqrt(T))
-    theta = -0.5 * df * annuity * ticket.notional * F * sigma * phi(d1)
+    vega  = df * annuity * ticket.notional * F * phi(d1) * math.sqrt(T) * 0.0001
+    gamma = df * annuity * ticket.notional * phi(d1) / (F * sigma * math.sqrt(T)) * 0.0001
+    theta = -0.5 * df * annuity * ticket.notional * F * sigma * phi(d1) / 365.0
 
     return {"pv": pv, "pv_bp": pv_bp, "pv_bp_spot": pv_bp_spot, "pv_bp_fwd": pv_bp_fwd,
             "delta": delta, "gamma": gamma, "vega": vega, "theta": theta, "bpv": bpv}
@@ -1172,10 +1172,10 @@ def bachelier_swaption_vanilla(ticket: SwaptionTicket) -> dict:
 
     if ticket.side.lower().startswith("payer"):
         price_rate = (F - K) * N + sigma_n * math.sqrt(T) * phi
-        delta = df * annuity * ticket.notional * N
+        delta = df * annuity * ticket.notional * N * 0.0001
     else:
         price_rate = (K - F) * (1 - N) + sigma_n * math.sqrt(T) * phi
-        delta = -df * annuity * ticket.notional * (1 - N)
+        delta = -df * annuity * ticket.notional * (1 - N) * 0.0001
 
     pv = df * annuity * ticket.notional * price_rate
     bpv = df * annuity * ticket.notional * 0.0001
@@ -1183,9 +1183,9 @@ def bachelier_swaption_vanilla(ticket: SwaptionTicket) -> dict:
     pv_bp_spot = pv / (ticket.notional * 0.0001) if ticket.notional > 0 else 0.0
     pv_bp_fwd  = pv_bp_spot / df if df > 0 else pv_bp_spot
     pv_bp = pv_bp_fwd  # default to fwd (market convention)
-    vega = df * annuity * ticket.notional * math.sqrt(T) * phi
-    gamma = df * annuity * ticket.notional * phi / (sigma_n * math.sqrt(T))
-    theta = -0.5 * df * annuity * ticket.notional * sigma_n * phi / math.sqrt(T)
+    vega  = df * annuity * ticket.notional * math.sqrt(T) * phi * 0.0001
+    gamma = df * annuity * ticket.notional * phi / (sigma_n * math.sqrt(T)) * 0.0001
+    theta = -0.5 * df * annuity * ticket.notional * sigma_n * phi / math.sqrt(T) / 365.0
 
     return {"pv": pv, "pv_bp": pv_bp, "pv_bp_spot": pv_bp_spot, "pv_bp_fwd": pv_bp_fwd,
             "delta": delta, "gamma": gamma, "vega": vega, "theta": theta, "bpv": bpv}
@@ -1302,9 +1302,9 @@ def black_caplet(notional: float, accrual: float,
     vega_rate = F * phi(d1) * math.sqrt(T)
     gamma_rate = phi(d1) / (F * sigma * math.sqrt(T))
     pv = notional * accrual * df * price_rate
-    delta = notional * accrual * df * delta_rate
-    vega = notional * accrual * df * vega_rate
-    gamma = notional * accrual * df * gamma_rate
+    delta = notional * accrual * df * delta_rate * 0.0001
+    vega  = notional * accrual * df * vega_rate  * 0.0001
+    gamma = notional * accrual * df * gamma_rate * 0.0001
     return {"pv": pv, "delta": delta, "vega": vega, "gamma": gamma}
 
 
@@ -1324,9 +1324,9 @@ def bachelier_caplet(notional: float, accrual: float,
         price_rate = (K - F) * (1 - N) + sigma_n * math.sqrt(T) * phi
         delta_rate = N - 1
     pv = notional * accrual * df * price_rate
-    delta = notional * accrual * df * delta_rate
-    vega = notional * accrual * df * math.sqrt(T) * phi
-    gamma = notional * accrual * df * phi / (sigma_n * math.sqrt(T))
+    delta = notional * accrual * df * delta_rate               * 0.0001
+    vega  = notional * accrual * df * math.sqrt(T) * phi       * 0.0001
+    gamma = notional * accrual * df * phi / (sigma_n * math.sqrt(T)) * 0.0001
     return {"pv": pv, "delta": delta, "vega": vega, "gamma": gamma}
 
 
@@ -3971,12 +3971,12 @@ def swaptions_tab(vol_mode: str):
             
             st.markdown("##### Greeks (Net)")
             greeks_df = pd.DataFrame({
-                "Greek": ["Delta", "Gamma", "Vega", "Theta", "BPV"],
-                "Value": [f"{res['delta']:,.0f}", f"{res['gamma']:,.0f}", f"{res['vega']:,.0f}",
-                          f"{res['theta']:,.0f}", f"{res['bpv']:,.0f}"],
-                "Per 1mm": [f"{res['delta']/stored_notional:,.0f}", f"{res['gamma']/stored_notional:,.0f}",
-                            f"{res['vega']/stored_notional:,.0f}", f"{res['theta']/stored_notional:,.0f}",
-                            f"{res['bpv']/stored_notional:,.0f}"]
+                "Greek": ["Delta ($/bp)", "Gamma ($/bp)", "Vega ($/bp vol)", "Theta ($/day)", "BPV ($/bp)"],
+                "Value": [f"{res['delta']:,.1f}", f"{res['gamma']:,.2f}", f"{res['vega']:,.1f}",
+                          f"{res['theta']:,.1f}", f"{res['bpv']:,.1f}"],
+                "Per 1mm": [f"{res['delta']/stored_notional:,.1f}", f"{res['gamma']/stored_notional:,.2f}",
+                            f"{res['vega']/stored_notional:,.1f}", f"{res['theta']/stored_notional:,.1f}",
+                            f"{res['bpv']/stored_notional:,.1f}"]
             })
             st.dataframe(greeks_df, use_container_width=True, hide_index=True)
 
