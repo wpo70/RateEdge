@@ -1136,13 +1136,15 @@ def black_swaption_vanilla(ticket: SwaptionTicket) -> dict:
 
     if ticket.side.lower().startswith("payer"):
         price_rate = F * N(d1) - K * N(d2)
-        delta = df * annuity * ticket.notional * N(d1) * 0.0001
+        delta_ratio = N(d1)          # hedge ratio: 0.5 ATM = 50mm hedge per 100mm notional
     else:
         price_rate = K * N(-d2) - F * N(-d1)
-        delta = -df * annuity * ticket.notional * N(-d1) * 0.0001
+        delta_ratio = -N(-d1)
 
     pv = df * annuity * ticket.notional * price_rate
     bpv = df * annuity * ticket.notional * 0.0001
+    delta = delta_ratio * ticket.notional   # notional-equivalent swap hedge
+    delta_dv01 = delta_ratio * bpv          # dollar DV01
     pv_bp_spot = pv / (ticket.notional * 0.0001) if ticket.notional > 0 else 0.0
     pv_bp_fwd  = pv_bp_spot / df if df > 0 else pv_bp_spot
     pv_bp = pv_bp_fwd
@@ -1151,7 +1153,8 @@ def black_swaption_vanilla(ticket: SwaptionTicket) -> dict:
     theta = -0.5 * df * annuity * ticket.notional * F * sigma * phi(d1) / 365.0
 
     return {"pv": pv, "pv_bp": pv_bp, "pv_bp_spot": pv_bp_spot, "pv_bp_fwd": pv_bp_fwd,
-            "delta": delta, "gamma": gamma, "vega": vega, "theta": theta, "bpv": bpv}
+            "delta": delta, "delta_dv01": delta_dv01, "delta_ratio": delta_ratio,
+            "gamma": gamma, "vega": vega, "theta": theta, "bpv": bpv}
 
 
 def bachelier_swaption_vanilla(ticket: SwaptionTicket) -> dict:
@@ -1172,13 +1175,15 @@ def bachelier_swaption_vanilla(ticket: SwaptionTicket) -> dict:
 
     if ticket.side.lower().startswith("payer"):
         price_rate = (F - K) * N + sigma_n * math.sqrt(T) * phi
-        delta = df * annuity * ticket.notional * N * 0.0001
+        delta_ratio = N
     else:
         price_rate = (K - F) * (1 - N) + sigma_n * math.sqrt(T) * phi
-        delta = -df * annuity * ticket.notional * (1 - N) * 0.0001
+        delta_ratio = -(1 - N)
 
     pv = df * annuity * ticket.notional * price_rate
     bpv = df * annuity * ticket.notional * 0.0001
+    delta = delta_ratio * ticket.notional   # notional-equivalent swap hedge
+    delta_dv01 = delta_ratio * bpv          # dollar DV01
     # pv_bp = premium in bp of notional (spot). Fwd = divide by df.
     pv_bp_spot = pv / (ticket.notional * 0.0001) if ticket.notional > 0 else 0.0
     pv_bp_fwd  = pv_bp_spot / df if df > 0 else pv_bp_spot
@@ -1188,7 +1193,8 @@ def bachelier_swaption_vanilla(ticket: SwaptionTicket) -> dict:
     theta = -0.5 * df * annuity * ticket.notional * sigma_n * phi / math.sqrt(T) / 365.0
 
     return {"pv": pv, "pv_bp": pv_bp, "pv_bp_spot": pv_bp_spot, "pv_bp_fwd": pv_bp_fwd,
-            "delta": delta, "gamma": gamma, "vega": vega, "theta": theta, "bpv": bpv}
+            "delta": delta, "delta_dv01": delta_dv01, "delta_ratio": delta_ratio,
+            "gamma": gamma, "vega": vega, "theta": theta, "bpv": bpv}
 
 
 def black_swaption_digital(ticket: SwaptionTicket) -> dict:
@@ -3970,13 +3976,26 @@ def swaptions_tab(vol_mode: str):
             st.metric("Total PV", f"${res['pv']:,.0f}")
             
             st.markdown("##### Greeks (Net)")
+            d_ratio = res.get("delta_ratio", res["delta"] / stored_notional if stored_notional else 0)
+            d_dv01  = res.get("delta_dv01", res["delta"] * 0.0001)
             greeks_df = pd.DataFrame({
-                "Greek": ["Delta ($/bp)", "Gamma ($/bp)", "Vega ($/bp vol)", "Theta ($/day)", "BPV ($/bp)"],
-                "Value": [f"{res['delta']:,.1f}", f"{res['gamma']:,.2f}", f"{res['vega']:,.1f}",
-                          f"{res['theta']:,.1f}", f"{res['bpv']:,.1f}"],
-                "Per 1mm": [f"{res['delta']/stored_notional:,.1f}", f"{res['gamma']/stored_notional:,.2f}",
-                            f"{res['vega']/stored_notional:,.1f}", f"{res['theta']/stored_notional:,.1f}",
-                            f"{res['bpv']/stored_notional:,.1f}"]
+                "Greek": ["Delta (swap hedge)", "Delta DV01 ($/bp)", "Gamma ($/bp)", "Vega ($/bp vol)", "Theta ($/day)", "BPV ($/bp)"],
+                "Value": [
+                    f"{res['delta']:,.0f}",
+                    f"{d_dv01:,.1f}",
+                    f"{res['gamma']:,.2f}",
+                    f"{res['vega']:,.1f}",
+                    f"{res['theta']:,.1f}",
+                    f"{res['bpv']:,.1f}"
+                ],
+                "Per 1mm notional": [
+                    f"{d_ratio*1e6:,.0f}",
+                    f"{d_dv01/stored_notional:,.1f}",
+                    f"{res['gamma']/stored_notional:,.3f}",
+                    f"{res['vega']/stored_notional:,.1f}",
+                    f"{res['theta']/stored_notional:,.1f}",
+                    f"{res['bpv']/stored_notional:,.1f}"
+                ]
             })
             st.dataframe(greeks_df, use_container_width=True, hide_index=True)
 
