@@ -3571,16 +3571,26 @@ def swaptions_tab(vol_mode: str):
                 sorted_ten = sorted(tenor_labels,  key=_yrs)
                 exp_yrs = [_yrs(e) for e in sorted_exp]
                 ten_yrs = [_yrs(t) for t in sorted_ten]
+                # For Fwd Premium use real premium matrix if available
+                prem_3d = None
+                if surf_mode_sw == "Fwd Premium (bp)":
+                    prem_store = st.session_state.get("prem_matrix", {})
+                    if ccy in prem_store:
+                        p = prem_store[ccy].copy()
+                        if "Expiry" in p.columns:
+                            p = p.set_index("Expiry")
+                        prem_3d = p
+
                 z_vals = []
                 for exp in sorted_exp:
                     row = []
                     for ten in sorted_ten:
                         try:
-                            v = float(surf.loc[exp, ten])
+                            if surf_mode_sw == "Fwd Premium (bp)" and prem_3d is not None:
+                                v = float(prem_3d.loc[exp, ten]) if exp in prem_3d.index and ten in prem_3d.columns else np.nan
+                            else:
+                                v = float(surf.loc[exp, ten])
                             if pd.isna(v): v = np.nan
-                            elif surf_mode_sw == "Fwd Premium (bp)":
-                                ey = _yrs(exp)
-                                v = v * (ey ** 0.5) * 0.7979 if ey > 0 else np.nan
                         except:
                             v = np.nan
                         row.append(v)
