@@ -3553,7 +3553,7 @@ def swaptions_tab(vol_mode: str):
             try:
                 import plotly.graph_objects as go
                 import numpy as np
-                surf_mode_sw = st.radio("Display", ["Vol (bp)", "Premium (bp)"], horizontal=True, key="sw_surf_mode_top")
+                surf_mode_sw = st.radio("Display", ["Vol (bp)", "Fwd Premium (bp)"], horizontal=True, key="sw_surf_mode_top")
                 # ATM surface has Expiry as a column, not index
                 surf = atm_3d.copy()
                 if "Expiry" in surf.columns:
@@ -3578,33 +3578,74 @@ def swaptions_tab(vol_mode: str):
                         try:
                             v = float(surf.loc[exp, ten])
                             if pd.isna(v): v = np.nan
-                            elif surf_mode_sw == "Premium (bp)":
+                            elif surf_mode_sw == "Fwd Premium (bp)":
                                 ey = _yrs(exp)
                                 v = v * (ey ** 0.5) * 0.7979 if ey > 0 else np.nan
                         except:
                             v = np.nan
                         row.append(v)
                     z_vals.append(row)
-                zlabel = "Vol (bp)" if surf_mode_sw == "Vol (bp)" else "Premium (bp)"
-                fig3d = go.Figure(data=[go.Surface(
-                    x=ten_yrs, y=exp_yrs, z=z_vals,
-                    colorscale="RdYlGn_r",
-                    colorbar=dict(title=zlabel, thickness=12, len=0.7),
-                    hovertemplate=f"Tenor: %{{x:.1f}}y<br>Expiry: %{{y:.2f}}y<br>{zlabel}: %{{z:.1f}}<extra></extra>"
-                )])
+                zlabel = "Vol (bp)" if surf_mode_sw == "Vol (bp)" else "Fwd Premium (bp)"
+                z_arr = np.array(z_vals, dtype=float)
+
+                # Surface trace — matches Vol Editor style
+                surf_trace = go.Surface(
+                    x=ten_yrs, y=exp_yrs, z=z_arr,
+                    colorscale=[
+                        [0.0,  "#0ea5e9"],
+                        [0.25, "#22d3ee"],
+                        [0.5,  "#4ade80"],
+                        [0.75, "#facc15"],
+                        [1.0,  "#ef4444"],
+                    ],
+                    opacity=0.92,
+                    colorbar=dict(title=dict(text=zlabel, font=dict(color="#94a3b8", size=11)),
+                                  tickfont=dict(color="#94a3b8"), thickness=10, len=0.6, x=1.02),
+                    hovertemplate=f"Tenor: %{{x:.1f}}y<br>Expiry: %{{y:.2f}}y<br>{zlabel}: %{{z:.1f}}<extra></extra>",
+                    lighting=dict(ambient=0.7, diffuse=0.8, specular=0.3, roughness=0.5),
+                    lightposition=dict(x=1000, y=1000, z=2000),
+                )
+                # Scatter dots on grid points — matches Vol Editor nodes
+                dot_x, dot_y, dot_z, dot_text = [], [], [], []
+                for i, exp in enumerate(sorted_exp):
+                    for j, ten in enumerate(sorted_ten):
+                        v = z_arr[i][j] if i < len(z_arr) and j < len(z_arr[i]) else np.nan
+                        if not np.isnan(v):
+                            dot_x.append(ten_yrs[j])
+                            dot_y.append(exp_yrs[i])
+                            dot_z.append(v)
+                            dot_text.append(f"{ten} x {exp}: {v:.1f}")
+                dots_trace = go.Scatter3d(
+                    x=dot_x, y=dot_y, z=dot_z,
+                    mode="markers",
+                    marker=dict(size=4, color=dot_z, colorscale=[
+                        [0.0, "#0ea5e9"],[0.5, "#4ade80"],[1.0, "#ef4444"]
+                    ], opacity=0.9),
+                    text=dot_text,
+                    hoverinfo="text",
+                    showlegend=False
+                )
+                fig3d = go.Figure(data=[surf_trace, dots_trace])
                 fig3d.update_layout(
                     scene=dict(
-                        xaxis_title="Tenor (yrs)", yaxis_title="Expiry (yrs)", zaxis_title=zlabel,
-                        bgcolor="rgba(15,23,42,0.0)",
-                        xaxis=dict(gridcolor="#334155", color="#94a3b8"),
-                        yaxis=dict(gridcolor="#334155", color="#94a3b8"),
-                        zaxis=dict(gridcolor="#334155", color="#94a3b8"),
+                        xaxis=dict(title="Tenor", tickmode="array",
+                                   tickvals=ten_yrs, ticktext=sorted_ten,
+                                   gridcolor="#1e3a5f", color="#94a3b8",
+                                   backgroundcolor="rgba(2,6,23,0.8)", showbackground=True),
+                        yaxis=dict(title="Expiry", tickmode="array",
+                                   tickvals=exp_yrs, ticktext=sorted_exp,
+                                   gridcolor="#1e3a5f", color="#94a3b8",
+                                   backgroundcolor="rgba(2,6,23,0.8)", showbackground=True),
+                        zaxis=dict(title=zlabel, gridcolor="#1e3a5f", color="#94a3b8",
+                                   backgroundcolor="rgba(2,6,23,0.6)", showbackground=True),
+                        bgcolor="rgba(2,6,23,0.0)",
+                        camera=dict(eye=dict(x=1.5, y=-1.5, z=1.2)),
                     ),
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(0,0,0,0)",
-                    margin=dict(l=0, r=0, t=20, b=0),
-                    height=420,
-                    font=dict(color="#94a3b8", family="Arial")
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    height=480,
+                    font=dict(color="#94a3b8", family="Inter, Arial"),
                 )
                 st.plotly_chart(fig3d, use_container_width=True)
             except Exception as e:
