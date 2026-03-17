@@ -3546,43 +3546,55 @@ def swaptions_tab(vol_mode: str):
     st.markdown("---")
     vol_src = st.radio("Vol", ["Surface", "Manual"], horizontal=True, key="sw_volsrc")
 
-    # 3D Vol Surface — collapsible toggle below vol choice
-    with st.expander("📊 3D Vol Surface", expanded=False):
+    # 3D Vol Surface — collapsible, below Vol source buttons
+    with st.expander("📊 ATM Vol Surface (3D)", expanded=False):
         atm_3d = get_working_atm_surface(ccy)
         if atm_3d is not None:
             try:
                 import plotly.graph_objects as go
                 import numpy as np
-                expiry_labels = [str(e) for e in atm_3d.index if str(e) != "Expiry"]
-                tenor_labels  = [c for c in atm_3d.columns if c not in ["Expiry", "index"]]
-                expiry_order  = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","7y","10y","12y","15y","20y"]
+                surf_mode_sw = st.radio("Display", ["Vol (bp)", "Premium (bp)"], horizontal=True, key="sw_surf_mode_top")
+                # ATM surface has Expiry as a column, not index
+                surf = atm_3d.copy()
+                if "Expiry" in surf.columns:
+                    surf = surf.set_index("Expiry")
                 def _yrs(lbl):
                     lbl = str(lbl).strip().lower()
                     if lbl.endswith("w"): return float(lbl[:-1])/52
                     if lbl.endswith("m"): return float(lbl[:-1])/12
                     if lbl.endswith("y"): return float(lbl[:-1])
-                    return 0
+                    try: return float(lbl)
+                    except: return 0
+                expiry_labels = [str(e) for e in surf.index]
+                tenor_labels  = [str(c) for c in surf.columns]
                 sorted_exp = sorted(expiry_labels, key=_yrs)
                 sorted_ten = sorted(tenor_labels,  key=_yrs)
+                exp_yrs = [_yrs(e) for e in sorted_exp]
+                ten_yrs = [_yrs(t) for t in sorted_ten]
                 z_vals = []
                 for exp in sorted_exp:
                     row = []
                     for ten in sorted_ten:
                         try:
-                            v = float(atm_3d.loc[exp, ten]) if exp in atm_3d.index else np.nan
+                            v = float(surf.loc[exp, ten])
+                            if pd.isna(v): v = np.nan
+                            elif surf_mode_sw == "Premium (bp)":
+                                ey = _yrs(exp)
+                                v = v * (ey ** 0.5) * 0.7979 if ey > 0 else np.nan
                         except:
                             v = np.nan
                         row.append(v)
                     z_vals.append(row)
+                zlabel = "Vol (bp)" if surf_mode_sw == "Vol (bp)" else "Premium (bp)"
                 fig3d = go.Figure(data=[go.Surface(
-                    x=sorted_ten, y=sorted_exp, z=z_vals,
+                    x=ten_yrs, y=exp_yrs, z=z_vals,
                     colorscale="RdYlGn_r",
-                    colorbar=dict(title="Vol (bp)", thickness=12, len=0.7),
-                    hovertemplate="Tenor: %{x}<br>Expiry: %{y}<br>Vol: %{z:.1f} bp<extra></extra>"
+                    colorbar=dict(title=zlabel, thickness=12, len=0.7),
+                    hovertemplate=f"Tenor: %{{x:.1f}}y<br>Expiry: %{{y:.2f}}y<br>{zlabel}: %{{z:.1f}}<extra></extra>"
                 )])
                 fig3d.update_layout(
                     scene=dict(
-                        xaxis_title="Tenor", yaxis_title="Expiry", zaxis_title="Vol (bp)",
+                        xaxis_title="Tenor (yrs)", yaxis_title="Expiry (yrs)", zaxis_title=zlabel,
                         bgcolor="rgba(15,23,42,0.0)",
                         xaxis=dict(gridcolor="#334155", color="#94a3b8"),
                         yaxis=dict(gridcolor="#334155", color="#94a3b8"),
@@ -3598,7 +3610,7 @@ def swaptions_tab(vol_mode: str):
             except Exception as e:
                 st.warning(f"3D surface error: {e}")
         else:
-            st.info("Load a vol surface in the Vol/SABR tab to view the 3D surface.")
+            st.info("Load a vol surface in Vol/SABR tab first.")
     
     if vol_src == "Manual":
         vol_input = st.number_input("Vol (bp normal or % Black)", value=80.0, key="sw_volinput")
@@ -3906,84 +3918,6 @@ def swaptions_tab(vol_mode: str):
                             f"{res['bpv']/stored_notional:,.0f}"]
             })
             st.dataframe(greeks_df, use_container_width=True, hide_index=True)
-
-    # 3D Vol Surface with collapse toggle + Premium/Vol toggle
-    atm_surf = get_working_atm_surface(ccy)
-    if atm_surf is not None:
-        with st.expander("📊 ATM Vol Surface (3D)", expanded=False):
-            try:
-                import plotly.graph_objects as go
-
-                surf_mode = st.radio("Display", ["Vol (bp)", "Premium (bp)"], horizontal=True, key="sw_surf_mode")
-
-                # Normalise index
-                surf = atm_surf.copy()
-                if "Expiry" in surf.columns:
-                    surf = surf.set_index("Expiry")
-
-                expiry_labels = list(surf.index)
-                tenor_labels  = [c for c in surf.columns]
-
-                def _lbl_to_yr(lbl):
-                    lbl = str(lbl).strip().lower()
-                    if lbl.endswith("w"): return float(lbl[:-1]) / 52
-                    if lbl.endswith("m"): return float(lbl[:-1]) / 12
-                    if lbl.endswith("y"): return float(lbl[:-1])
-                    try: return float(lbl)
-                    except: return 0
-
-                exp_yrs = [_lbl_to_yr(e) for e in expiry_labels]
-                ten_yrs = [_lbl_to_yr(t) for t in tenor_labels]
-
-                # Build Z matrix
-                Z = []
-                for exp in expiry_labels:
-                    row = []
-                    for ten in tenor_labels:
-                        try:
-                            v = surf.loc[exp, ten]
-                            val = float(v) if v is not None and not pd.isna(v) else np.nan
-                            if surf_mode == "Premium (bp)":
-                                # Convert ATM vol (bp) to premium using Bachelier approx
-                                expiry_y_ = _lbl_to_yr(exp)
-                                tenor_y_  = _lbl_to_yr(ten)
-                                if expiry_y_ > 0 and tenor_y_ > 0 and not np.isnan(val):
-                                    # ATM straddle premium ≈ vol * sqrt(T) * 0.7979 (normal model)
-                                    val = val * (expiry_y_ ** 0.5) * 0.7979
-                                else:
-                                    val = np.nan
-                            row.append(val)
-                        except:
-                            row.append(np.nan)
-                    Z.append(row)
-
-                Z_arr = np.array(Z, dtype=float)
-                zlabel = "Vol (bp)" if surf_mode == "Vol (bp)" else "Premium (bp)"
-
-                fig = go.Figure(data=[go.Surface(
-                    z=Z_arr,
-                    x=ten_yrs,
-                    y=exp_yrs,
-                    colorscale="RdYlGn_r",
-                    colorbar=dict(title=zlabel, thickness=12),
-                    hovertemplate=f"Tenor: %{{x:.1f}}y<br>Expiry: %{{y:.2f}}y<br>{zlabel}: %{{z:.1f}}<extra></extra>"
-                )])
-                fig.update_layout(
-                    scene=dict(
-                        xaxis_title="Tenor (yrs)",
-                        yaxis_title="Expiry (yrs)",
-                        zaxis_title=zlabel,
-                        bgcolor="rgba(0,0,0,0)",
-                    ),
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    font=dict(color="#e5e7eb"),
-                    margin=dict(l=0, r=0, t=20, b=0),
-                    height=420,
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception as e:
-                st.caption(f"Vol surface chart unavailable: {e}")
 
     # Display portfolio
     if st.session_state["swaption_portfolio"]:
