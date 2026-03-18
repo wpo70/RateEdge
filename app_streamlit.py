@@ -7051,6 +7051,37 @@ def rv_tab():
                 "2s30s":  (_par_rate(30) - _par_rate(2))  if max(xs_c) >= 25 else None,
             }
 
+            # ── Historical context from BlueGamma swap data ──────────
+            _hist_ctx = {}
+            try:
+                import io as _io
+                _bg_data = {
+                    "2s10s": {"mean": 0.64, "p10": 0.47, "p90": 0.79},
+                    "2s5s":  {"mean": 0.21, "p10": 0.11, "p90": 0.27},
+                    "5s10s": {"mean": 0.43, "p10": 0.35, "p90": 0.52},
+                }
+                for _k, _h in _bg_data.items():
+                    _cur = spreads_live.get(_k)
+                    if _cur is not None:
+                        _pct = (_cur - _h["p10"]) / (_h["p90"] - _h["p10"])
+                        _pct = max(0.0, min(1.0, _pct))
+                        _hist_ctx[_k] = {
+                            "mean": _h["mean"],
+                            "p10":  _h["p10"],
+                            "p90":  _h["p90"],
+                            "current": _cur,
+                            "pct": _pct * 100,  # 0-100
+                        }
+            except Exception:
+                pass
+
+            def _hist_note(spread_key):
+                h = _hist_ctx.get(spread_key)
+                if not h:
+                    return ""
+                return (f" Historically {h['pct']:.0f}th percentile "
+                        f"(range {h['p10']*100:.0f}–{h['p90']*100:.0f}bp, mean {h['mean']*100:.0f}bp, 2018–2025).")
+
             # Fwd rates
             def _fwd_rate(t1, t2):
                 if t2 > max(xs_c):
@@ -7370,6 +7401,144 @@ def rv_tab():
                             "Score": (gamma_ratio - 1) * 60,
                         })
 
+            # ── Curve Steepener / Flattener — IRS ───────────────────
+            if curve is not None:
+                r2  = _par_rate(2)
+                r5  = _par_rate(5)
+                r10 = _par_rate(10)
+                slope_2s10s = (r10 - r2) if r2 and r10 else None
+                slope_2s5s  = (r5  - r2) if r2 and r5  else None
+                slope_5s10s = (r10 - r5) if r5 and r10 else None
+
+                if slope_2s10s is not None:
+                    if slope_2s10s > 0.50:
+                        ideas.append({
+                            "Type": "IRS Curve",
+                            "Structure": "2s10s Flattener",
+                            "Signal": f"2s10s = {slope_2s10s*100:.0f}bp steep",
+                            "Trade": "Pay 2Y / Receive 10Y (IRS flattener)",
+                            "Rationale": f"2s10s at {slope_2s10s*100:.0f}bp — historically elevated. "
+                                         f"Flattener profits if curve reverts toward fair." + _hist_note("2s10s"),
+                            "Risk": "Carry negative in steep curve; stop if curve steepens further",
+                            "Score": slope_2s10s * 120,
+                        })
+                    elif slope_2s10s < -0.20:
+                        ideas.append({
+                            "Type": "IRS Curve",
+                            "Structure": "2s10s Steepener",
+                            "Signal": f"2s10s = {slope_2s10s*100:.0f}bp inverted",
+                            "Trade": "Receive 2Y / Pay 10Y (IRS steepener)",
+                            "Rationale": f"2s10s inverted {abs(slope_2s10s)*100:.0f}bp — "
+                                         f"steepener profits on RBA pivot / normalisation." + _hist_note("2s10s"),
+                            "Risk": "Carry positive but inversion can persist",
+                            "Score": abs(slope_2s10s) * 100,
+                        })
+
+                if slope_2s5s is not None and abs(slope_2s5s) > 0.30:
+                    direction = "Flattener" if slope_2s5s > 0 else "Steepener"
+                    trade = "Pay 2Y / Receive 5Y" if slope_2s5s > 0 else "Receive 2Y / Pay 5Y"
+                    ideas.append({
+                        "Type": "IRS Curve",
+                        "Structure": f"2s5s {direction}",
+                        "Signal": f"2s5s = {slope_2s5s*100:.0f}bp",
+                        "Trade": f"{trade} (IRS {direction.lower()})",
+                        "Rationale": f"2s5s at {slope_2s5s*100:.0f}bp — "
+                                     f"{'steep relative to history' if slope_2s5s>0 else 'inverted — cuts priced'}." + _hist_note("2s5s"),
+                        "Risk": "Mark-to-market vol on DV01 mismatch",
+                        "Score": abs(slope_2s5s) * 90,
+                    })
+
+                if slope_5s10s is not None and abs(slope_5s10s) > 0.25:
+                    direction = "Flattener" if slope_5s10s > 0 else "Steepener"
+                    trade = "Pay 5Y / Receive 10Y" if slope_5s10s > 0 else "Receive 5Y / Pay 10Y"
+                    ideas.append({
+                        "Type": "IRS Curve",
+                        "Structure": f"5s10s {direction}",
+                        "Signal": f"5s10s = {slope_5s10s*100:.0f}bp",
+                        "Trade": f"{trade} (IRS {direction.lower()})",
+                        "Rationale": f"5s10s at {slope_5s10s*100:.0f}bp." + _hist_note("5s10s"),
+                        "Risk": "Basis and carry risk",
+                        "Score": abs(slope_5s10s) * 80,
+                    })
+
+            # ── Curve Steepener / Flattener — Vol Expression ─────────
+            if curve is not None and atm is not None:
+                r2  = _par_rate(2)
+                r5  = _par_rate(5)
+                r10 = _par_rate(10)
+                slope_2s10s = (r10 - r2) if r2 and r10 else None
+
+                if slope_2s10s is not None and slope_2s10s > 0.50:
+                    v_pay_2y10 = get_matrix_value(atm, "1y", 10.0)
+                    v_rec_2y2  = get_matrix_value(atm, "1y", 2.0)
+                    ideas.append({
+                        "Type": "Vol Curve",
+                        "Structure": "2s10s Flattener via Swaptions",
+                        "Signal": f"2s10s = {slope_2s10s*100:.0f}bp",
+                        "Trade": "Buy 1y×2Y Receiver / Buy 1y×10Y Payer (vol flattener)",
+                        "Rationale": f"Express curve flattener via swaptions — receiver on front "
+                                     f"(short rates fall), payer on back (long rates rise or stay). "
+                                     f"Vols: 2Y={v_rec_2y2:.0f}bp, 10Y={v_pay_2y10:.0f}bp." if v_rec_2y2 and v_pay_2y10 else
+                                     f"Express curve flattener via swaptions.",
+                        "Risk": "Pays two premiums; needs curve to move",
+                        "Score": slope_2s10s * 80,
+                    })
+                elif slope_2s10s is not None and slope_2s10s < -0.20:
+                    v_pay_2y2  = get_matrix_value(atm, "1y", 2.0)
+                    v_rec_2y10 = get_matrix_value(atm, "1y", 10.0)
+                    ideas.append({
+                        "Type": "Vol Curve",
+                        "Structure": "2s10s Steepener via Swaptions",
+                        "Signal": f"2s10s = {slope_2s10s*100:.0f}bp inverted",
+                        "Trade": "Buy 1y×2Y Payer / Buy 1y×10Y Receiver (vol steepener)",
+                        "Rationale": f"Express curve steepener — payer on 2Y (front rates up on inflation), "
+                                     f"receiver on 10Y (longs rally on flight to quality). "
+                                     f"Vols: 2Y={v_pay_2y2:.0f}bp, 10Y={v_rec_2y10:.0f}bp." if v_pay_2y2 and v_rec_2y10 else
+                                     f"Vol expression of curve steepening.",
+                        "Risk": "Pays two premiums; needs asymmetric rate moves",
+                        "Score": abs(slope_2s10s) * 70,
+                    })
+
+            # ── Calendar Vol Spreads ──────────────────────────────────
+            if atm is not None:
+                for tn in [2, 5, 10]:
+                    for short_e, long_e in [("3m","6m"),("6m","1y"),("1y","2y")]:
+                        v_short = get_matrix_value(atm, short_e, float(tn))
+                        v_long  = get_matrix_value(atm, long_e,  float(tn))
+                        if v_short and v_long and v_long > 0:
+                            ratio = v_short / v_long
+                            # Normalise by sqrt(T) — fair ratio should be ~sqrt(T_short/T_long)
+                            import re as _re
+                            def _e2y(e):
+                                m = _re.match(r"(\d+)(m|y)", e)
+                                if m:
+                                    return float(m.group(1))/12 if m.group(2)=="m" else float(m.group(1))
+                                return 1.0
+                            fair_ratio = math.sqrt(_e2y(short_e) / _e2y(long_e))
+                            rich_cheap = ratio / fair_ratio
+                            if rich_cheap > 1.30:
+                                ideas.append({
+                                    "Type": "Calendar Vol Spread",
+                                    "Structure": f"Sell {short_e} / Buy {long_e} ×{tn}Y",
+                                    "Signal": f"Ratio {ratio:.2f}x vs fair {fair_ratio:.2f}x",
+                                    "Trade": f"Sell {short_e}×{tn}Y straddle, Buy {long_e}×{tn}Y straddle (vega-neutral)",
+                                    "Rationale": f"{short_e} vol {(rich_cheap-1)*100:.0f}% rich vs {long_e} on sqrt(T) basis. "
+                                                 f"Sell expensive short-dated gamma, buy cheap long-dated vega.",
+                                    "Risk": "Short near-term gamma; large move hurts",
+                                    "Score": (rich_cheap - 1) * 80,
+                                })
+                            elif rich_cheap < 0.80:
+                                ideas.append({
+                                    "Type": "Calendar Vol Spread",
+                                    "Structure": f"Buy {short_e} / Sell {long_e} ×{tn}Y",
+                                    "Signal": f"Ratio {ratio:.2f}x vs fair {fair_ratio:.2f}x",
+                                    "Trade": f"Buy {short_e}×{tn}Y straddle, Sell {long_e}×{tn}Y straddle",
+                                    "Rationale": f"{short_e} vol {(1-rich_cheap)*100:.0f}% cheap vs {long_e}. "
+                                                 f"Buy cheap near-dated gamma vs expensive long-dated vol.",
+                                    "Risk": "Negative carry on long-dated short",
+                                    "Score": (1 - rich_cheap) * 60,
+                                })
+
             # Sort by score
             ideas.sort(key=lambda x: x["Score"], reverse=True)
 
@@ -7377,10 +7546,41 @@ def rv_tab():
                 st.info("No strong signals at current vol levels. Surface appears fair.")
             else:
                 st.markdown(f"**{len(ideas)} trade ideas generated**")
-                for i, idea in enumerate(ideas[:8]):
+
+                # ── Select all / copy all ──────────────────────────────
+                if "rv_selected" not in st.session_state:
+                    st.session_state["rv_selected"] = set()
+
+                col_sel1, col_sel2, col_sel3 = st.columns([1, 1, 4])
+                with col_sel1:
+                    if st.button("☑ Select All", key="rv_sel_all"):
+                        st.session_state["rv_selected"] = set(range(len(ideas[:12])))
+                with col_sel2:
+                    if st.button("☐ Clear", key="rv_sel_none"):
+                        st.session_state["rv_selected"] = set()
+
+                selected = st.session_state["rv_selected"]
+
+                if selected:
+                    lines = []
+                    for idx in sorted(selected):
+                        if idx < len(ideas):
+                            idea = ideas[idx]
+                            lines.append(
+                                f"[{idea['Type']}] {idea['Structure']}\n"
+                                f"Trade: {idea['Trade']}\n"
+                                f"Rationale: {idea['Rationale']}\n"
+                                f"Risk: {idea['Risk']}\n"
+                                f"Score: {idea['Score']:.1f}\n"
+                            )
+                    copy_text = "\n".join(lines)
+                    st.text_area("📋 Copy selected ideas", copy_text, height=120, key="rv_copy_box")
+
+                for i, idea in enumerate(ideas[:12]):
                     score_color = "#22c55e" if idea["Score"] > 5 else "#f59e0b"
+                    is_selected = i in selected
                     with st.expander(
-                        f"**{idea['Type']}** — {idea['Structure']}  |  {idea['Signal']}  "
+                        f"{'✅' if is_selected else '  '} **{idea['Type']}** — {idea['Structure']}  |  {idea['Signal']}  "
                         f"| Score: {idea['Score']:.1f}", expanded=i < 2):
                         c1, c2 = st.columns([3, 1])
                         with c1:
@@ -7389,6 +7589,22 @@ def rv_tab():
                             st.markdown(f"**Risk:** {idea['Risk']}")
                         with c2:
                             st.metric("Signal Score", f"{idea['Score']:.1f}")
+                            cb_key = f"rv_chk_{i}"
+                            checked = st.checkbox("Select", value=is_selected, key=cb_key)
+                            if checked and i not in selected:
+                                st.session_state["rv_selected"].add(i)
+                                st.rerun()
+                            elif not checked and i in selected:
+                                st.session_state["rv_selected"].discard(i)
+                                st.rerun()
+                            idea_text = (
+                                f"[{idea['Type']}] {idea['Structure']}\n"
+                                f"Trade: {idea['Trade']}\n"
+                                f"Rationale: {idea['Rationale']}\n"
+                                f"Risk: {idea['Risk']}\n"
+                                f"Score: {idea['Score']:.1f}"
+                            )
+                            st.code(idea_text, language=None)
 
     # ══════════════════════════════════════════════════════════════════
     # TAB 4 — CAP/FLOOR TRADE IDEAS
