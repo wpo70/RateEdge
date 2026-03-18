@@ -1308,7 +1308,7 @@ def black_caplet(notional: float, accrual: float,
     vega_rate = F * phi(d1) * math.sqrt(T)
     gamma_rate = phi(d1) / (F * sigma * math.sqrt(T))
     pv = notional * accrual * df * price_rate
-    delta = notional * delta_rate               # notional-equivalent swap hedge (same as swaption)
+    delta = notional * accrual * df * delta_rate * 0.0001   # DV01 contribution per caplet
     vega  = notional * accrual * df * vega_rate  * 0.0001
     gamma = notional * accrual * df * gamma_rate * 0.0001
     return {"pv": pv, "delta": delta, "vega": vega, "gamma": gamma}
@@ -1330,7 +1330,7 @@ def bachelier_caplet(notional: float, accrual: float,
         price_rate = (K - F) * (1 - N) + sigma_n * math.sqrt(T) * phi
         delta_rate = N - 1
     pv = notional * accrual * df * price_rate
-    delta = notional * delta_rate                              # notional-equivalent swap hedge
+    delta = notional * accrual * df * delta_rate * 0.0001      # DV01 contribution per caplet
     vega  = notional * accrual * df * math.sqrt(T) * phi       * 0.0001
     gamma = notional * accrual * df * phi / (sigma_n * math.sqrt(T)) * 0.0001
     return {"pv": pv, "delta": delta, "vega": vega, "gamma": gamma}
@@ -4797,12 +4797,16 @@ def caps_floors_tab(vol_mode: str):
             st.metric("Total PV", f"${r['pv_total']:,.0f}")
             
             st.markdown("##### Greeks (Net)")
+            # Convert DV01 delta to swap notional equivalent: delta_swap = delta_dv01 * notional_$ / BPV
+            _notional_d = r['notional'] * 1e6
+            _one_bp = r['one_bp'] if r['one_bp'] > 0 else 1
+            delta_swap = r['delta_total'] * _notional_d / _one_bp
             greeks_df = pd.DataFrame({
-                "Greek": ["Delta", "Gamma", "Vega", "BPV"],
-                "Value": [f"{r['delta_total']:,.0f}", f"{r['gamma_total']:,.0f}", 
+                "Greek": ["Delta (swap $)", "Gamma ($/bp)", "Vega ($/bp vol)", "BPV ($/bp)"],
+                "Value": [f"{delta_swap:,.0f}", f"{r['gamma_total']:,.0f}",
                           f"{r['vega_total']:,.0f}", f"{r['one_bp']:,.0f}"],
-                "Per 1mm": [f"{r['delta_total']/r['notional']:,.0f}", f"{r['gamma_total']/r['notional']:,.0f}",
-                            f"{r['vega_total']/r['notional']:,.0f}", f"{r['one_bp']/r['notional']:,.0f}"]
+                "Per 1mm": [f"{delta_swap/r['notional']:,.0f}", f"{r['gamma_total']/r['notional']:,.2f}",
+                            f"{r['vega_total']/r['notional']:,.1f}", f"{r['one_bp']/r['notional']:,.1f}"]
             })
             st.dataframe(greeks_df, use_container_width=True, hide_index=True)
         
