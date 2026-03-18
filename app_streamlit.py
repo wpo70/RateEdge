@@ -4333,6 +4333,7 @@ def caps_floors_tab(vol_mode: str):
                 st.session_state["cfs_table_data"] = {}
 
             # SABR defaults per expiry
+            # 11 SABR rows: 3m above spreads, 1y-15y align with 9 spread rows, 20y below
             _SABR_ROWS = [
                 ("3m",  0.5, 0.10, 0.60, 0.01),
                 ("1y",  0.5, 0.35, 0.50, 0.01),
@@ -4421,10 +4422,9 @@ def caps_floors_tab(vol_mode: str):
                     st.session_state[f"{spr_key}_temp"] = new_val
 
             with col_sabr:
-                st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
-                st.markdown("<div style='font-size:0.75rem;font-weight:600;color:#64748b;margin-bottom:2px'>SABR Parameters (Caplet Skew)</div>", unsafe_allow_html=True)
+                st.markdown("<div style='height:46px'></div>", unsafe_allow_html=True)
                 _sh_cols = st.columns([0.6, 0.7, 0.7, 0.7, 0.8])
-                for _lbl, _c in zip(["Exp","β","ρ","ν","Shift"], _sh_cols):
+                for _lbl, _c in zip(["Tenor","β","ρ","ν","Shift"], _sh_cols):
                     _c.markdown(f"<div style='font-size:0.75rem;font-weight:600;color:#64748b;text-align:center'>{_lbl}</div>", unsafe_allow_html=True)
                 st.markdown("<hr style='margin:2px 0 0 0;border-color:#334155'>", unsafe_allow_html=True)
                 for _exp, _b_def, _r_def, _n_def, _sh_def in _SABR_ROWS:
