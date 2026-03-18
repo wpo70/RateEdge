@@ -4422,13 +4422,13 @@ def caps_floors_tab(vol_mode: str):
                     st.session_state[f"{spr_key}_temp"] = new_val
 
             with col_sabr:
-                st.markdown("<div style='height:46px'></div>", unsafe_allow_html=True)
-                _sh_cols = st.columns([0.6, 0.7, 0.7, 0.7, 0.8])
+                st.markdown("<div style='font-size:0.75rem;font-weight:600;color:#64748b;margin-bottom:2px'>SABR Parameters (Caplet Skew)</div>", unsafe_allow_html=True)
+                _sh_cols = st.columns([0.5, 0.9, 0.9, 0.9, 0.9])
                 for _lbl, _c in zip(["Tenor","β","ρ","ν","Shift"], _sh_cols):
                     _c.markdown(f"<div style='font-size:0.75rem;font-weight:600;color:#64748b;text-align:center'>{_lbl}</div>", unsafe_allow_html=True)
                 st.markdown("<hr style='margin:2px 0 0 0;border-color:#334155'>", unsafe_allow_html=True)
                 for _exp, _b_def, _r_def, _n_def, _sh_def in _SABR_ROWS:
-                    sr = st.columns([0.6, 0.7, 0.7, 0.7, 0.8])
+                    sr = st.columns([0.5, 0.9, 0.9, 0.9, 0.9])
                     sr[0].markdown(f"<div style='font-size:0.80rem;padding-top:6px;color:#94a3b8;text-align:center'>{_exp}</div>", unsafe_allow_html=True)
                     st.session_state[f"cf_sabr_{_exp}_beta"]  = sr[1].number_input("", value=st.session_state[f"cf_sabr_{_exp}_beta"],  key=f"s_b_{_exp}", min_value=0.0, max_value=1.0,  step=0.05, format="%.2f", label_visibility="collapsed")
                     st.session_state[f"cf_sabr_{_exp}_rho"]   = sr[2].number_input("", value=st.session_state[f"cf_sabr_{_exp}_rho"],   key=f"s_r_{_exp}", min_value=-1.0, max_value=1.0, step=0.05, format="%.2f", label_visibility="collapsed")
