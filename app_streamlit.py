@@ -1308,7 +1308,7 @@ def black_caplet(notional: float, accrual: float,
     vega_rate = F * phi(d1) * math.sqrt(T)
     gamma_rate = phi(d1) / (F * sigma * math.sqrt(T))
     pv = notional * accrual * df * price_rate
-    delta = notional * accrual * df * delta_rate * 0.0001
+    delta = notional * delta_rate               # notional-equivalent swap hedge (same as swaption)
     vega  = notional * accrual * df * vega_rate  * 0.0001
     gamma = notional * accrual * df * gamma_rate * 0.0001
     return {"pv": pv, "delta": delta, "vega": vega, "gamma": gamma}
@@ -1330,7 +1330,7 @@ def bachelier_caplet(notional: float, accrual: float,
         price_rate = (K - F) * (1 - N) + sigma_n * math.sqrt(T) * phi
         delta_rate = N - 1
     pv = notional * accrual * df * price_rate
-    delta = notional * accrual * df * delta_rate               * 0.0001
+    delta = notional * delta_rate                              # notional-equivalent swap hedge
     vega  = notional * accrual * df * math.sqrt(T) * phi       * 0.0001
     gamma = notional * accrual * df * phi / (sigma_n * math.sqrt(T)) * 0.0001
     return {"pv": pv, "delta": delta, "vega": vega, "gamma": gamma}
