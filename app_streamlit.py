@@ -4323,7 +4323,7 @@ def caps_floors_tab(vol_mode: str):
         # Toggle
         if "wedges_expanded" not in st.session_state:
             st.session_state["wedges_expanded"] = True
-        icon = "▼ Hide Spreads" if st.session_state["wedges_expanded"] else "▶ Show Spreads"
+        icon = "▼ Hide Spreads & SABRs" if st.session_state["wedges_expanded"] else "▶ Show Spreads & SABRs"
         if st.button(icon, key="wedges_toggle"):
             st.session_state["wedges_expanded"] = not st.session_state["wedges_expanded"]
             st.rerun()
@@ -4332,8 +4332,28 @@ def caps_floors_tab(vol_mode: str):
             if "cfs_table_data" not in st.session_state:
                 st.session_state["cfs_table_data"] = {}
 
+            # SABR defaults per expiry
+            _SABR_ROWS = [
+                ("3m",  0.5, 0.10, 0.60, 0.01),
+                ("1y",  0.5, 0.35, 0.50, 0.01),
+                ("2y",  0.5, 0.35, 0.45, 0.01),
+                ("3y",  0.5, 0.30, 0.40, 0.01),
+                ("4y",  0.5, 0.28, 0.38, 0.01),
+                ("5y",  0.5, 0.25, 0.35, 0.01),
+                ("7y",  0.5, 0.20, 0.30, 0.01),
+                ("10y", 0.5, 0.20, 0.30, 0.01),
+                ("12y", 0.5, 0.20, 0.30, 0.01),
+                ("15y", 0.5, 0.20, 0.28, 0.01),
+                ("20y", 0.5, 0.20, 0.28, 0.01),
+            ]
+            for _exp, _b, _r, _n, _sh in _SABR_ROWS:
+                for _p, _d in [("beta",_b),("rho",_r),("nu",_n),("shift",_sh)]:
+                    _k = f"cf_sabr_{_exp}_{_p}"
+                    if _k not in st.session_state:
+                        st.session_state[_k] = _d
+
             ROW_DATA = [
-                ("cf_spr_3m1y",  "3m1y → 1Y",      "3m1y",  "3mx1",  "1Y CFS",  spread_3m1y),
+                ("cf_spr_3m1y",  "3m1y→1Y",     "3m1y",  "3mx1",  "1Y CFS",  spread_3m1y),
                 ("cf_spr_1y1y",  "1y1y vs 1x2",    "1y1y",  "1x2",   "2Y CFS",  spread_1y1y),
                 ("cf_spr_2y1y",  "2y1y vs 2x3",    "2y1y",  "2x3",   "3Y CFS",  spread_2y1y),
                 ("cf_spr_3y1y",  "3y1y vs 3x4",    "3y1y",  "3x4",   "4Y CFS",  spread_3y1y),
@@ -4344,60 +4364,76 @@ def caps_floors_tab(vol_mode: str):
                 ("cf_spr_12y3y", "12y3y vs 12x15", "12y3y", "12x15", "15Y CFS", spread_12y3y),
             ]
 
-            CW = [1.6, 0.7, 1.3, 0.7,  0.1,  0.7, 1.1, 0.7, 0.7, 1.1, 0.8]
+            # Two-column layout: spreads left, SABR right
+            col_spr, col_sabr = st.columns([2.2, 1.0])
 
-            def _h(txt, align="left"):
-                return f"<div style='font-size:0.85rem;font-weight:600;color:#64748b;text-align:{align}'>{txt}</div>"
+            with col_spr:
+                CW = [1.3, 0.55, 1.0, 0.55, 0.05, 0.55, 0.9, 0.55, 0.55, 0.9, 0.65]
 
-            st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+                def _h(txt, align="left"):
+                    return f"<div style='font-size:0.75rem;font-weight:600;color:#64748b;text-align:{align}'>{txt}</div>"
 
-            hc = st.columns(CW)
-            hc[0].markdown(_h("Wedge"),                        unsafe_allow_html=True)
-            hc[1].markdown(_h("Last","right"),                 unsafe_allow_html=True)
-            hc[2].markdown(_h("Current (bp)","center"),       unsafe_allow_html=True)
-            hc[3].markdown(_h("Chg","right"),                  unsafe_allow_html=True)
-            hc[5].markdown(_h("Label","right"),               unsafe_allow_html=True)
-            hc[6].markdown(_h("Swaption","right"),            unsafe_allow_html=True)
-            hc[7].markdown(_h("Wedge","right"),               unsafe_allow_html=True)
-            hc[8].markdown(_h("Spread","right"),              unsafe_allow_html=True)
-            hc[9].markdown(_h("FWD CFS","right"),             unsafe_allow_html=True)
-            hc[10].markdown(_h("Target","right"),             unsafe_allow_html=True)
-            st.markdown("<hr style='margin:2px 0 0 0;border-color:#334155'>", unsafe_allow_html=True)
+                st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+                hc = st.columns(CW)
+                hc[0].markdown(_h("Wedge"),               unsafe_allow_html=True)
+                hc[1].markdown(_h("Last","right"),        unsafe_allow_html=True)
+                hc[2].markdown(_h("Current(bp)","center"), unsafe_allow_html=True)
+                hc[3].markdown(_h("Chg","right"),         unsafe_allow_html=True)
+                hc[5].markdown(_h("Label","right"),       unsafe_allow_html=True)
+                hc[6].markdown(_h("Swptn","right"),       unsafe_allow_html=True)
+                hc[7].markdown(_h("Wdg","right"),         unsafe_allow_html=True)
+                hc[8].markdown(_h("Sprd","right"),        unsafe_allow_html=True)
+                hc[9].markdown(_h("FWD CFS","right"),     unsafe_allow_html=True)
+                hc[10].markdown(_h("Target","right"),     unsafe_allow_html=True)
+                st.markdown("<hr style='margin:2px 0 0 0;border-color:#334155'>", unsafe_allow_html=True)
 
-            new_spread_values = {}
-            for spr_key, wedge_lbl, tbl_lbl, tbl_wedge, cfs_lbl, spread in ROW_DATA:
-                last_val = st.session_state[spr_key]
-                cur_val  = st.session_state.get(f"{spr_key}_temp", last_val)
+                new_spread_values = {}
+                for spr_key, wedge_lbl, tbl_lbl, tbl_wedge, cfs_lbl, spread in ROW_DATA:
+                    last_val = st.session_state[spr_key]
+                    cur_val  = st.session_state.get(f"{spr_key}_temp", last_val)
+                    tdata  = st.session_state["cfs_table_data"].get(tbl_lbl, {})
+                    swpt   = tdata.get("swaption", None)
+                    if swpt is not None:
+                        cfs = swpt + spread
+                        st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs
+                        swpt_str = f"{swpt:.4f}"
+                        cfs_str  = f"{cfs:.4f}"
+                    else:
+                        cfs = None
+                        swpt_str = "—"
+                        cfs_str  = "—"
+                    st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_label"] = cfs_lbl
+                    rc = st.columns(CW)
+                    fs = "font-size:0.80rem;padding-top:6px"
+                    rc[0].markdown(f"<div style='{fs}'>{wedge_lbl}</div>", unsafe_allow_html=True)
+                    rc[1].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{last_val:.1f}</div>", unsafe_allow_html=True)
+                    new_val = rc[2].number_input("", value=cur_val, key=f"{spr_key}_new", format="%.1f", step=0.5, label_visibility="collapsed")
+                    delta = new_val - last_val
+                    dc = "#22c55e" if delta > 0 else "#ef4444" if delta < 0 else "#94a3b8"
+                    rc[3].markdown(f"<div style='{fs};text-align:right;color:{dc}'>{delta:+.1f}</div>", unsafe_allow_html=True)
+                    rc[5].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{tbl_lbl}</div>", unsafe_allow_html=True)
+                    rc[6].markdown(f"<div style='{fs};text-align:right;color:#cbd5e1'>{swpt_str}</div>", unsafe_allow_html=True)
+                    rc[7].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{tbl_wedge}</div>", unsafe_allow_html=True)
+                    rc[8].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{spread:.1f}</div>", unsafe_allow_html=True)
+                    rc[9].markdown(f"<div style='{fs};text-align:right;color:#38bdf8;font-weight:600'>{cfs_str}</div>", unsafe_allow_html=True)
+                    rc[10].markdown(f"<div style='{fs};text-align:right;color:#64748b'>{cfs_lbl}</div>", unsafe_allow_html=True)
+                    new_spread_values[spr_key] = new_val
+                    st.session_state[f"{spr_key}_temp"] = new_val
 
-                tdata  = st.session_state["cfs_table_data"].get(tbl_lbl, {})
-                swpt   = tdata.get("swaption", None)
-                if swpt is not None:
-                    cfs = swpt + spread
-                    st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs
-                    swpt_str = f"{swpt:.4f}"
-                    cfs_str  = f"{cfs:.4f}"
-                else:
-                    cfs = None
-                    swpt_str = "—"
-                    cfs_str  = "—"
-                st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_label"] = cfs_lbl
-
-                rc = st.columns(CW)
-                rc[0].markdown(f"<div style='font-size:0.95rem;padding-top:8px'>{wedge_lbl}</div>", unsafe_allow_html=True)
-                rc[1].markdown(f"<div style='font-size:0.95rem;padding-top:8px;text-align:right;color:#94a3b8'>{last_val:.1f}</div>", unsafe_allow_html=True)
-                new_val = rc[2].number_input("", value=cur_val, key=f"{spr_key}_new", format="%.1f", step=0.5, label_visibility="collapsed")
-                delta = new_val - last_val
-                dc = "#22c55e" if delta > 0 else "#ef4444" if delta < 0 else "#94a3b8"
-                rc[3].markdown(f"<div style='font-size:0.95rem;padding-top:8px;text-align:right;color:{dc}'>{delta:+.1f}</div>", unsafe_allow_html=True)
-                rc[5].markdown(f"<div style='font-size:0.95rem;padding-top:8px;text-align:right;color:#94a3b8'>{tbl_lbl}</div>", unsafe_allow_html=True)
-                rc[6].markdown(f"<div style='font-size:0.95rem;padding-top:8px;text-align:right;color:#cbd5e1'>{swpt_str}</div>", unsafe_allow_html=True)
-                rc[7].markdown(f"<div style='font-size:0.95rem;padding-top:8px;text-align:right;color:#94a3b8'>{tbl_wedge}</div>", unsafe_allow_html=True)
-                rc[8].markdown(f"<div style='font-size:0.95rem;padding-top:8px;text-align:right;color:#94a3b8'>{spread:.1f}</div>", unsafe_allow_html=True)
-                rc[9].markdown(f"<div style='font-size:0.95rem;padding-top:8px;text-align:right;color:#38bdf8;font-weight:600'>{cfs_str}</div>", unsafe_allow_html=True)
-                rc[10].markdown(f"<div style='font-size:0.95rem;padding-top:8px;text-align:right;color:#64748b'>{cfs_lbl}</div>", unsafe_allow_html=True)
-
-                new_spread_values[spr_key] = new_val
-                st.session_state[f"{spr_key}_temp"] = new_val
+            with col_sabr:
+                st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+                st.markdown("<div style='font-size:0.75rem;font-weight:600;color:#64748b;margin-bottom:2px'>SABR Parameters (Caplet Skew)</div>", unsafe_allow_html=True)
+                _sh_cols = st.columns([0.6, 0.7, 0.7, 0.7, 0.8])
+                for _lbl, _c in zip(["Exp","β","ρ","ν","Shift"], _sh_cols):
+                    _c.markdown(f"<div style='font-size:0.75rem;font-weight:600;color:#64748b;text-align:center'>{_lbl}</div>", unsafe_allow_html=True)
+                st.markdown("<hr style='margin:2px 0 0 0;border-color:#334155'>", unsafe_allow_html=True)
+                for _exp, _b_def, _r_def, _n_def, _sh_def in _SABR_ROWS:
+                    sr = st.columns([0.6, 0.7, 0.7, 0.7, 0.8])
+                    sr[0].markdown(f"<div style='font-size:0.80rem;padding-top:6px;color:#94a3b8;text-align:center'>{_exp}</div>", unsafe_allow_html=True)
+                    st.session_state[f"cf_sabr_{_exp}_beta"]  = sr[1].number_input("", value=st.session_state[f"cf_sabr_{_exp}_beta"],  key=f"s_b_{_exp}", min_value=0.0, max_value=1.0,  step=0.05, format="%.2f", label_visibility="collapsed")
+                    st.session_state[f"cf_sabr_{_exp}_rho"]   = sr[2].number_input("", value=st.session_state[f"cf_sabr_{_exp}_rho"],   key=f"s_r_{_exp}", min_value=-1.0, max_value=1.0, step=0.05, format="%.2f", label_visibility="collapsed")
+                    st.session_state[f"cf_sabr_{_exp}_nu"]    = sr[3].number_input("", value=st.session_state[f"cf_sabr_{_exp}_nu"],    key=f"s_n_{_exp}", min_value=0.0, max_value=2.0,  step=0.05, format="%.2f", label_visibility="collapsed")
+                    st.session_state[f"cf_sabr_{_exp}_shift"] = sr[4].number_input("", value=st.session_state[f"cf_sabr_{_exp}_shift"], key=f"s_sh_{_exp}", min_value=0.0, max_value=0.05, step=0.005, format="%.3f", label_visibility="collapsed")
 
             new_spread_3m1y  = new_spread_values["cf_spr_3m1y"]
             new_spread_1y1y  = new_spread_values["cf_spr_1y1y"]
