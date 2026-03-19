@@ -2576,6 +2576,10 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                 except:
                     curve_df = load_curve(raw_curve, curve_name)
                 set_ccy_curve(ccy, curve_df)
+                # Backup to config_curves so curves_tab can restore on switch from live → saved
+                if "config_curves" not in st.session_state:
+                    st.session_state["config_curves"] = {}
+                st.session_state["config_curves"][ccy] = curve_df
                 set_timestamp("curves", ccy)
                 loaded["curves"] += 1
             
@@ -2586,6 +2590,9 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                 try:
                     basis_df = load_basis_curve_flexible(raw_basis, basis_6v3_name)
                     set_basis_curve(ccy, "6v3", basis_df)
+                    if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
+                    if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
+                    st.session_state["config_basis"][ccy]["6v3"] = basis_df
                     loaded["basis"] += 1
                 except Exception as e:
                     pass  # Basis loading is optional
@@ -2597,6 +2604,9 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                 try:
                     basis_df = load_basis_curve_flexible(raw_basis, basis_3v1_name)
                     set_basis_curve(ccy, "3v1", basis_df)
+                    if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
+                    if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
+                    st.session_state["config_basis"][ccy]["3v1"] = basis_df
                     loaded["basis"] += 1
                 except:
                     pass
@@ -2607,8 +2617,10 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                 raw_ois = pd.read_excel(xl, sheet_name=ois_name)
                 try:
                     ois_df = load_curve_flexible(raw_ois, ois_name)
-                    # Store in basis_curves with "ois" key
                     set_basis_curve(ccy, "ois", ois_df)
+                    if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
+                    if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
+                    st.session_state["config_basis"][ccy]["ois"] = ois_df
                 except:
                     pass
     
@@ -2946,7 +2958,7 @@ def _load_curve_from_db_latest(floating_rate: str, ccy: str = "AUD") -> pd.DataF
             if not m: continue
             v, u = float(m.group(1)), m.group(2)
             mat_y = v if u == "Y" else v / 12
-            records.append({"MaturityY": mat_y, "ZeroRatePct": float(rate)})
+            records.append({"MaturityY": mat_y, "ZeroRatePct": float(rate) * 100})  # DB = decimal, saved = %, normalise here
         if not records:
             return None
         df = pd.DataFrame(records).sort_values("MaturityY").reset_index(drop=True)
@@ -2989,7 +3001,7 @@ def _load_ois_from_db_latest(ccy: str = "AUD") -> pd.DataFrame:
             if not m: continue
             v, u = float(m.group(1)), m.group(2)
             mat_y = v if u == "Y" else v / 12
-            records.append({"MaturityY": mat_y, "ZeroRatePct": float(rate)})
+            records.append({"MaturityY": mat_y, "ZeroRatePct": float(rate) * 100})  # DB = decimal, saved = %, normalise here
         if not records:
             return None
         df = pd.DataFrame(records).sort_values("MaturityY").reset_index(drop=True)
@@ -3124,10 +3136,13 @@ def curves_tab():
             basis_6v3 = get_basis_curve(ccy, "6v3")
             ois_curve = get_basis_curve(ccy, "ois")
     else:
-        curve = get_ccy_curve(ccy)
-        basis_6v3 = get_basis_curve(ccy, "6v3")
-        basis_3v1 = get_basis_curve(ccy, "3v1")
-        ois_curve = get_basis_curve(ccy, "ois")
+        # Saved mode: restore from config backup to undo any live contamination
+        _cfg_curve = st.session_state.get("config_curves", {}).get(ccy)
+        _cfg_basis = st.session_state.get("config_basis", {}).get(ccy, {})
+        curve    = _cfg_curve if _cfg_curve is not None else get_ccy_curve(ccy)
+        basis_6v3 = _cfg_basis.get("6v3") or get_basis_curve(ccy, "6v3")
+        basis_3v1 = _cfg_basis.get("3v1") or get_basis_curve(ccy, "3v1")
+        ois_curve = _cfg_basis.get("ois") or get_basis_curve(ccy, "ois")
         with _src_info:
             st.caption("💾 Previous Close: using saved/uploaded curve data")
 
@@ -3146,16 +3161,27 @@ def curves_tab():
         basis_3v1 = basis_3v1.drop(columns=["_source_date"])
 
     # ── Source of truth: write resolved curves back to session state ──
-    # All other tabs (Rate/Vol Matrix, Swaptions, Caps, etc.) read from
-    # session state via get_ccy_curve / get_basis_curve — so whatever
-    # the Curves tab resolved (live OR saved) becomes the app-wide curve.
-    set_ccy_curve(ccy, curve)
-    if ois_curve is not None:
-        set_basis_curve(ccy, "ois", ois_curve)
-    if basis_6v3 is not None:
-        set_basis_curve(ccy, "6v3", basis_6v3)
-    if basis_3v1 is not None:
-        set_basis_curve(ccy, "3v1", basis_3v1)
+    # Only in live mode — saved mode uses config backup directly above.
+    # This ensures Rate/Vol Matrix and other tabs always see the live curves
+    # when the user is working with live data.
+    if _use_live:
+        set_ccy_curve(ccy, curve)
+        if ois_curve is not None:
+            set_basis_curve(ccy, "ois", ois_curve)
+        if basis_6v3 is not None:
+            set_basis_curve(ccy, "6v3", basis_6v3)
+        if basis_3v1 is not None:
+            set_basis_curve(ccy, "3v1", basis_3v1)
+    else:
+        # Restore saved config into session state so other tabs read correct saved curves
+        if curve is not None:
+            set_ccy_curve(ccy, curve)
+        if ois_curve is not None:
+            set_basis_curve(ccy, "ois", ois_curve)
+        if basis_6v3 is not None:
+            set_basis_curve(ccy, "6v3", basis_6v3)
+        if basis_3v1 is not None:
+            set_basis_curve(ccy, "3v1", basis_3v1)
     
     # LOCAL CSS fix for checkbox visibility - NUCLEAR
     st.markdown("""
@@ -3747,7 +3773,7 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
     tenors = ["1Y", "2Y", "3Y", "4Y", "5Y", "7Y", "10Y", "12Y", "15Y", "20Y", "25Y", "30Y"]
 
     curve_x = np.array(curve_tuple[0])
-    curve_y = np.array(curve_tuple[1])          # ZeroRatePct stored as decimal (e.g. 0.045 = 4.5%)
+    curve_y = np.array(curve_tuple[1]) / 100.0  # ZeroRatePct stored as % (e.g. 4.5), convert to decimal
 
     basis_x = basis_y = None
     if basis_tuple is not None:
@@ -3757,7 +3783,7 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
     ois_x = ois_y = None
     if ois_tuple is not None:
         ois_x = np.array(ois_tuple[0])
-        ois_y = np.array(ois_tuple[1])          # ZeroRatePct stored as decimal
+        ois_y = np.array(ois_tuple[1]) / 100.0  # ZeroRatePct stored as % (e.g. 4.5), convert to decimal
     
     matrix = []
     
@@ -3788,14 +3814,14 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
                     if tenor_y <= 3.0:
                         fwd = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy, freq_override=0.25, ois_x=ois_x, ois_y=ois_y)
                     else:
-                        fwd = mkt_rate - basis_bp / 100.0   # BasisBp=0.22 → 0.22/100=0.0022 = 22bp
+                        fwd = mkt_rate - basis_bp / 10000.0  # BasisBp in bp, rate in decimal
 
                 elif convention == "ss":
                     # S/S forced:
                     # ≤3Y tenors: market is Q/Q — add basis to get S/S equivalent
                     # >3Y tenors: market is already S/S — same rate, just recalc with S/S frequency
                     if tenor_y <= 3.0:
-                        fwd = mkt_rate + basis_bp / 100.0   # BasisBp=0.22 → 0.22/100=0.0022 = 22bp
+                        fwd = mkt_rate + basis_bp / 10000.0  # BasisBp in bp, rate in decimal
                     else:
                         fwd = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy, freq_override=0.5, ois_x=ois_x, ois_y=ois_y)
 
@@ -9509,7 +9535,7 @@ def _generate_basis_matrix_cached(ccy: str, basis_tuple: tuple) -> pd.DataFrame:
             tenor_y = float(tenor[:-1])
             mid_point = exp_y + tenor_y / 2
             basis_bp = float(np.interp(mid_point, basis_x, basis_y))
-            row[tenor] = round(basis_bp * 100, 4)   # BasisBp stored as decimal×100, *100 → bp
+            row[tenor] = round(basis_bp, 4)
         matrix.append(row)
     
     df = pd.DataFrame(matrix).set_index("Expiry")
