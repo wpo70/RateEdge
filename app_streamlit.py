@@ -2973,7 +2973,7 @@ def curves_tab():
     with col3:
         show_3v1 = st.checkbox("3v1 Basis", value=False, disabled=basis_3v1 is None, key="show_3v1")
     with col4:
-        show_ois = st.checkbox("OIS", value=False, disabled=ois_curve is None, key="show_ois")
+        show_ois = st.checkbox("OIS", value=ois_curve is not None, disabled=ois_curve is None, key="show_ois")
     
     # Create Plotly chart
     fig = go.Figure()
@@ -4422,7 +4422,7 @@ def caps_floors_tab(vol_mode: str):
                     st.session_state[f"{spr_key}_temp"] = new_val
 
             with col_sabr:
-                st.markdown("<div style='font-size:0.75rem;font-weight:600;color:#64748b;margin-bottom:2px'>SABR Parameters (Caplet Skew)</div>", unsafe_allow_html=True)
+                st.markdown("<div style='margin-top:-46px;font-size:0.75rem;font-weight:600;color:#64748b;margin-bottom:2px'>SABR Parameters (Caplet Skew)</div>", unsafe_allow_html=True)
                 _sh_cols = st.columns([0.5, 0.9, 0.9, 0.9, 0.9])
                 for _lbl, _c in zip(["Tenor","β","ρ","ν","Shift"], _sh_cols):
                     _c.markdown(f"<div style='font-size:0.75rem;font-weight:600;color:#64748b;text-align:center'>{_lbl}</div>", unsafe_allow_html=True)
