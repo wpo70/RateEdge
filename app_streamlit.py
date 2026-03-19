@@ -3073,6 +3073,12 @@ def curves_tab():
     if curve is None:
         st.info("No curve loaded. Upload RateEdge_Config.xlsx in Vol/SABR tab, or switch to Live.")
         return
+
+    # Strip internal metadata columns before passing to matrix/pricing functions
+    if "_source_date" in curve.columns:
+        curve = curve.drop(columns=["_source_date"])
+    if ois_curve is not None and "_source_date" in ois_curve.columns:
+        ois_curve = ois_curve.drop(columns=["_source_date"])
     
     # LOCAL CSS fix for checkbox visibility - NUCLEAR
     st.markdown("""
