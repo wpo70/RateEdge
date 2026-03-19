@@ -3430,6 +3430,67 @@ def fwd_analysis_tab():
 
     _an_tabs = st.tabs(["IRS Spreads", "IRS Butterflies", "Fwd-Fwd Rates (3M)", "6v3 Outright", "6v3 Fwd-Fwd", "6v3 Spreads"])
 
+    def _chart_tools(fig, series_dict: dict, key: str, ylab: str = "bp"):
+        """📥 Download + date-range picker + Hi/Lo/Mean/Std/Current stats box."""
+        import plotly.io as _pio
+
+        # ── Download button ──────────────────────────────────────
+        try:
+            _img = _pio.to_image(fig, format="png", width=1400, height=520)
+            st.download_button("📥 Copy Chart", _img, f"RateEdge_{key}.png", "image/png",
+                               key=f"dl_{key}", use_container_width=False)
+        except Exception:
+            _html = fig.to_html(include_plotlyjs="cdn", full_html=True)
+            st.download_button("📥 Copy Chart", _html.encode(), f"RateEdge_{key}.html", "text/html",
+                               key=f"dl_{key}", use_container_width=False)
+
+        if not series_dict:
+            return
+
+        # ── Date range for stats window ──────────────────────────
+        _all_idx = pd.DatetimeIndex([])
+        for _s in series_dict.values():
+            if hasattr(_s, "index") and not _s.empty:
+                _all_idx = _all_idx.union(_s.index)
+        if _all_idx.empty:
+            return
+        _min_d = _all_idx.min().date()
+        _max_d = _all_idx.max().date()
+
+        st.markdown("**📊 Range Stats**")
+        _rc1, _rc2, _rc3 = st.columns([2, 2, 2])
+        with _rc1:
+            _pt1 = st.date_input("From", value=_min_d, min_value=_min_d, max_value=_max_d,
+                                 key=f"pt1_{key}", format="DD/MM/YYYY")
+        with _rc2:
+            _pt2 = st.date_input("To", value=_max_d, min_value=_min_d, max_value=_max_d,
+                                 key=f"pt2_{key}", format="DD/MM/YYYY")
+        with _rc3:
+            st.markdown(f"<div style='padding-top:30px;color:#94a3b8;font-size:0.8rem'>"
+                        f"{_pt1} → {_pt2}</div>", unsafe_allow_html=True)
+
+        _t1 = pd.Timestamp(_pt1)
+        _t2 = pd.Timestamp(_pt2) + pd.Timedelta(days=1)
+        _rows = []
+        for _name, _ser in series_dict.items():
+            _w = _ser[(_ser.index >= _t1) & (_ser.index < _t2)].dropna()
+            if _w.empty:
+                continue
+            _cur = _ser.dropna()
+            _rows.append({
+                "Series": _name,
+                f"Hi": round(_w.max(), 4),
+                f"Lo": round(_w.min(), 4),
+                f"Mean": round(_w.mean(), 4),
+                f"Std": round(_w.std(), 4),
+                f"Current": round(_cur.iloc[-1], 4) if not _cur.empty else None,
+                f"vs Mean": round(_cur.iloc[-1] - _w.mean(), 4) if not _cur.empty else None,
+            })
+        if _rows:
+            _sdf = pd.DataFrame(_rows).set_index("Series")
+            st.dataframe(_sdf.style.format("{:.4f}", na_rep="—"),
+                         use_container_width=True, height=min(38 + 38*len(_rows), 280))
+
     # Available tenors for dropdowns
     _yr_tenors = sorted(
         [int(c[:-1]) for c in _w3.columns if c.endswith("Y")] +
@@ -3531,6 +3592,13 @@ def fwd_analysis_tab():
 
         _fig_layout(_fig, _cut, "Spread (bp)")
         st.plotly_chart(_fig, use_container_width=True)
+        # Build active series for stats (handles spread-of-spread mode)
+        if _sp_as_spread and len(_sp_series) >= 2:
+            _ks = list(_sp_series.keys())
+            _sp_active = {f"{_ks[0]} − {_ks[1]}": (_sp_series[_ks[0]] - _sp_series[_ks[1]]).dropna()}
+        else:
+            _sp_active = _sp_series
+        _chart_tools(_fig, _sp_active, "sp", "bp")
 
     # ── TAB 2: IRS BUTTERFLIES ──────────────────────────────────
     with _an_tabs[1]:
@@ -3596,6 +3664,12 @@ def fwd_analysis_tab():
         _fig_fl.add_hline(y=0, line=dict(color="#64748b",width=1))
         _fig_layout(_fig_fl, _cut_fl, "Fly (bp)")
         st.plotly_chart(_fig_fl, use_container_width=True)
+        if _fl_as_spread and len(_fl_series) >= 2:
+            _ks = list(_fl_series.keys())
+            _fl_active = {f"{_ks[0]} − {_ks[1]}": (_fl_series[_ks[0]] - _fl_series[_ks[1]]).dropna()}
+        else:
+            _fl_active = _fl_series
+        _chart_tools(_fig_fl, _fl_active, "fl", "bp")
 
     # ── TAB 3: FWD-FWD RATES ────────────────────────────────────
     with _an_tabs[2]:
@@ -3656,8 +3730,12 @@ def fwd_analysis_tab():
                 _add_series(_fig_fv, _l, _s, _sp_colors[_i%len(_sp_colors)])
             _fig_layout(_fig_fv, _cut_fv, "Rate (%)")
         st.plotly_chart(_fig_fv, use_container_width=True)
-
-    # ── TAB 4: 6v3 OUTRIGHT ────────────────────────────────────
+        if _fv_as_spread and len(_fv_series) >= 2:
+            _ks = list(_fv_series.keys())
+            _fv_active = {f"{_ks[0]} − {_ks[1]}": (_fv_series[_ks[0]] - _fv_series[_ks[1]]).dropna() * 100}
+        else:
+            _fv_active = _fv_series
+        _chart_tools(_fig_fv, _fv_active, "fv", "%")
     with _an_tabs[3]:
         st.markdown("#### 6v3 Basis — Outright (6M BBSW − 3M BBSW)")
         _com6v3 = sorted([c for c in _w6.columns if c in _w3.columns and c.endswith("Y")],
@@ -3690,14 +3768,17 @@ def fwd_analysis_tab():
             with c1: _b6_yr = st.slider("History (years)",1,8,5,key="b6_yr")
             _cut_b6 = pd.Timestamp.now() - pd.DateOffset(years=_b6_yr)
             _fig_b6 = go.Figure()
+            _b6_series = {}
             for _i,_tn in enumerate(st.session_state["b6_list"]):
                 if _tn not in _w6.columns or _tn not in _w3.columns: continue
                 _b6 = (_w6[_tn]-_w3[_tn]).dropna()
                 _b6 = _b6[_b6.index>=_cut_b6]*100
+                _b6_series[f"{_tn} 6v3"] = _b6
                 _add_series(_fig_b6, f"{_tn} 6v3", _b6, _sp_colors[_i%len(_sp_colors)])
             _fig_b6.add_hline(y=0,line=dict(color="#64748b",width=1))
             _fig_layout(_fig_b6, _cut_b6, "6v3 Basis (bp)")
             st.plotly_chart(_fig_b6, use_container_width=True)
+            _chart_tools(_fig_b6, _b6_series, "b6", "bp")
 
     # ── TAB 5: 6v3 FWD-FWD ─────────────────────────────────────
     with _an_tabs[4]:
@@ -3760,8 +3841,12 @@ def fwd_analysis_tab():
         _fig_fv6.add_hline(y=0,line=dict(color="#64748b",width=1))
         _fig_layout(_fig_fv6, _cut_fv6, "6v3 Fwd-Fwd Basis (bp)")
         st.plotly_chart(_fig_fv6, use_container_width=True)
-
-    # ── TAB 6: 6v3 SPREADS ─────────────────────────────────────
+        if _fv6_as_spread and len(_fv6_series) >= 2:
+            _ks = list(_fv6_series.keys())
+            _fv6_active = {f"{_ks[0]} − {_ks[1]}": (_fv6_series[_ks[0]] - _fv6_series[_ks[1]]).dropna()}
+        else:
+            _fv6_active = _fv6_series
+        _chart_tools(_fig_fv6, _fv6_active, "fv6", "bp")
     with _an_tabs[5]:
         st.markdown("#### 6v3 Basis Spreads")
         _com6v3_sp = sorted([c for c in _w6.columns if c in _w3.columns and c.endswith("Y")],
@@ -3826,6 +3911,12 @@ def fwd_analysis_tab():
             _fig_bsp.add_hline(y=0,line=dict(color="#64748b",width=1))
             _fig_layout(_fig_bsp, _cut_bsp, "6v3 Spread (bp)")
             st.plotly_chart(_fig_bsp, use_container_width=True)
+            if _bsp_as_spread and len(_bsp_series) >= 2:
+                _ks = list(_bsp_series.keys())
+                _bsp_active = {f"{_ks[0]} − {_ks[1]}": (_bsp_series[_ks[0]] - _bsp_series[_ks[1]]).dropna()}
+            else:
+                _bsp_active = _bsp_series
+            _chart_tools(_fig_bsp, _bsp_active, "bsp", "bp")
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: Optional[tuple] = None,
