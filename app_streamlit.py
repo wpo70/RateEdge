@@ -2999,6 +2999,59 @@ def _load_ois_from_db_latest(ccy: str = "AUD") -> pd.DataFrame:
         return None
 
 
+def generate_forward_matrix(ccy: str, curve: pd.DataFrame, basis_6v3: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """Public wrapper — converts DataFrames → tuples and calls the cached matrix generator."""
+    if curve is None or curve.empty:
+        return pd.DataFrame()
+    curve_tuple = (
+        tuple(curve["MaturityY"].to_numpy().astype(float).tolist()),
+        tuple(curve["ZeroRatePct"].to_numpy().astype(float).tolist()),
+    )
+    basis_tuple = None
+    if basis_6v3 is not None and not basis_6v3.empty and "MaturityY" in basis_6v3.columns and "BasisBp" in basis_6v3.columns:
+        basis_tuple = (
+            tuple(basis_6v3["MaturityY"].to_numpy().astype(float).tolist()),
+            tuple(basis_6v3["BasisBp"].to_numpy().astype(float).tolist()),
+        )
+    ois_tuple = None
+    ois_curve = get_basis_curve(ccy, "ois")
+    if ois_curve is not None and not ois_curve.empty:
+        _oc = ois_curve.drop(columns=["_source_date"], errors="ignore")
+        if "MaturityY" in _oc.columns and "ZeroRatePct" in _oc.columns:
+            ois_tuple = (
+                tuple(_oc["MaturityY"].to_numpy().astype(float).tolist()),
+                tuple(_oc["ZeroRatePct"].to_numpy().astype(float).tolist()),
+            )
+    return _generate_forward_matrix_cached(ccy, curve_tuple, basis_tuple, convention="market", ois_tuple=ois_tuple)
+
+
+def generate_forward_matrix_convention(ccy: str, curve: pd.DataFrame, basis_6v3: Optional[pd.DataFrame] = None,
+                                        convention: str = "market") -> pd.DataFrame:
+    """Public wrapper — like generate_forward_matrix but with explicit convention override."""
+    if curve is None or curve.empty:
+        return pd.DataFrame()
+    curve_tuple = (
+        tuple(curve["MaturityY"].to_numpy().astype(float).tolist()),
+        tuple(curve["ZeroRatePct"].to_numpy().astype(float).tolist()),
+    )
+    basis_tuple = None
+    if basis_6v3 is not None and not basis_6v3.empty and "MaturityY" in basis_6v3.columns and "BasisBp" in basis_6v3.columns:
+        basis_tuple = (
+            tuple(basis_6v3["MaturityY"].to_numpy().astype(float).tolist()),
+            tuple(basis_6v3["BasisBp"].to_numpy().astype(float).tolist()),
+        )
+    ois_tuple = None
+    ois_curve = get_basis_curve(ccy, "ois")
+    if ois_curve is not None and not ois_curve.empty:
+        _oc = ois_curve.drop(columns=["_source_date"], errors="ignore")
+        if "MaturityY" in _oc.columns and "ZeroRatePct" in _oc.columns:
+            ois_tuple = (
+                tuple(_oc["MaturityY"].to_numpy().astype(float).tolist()),
+                tuple(_oc["ZeroRatePct"].to_numpy().astype(float).tolist()),
+            )
+    return _generate_forward_matrix_cached(ccy, curve_tuple, basis_tuple, convention=convention, ois_tuple=ois_tuple)
+
+
 def curves_tab():
     st.subheader(" Curves & Forward Swap Matrix")
     
@@ -3746,75 +3799,6 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
     df = pd.DataFrame(matrix)
     df = df.set_index("Expiry")
     return df
-
-
-def generate_forward_matrix(ccy: str, curve: pd.DataFrame, basis_6v3: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-    """
-    Public wrapper — converts DataFrames → tuples and calls the cached matrix generator.
-    Uses 'market' convention (AUD: ≤3Y Q/Q, >3Y S/S).
-    OIS curve is pulled from session state if available.
-    """
-    if curve is None or curve.empty:
-        return pd.DataFrame()
-
-    curve_tuple = (
-        tuple(curve["MaturityY"].to_numpy().astype(float).tolist()),
-        tuple(curve["ZeroRatePct"].to_numpy().astype(float).tolist()),
-    )
-
-    basis_tuple = None
-    if basis_6v3 is not None and not basis_6v3.empty and "MaturityY" in basis_6v3.columns and "BasisBp" in basis_6v3.columns:
-        basis_tuple = (
-            tuple(basis_6v3["MaturityY"].to_numpy().astype(float).tolist()),
-            tuple(basis_6v3["BasisBp"].to_numpy().astype(float).tolist()),
-        )
-
-    # Pull OIS curve from session state via canonical getter
-    ois_tuple = None
-    ois_curve = get_basis_curve(ccy, "ois")
-    if ois_curve is not None and not ois_curve.empty:
-        _oc = ois_curve.drop(columns=["_source_date"], errors="ignore")
-        if "MaturityY" in _oc.columns and "ZeroRatePct" in _oc.columns:
-            ois_tuple = (
-                tuple(_oc["MaturityY"].to_numpy().astype(float).tolist()),
-                tuple(_oc["ZeroRatePct"].to_numpy().astype(float).tolist()),
-            )
-
-    return _generate_forward_matrix_cached(ccy, curve_tuple, basis_tuple, convention="market", ois_tuple=ois_tuple)
-
-
-def generate_forward_matrix_convention(ccy: str, curve: pd.DataFrame, basis_6v3: Optional[pd.DataFrame] = None,
-                                        convention: str = "market") -> pd.DataFrame:
-    """
-    Public wrapper — like generate_forward_matrix but with explicit convention override.
-    convention: 'market' | 'qq' | 'ss'
-    """
-    if curve is None or curve.empty:
-        return pd.DataFrame()
-
-    curve_tuple = (
-        tuple(curve["MaturityY"].to_numpy().astype(float).tolist()),
-        tuple(curve["ZeroRatePct"].to_numpy().astype(float).tolist()),
-    )
-
-    basis_tuple = None
-    if basis_6v3 is not None and not basis_6v3.empty and "MaturityY" in basis_6v3.columns and "BasisBp" in basis_6v3.columns:
-        basis_tuple = (
-            tuple(basis_6v3["MaturityY"].to_numpy().astype(float).tolist()),
-            tuple(basis_6v3["BasisBp"].to_numpy().astype(float).tolist()),
-        )
-
-    ois_tuple = None
-    ois_curve = get_basis_curve(ccy, "ois")
-    if ois_curve is not None and not ois_curve.empty:
-        _oc = ois_curve.drop(columns=["_source_date"], errors="ignore")
-        if "MaturityY" in _oc.columns and "ZeroRatePct" in _oc.columns:
-            ois_tuple = (
-                tuple(_oc["MaturityY"].to_numpy().astype(float).tolist()),
-                tuple(_oc["ZeroRatePct"].to_numpy().astype(float).tolist()),
-            )
-
-    return _generate_forward_matrix_cached(ccy, curve_tuple, basis_tuple, convention=convention, ois_tuple=ois_tuple)
 
 
 def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, tenor: float, ccy: str,
