@@ -3747,7 +3747,7 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
     tenors = ["1Y", "2Y", "3Y", "4Y", "5Y", "7Y", "10Y", "12Y", "15Y", "20Y", "25Y", "30Y"]
 
     curve_x = np.array(curve_tuple[0])
-    curve_y = np.array(curve_tuple[1]) / 100.0
+    curve_y = np.array(curve_tuple[1])          # ZeroRatePct stored as decimal (e.g. 0.045 = 4.5%)
 
     basis_x = basis_y = None
     if basis_tuple is not None:
@@ -3757,7 +3757,7 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
     ois_x = ois_y = None
     if ois_tuple is not None:
         ois_x = np.array(ois_tuple[0])
-        ois_y = np.array(ois_tuple[1]) / 100.0
+        ois_y = np.array(ois_tuple[1])          # ZeroRatePct stored as decimal
     
     matrix = []
     
@@ -3788,14 +3788,14 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
                     if tenor_y <= 3.0:
                         fwd = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy, freq_override=0.25, ois_x=ois_x, ois_y=ois_y)
                     else:
-                        fwd = mkt_rate - basis_bp / 10000.0
+                        fwd = mkt_rate - basis_bp / 100.0   # BasisBp=0.22 → 0.22/100=0.0022 = 22bp
 
                 elif convention == "ss":
                     # S/S forced:
                     # ≤3Y tenors: market is Q/Q — add basis to get S/S equivalent
                     # >3Y tenors: market is already S/S — same rate, just recalc with S/S frequency
                     if tenor_y <= 3.0:
-                        fwd = mkt_rate + basis_bp / 10000.0
+                        fwd = mkt_rate + basis_bp / 100.0   # BasisBp=0.22 → 0.22/100=0.0022 = 22bp
                     else:
                         fwd = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy, freq_override=0.5, ois_x=ois_x, ois_y=ois_y)
 
@@ -9509,7 +9509,7 @@ def _generate_basis_matrix_cached(ccy: str, basis_tuple: tuple) -> pd.DataFrame:
             tenor_y = float(tenor[:-1])
             mid_point = exp_y + tenor_y / 2
             basis_bp = float(np.interp(mid_point, basis_x, basis_y))
-            row[tenor] = basis_bp
+            row[tenor] = round(basis_bp * 100, 4)   # BasisBp stored as decimal×100, *100 → bp
         matrix.append(row)
     
     df = pd.DataFrame(matrix).set_index("Expiry")
@@ -9744,8 +9744,8 @@ def main():
             " Home",
             " Vol / SABR",
             " Curves",
-            "📈 FWD Analysis",
             " Rate/Vol Matrix",
+            "📈 FWD Analysis",
             " Swaptions",
             " Caps & Floors",
             " Portfolio",
@@ -9766,9 +9766,9 @@ def main():
     with tabs[2]:
         curves_tab()
     with tabs[3]:
-        fwd_analysis_tab()
-    with tabs[4]:
         rate_vol_matrix_tab(ccy)
+    with tabs[4]:
+        fwd_analysis_tab()
     with tabs[5]:
         swaptions_tab(vol_mode)
     with tabs[6]:
