@@ -3095,192 +3095,260 @@ def curves_tab():
 
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_swap_rates_from_db(floating_rate: str) -> pd.DataFrame:
+    """Load swap rates from Supabase, return wide-format DataFrame indexed by date."""
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return pd.DataFrame()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT date, tenor, rate FROM swap_rates WHERE currency=%s AND floating_rate=%s ORDER BY date",
+            ("AUD", floating_rate)
+        )
+        rows = cur.fetchall()
+        conn.close()
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows, columns=["date", "tenor", "rate"])
+        df["date"] = pd.to_datetime(df["date"])
+        df["rate"] = df["rate"].astype(float)
+        wide = df.pivot_table(index="date", columns="tenor", values="rate", aggfunc="last")
+        return wide.sort_index()
+    except Exception:
+        return pd.DataFrame()
+
+
 def fwd_analysis_tab():
     """FWD Swap & Basis Historical Analysis tab"""
     st.subheader("📈 FWD Swap & Basis Historical Analysis")
-    st.caption("Analyse IRS spreads, butterflies, fwd-fwd rates and 6v3 basis from BlueGamma historical data.")
+    st.caption("IRS spreads, butterflies, fwd-fwd rates and 6v3 basis from Supabase (BlueGamma data 2018–today).")
 
-    _bg3 = None
-    _bg6 = None
-    try:
-        _bg3_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aud_3m_bbsw_complete.csv")
-        _bg6_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aud_6m_bbsw_complete.csv")
-        if os.path.exists(_bg3_path):
-            _bg3 = pd.read_csv(_bg3_path)
-            _bg3["date"] = pd.to_datetime(_bg3["date"])
-        if os.path.exists(_bg6_path):
-            _bg6 = pd.read_csv(_bg6_path)
-            _bg6["date"] = pd.to_datetime(_bg6["date"])
-    except Exception:
-        pass
+    with st.spinner("Loading swap rate history..."):
+        _w3 = _load_swap_rates_from_db("3M BBSW")
+        _w6 = _load_swap_rates_from_db("6M BBSW")
 
-    if _bg3 is None:
-        st.info("Upload aud_3m_bbsw_complete.csv to the app folder to enable historical analysis.")
+    if _w3.empty and _w6.empty:
+        st.warning("No swap rate data found in database. Check Supabase connection.")
         return
 
-    _wide3 = _bg3.pivot_table(index="date", columns="tenor", values="rate").sort_index()
-    _wide6 = _bg6.pivot_table(index="date", columns="tenor", values="rate").sort_index() if _bg6 is not None else None
+    def _tenor_years(t):
+        import re as _re
+        t = str(t).strip().upper()
+        m = _re.match(r"(\d+(?:\.\d+)?)(Y|M)", t)
+        if not m: return None
+        v, u = float(m.group(1)), m.group(2)
+        return v if u == "Y" else v / 12
 
     def _fwd(wide, start_y, tenor_y):
         end_y = start_y + tenor_y
-        def _lbl(y): return f"{int(y)}Y" if y == int(y) else f"{round(y*12)}M"
+        def _lbl(y):
+            if y == int(y): return f"{int(y)}Y"
+            return f"{round(y*12)}M"
         s, e = _lbl(start_y), _lbl(end_y)
-        if s not in wide.columns or e not in wide.columns:
-            return None
+        if s not in wide.columns or e not in wide.columns: return None
         return (wide[e] * end_y - wide[s] * start_y) / tenor_y
 
-    _sp_colors = ["#3b82f6","#ef4444","#22c55e","#f59e0b","#a855f7","#06b6d4"]
-    _an_tabs = st.tabs(["IRS Spreads", "IRS Butterflies", "Fwd-Fwd Rates", "6v3 Basis"])
+    _sp_colors = ["#3b82f6","#ef4444","#22c55e","#f59e0b","#a855f7","#06b6d4","#f43f5e","#84cc16"]
 
-    # TAB 1: IRS SPREADS
+    # Note data coverage
+    _3m_full = [c for c in (_w3.columns if not _w3.empty else [])
+                if c.endswith("Y") and not _w3[c].dropna().empty
+                and _w3[c].dropna().index.min() < pd.Timestamp("2020-01-01")]
+    _6m_full = [c for c in (_w6.columns if not _w6.empty else [])
+                if c.endswith("Y") and not _w6[c].dropna().empty
+                and _w6[c].dropna().index.min() < pd.Timestamp("2020-01-01")]
+
+    st.caption(f"3M BBSW full history tenors: {', '.join(sorted(_3m_full, key=lambda x: int(x[:-1])))}  |  "
+               f"6M BBSW full history tenors: {', '.join(sorted(_6m_full, key=lambda x: int(x[:-1])))}")
+
+    _an_tabs = st.tabs(["IRS Spreads", "IRS Butterflies", "Fwd-Fwd Rates (3M)", "6v3 Outright", "6v3 Fwd-Fwd", "6v3 Spreads"])
+
+    # ── TAB 1: IRS SPREADS ──────────────────────────────────────
     with _an_tabs[0]:
-        st.markdown("#### IRS Curve Spreads")
-        _spread_presets = [
-            ("2s5s", 2, 5), ("2s10s", 2, 10), ("5s10s", 5, 10),
-            ("5s15s", 5, 15), ("10s15s", 10, 15), ("2s30s", 2, 30),
-        ]
-        _valid_presets = [(lbl, s, e) for lbl, s, e in _spread_presets
-                          if f"{s}Y" in _wide3.columns and f"{e}Y" in _wide3.columns]
-        _sp_col1, _sp_col2, _sp_col3 = st.columns(3)
-        with _sp_col1:
-            _sp_sel = st.multiselect("Spreads", [l for l,s,e in _valid_presets],
-                                      default=[l for l,s,e in _valid_presets[:3]], key="irs_sp_sel")
-        with _sp_col2:
-            _sp_years = st.slider("History (years)", 1, 7, 5, key="irs_sp_yrs")
-        with _sp_col3:
-            _sp_ref = st.checkbox("Show mean ± 1σ bands", value=True, key="irs_sp_bands")
-
-        _cutoff = pd.Timestamp.now() - pd.DateOffset(years=_sp_years)
-        _fig_sp = go.Figure()
-        for _idx, _lbl in enumerate(_sp_sel):
-            _preset = next((x for x in _valid_presets if x[0] == _lbl), None)
-            if not _preset: continue
-            _, _s, _e = _preset
-            _spread = (_wide3[f"{_e}Y"] - _wide3[f"{_s}Y"]).dropna()
-            _spread = _spread[_spread.index >= _cutoff] * 100
-            _c = _sp_colors[_idx % len(_sp_colors)]
-            _fig_sp.add_trace(go.Scatter(x=_spread.index, y=_spread.values,
-                mode="lines", name=_lbl, line=dict(color=_c, width=1.5)))
-            if _sp_ref:
-                _mu, _sd = _spread.mean(), _spread.std()
-                _fig_sp.add_hline(y=_mu, line=dict(color=_c, dash="dash", width=1), opacity=0.5)
-                _fig_sp.add_hrect(y0=_mu-_sd, y1=_mu+_sd, fillcolor=_c, opacity=0.06, line_width=0)
-        _fig_sp.update_layout(height=400, margin=dict(l=50,r=20,t=30,b=40),
+        st.markdown("#### IRS Curve Spreads (3M BBSW)")
+        _sp_presets = [("2s5s",2,5),("2s10s",2,10),("5s10s",5,10),("5s15s",5,15),("10s15s",10,15),("2s30s",2,30)]
+        _valid_sp = [(l,s,e) for l,s,e in _sp_presets if f"{s}Y" in _w3.columns and f"{e}Y" in _w3.columns]
+        c1,c2,c3 = st.columns(3)
+        with c1: _sp_sel = st.multiselect("Spreads", [l for l,*_ in _valid_sp], default=[l for l,*_ in _valid_sp[:3]], key="sp_sel")
+        with c2: _sp_yr = st.slider("History (years)", 1, 8, 5, key="sp_yr")
+        with c3: _sp_bands = st.checkbox("Mean ± 1σ bands", True, key="sp_bands")
+        _cut = pd.Timestamp.now() - pd.DateOffset(years=_sp_yr)
+        _fig = go.Figure()
+        for _i, _l in enumerate(_sp_sel):
+            _p = next((x for x in _valid_sp if x[0]==_l), None)
+            if not _p: continue
+            _,_s,_e = _p
+            _sr = (_w3[f"{_e}Y"] - _w3[f"{_s}Y"]).dropna()
+            _sr = _sr[_sr.index>=_cut]*100
+            _c = _sp_colors[_i%len(_sp_colors)]
+            _fig.add_trace(go.Scatter(x=_sr.index, y=_sr.values, mode="lines", name=_l, line=dict(color=_c,width=1.5)))
+            if _sp_bands:
+                _mu,_sd = _sr.mean(),_sr.std()
+                _fig.add_hline(y=_mu, line=dict(color=_c,dash="dash",width=1), opacity=0.5)
+                _fig.add_hrect(y0=_mu-_sd, y1=_mu+_sd, fillcolor=_c, opacity=0.06, line_width=0)
+        _fig.update_layout(height=420, margin=dict(l=50,r=20,t=30,b=40),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
-            legend=dict(orientation="h", y=1.05), yaxis_title="Spread (bp)",
+            legend=dict(orientation="h",y=1.05), yaxis_title="Spread (bp)",
             xaxis=dict(gridcolor="#334155"), yaxis=dict(gridcolor="#334155"))
-        st.plotly_chart(_fig_sp, use_container_width=True)
+        st.plotly_chart(_fig, use_container_width=True)
 
-    # TAB 2: IRS BUTTERFLIES
+    # ── TAB 2: IRS BUTTERFLIES ──────────────────────────────────
     with _an_tabs[1]:
-        st.markdown("#### IRS Rate Butterflies")
-        _fly_presets = [
-            ("2s5s10s fly", 2, 5, 10), ("2s7s15s fly", 2, 7, 15),
-            ("5s10s15s fly", 5, 10, 15), ("2s10s20s fly", 2, 10, 20),
-        ]
-        _valid_flies = [(lbl, w, m, e) for lbl, w, m, e in _fly_presets
-                        if all(f"{t}Y" in _wide3.columns for t in [w, m, e])]
-        _fl_col1, _fl_col2 = st.columns([2, 1])
-        with _fl_col1:
-            _fl_sel = st.multiselect("Butterflies", [l for l,*_ in _valid_flies],
-                                      default=[l for l,*_ in _valid_flies[:2]], key="irs_fl_sel")
-        with _fl_col2:
-            _fl_years = st.slider("History (years)", 1, 7, 5, key="irs_fl_yrs")
-
-        _cutoff_fl = pd.Timestamp.now() - pd.DateOffset(years=_fl_years)
+        st.markdown("#### IRS Rate Butterflies (3M BBSW)")
+        _fl_presets = [("2s5s10s",2,5,10),("2s7s15s",2,7,15),("5s10s15s",5,10,15),("2s10s20s",2,10,20)]
+        _valid_fl = [(l,w,m,e) for l,w,m,e in _fl_presets if all(f"{t}Y" in _w3.columns for t in [w,m,e])]
+        c1,c2 = st.columns([2,1])
+        with c1: _fl_sel = st.multiselect("Butterflies",[l for l,*_ in _valid_fl], default=[l for l,*_ in _valid_fl[:2]], key="fl_sel")
+        with c2: _fl_yr = st.slider("History (years)",1,8,5,key="fl_yr")
+        _cut_fl = pd.Timestamp.now() - pd.DateOffset(years=_fl_yr)
         _fig_fl = go.Figure()
-        for _idx, _lbl in enumerate(_fl_sel):
-            _preset = next((x for x in _valid_flies if x[0] == _lbl), None)
-            if not _preset: continue
-            _, _w, _m, _e = _preset
-            _fly = (_wide3[f"{_m}Y"] - 0.5*(_wide3[f"{_w}Y"] + _wide3[f"{_e}Y"])).dropna()
-            _fly = _fly[_fly.index >= _cutoff_fl] * 100
-            _c = _sp_colors[_idx % len(_sp_colors)]
-            _fig_fl.add_trace(go.Scatter(x=_fly.index, y=_fly.values,
-                mode="lines", name=_lbl, line=dict(color=_c, width=1.5)))
-            _fig_fl.add_hline(y=_fly.mean(), line=dict(color=_c, dash="dot", width=1), opacity=0.5)
-        _fig_fl.add_hline(y=0, line=dict(color="#64748b", width=1))
-        _fig_fl.update_layout(height=400, margin=dict(l=50,r=20,t=30,b=40),
+        for _i,_l in enumerate(_fl_sel):
+            _p = next((x for x in _valid_fl if x[0]==_l), None)
+            if not _p: continue
+            _,_w,_m,_e = _p
+            _fly = (_w3[f"{_m}Y"] - 0.5*(_w3[f"{_w}Y"]+_w3[f"{_e}Y"])).dropna()
+            _fly = _fly[_fly.index>=_cut_fl]*100
+            _c = _sp_colors[_i%len(_sp_colors)]
+            _fig_fl.add_trace(go.Scatter(x=_fly.index, y=_fly.values, mode="lines", name=_l, line=dict(color=_c,width=1.5)))
+            _fig_fl.add_hline(y=_fly.mean(), line=dict(color=_c,dash="dot",width=1), opacity=0.5)
+        _fig_fl.add_hline(y=0, line=dict(color="#64748b",width=1))
+        _fig_fl.update_layout(height=420, margin=dict(l=50,r=20,t=30,b=40),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
-            legend=dict(orientation="h", y=1.05), yaxis_title="Fly (bp)",
+            legend=dict(orientation="h",y=1.05), yaxis_title="Fly (bp)",
             xaxis=dict(gridcolor="#334155"), yaxis=dict(gridcolor="#334155"))
         st.plotly_chart(_fig_fl, use_container_width=True)
 
-    # TAB 3: FWD-FWD RATES
+    # ── TAB 3: FWD-FWD RATES (3M) ──────────────────────────────
     with _an_tabs[2]:
-        st.markdown("#### Forward-Forward Swap Rates")
-        _fwd_presets = [
-            ("2y2y", 2, 2), ("4y2y", 4, 2), ("2y5y", 2, 5),
-            ("5y5y", 5, 5), ("2y10y", 2, 10), ("5y10y", 5, 10),
-        ]
-        _valid_fwds = [(l, s, t) for l, s, t in _fwd_presets if _fwd(_wide3, s, t) is not None]
-        _fv_col1, _fv_col2, _fv_col3 = st.columns(3)
-        with _fv_col1:
-            _fv_sel = st.multiselect("Fwd-Fwd Rates", [l for l,*_ in _valid_fwds],
-                                      default=[l for l,*_ in _valid_fwds[:3]], key="fvfv_sel")
-        with _fv_col2:
-            _fv_years = st.slider("History (years)", 1, 7, 5, key="fvfv_yrs")
-        with _fv_col3:
-            _fv_spread = st.checkbox("Show as spread (1st vs 2nd)", value=False, key="fvfv_sprd")
-
-        _cutoff_fv = pd.Timestamp.now() - pd.DateOffset(years=_fv_years)
+        st.markdown("#### Forward-Forward Swap Rates (3M BBSW)")
+        _fv_presets = [("1y1y",1,1),("1y2y",1,2),("2y1y",2,1),("2y2y",2,2),("2y3y",2,3),
+                       ("4y2y",4,2),("5y5y",5,5),("2y10y",2,10),("5y10y",5,10)]
+        _valid_fv = [(l,s,t) for l,s,t in _fv_presets if _fwd(_w3,s,t) is not None]
+        c1,c2,c3 = st.columns(3)
+        with c1: _fv_sel = st.multiselect("Fwd-Fwd Rates",[l for l,*_ in _valid_fv], default=[l for l,*_ in _valid_fv[:3]], key="fv_sel")
+        with c2: _fv_yr = st.slider("History (years)",1,8,5,key="fv_yr")
+        with c3: _fv_as_spread = st.checkbox("Show as spread (1st vs 2nd)",False,key="fv_sprd")
+        _cut_fv = pd.Timestamp.now() - pd.DateOffset(years=_fv_yr)
         _fig_fv = go.Figure()
         _fv_series = {}
-        for _lbl, _st_y, _tn in _valid_fwds:
-            if _lbl in _fv_sel:
-                _r = _fwd(_wide3, _st_y, _tn)
+        for _l,_s,_t in _valid_fv:
+            if _l in _fv_sel:
+                _r = _fwd(_w3,_s,_t)
                 if _r is not None:
-                    _fv_series[_lbl] = _r[_r.index >= _cutoff_fv].dropna()
-
-        if _fv_spread and len(_fv_series) >= 2:
-            _keys = list(_fv_series.keys())
-            _combined = (_fv_series[_keys[0]] - _fv_series[_keys[1]]).dropna() * 100
-            _fig_fv.add_trace(go.Scatter(x=_combined.index, y=_combined.values,
-                mode="lines", name=f"{_keys[0]} - {_keys[1]}", line=dict(color="#3b82f6", width=1.5)))
-            _fig_fv.add_hline(y=_combined.mean(), line=dict(color="#94a3b8", dash="dash", width=1))
+                    _fv_series[_l] = _r[_r.index>=_cut_fv].dropna()
+        if _fv_as_spread and len(_fv_series)>=2:
+            _ks = list(_fv_series.keys())
+            _cmb = (_fv_series[_ks[0]]-_fv_series[_ks[1]]).dropna()*100
+            _fig_fv.add_trace(go.Scatter(x=_cmb.index,y=_cmb.values,mode="lines",
+                name=f"{_ks[0]} − {_ks[1]}",line=dict(color="#3b82f6",width=1.5)))
+            _fig_fv.add_hline(y=_cmb.mean(),line=dict(color="#94a3b8",dash="dash",width=1))
             _fig_fv.update_layout(yaxis_title="Spread (bp)")
         else:
-            for _idx, (_lbl, _s) in enumerate(_fv_series.items()):
-                _c = _sp_colors[_idx % len(_sp_colors)]
-                _fig_fv.add_trace(go.Scatter(x=_s.index, y=_s.values,
-                    mode="lines", name=_lbl, line=dict(color=_c, width=1.5)))
+            for _i,(_l,_s) in enumerate(_fv_series.items()):
+                _fig_fv.add_trace(go.Scatter(x=_s.index,y=_s.values,mode="lines",
+                    name=_l,line=dict(color=_sp_colors[_i%len(_sp_colors)],width=1.5)))
             _fig_fv.update_layout(yaxis_title="Rate (%)")
-
-        _fig_fv.update_layout(height=400, margin=dict(l=50,r=20,t=30,b=40),
+        _fig_fv.update_layout(height=420, margin=dict(l=50,r=20,t=30,b=40),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
-            legend=dict(orientation="h", y=1.05),
+            legend=dict(orientation="h",y=1.05),
             xaxis=dict(gridcolor="#334155"), yaxis=dict(gridcolor="#334155"))
         st.plotly_chart(_fig_fv, use_container_width=True)
 
-    # TAB 4: 6v3 BASIS
+    # ── TAB 4: 6v3 OUTRIGHT ────────────────────────────────────
     with _an_tabs[3]:
-        st.markdown("#### 6v3 Basis Analysis")
-        if _wide6 is None:
-            st.info("Upload aud_6m_bbsw_complete.csv to enable 6v3 basis analysis.")
+        st.markdown("#### 6v3 Basis — Outright (6M BBSW − 3M BBSW)")
+        _com6v3 = sorted([c for c in _w6.columns if c in _w3.columns and c.endswith("Y")],
+                          key=lambda x: int(x[:-1]))
+        if not _com6v3:
+            st.info("No overlapping tenors between 3M and 6M BBSW.")
         else:
-            _common = sorted([c for c in _wide6.columns if c in _wide3.columns and c.endswith("Y")],
-                              key=lambda x: int(x[:-1]))
-            _b6_col1, _b6_col2 = st.columns([2, 1])
-            with _b6_col1:
-                _b6_sel = st.multiselect("Tenors", _common, default=_common[:4], key="b6_sel")
-            with _b6_col2:
-                _b6_years = st.slider("History (years)", 1, 7, 5, key="b6_yrs")
-
-            _cutoff_b6 = pd.Timestamp.now() - pd.DateOffset(years=_b6_years)
+            c1,c2 = st.columns([2,1])
+            with c1: _b6_sel = st.multiselect("Tenors", _com6v3, default=_com6v3[:4], key="b6_sel")
+            with c2: _b6_yr = st.slider("History (years)",1,8,5,key="b6_yr")
+            _cut_b6 = pd.Timestamp.now() - pd.DateOffset(years=_b6_yr)
             _fig_b6 = go.Figure()
-            for _idx, _tn in enumerate(_b6_sel):
-                _b6 = (_wide6[_tn] - _wide3[_tn]).dropna()
-                _b6 = _b6[_b6.index >= _cutoff_b6] * 100
-                _c = _sp_colors[_idx % len(_sp_colors)]
-                _fig_b6.add_trace(go.Scatter(x=_b6.index, y=_b6.values,
-                    mode="lines", name=f"{_tn} 6v3", line=dict(color=_c, width=1.5)))
-                _fig_b6.add_hline(y=_b6.mean(), line=dict(color=_c, dash="dash", width=1), opacity=0.5)
-            _fig_b6.add_hline(y=0, line=dict(color="#64748b", width=1))
-            _fig_b6.update_layout(height=400, margin=dict(l=50,r=20,t=30,b=40),
+            for _i,_tn in enumerate(_b6_sel):
+                _b6 = (_w6[_tn]-_w3[_tn]).dropna()
+                _b6 = _b6[_b6.index>=_cut_b6]*100
+                _c = _sp_colors[_i%len(_sp_colors)]
+                _fig_b6.add_trace(go.Scatter(x=_b6.index,y=_b6.values,mode="lines",
+                    name=f"{_tn} 6v3",line=dict(color=_c,width=1.5)))
+                _fig_b6.add_hline(y=_b6.mean(),line=dict(color=_c,dash="dash",width=1),opacity=0.5)
+            _fig_b6.add_hline(y=0,line=dict(color="#64748b",width=1))
+            _fig_b6.update_layout(height=420, margin=dict(l=50,r=20,t=30,b=40),
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
-                legend=dict(orientation="h", y=1.05), yaxis_title="6v3 Basis (bp)",
+                legend=dict(orientation="h",y=1.05), yaxis_title="6v3 Basis (bp)",
                 xaxis=dict(gridcolor="#334155"), yaxis=dict(gridcolor="#334155"))
             st.plotly_chart(_fig_b6, use_container_width=True)
+
+    # ── TAB 5: 6v3 FWD-FWD ─────────────────────────────────────
+    with _an_tabs[4]:
+        st.markdown("#### 6v3 Forward-Forward Basis")
+        st.caption("Fwd-fwd 6v3 = fwd-fwd 6M BBSW − fwd-fwd 3M BBSW for same start/tenor")
+        _fv6_presets = [("1y1y",1,1),("1y2y",1,2),("2y2y",2,2),("2y3y",2,3),("4y2y",4,2),("5y5y",5,5)]
+        _valid_fv6 = [(l,s,t) for l,s,t in _fv6_presets
+                       if _fwd(_w6,s,t) is not None and _fwd(_w3,s,t) is not None]
+        c1,c2 = st.columns([2,1])
+        with c1: _fv6_sel = st.multiselect("Fwd-Fwd Pairs",[l for l,*_ in _valid_fv6],
+                                             default=[l for l,*_ in _valid_fv6[:3]], key="fv6_sel")
+        with c2: _fv6_yr = st.slider("History (years)",1,8,5,key="fv6_yr")
+        _cut_fv6 = pd.Timestamp.now() - pd.DateOffset(years=_fv6_yr)
+        _fig_fv6 = go.Figure()
+        for _i,(_l,_s,_t) in enumerate([(l,s,t) for l,s,t in _valid_fv6 if l in _fv6_sel]):
+            _r6 = _fwd(_w6,_s,_t)
+            _r3 = _fwd(_w3,_s,_t)
+            _basis = (_r6-_r3).dropna()
+            _basis = _basis[_basis.index>=_cut_fv6]*100
+            _c = _sp_colors[_i%len(_sp_colors)]
+            _fig_fv6.add_trace(go.Scatter(x=_basis.index,y=_basis.values,mode="lines",
+                name=f"{_l} 6v3",line=dict(color=_c,width=1.5)))
+            _fig_fv6.add_hline(y=_basis.mean(),line=dict(color=_c,dash="dash",width=1),opacity=0.5)
+        _fig_fv6.add_hline(y=0,line=dict(color="#64748b",width=1))
+        _fig_fv6.update_layout(height=420, margin=dict(l=50,r=20,t=30,b=40),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
+            legend=dict(orientation="h",y=1.05), yaxis_title="6v3 Fwd-Fwd Basis (bp)",
+            xaxis=dict(gridcolor="#334155"), yaxis=dict(gridcolor="#334155"))
+        st.plotly_chart(_fig_fv6, use_container_width=True)
+
+    # ── TAB 6: 6v3 SPREADS ─────────────────────────────────────
+    with _an_tabs[5]:
+        st.markdown("#### 6v3 Basis Spreads (e.g. 5Y 6v3 − 10Y 6v3)")
+        if not _com6v3 or len(_com6v3) < 2:
+            st.info("Need at least 2 overlapping tenors for basis spreads.")
+        else:
+            _bsp_presets = []
+            _com_sorted = sorted(_com6v3, key=lambda x: int(x[:-1]))
+            for _i in range(len(_com_sorted)-1):
+                for _j in range(_i+1, min(_i+4, len(_com_sorted))):
+                    _bsp_presets.append(f"{_com_sorted[_i]} vs {_com_sorted[_j]}")
+            c1,c2 = st.columns([2,1])
+            with c1: _bsp_sel = st.multiselect("Basis Spreads", _bsp_presets,
+                                                 default=_bsp_presets[:3], key="bsp_sel")
+            with c2: _bsp_yr = st.slider("History (years)",1,8,5,key="bsp_yr")
+            _cut_bsp = pd.Timestamp.now() - pd.DateOffset(years=_bsp_yr)
+            _fig_bsp = go.Figure()
+            for _i,_lbl in enumerate(_bsp_sel):
+                _parts = _lbl.split(" vs ")
+                if len(_parts)!=2: continue
+                _tn1, _tn2 = _parts
+                if _tn1 not in _w6.columns or _tn1 not in _w3.columns: continue
+                if _tn2 not in _w6.columns or _tn2 not in _w3.columns: continue
+                _b1 = (_w6[_tn1]-_w3[_tn1]).dropna()*100
+                _b2 = (_w6[_tn2]-_w3[_tn2]).dropna()*100
+                _bspread = (_b1-_b2).dropna()
+                _bspread = _bspread[_bspread.index>=_cut_bsp]
+                _c = _sp_colors[_i%len(_sp_colors)]
+                _fig_bsp.add_trace(go.Scatter(x=_bspread.index,y=_bspread.values,mode="lines",
+                    name=_lbl,line=dict(color=_c,width=1.5)))
+                _fig_bsp.add_hline(y=_bspread.mean(),line=dict(color=_c,dash="dash",width=1),opacity=0.5)
+            _fig_bsp.add_hline(y=0,line=dict(color="#64748b",width=1))
+            _fig_bsp.update_layout(height=420, margin=dict(l=50,r=20,t=30,b=40),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
+                legend=dict(orientation="h",y=1.05), yaxis_title="6v3 Spread (bp)",
+                xaxis=dict(gridcolor="#334155"), yaxis=dict(gridcolor="#334155"))
+            st.plotly_chart(_fig_bsp, use_container_width=True)
 
 def generate_forward_matrix(ccy: str, curve: pd.DataFrame, basis_6v3: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """Generate forward swap rate matrix - wrapper that calls cached version"""
