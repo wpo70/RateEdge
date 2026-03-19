@@ -3483,13 +3483,16 @@ def fwd_analysis_tab():
                     st.session_state["irs_sp_list"].append((_sp_l1, _sp_l2))
                     st.rerun()
         with bc4:
-            # Show active spreads as removable chips
-            _sp_remove = st.selectbox("Remove spread", ["—"] + [f"{a}−{b}" for a,b in st.session_state["irs_sp_list"]], key="sp_rm")
-            if _sp_remove != "—":
-                _rm_parts = _sp_remove.split("−")
-                if len(_rm_parts)==2 and (_rm_parts[0],_rm_parts[1]) in st.session_state["irs_sp_list"]:
-                    st.session_state["irs_sp_list"].remove((_rm_parts[0],_rm_parts[1]))
-                    st.rerun()
+            rc1, rc2 = st.columns([3,1])
+            with rc1:
+                _sp_remove = st.selectbox("Remove spread", ["—"] + [f"{a}−{b}" for a,b in st.session_state["irs_sp_list"]], key="sp_rm")
+            with rc2:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                if st.button("✕", key="sp_rm_btn", use_container_width=True) and _sp_remove != "—":
+                    _rm_parts = _sp_remove.split("−")
+                    if len(_rm_parts)==2 and (_rm_parts[0],_rm_parts[1]) in st.session_state["irs_sp_list"]:
+                        st.session_state["irs_sp_list"].remove((_rm_parts[0],_rm_parts[1]))
+                        st.rerun()
 
         c1, c2, c3 = st.columns(3)
         with c1: _sp_yr = st.slider("History (years)", 1, 8, 5, key="sp_yr")
@@ -3537,11 +3540,15 @@ def fwd_analysis_tab():
                     st.session_state["irs_fl_list"].append((_fl_w,_fl_m,_fl_e))
                     st.rerun()
         with bc5:
-            _fl_rm = st.selectbox("Remove", ["—"]+[f"{w}/{m}/{e}" for w,m,e in st.session_state["irs_fl_list"]], key="fl_rm")
-            if _fl_rm != "—":
-                _rp = _fl_rm.split("/")
-                if len(_rp)==3 and tuple(_rp) in st.session_state["irs_fl_list"]:
-                    st.session_state["irs_fl_list"].remove(tuple(_rp)); st.rerun()
+            rc1, rc2 = st.columns([3,1])
+            with rc1:
+                _fl_rm = st.selectbox("Remove", ["—"]+[f"{w}/{m}/{e}" for w,m,e in st.session_state["irs_fl_list"]], key="fl_rm")
+            with rc2:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                if st.button("✕", key="fl_rm_btn", use_container_width=True) and _fl_rm != "—":
+                    _rp = _fl_rm.split("/")
+                    if len(_rp)==3 and tuple(_rp) in st.session_state["irs_fl_list"]:
+                        st.session_state["irs_fl_list"].remove(tuple(_rp)); st.rerun()
 
         c1,c2,c3 = st.columns(3)
         with c1: _fl_yr = st.slider("History (years)",1,8,5,key="fl_yr")
@@ -3587,15 +3594,19 @@ def fwd_analysis_tab():
                 if (_fv_st,_fv_tn) not in st.session_state["fvfv_list"]:
                     st.session_state["fvfv_list"].append((_fv_st,_fv_tn)); st.rerun()
         with bc4:
-            _fv_rm = st.selectbox("Remove", ["—"]+[f"{s}y{t}y" for s,t in st.session_state["fvfv_list"]], key="fv_rm")
-            if _fv_rm != "—":
-                _rp = _fv_rm[:-1].split("y"); 
-                if len(_rp)==2:
-                    try:
-                        _rs,_rt = int(_rp[0]),int(_rp[1])
-                        if (_rs,_rt) in st.session_state["fvfv_list"]:
-                            st.session_state["fvfv_list"].remove((_rs,_rt)); st.rerun()
-                    except: pass
+            rc1, rc2 = st.columns([3,1])
+            with rc1:
+                _fv_rm = st.selectbox("Remove", ["—"]+[f"{s}y{t}y" for s,t in st.session_state["fvfv_list"]], key="fv_rm")
+            with rc2:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                if st.button("✕", key="fv_rm_btn", use_container_width=True) and _fv_rm != "—":
+                    _rp = _fv_rm[:-1].split("y")
+                    if len(_rp)==2:
+                        try:
+                            _rs,_rt = int(_rp[0]),int(_rp[1])
+                            if (_rs,_rt) in st.session_state["fvfv_list"]:
+                                st.session_state["fvfv_list"].remove((_rs,_rt)); st.rerun()
+                        except: pass
 
         c1,c2,c3 = st.columns(3)
         with c1: _fv_yr = st.slider("History (years)",1,8,5,key="fv_yr")
@@ -3640,9 +3651,13 @@ def fwd_analysis_tab():
                     if _b6_add_tn not in st.session_state["b6_list"]:
                         st.session_state["b6_list"].append(_b6_add_tn); st.rerun()
             with bc3:
-                _b6_rm = st.selectbox("Remove", ["—"]+st.session_state["b6_list"], key="b6_rm")
-                if _b6_rm != "—" and _b6_rm in st.session_state["b6_list"]:
-                    st.session_state["b6_list"].remove(_b6_rm); st.rerun()
+                rc1, rc2 = st.columns([3,1])
+                with rc1:
+                    _b6_rm = st.selectbox("Remove", ["—"]+st.session_state["b6_list"], key="b6_rm")
+                with rc2:
+                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                    if st.button("✕", key="b6_rm_btn", use_container_width=True) and _b6_rm != "—" and _b6_rm in st.session_state["b6_list"]:
+                        st.session_state["b6_list"].remove(_b6_rm); st.rerun()
 
             c1,c2 = st.columns(2)
             with c1: _b6_yr = st.slider("History (years)",1,8,5,key="b6_yr")
@@ -3673,15 +3688,19 @@ def fwd_analysis_tab():
                 if (_fv6_st,_fv6_tn) not in st.session_state["fv6_list"]:
                     st.session_state["fv6_list"].append((_fv6_st,_fv6_tn)); st.rerun()
         with bc4:
-            _fv6_rm = st.selectbox("Remove", ["—"]+[f"{s}y{t}y" for s,t in st.session_state["fv6_list"]], key="fv6_rm")
-            if _fv6_rm != "—":
-                _rp = _fv6_rm[:-1].split("y")
-                if len(_rp)==2:
-                    try:
-                        _rs,_rt=int(_rp[0]),int(_rp[1])
-                        if (_rs,_rt) in st.session_state["fv6_list"]:
-                            st.session_state["fv6_list"].remove((_rs,_rt)); st.rerun()
-                    except: pass
+            rc1, rc2 = st.columns([3,1])
+            with rc1:
+                _fv6_rm = st.selectbox("Remove", ["—"]+[f"{s}y{t}y" for s,t in st.session_state["fv6_list"]], key="fv6_rm")
+            with rc2:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                if st.button("✕", key="fv6_rm_btn", use_container_width=True) and _fv6_rm != "—":
+                    _rp = _fv6_rm[:-1].split("y")
+                    if len(_rp)==2:
+                        try:
+                            _rs,_rt=int(_rp[0]),int(_rp[1])
+                            if (_rs,_rt) in st.session_state["fv6_list"]:
+                                st.session_state["fv6_list"].remove((_rs,_rt)); st.rerun()
+                        except: pass
 
         c1,c2 = st.columns(2)
         with c1: _fv6_yr = st.slider("History (years)",1,8,5,key="fv6_yr")
@@ -3729,11 +3748,15 @@ def fwd_analysis_tab():
                     if (_bsp_l1,_bsp_l2) not in st.session_state["bsp_list"] and _bsp_l1!=_bsp_l2:
                         st.session_state["bsp_list"].append((_bsp_l1,_bsp_l2)); st.rerun()
             with bc4:
-                _bsp_rm = st.selectbox("Remove", ["—"]+[f"{a}−{b}" for a,b in st.session_state["bsp_list"]], key="bsp_rm")
-                if _bsp_rm != "—":
-                    _rp=_bsp_rm.split("−")
-                    if len(_rp)==2 and tuple(_rp) in st.session_state["bsp_list"]:
-                        st.session_state["bsp_list"].remove(tuple(_rp)); st.rerun()
+                rc1, rc2 = st.columns([3,1])
+                with rc1:
+                    _bsp_rm = st.selectbox("Remove", ["—"]+[f"{a}−{b}" for a,b in st.session_state["bsp_list"]], key="bsp_rm")
+                with rc2:
+                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                    if st.button("✕", key="bsp_rm_btn", use_container_width=True) and _bsp_rm != "—":
+                        _rp=_bsp_rm.split("−")
+                        if len(_rp)==2 and tuple(_rp) in st.session_state["bsp_list"]:
+                            st.session_state["bsp_list"].remove(tuple(_rp)); st.rerun()
 
             c1,c2,c3 = st.columns(3)
             with c1: _bsp_yr = st.slider("History (years)",1,8,5,key="bsp_yr")
