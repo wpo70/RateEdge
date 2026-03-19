@@ -3475,13 +3475,11 @@ def fwd_analysis_tab():
         with bc1:
             _sp_l1 = st.selectbox("Leg 1 (short)", _tn_opts, index=_tn_opts.index("2Y") if "2Y" in _tn_opts else 0, key="sp_l1")
         with bc2:
-            _sp_l2 = st.selectbox("Leg 2 (long)", _tn_opts, index=_tn_opts.index("10Y") if "10Y" in _tn_opts else min(4,len(_tn_opts)-1), key="sp_l2")
+            _sp_l2_default = _tn_opts.index("10Y") if "10Y" in _tn_opts else min(4, len(_tn_opts)-1)
+            _sp_l2 = st.selectbox("Leg 2 (long)", _tn_opts, index=_sp_l2_default, key="sp_l2")
         with bc3:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            if st.button("＋ Add", key="sp_add", use_container_width=True):
-                if (_sp_l1, _sp_l2) not in st.session_state["irs_sp_list"] and _sp_l1 != _sp_l2:
-                    st.session_state["irs_sp_list"].append((_sp_l1, _sp_l2))
-                    st.rerun()
+            _sp_add_clicked = st.button("＋ Add", key="sp_add", use_container_width=True)
         with bc4:
             rc1, rc2 = st.columns([3,1])
             with rc1:
@@ -3493,6 +3491,17 @@ def fwd_analysis_tab():
                     if len(_rm_parts)==2 and (_rm_parts[0],_rm_parts[1]) in st.session_state["irs_sp_list"]:
                         st.session_state["irs_sp_list"].remove((_rm_parts[0],_rm_parts[1]))
                         st.rerun()
+
+        if _sp_add_clicked:
+            _l1 = st.session_state.get("sp_l1", _sp_l1)
+            _l2 = st.session_state.get("sp_l2", _sp_l2)
+            if _l1 == _l2:
+                st.warning("Leg 1 and Leg 2 must be different tenors.")
+            elif (_l1, _l2) in st.session_state["irs_sp_list"]:
+                st.warning(f"{_l1}−{_l2} is already in the list.")
+            else:
+                st.session_state["irs_sp_list"].append((_l1, _l2))
+                st.rerun()
 
         c1, c2, c3 = st.columns(3)
         with c1: _sp_yr = st.slider("History (years)", 1, 8, 5, key="sp_yr")
@@ -3535,10 +3544,7 @@ def fwd_analysis_tab():
         with bc3: _fl_e = st.selectbox("Wing 2", _tn_opts, index=_tn_opts.index("10Y") if "10Y" in _tn_opts else 4, key="fl_e")
         with bc4:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            if st.button("＋ Add", key="fl_add", use_container_width=True):
-                if (_fl_w,_fl_m,_fl_e) not in st.session_state["irs_fl_list"] and len({_fl_w,_fl_m,_fl_e})==3:
-                    st.session_state["irs_fl_list"].append((_fl_w,_fl_m,_fl_e))
-                    st.rerun()
+            _fl_add_clicked = st.button("＋ Add", key="fl_add", use_container_width=True)
         with bc5:
             rc1, rc2 = st.columns([3,1])
             with rc1:
@@ -3549,6 +3555,18 @@ def fwd_analysis_tab():
                     _rp = _fl_rm.split("/")
                     if len(_rp)==3 and tuple(_rp) in st.session_state["irs_fl_list"]:
                         st.session_state["irs_fl_list"].remove(tuple(_rp)); st.rerun()
+
+        if _fl_add_clicked:
+            _fw = st.session_state.get("fl_w", _fl_w)
+            _fm = st.session_state.get("fl_m", _fl_m)
+            _fe = st.session_state.get("fl_e", _fl_e)
+            if len({_fw,_fm,_fe}) < 3:
+                st.warning("Wing 1, Body and Wing 2 must all be different tenors.")
+            elif (_fw,_fm,_fe) in st.session_state["irs_fl_list"]:
+                st.warning(f"{_fw}/{_fm}/{_fe} is already in the list.")
+            else:
+                st.session_state["irs_fl_list"].append((_fw,_fm,_fe))
+                st.rerun()
 
         c1,c2,c3 = st.columns(3)
         with c1: _fl_yr = st.slider("History (years)",1,8,5,key="fl_yr")
@@ -3590,9 +3608,7 @@ def fwd_analysis_tab():
         with bc2: _fv_tn = st.selectbox("Tenor (years)", _fwd_tenors, index=_fwd_tenors.index(2) if 2 in _fwd_tenors else 0, key="fv_tn")
         with bc3:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            if st.button("＋ Add", key="fv_add", use_container_width=True):
-                if (_fv_st,_fv_tn) not in st.session_state["fvfv_list"]:
-                    st.session_state["fvfv_list"].append((_fv_st,_fv_tn)); st.rerun()
+            _fv_add_clicked = st.button("＋ Add", key="fv_add", use_container_width=True)
         with bc4:
             rc1, rc2 = st.columns([3,1])
             with rc1:
@@ -3607,6 +3623,14 @@ def fwd_analysis_tab():
                             if (_rs,_rt) in st.session_state["fvfv_list"]:
                                 st.session_state["fvfv_list"].remove((_rs,_rt)); st.rerun()
                         except: pass
+
+        if _fv_add_clicked:
+            _fvs = st.session_state.get("fv_st", _fv_st)
+            _fvt = st.session_state.get("fv_tn", _fv_tn)
+            if (_fvs, _fvt) in st.session_state["fvfv_list"]:
+                st.warning(f"{_fvs}y{_fvt}y is already in the list.")
+            else:
+                st.session_state["fvfv_list"].append((_fvs, _fvt)); st.rerun()
 
         c1,c2,c3 = st.columns(3)
         with c1: _fv_yr = st.slider("History (years)",1,8,5,key="fv_yr")
@@ -3647,9 +3671,7 @@ def fwd_analysis_tab():
             with bc1: _b6_add_tn = st.selectbox("Add tenor", [t for t in _com6v3 if t not in st.session_state["b6_list"]] or _com6v3, key="b6_add_tn")
             with bc2:
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                if st.button("＋ Add", key="b6_add", use_container_width=True):
-                    if _b6_add_tn not in st.session_state["b6_list"]:
-                        st.session_state["b6_list"].append(_b6_add_tn); st.rerun()
+                _b6_add_clicked = st.button("＋ Add", key="b6_add", use_container_width=True)
             with bc3:
                 rc1, rc2 = st.columns([3,1])
                 with rc1:
@@ -3658,6 +3680,11 @@ def fwd_analysis_tab():
                     st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
                     if st.button("✕", key="b6_rm_btn", use_container_width=True) and _b6_rm != "—" and _b6_rm in st.session_state["b6_list"]:
                         st.session_state["b6_list"].remove(_b6_rm); st.rerun()
+
+            if _b6_add_clicked:
+                _btn = st.session_state.get("b6_add_tn", _b6_add_tn)
+                if _btn not in st.session_state["b6_list"]:
+                    st.session_state["b6_list"].append(_btn); st.rerun()
 
             c1,c2 = st.columns(2)
             with c1: _b6_yr = st.slider("History (years)",1,8,5,key="b6_yr")
@@ -3684,9 +3711,7 @@ def fwd_analysis_tab():
         with bc2: _fv6_tn = st.selectbox("Tenor (years)", _fwd_tenors, index=_fwd_tenors.index(2) if 2 in _fwd_tenors else 0, key="fv6_tn")
         with bc3:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            if st.button("＋ Add", key="fv6_add", use_container_width=True):
-                if (_fv6_st,_fv6_tn) not in st.session_state["fv6_list"]:
-                    st.session_state["fv6_list"].append((_fv6_st,_fv6_tn)); st.rerun()
+            _fv6_add_clicked = st.button("＋ Add", key="fv6_add", use_container_width=True)
         with bc4:
             rc1, rc2 = st.columns([3,1])
             with rc1:
@@ -3701,6 +3726,14 @@ def fwd_analysis_tab():
                             if (_rs,_rt) in st.session_state["fv6_list"]:
                                 st.session_state["fv6_list"].remove((_rs,_rt)); st.rerun()
                         except: pass
+
+        if _fv6_add_clicked:
+            _fv6s = st.session_state.get("fv6_st", _fv6_st)
+            _fv6t = st.session_state.get("fv6_tn", _fv6_tn)
+            if (_fv6s, _fv6t) in st.session_state["fv6_list"]:
+                st.warning(f"{_fv6s}y{_fv6t}y is already in the list.")
+            else:
+                st.session_state["fv6_list"].append((_fv6s, _fv6t)); st.rerun()
 
         c1,c2 = st.columns(2)
         with c1: _fv6_yr = st.slider("History (years)",1,8,5,key="fv6_yr")
@@ -3744,9 +3777,7 @@ def fwd_analysis_tab():
             with bc2: _bsp_l2 = st.selectbox("Leg 2 (6v3 tenor)", _com6v3_sp, index=min(2,len(_com6v3_sp)-1), key="bsp_l2")
             with bc3:
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                if st.button("＋ Add", key="bsp_add", use_container_width=True):
-                    if (_bsp_l1,_bsp_l2) not in st.session_state["bsp_list"] and _bsp_l1!=_bsp_l2:
-                        st.session_state["bsp_list"].append((_bsp_l1,_bsp_l2)); st.rerun()
+                _bsp_add_clicked = st.button("＋ Add", key="bsp_add", use_container_width=True)
             with bc4:
                 rc1, rc2 = st.columns([3,1])
                 with rc1:
@@ -3757,6 +3788,16 @@ def fwd_analysis_tab():
                         _rp=_bsp_rm.split("−")
                         if len(_rp)==2 and tuple(_rp) in st.session_state["bsp_list"]:
                             st.session_state["bsp_list"].remove(tuple(_rp)); st.rerun()
+
+            if _bsp_add_clicked:
+                _bl1 = st.session_state.get("bsp_l1", _bsp_l1)
+                _bl2 = st.session_state.get("bsp_l2", _bsp_l2)
+                if _bl1 == _bl2:
+                    st.warning("Leg 1 and Leg 2 must be different tenors.")
+                elif (_bl1, _bl2) in st.session_state["bsp_list"]:
+                    st.warning(f"{_bl1}−{_bl2} is already in the list.")
+                else:
+                    st.session_state["bsp_list"].append((_bl1, _bl2)); st.rerun()
 
             c1,c2,c3 = st.columns(3)
             with c1: _bsp_yr = st.slider("History (years)",1,8,5,key="bsp_yr")
