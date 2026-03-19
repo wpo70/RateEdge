@@ -3174,24 +3174,37 @@ def fwd_analysis_tab():
         with c1: _sp_sel = st.multiselect("Spreads", [l for l,*_ in _valid_sp], default=[l for l,*_ in _valid_sp[:3]], key="sp_sel")
         with c2: _sp_yr = st.slider("History (years)", 1, 8, 5, key="sp_yr")
         with c3: _sp_bands = st.checkbox("Mean ± 1σ bands", True, key="sp_bands")
+        _sp_as_spread = st.checkbox("Show as spread (1st vs 2nd)", False, key="sp_as_spread")
         _cut = pd.Timestamp.now() - pd.DateOffset(years=_sp_yr)
         _fig = go.Figure()
+        _sp_series = {}
         for _i, _l in enumerate(_sp_sel):
             _p = next((x for x in _valid_sp if x[0]==_l), None)
             if not _p: continue
             _,_s,_e = _p
             _sr = (_w3[f"{_e}Y"] - _w3[f"{_s}Y"]).dropna()
             _sr = _sr[_sr.index>=_cut]*100
-            _c = _sp_colors[_i%len(_sp_colors)]
-            _fig.add_trace(go.Scatter(x=_sr.index, y=_sr.values, mode="lines", name=_l, line=dict(color=_c,width=1.5)))
-            if _sp_bands:
-                _mu,_sd = _sr.mean(),_sr.std()
-                _fig.add_hline(y=_mu, line=dict(color=_c,dash="dash",width=1), opacity=0.5)
-                _fig.add_hrect(y0=_mu-_sd, y1=_mu+_sd, fillcolor=_c, opacity=0.06, line_width=0)
+            _sp_series[_l] = _sr
+        if _sp_as_spread and len(_sp_series) >= 2:
+            _ks = list(_sp_series.keys())
+            _cmb = (_sp_series[_ks[0]] - _sp_series[_ks[1]]).dropna()
+            _fig.add_trace(go.Scatter(x=_cmb.index, y=_cmb.values, mode="lines",
+                name=f"{_ks[0]} − {_ks[1]}", line=dict(color=_sp_colors[0],width=1.5)))
+            _fig.add_hline(y=_cmb.mean(), line=dict(color="#94a3b8",dash="dash",width=1))
+        else:
+            for _i, (_l, _sr) in enumerate(_sp_series.items()):
+                _c = _sp_colors[_i%len(_sp_colors)]
+                _fig.add_trace(go.Scatter(x=_sr.index, y=_sr.values, mode="lines", name=_l, line=dict(color=_c,width=1.5)))
+                if _sp_bands:
+                    _mu,_sd = _sr.mean(),_sr.std()
+                    _fig.add_hline(y=_mu, line=dict(color=_c,dash="dash",width=1), opacity=0.5)
+                    _fig.add_hrect(y0=_mu-_sd, y1=_mu+_sd, fillcolor=_c, opacity=0.06, line_width=0)
         _fig.update_layout(height=420, margin=dict(l=50,r=20,t=30,b=40),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
-            legend=dict(orientation="h",y=1.05), yaxis_title="Spread (bp)",
-            xaxis=dict(gridcolor="#334155"), yaxis=dict(gridcolor="#334155"))
+            legend=dict(orientation="h",y=1.05,font=dict(color="#e2e8f0",size=12)),
+            yaxis_title="Spread (bp)",
+            xaxis=dict(gridcolor="#334155",color="#94a3b8",range=[_cut,pd.Timestamp.now()]),
+            yaxis=dict(gridcolor="#334155",color="#94a3b8"),font=dict(color="#94a3b8"))
         st.plotly_chart(_fig, use_container_width=True)
 
     # ── TAB 2: IRS BUTTERFLIES ──────────────────────────────────
@@ -3202,22 +3215,35 @@ def fwd_analysis_tab():
         c1,c2 = st.columns([2,1])
         with c1: _fl_sel = st.multiselect("Butterflies",[l for l,*_ in _valid_fl], default=[l for l,*_ in _valid_fl[:2]], key="fl_sel")
         with c2: _fl_yr = st.slider("History (years)",1,8,5,key="fl_yr")
+        _fl_as_spread = st.checkbox("Show as spread (1st vs 2nd)", False, key="fl_as_spread")
         _cut_fl = pd.Timestamp.now() - pd.DateOffset(years=_fl_yr)
         _fig_fl = go.Figure()
+        _fl_series = {}
         for _i,_l in enumerate(_fl_sel):
             _p = next((x for x in _valid_fl if x[0]==_l), None)
             if not _p: continue
             _,_w,_m,_e = _p
             _fly = (_w3[f"{_m}Y"] - 0.5*(_w3[f"{_w}Y"]+_w3[f"{_e}Y"])).dropna()
             _fly = _fly[_fly.index>=_cut_fl]*100
-            _c = _sp_colors[_i%len(_sp_colors)]
-            _fig_fl.add_trace(go.Scatter(x=_fly.index, y=_fly.values, mode="lines", name=_l, line=dict(color=_c,width=1.5)))
-            _fig_fl.add_hline(y=_fly.mean(), line=dict(color=_c,dash="dot",width=1), opacity=0.5)
+            _fl_series[_l] = _fly
+        if _fl_as_spread and len(_fl_series) >= 2:
+            _ks = list(_fl_series.keys())
+            _cmb = (_fl_series[_ks[0]] - _fl_series[_ks[1]]).dropna()
+            _fig_fl.add_trace(go.Scatter(x=_cmb.index, y=_cmb.values, mode="lines",
+                name=f"{_ks[0]} − {_ks[1]}", line=dict(color=_sp_colors[0],width=1.5)))
+            _fig_fl.add_hline(y=_cmb.mean(), line=dict(color="#94a3b8",dash="dash",width=1))
+        else:
+            for _i,(_l,_fly) in enumerate(_fl_series.items()):
+                _c = _sp_colors[_i%len(_sp_colors)]
+                _fig_fl.add_trace(go.Scatter(x=_fly.index, y=_fly.values, mode="lines", name=_l, line=dict(color=_c,width=1.5)))
+                _fig_fl.add_hline(y=_fly.mean(), line=dict(color=_c,dash="dot",width=1), opacity=0.5)
         _fig_fl.add_hline(y=0, line=dict(color="#64748b",width=1))
         _fig_fl.update_layout(height=420, margin=dict(l=50,r=20,t=30,b=40),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
-            legend=dict(orientation="h",y=1.05), yaxis_title="Fly (bp)",
-            xaxis=dict(gridcolor="#334155"), yaxis=dict(gridcolor="#334155"))
+            legend=dict(orientation="h",y=1.05,font=dict(color="#e2e8f0",size=12)),
+            yaxis_title="Fly (bp)",
+            xaxis=dict(gridcolor="#334155",color="#94a3b8",range=[_cut_fl,pd.Timestamp.now()]),
+            yaxis=dict(gridcolor="#334155",color="#94a3b8"),font=dict(color="#94a3b8"))
         st.plotly_chart(_fig_fl, use_container_width=True)
 
     # ── TAB 3: FWD-FWD RATES (3M) ──────────────────────────────
@@ -3252,8 +3278,10 @@ def fwd_analysis_tab():
             _fig_fv.update_layout(yaxis_title="Rate (%)")
         _fig_fv.update_layout(height=420, margin=dict(l=50,r=20,t=30,b=40),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
-            legend=dict(orientation="h",y=1.05),
-            xaxis=dict(gridcolor="#334155"), yaxis=dict(gridcolor="#334155"))
+            legend=dict(orientation="h",y=1.05,font=dict(color="#e2e8f0",size=12)),
+            xaxis=dict(gridcolor="#334155",color="#94a3b8",range=[_cut_fv,pd.Timestamp.now()]),
+            yaxis=dict(gridcolor="#334155",color="#94a3b8"),
+            font=dict(color="#94a3b8"))
         st.plotly_chart(_fig_fv, use_container_width=True)
 
     # ── TAB 4: 6v3 OUTRIGHT ────────────────────────────────────
@@ -3279,8 +3307,11 @@ def fwd_analysis_tab():
             _fig_b6.add_hline(y=0,line=dict(color="#64748b",width=1))
             _fig_b6.update_layout(height=420, margin=dict(l=50,r=20,t=30,b=40),
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
-                legend=dict(orientation="h",y=1.05), yaxis_title="6v3 Basis (bp)",
-                xaxis=dict(gridcolor="#334155"), yaxis=dict(gridcolor="#334155"))
+                legend=dict(orientation="h",y=1.05,font=dict(color="#e2e8f0",size=12)),
+                yaxis_title="6v3 Basis (bp)",
+                xaxis=dict(gridcolor="#334155",color="#94a3b8",range=[_cut_b6,pd.Timestamp.now()]),
+                yaxis=dict(gridcolor="#334155",color="#94a3b8"),
+                font=dict(color="#94a3b8"))
             st.plotly_chart(_fig_b6, use_container_width=True)
 
     # ── TAB 5: 6v3 FWD-FWD ─────────────────────────────────────
@@ -3294,22 +3325,37 @@ def fwd_analysis_tab():
         with c1: _fv6_sel = st.multiselect("Fwd-Fwd Pairs",[l for l,*_ in _valid_fv6],
                                              default=[l for l,*_ in _valid_fv6[:3]], key="fv6_sel")
         with c2: _fv6_yr = st.slider("History (years)",1,8,5,key="fv6_yr")
+        _fv6_as_spread = st.checkbox("Show as spread (1st vs 2nd)", False, key="fv6_as_spread")
         _cut_fv6 = pd.Timestamp.now() - pd.DateOffset(years=_fv6_yr)
         _fig_fv6 = go.Figure()
-        for _i,(_l,_s,_t) in enumerate([(l,s,t) for l,s,t in _valid_fv6 if l in _fv6_sel]):
-            _r6 = _fwd(_w6,_s,_t)
-            _r3 = _fwd(_w3,_s,_t)
-            _basis = (_r6-_r3).dropna()
-            _basis = _basis[_basis.index>=_cut_fv6]*100
-            _c = _sp_colors[_i%len(_sp_colors)]
-            _fig_fv6.add_trace(go.Scatter(x=_basis.index,y=_basis.values,mode="lines",
-                name=f"{_l} 6v3",line=dict(color=_c,width=1.5)))
-            _fig_fv6.add_hline(y=_basis.mean(),line=dict(color=_c,dash="dash",width=1),opacity=0.5)
+        _fv6_series = {}
+        for _l,_s,_t in _valid_fv6:
+            if _l in _fv6_sel:
+                _r6 = _fwd(_w6,_s,_t)
+                _r3 = _fwd(_w3,_s,_t)
+                if _r6 is not None and _r3 is not None:
+                    _b = (_r6-_r3).dropna()
+                    _fv6_series[f"{_l} 6v3"] = _b[_b.index>=_cut_fv6]*100
+        if _fv6_as_spread and len(_fv6_series) >= 2:
+            _ks = list(_fv6_series.keys())
+            _cmb = (_fv6_series[_ks[0]] - _fv6_series[_ks[1]]).dropna()
+            _fig_fv6.add_trace(go.Scatter(x=_cmb.index,y=_cmb.values,mode="lines",
+                name=f"{_ks[0]} − {_ks[1]}",line=dict(color=_sp_colors[0],width=1.5)))
+            _fig_fv6.add_hline(y=_cmb.mean(),line=dict(color="#94a3b8",dash="dash",width=1))
+        else:
+            for _i,(_l,_b) in enumerate(_fv6_series.items()):
+                _c = _sp_colors[_i%len(_sp_colors)]
+                _fig_fv6.add_trace(go.Scatter(x=_b.index,y=_b.values,mode="lines",
+                    name=_l,line=dict(color=_c,width=1.5)))
+                _fig_fv6.add_hline(y=_b.mean(),line=dict(color=_c,dash="dash",width=1),opacity=0.5)
         _fig_fv6.add_hline(y=0,line=dict(color="#64748b",width=1))
         _fig_fv6.update_layout(height=420, margin=dict(l=50,r=20,t=30,b=40),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
-            legend=dict(orientation="h",y=1.05), yaxis_title="6v3 Fwd-Fwd Basis (bp)",
-            xaxis=dict(gridcolor="#334155"), yaxis=dict(gridcolor="#334155"))
+            legend=dict(orientation="h",y=1.05,font=dict(color="#e2e8f0",size=12)),
+            yaxis_title="6v3 Fwd-Fwd Basis (bp)",
+            xaxis=dict(gridcolor="#334155",color="#94a3b8",range=[_cut_fv6,pd.Timestamp.now()]),
+            yaxis=dict(gridcolor="#334155",color="#94a3b8"),
+            font=dict(color="#94a3b8"))
         st.plotly_chart(_fig_fv6, use_container_width=True)
 
     # ── TAB 6: 6v3 SPREADS ─────────────────────────────────────
@@ -3327,9 +3373,11 @@ def fwd_analysis_tab():
             with c1: _bsp_sel = st.multiselect("Basis Spreads", _bsp_presets,
                                                  default=_bsp_presets[:3], key="bsp_sel")
             with c2: _bsp_yr = st.slider("History (years)",1,8,5,key="bsp_yr")
+            _bsp_as_spread = st.checkbox("Show as spread (1st vs 2nd)", False, key="bsp_as_spread")
             _cut_bsp = pd.Timestamp.now() - pd.DateOffset(years=_bsp_yr)
             _fig_bsp = go.Figure()
-            for _i,_lbl in enumerate(_bsp_sel):
+            _bsp_series = {}
+            for _lbl in _bsp_sel:
                 _parts = _lbl.split(" vs ")
                 if len(_parts)!=2: continue
                 _tn1, _tn2 = _parts
@@ -3337,17 +3385,28 @@ def fwd_analysis_tab():
                 if _tn2 not in _w6.columns or _tn2 not in _w3.columns: continue
                 _b1 = (_w6[_tn1]-_w3[_tn1]).dropna()*100
                 _b2 = (_w6[_tn2]-_w3[_tn2]).dropna()*100
-                _bspread = (_b1-_b2).dropna()
-                _bspread = _bspread[_bspread.index>=_cut_bsp]
-                _c = _sp_colors[_i%len(_sp_colors)]
-                _fig_bsp.add_trace(go.Scatter(x=_bspread.index,y=_bspread.values,mode="lines",
-                    name=_lbl,line=dict(color=_c,width=1.5)))
-                _fig_bsp.add_hline(y=_bspread.mean(),line=dict(color=_c,dash="dash",width=1),opacity=0.5)
+                _bsprd = (_b1-_b2).dropna()
+                _bsp_series[_lbl] = _bsprd[_bsprd.index>=_cut_bsp]
+            if _bsp_as_spread and len(_bsp_series) >= 2:
+                _ks = list(_bsp_series.keys())
+                _cmb = (_bsp_series[_ks[0]] - _bsp_series[_ks[1]]).dropna()
+                _fig_bsp.add_trace(go.Scatter(x=_cmb.index,y=_cmb.values,mode="lines",
+                    name=f"{_ks[0]} − {_ks[1]}",line=dict(color=_sp_colors[0],width=1.5)))
+                _fig_bsp.add_hline(y=_cmb.mean(),line=dict(color="#94a3b8",dash="dash",width=1))
+            else:
+                for _i,(_lbl,_bsprd) in enumerate(_bsp_series.items()):
+                    _c = _sp_colors[_i%len(_sp_colors)]
+                    _fig_bsp.add_trace(go.Scatter(x=_bsprd.index,y=_bsprd.values,mode="lines",
+                        name=_lbl,line=dict(color=_c,width=1.5)))
+                    _fig_bsp.add_hline(y=_bsprd.mean(),line=dict(color=_c,dash="dash",width=1),opacity=0.5)
             _fig_bsp.add_hline(y=0,line=dict(color="#64748b",width=1))
             _fig_bsp.update_layout(height=420, margin=dict(l=50,r=20,t=30,b=40),
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
-                legend=dict(orientation="h",y=1.05), yaxis_title="6v3 Spread (bp)",
-                xaxis=dict(gridcolor="#334155"), yaxis=dict(gridcolor="#334155"))
+                legend=dict(orientation="h",y=1.05,font=dict(color="#e2e8f0",size=12)),
+                yaxis_title="6v3 Spread (bp)",
+                xaxis=dict(gridcolor="#334155",color="#94a3b8",range=[_cut_bsp,pd.Timestamp.now()]),
+                yaxis=dict(gridcolor="#334155",color="#94a3b8"),
+                font=dict(color="#94a3b8"))
             st.plotly_chart(_fig_bsp, use_container_width=True)
 
 def generate_forward_matrix(ccy: str, curve: pd.DataFrame, basis_6v3: Optional[pd.DataFrame] = None) -> pd.DataFrame:
@@ -9363,6 +9422,24 @@ def main():
     if not st.session_state.get("authenticated"):
         show_login_page()
         return
+    
+    # Single session validation — check token still valid in DB
+    try:
+        if HAS_POSTGRES and st.session_state.get("session_token"):
+            _vconn = get_db_connection()
+            if _vconn:
+                _vcur = _vconn.cursor()
+                _vcur.execute("SELECT session_token FROM active_sessions WHERE email=%s",
+                              (st.session_state.get("user_email",""),))
+                _vrow = _vcur.fetchone()
+                _vconn.close()
+                if _vrow and _vrow[0] != st.session_state["session_token"]:
+                    st.session_state["authenticated"] = False
+                    st.session_state["session_token"] = None
+                    st.warning("Your session was ended because you logged in from another device.")
+                    st.stop()
+    except Exception:
+        pass
 
     # Only show tabs if authenticated
     tabs = st.tabs(
@@ -9664,9 +9741,8 @@ def send_vol_email(recipients: list, subject: str, message: str, currencies: lis
 
 
 def show_login_page():
-    """Full-page login with email OTP authentication - matches Data Portal style"""
+    """Full-page login with email OTP authentication"""
     
-    # Hide ALL Streamlit chrome including sidebar
     st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
@@ -9674,91 +9750,51 @@ def show_login_page():
     footer {visibility: hidden;}
     [data-testid="stSidebar"] {display: none;}
     [data-testid="collapsedControl"] {display: none;}
-    .stApp {background: #0a0f1a;}
+    .stApp {background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);}
     section[data-testid="stSidebar"] {display: none !important;}
-    .css-1d391kg {display: none !important;}
     .stDeployButton {display: none !important;}
-    
-    /* Login card container - matching Data Portal */
-    .login-card {
-        background: #1e293b;
-        border-radius: 16px;
-        padding: 40px 36px;
-        max-width: 440px;
-        margin: 0 auto;
-        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-    }
-    
-    /* Input styling */
-    .stTextInput > label {display: none;}
     .stTextInput > div > div > input {
-        background: #334155 !important;
-        border: 1px solid #475569 !important;
+        background: #1e293b !important;
+        color: white !important;
+        border: 1px solid #334155 !important;
         border-radius: 8px !important;
-        color: #f1f5f9 !important;
-        padding: 14px 16px !important;
-        font-size: 1rem !important;
+        padding: 12px 16px !important;
     }
-    .stTextInput > div > div > input:focus {
-        border-color: #dc2626 !important;
-        box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.2) !important;
-    }
-    .stTextInput > div > div > input::placeholder {color: #94a3b8 !important;}
-    
-    /* Button styling */
+    .stTextInput > div > div > input::placeholder {color: #64748b !important;}
+    .stTextInput > div > div > input:focus {border-color: #dc2626 !important;}
     .stButton > button {
         background: #dc2626 !important;
         color: white !important;
         border: none !important;
+        width: 100% !important;
         border-radius: 8px !important;
-        padding: 14px 24px !important;
+        padding: 12px !important;
         font-weight: 600 !important;
-        font-size: 1rem !important;
-        transition: background 0.2s !important;
     }
     .stButton > button:hover {background: #b91c1c !important;}
-    
-    /* Back button styling */
-    .back-btn button {
-        background: #334155 !important;
-        padding: 14px 24px !important;
-        font-size: 1rem !important;
-        font-weight: 600 !important;
-    }
-    .back-btn button:hover {
-        background: #475569 !important;
-    }
     </style>
     """, unsafe_allow_html=True)
     
-    # Center the login card vertically and horizontally
-    st.markdown('<div style="height: 12vh;"></div>', unsafe_allow_html=True)
-    
-    # Create centered container using columns - narrower for better centering
-    col1, col2, col3 = st.columns([1.2, 1, 1.2])
+    st.markdown('<div style="height: 8vh;"></div>', unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1.2, 1])
     
     with col2:
-        # Login card with all content
-        st.markdown('<div class="login-card">', unsafe_allow_html=True)
-        
-        # Logo
+        # Card with logo+title inside — matches IRS style
         st.markdown("""
-        <div style="text-align: center; margin-bottom: 32px;">
-            <svg viewBox="0 0 200 50" width="180" height="45" xmlns="http://www.w3.org/2000/svg">
-                <path d="M25 5 L45 25 L25 45 L5 25 Z" fill="#dc2626"/>
-                <path d="M25 12 L38 25 L25 38 L12 25 Z" fill="#1e293b"/>
-                <text x="55" y="33" font-family="system-ui, -apple-system, sans-serif" font-size="24" font-weight="700" fill="#f9fafb">RateEdge</text>
-            </svg>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Title - larger and more prominent like Data Portal
-        st.markdown("""
-        <div style="text-align: center; margin-bottom: 12px;">
-            <div style="color: #f9fafb; font-size: 1.75rem; font-weight: 700; letter-spacing: -0.025em;">Options Platform</div>
-        </div>
-        <div style="text-align: center; margin-bottom: 32px;">
-            <div style="color: #94a3b8; font-size: 0.95rem;">Sign in with your email</div>
+        <div style="background:#1e293b;border-radius:16px;padding:2.5rem;border:1px solid #334155;margin-bottom:1rem;">
+            <div style="text-align:center;margin-bottom:1.5rem;">
+                <div style="display:inline-flex;align-items:center;gap:12px;">
+                    <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                        <rect x="20" y="2" width="25" height="25" rx="3" transform="rotate(45 20 2)" fill="#dc2626"/>
+                        <rect x="20" y="8" width="17" height="17" rx="2" transform="rotate(45 20 8)" fill="#1e293b"/>
+                    </svg>
+                    <span style="font-size:1.8rem;font-weight:700;color:white;">RateEdge</span>
+                </div>
+            </div>
+            <div style="text-align:center;margin-bottom:0.5rem;">
+                <div style="font-size:1.3rem;font-weight:700;color:white;">Options Platform</div>
+                <div style="font-size:0.9rem;color:#94a3b8;margin-top:0.25rem;">Sign in with your email</div>
+            </div>
         </div>
         """, unsafe_allow_html=True)
         
@@ -9802,9 +9838,34 @@ def show_login_page():
                     if otp and len(otp) == 6:
                         status, data = verify_otp(st.session_state.auth_email, otp)
                         if status == 200:
+                            # Single session enforcement — store token in DB, invalidate old session
+                            import secrets as _sec
+                            _sess_token = _sec.token_hex(32)
+                            try:
+                                if HAS_POSTGRES:
+                                    _conn = get_db_connection()
+                                    if _conn:
+                                        _cur = _conn.cursor()
+                                        _cur.execute("""
+                                            CREATE TABLE IF NOT EXISTS active_sessions (
+                                                email TEXT PRIMARY KEY,
+                                                session_token TEXT NOT NULL,
+                                                created_at TIMESTAMPTZ DEFAULT NOW()
+                                            )
+                                        """)
+                                        _cur.execute("""
+                                            INSERT INTO active_sessions (email, session_token, created_at)
+                                            VALUES (%s, %s, NOW())
+                                            ON CONFLICT (email) DO UPDATE SET session_token=EXCLUDED.session_token, created_at=NOW()
+                                        """, (st.session_state.auth_email, _sess_token))
+                                        _conn.commit()
+                                        _conn.close()
+                            except Exception:
+                                pass
                             st.session_state["authenticated"] = True
                             st.session_state["username"] = st.session_state.auth_email
                             st.session_state["user_email"] = st.session_state.auth_email
+                            st.session_state["session_token"] = _sess_token
                             st.session_state.auth_step = 'email'
                             st.rerun()
                         else:
@@ -9812,21 +9873,11 @@ def show_login_page():
                     else:
                         st.error("Please enter the 6-digit code")
         
-        # Admin login link - cleaner divider
         st.markdown("""
-        <div style="text-align: center; margin-top: 28px; padding-top: 20px; border-top: 1px solid #334155;">
-            <span style="color: #64748b; font-size: 0.875rem;">Admin login</span>
+        <div style="text-align:center;margin-top:1rem;">
+            <a href="mailto:wpo@rateedge.au" style="color:#64748b;font-size:0.85rem;text-decoration:none;">Contact support</a>
         </div>
         """, unsafe_allow_html=True)
-        
-        st.markdown('</div>', unsafe_allow_html=True)  # Close login-card
-    
-    # Contact footer - keeping your contact info
-    st.markdown("""
-    <div style="text-align: center; margin-top: 40px; color: #64748b; font-size: 0.875rem;">
-        Contact <a href="mailto:wpo@rateedge.au" style="color: #3b82f6; text-decoration: none; font-weight: 500;">wpo@rateedge.au</a> for access
-    </div>
-    """, unsafe_allow_html=True)
     
     st.stop()
 
