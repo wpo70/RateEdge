@@ -3144,6 +3144,18 @@ def curves_tab():
         basis_6v3 = basis_6v3.drop(columns=["_source_date"])
     if basis_3v1 is not None and "_source_date" in basis_3v1.columns:
         basis_3v1 = basis_3v1.drop(columns=["_source_date"])
+
+    # ── Source of truth: write resolved curves back to session state ──
+    # All other tabs (Rate/Vol Matrix, Swaptions, Caps, etc.) read from
+    # session state via get_ccy_curve / get_basis_curve — so whatever
+    # the Curves tab resolved (live OR saved) becomes the app-wide curve.
+    set_ccy_curve(ccy, curve)
+    if ois_curve is not None:
+        set_basis_curve(ccy, "ois", ois_curve)
+    if basis_6v3 is not None:
+        set_basis_curve(ccy, "6v3", basis_6v3)
+    if basis_3v1 is not None:
+        set_basis_curve(ccy, "3v1", basis_3v1)
     
     # LOCAL CSS fix for checkbox visibility - NUCLEAR
     st.markdown("""
