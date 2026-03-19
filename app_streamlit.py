@@ -252,6 +252,8 @@ try:
 except ImportError:
     HAS_VOL_EDITOR = False
     render_conventions_tab = None
+    render_vol_surface_editor_unified = None
+    render_bulk_adjustment_tools = None
 
 try:
     import psycopg2
@@ -3085,6 +3087,10 @@ def curves_tab():
         curve = curve.drop(columns=["_source_date"])
     if ois_curve is not None and "_source_date" in ois_curve.columns:
         ois_curve = ois_curve.drop(columns=["_source_date"])
+    if basis_6v3 is not None and "_source_date" in basis_6v3.columns:
+        basis_6v3 = basis_6v3.drop(columns=["_source_date"])
+    if basis_3v1 is not None and "_source_date" in basis_3v1.columns:
+        basis_3v1 = basis_3v1.drop(columns=["_source_date"])
     
     # LOCAL CSS fix for checkbox visibility - NUCLEAR
     st.markdown("""
@@ -3666,6 +3672,7 @@ def fwd_analysis_tab():
             _fig_layout(_fig_bsp, _cut_bsp, "6v3 Spread (bp)")
             st.plotly_chart(_fig_bsp, use_container_width=True)
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: Optional[tuple] = None,
                                      freq_override: Optional[float] = None, convention: str = "market",
                                      ois_tuple: Optional[tuple] = None) -> pd.DataFrame:
@@ -3739,6 +3746,75 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
     df = pd.DataFrame(matrix)
     df = df.set_index("Expiry")
     return df
+
+
+def generate_forward_matrix(ccy: str, curve: pd.DataFrame, basis_6v3: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """
+    Public wrapper — converts DataFrames → tuples and calls the cached matrix generator.
+    Uses 'market' convention (AUD: ≤3Y Q/Q, >3Y S/S).
+    OIS curve is pulled from session state if available.
+    """
+    if curve is None or curve.empty:
+        return pd.DataFrame()
+
+    curve_tuple = (
+        tuple(curve["MaturityY"].to_numpy().astype(float).tolist()),
+        tuple(curve["ZeroRatePct"].to_numpy().astype(float).tolist()),
+    )
+
+    basis_tuple = None
+    if basis_6v3 is not None and not basis_6v3.empty and "MaturityY" in basis_6v3.columns and "BasisBp" in basis_6v3.columns:
+        basis_tuple = (
+            tuple(basis_6v3["MaturityY"].to_numpy().astype(float).tolist()),
+            tuple(basis_6v3["BasisBp"].to_numpy().astype(float).tolist()),
+        )
+
+    # Pull OIS curve from session state via canonical getter
+    ois_tuple = None
+    ois_curve = get_basis_curve(ccy, "ois")
+    if ois_curve is not None and not ois_curve.empty:
+        _oc = ois_curve.drop(columns=["_source_date"], errors="ignore")
+        if "MaturityY" in _oc.columns and "ZeroRatePct" in _oc.columns:
+            ois_tuple = (
+                tuple(_oc["MaturityY"].to_numpy().astype(float).tolist()),
+                tuple(_oc["ZeroRatePct"].to_numpy().astype(float).tolist()),
+            )
+
+    return _generate_forward_matrix_cached(ccy, curve_tuple, basis_tuple, convention="market", ois_tuple=ois_tuple)
+
+
+def generate_forward_matrix_convention(ccy: str, curve: pd.DataFrame, basis_6v3: Optional[pd.DataFrame] = None,
+                                        convention: str = "market") -> pd.DataFrame:
+    """
+    Public wrapper — like generate_forward_matrix but with explicit convention override.
+    convention: 'market' | 'qq' | 'ss'
+    """
+    if curve is None or curve.empty:
+        return pd.DataFrame()
+
+    curve_tuple = (
+        tuple(curve["MaturityY"].to_numpy().astype(float).tolist()),
+        tuple(curve["ZeroRatePct"].to_numpy().astype(float).tolist()),
+    )
+
+    basis_tuple = None
+    if basis_6v3 is not None and not basis_6v3.empty and "MaturityY" in basis_6v3.columns and "BasisBp" in basis_6v3.columns:
+        basis_tuple = (
+            tuple(basis_6v3["MaturityY"].to_numpy().astype(float).tolist()),
+            tuple(basis_6v3["BasisBp"].to_numpy().astype(float).tolist()),
+        )
+
+    ois_tuple = None
+    ois_curve = get_basis_curve(ccy, "ois")
+    if ois_curve is not None and not ois_curve.empty:
+        _oc = ois_curve.drop(columns=["_source_date"], errors="ignore")
+        if "MaturityY" in _oc.columns and "ZeroRatePct" in _oc.columns:
+            ois_tuple = (
+                tuple(_oc["MaturityY"].to_numpy().astype(float).tolist()),
+                tuple(_oc["ZeroRatePct"].to_numpy().astype(float).tolist()),
+            )
+
+    return _generate_forward_matrix_cached(ccy, curve_tuple, basis_tuple, convention=convention, ois_tuple=ois_tuple)
 
 
 def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, tenor: float, ccy: str,
@@ -8340,9 +8416,7 @@ def rv_tab():
 
 # Current AGB lines on issue (coupon %, maturity date, label)
 AGB_LINES = [
-    (2.75, "2024-11-21", "2.75% Nov-24"),   # near maturity - keep for testing
-    (3.25, "2025-04-21", "3.25% Apr-25"),
-    (2.75, "2025-10-21", "2.75% Oct-25"),
+    # Active bonds as of Mar-2026 — remove matured: Nov-24, Apr-25, Oct-25
     (4.50, "2026-04-21", "4.50% Apr-26"),
     (1.75, "2026-11-21", "1.75% Nov-26"),
     (4.75, "2027-04-21", "4.75% Apr-27"),
@@ -8612,7 +8686,7 @@ def bond_option_tab():
     col_bond, col_face, col_model = st.columns([3, 2, 2])
     with col_bond:
         bond_labels = [b[2] for b in AGB_LINES]
-        bond_sel = st.selectbox("Bond Line", bond_labels, index=11, key="bo_bond")
+        bond_sel = st.selectbox("Bond Line", bond_labels, index=min(8, len(bond_labels)-1), key="bo_bond")
         bond_idx = bond_labels.index(bond_sel)
         coupon_pct, mat_str, _ = AGB_LINES[bond_idx]
         maturity = _date.fromisoformat(mat_str)
