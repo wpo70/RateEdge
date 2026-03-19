@@ -3008,6 +3008,12 @@ def curves_tab():
     
     ccy = st.selectbox("Currency", SUPPORTED_CURRENCIES, key="curve_ccy")
 
+    # Ensure all curve variables have defaults
+    curve = get_ccy_curve(ccy)
+    basis_6v3 = get_basis_curve(ccy, "6v3")
+    basis_3v1 = get_basis_curve(ccy, "3v1")
+    ois_curve  = get_basis_curve(ccy, "ois")
+
     # Data source toggle
     _src_col, _src_info = st.columns([2, 3])
     with _src_col:
