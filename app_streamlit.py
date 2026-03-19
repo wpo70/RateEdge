@@ -3133,14 +3133,6 @@ def fwd_analysis_tab():
         st.warning("No swap rate data found in database. Check Supabase connection.")
         return
 
-    def _tenor_years(t):
-        import re as _re
-        t = str(t).strip().upper()
-        m = _re.match(r"(\d+(?:\.\d+)?)(Y|M)", t)
-        if not m: return None
-        v, u = float(m.group(1)), m.group(2)
-        return v if u == "Y" else v / 12
-
     def _fwd(wide, start_y, tenor_y):
         end_y = start_y + tenor_y
         def _lbl(y):
@@ -3152,16 +3144,35 @@ def fwd_analysis_tab():
 
     _sp_colors = ["#3b82f6","#ef4444","#22c55e","#f59e0b","#a855f7","#06b6d4","#f43f5e","#84cc16"]
 
-    # Note data coverage
-    _3m_full = [c for c in (_w3.columns if not _w3.empty else [])
-                if c.endswith("Y") and not _w3[c].dropna().empty
-                and _w3[c].dropna().index.min() < pd.Timestamp("2020-01-01")]
-    _6m_full = [c for c in (_w6.columns if not _w6.empty else [])
-                if c.endswith("Y") and not _w6[c].dropna().empty
-                and _w6[c].dropna().index.min() < pd.Timestamp("2020-01-01")]
+    # Convention helper — market default: <=3Y = 3M BBSW, >=4Y = 6M BBSW
+    def _conv_rate(tenor_y, conv="Market"):
+        """Return rate series for a given tenor using selected convention."""
+        def _lbl(y): return f"{int(y)}Y" if y == int(y) else f"{round(y*12)}M"
+        t = _lbl(tenor_y)
+        if conv == "Q/Q (3M BBSW)":
+            return _w3[t] if t in _w3.columns else None
+        elif conv == "S/S (6M BBSW)":
+            return _w6[t] if t in _w6.columns else None
+        else:  # Market convention
+            if tenor_y <= 3:
+                return _w3[t] if t in _w3.columns else None
+            else:
+                return _w6[t] if t in _w6.columns else None
 
-    st.caption(f"3M BBSW full history tenors: {', '.join(sorted(_3m_full, key=lambda x: int(x[:-1])))}  |  "
-               f"6M BBSW full history tenors: {', '.join(sorted(_6m_full, key=lambda x: int(x[:-1])))}")
+    def _fwd_conv(start_y, tenor_y, conv="Market"):
+        """Fwd-fwd rate using convention-appropriate curve."""
+        end_y = start_y + tenor_y
+        r_s = _conv_rate(start_y, conv)
+        r_e = _conv_rate(end_y, conv)
+        if r_s is None or r_e is None: return None
+        return (r_e * end_y - r_s * start_y) / tenor_y
+
+    # Convention selector shown once at top
+    _conv = st.radio("Rate Convention", ["Market (≤3Y Q/Q, ≥4Y S/S)", "Q/Q (3M BBSW)", "S/S (6M BBSW)"],
+                     horizontal=True, key="fwd_conv")
+    _conv_key = "Market" if "Market" in _conv else ("Q/Q (3M BBSW)" if "Q/Q" in _conv else "S/S (6M BBSW)")
+
+    st.caption(f"3M BBSW: 1Y–3Y full history (2018–today) | 6M BBSW: 4Y–30Y full history (2018–today)")
 
     _an_tabs = st.tabs(["IRS Spreads", "IRS Butterflies", "Fwd-Fwd Rates (3M)", "6v3 Outright", "6v3 Fwd-Fwd", "6v3 Spreads"])
 
@@ -3169,7 +3180,8 @@ def fwd_analysis_tab():
     with _an_tabs[0]:
         st.markdown("#### IRS Curve Spreads (3M BBSW)")
         _sp_presets = [("2s5s",2,5),("2s10s",2,10),("5s10s",5,10),("5s15s",5,15),("10s15s",10,15),("2s30s",2,30)]
-        _valid_sp = [(l,s,e) for l,s,e in _sp_presets if f"{s}Y" in _w3.columns and f"{e}Y" in _w3.columns]
+        _valid_sp = [(l,s,e) for l,s,e in _sp_presets
+                     if _conv_rate(s,_conv_key) is not None and _conv_rate(e,_conv_key) is not None]
         c1,c2,c3 = st.columns(3)
         with c1: _sp_sel = st.multiselect("Spreads", [l for l,*_ in _valid_sp], default=[l for l,*_ in _valid_sp[:3]], key="sp_sel")
         with c2: _sp_yr = st.slider("History (years)", 1, 8, 5, key="sp_yr")
@@ -3182,7 +3194,10 @@ def fwd_analysis_tab():
             _p = next((x for x in _valid_sp if x[0]==_l), None)
             if not _p: continue
             _,_s,_e = _p
-            _sr = (_w3[f"{_e}Y"] - _w3[f"{_s}Y"]).dropna()
+            _rs = _conv_rate(_s, _conv_key)
+            _re = _conv_rate(_e, _conv_key)
+            if _rs is None or _re is None: continue
+            _sr = (_re - _rs).dropna()
             _sr = _sr[_sr.index>=_cut]*100
             _sp_series[_l] = _sr
         if _sp_as_spread and len(_sp_series) >= 2:
@@ -3211,7 +3226,8 @@ def fwd_analysis_tab():
     with _an_tabs[1]:
         st.markdown("#### IRS Rate Butterflies (3M BBSW)")
         _fl_presets = [("2s5s10s",2,5,10),("2s7s15s",2,7,15),("5s10s15s",5,10,15),("2s10s20s",2,10,20)]
-        _valid_fl = [(l,w,m,e) for l,w,m,e in _fl_presets if all(f"{t}Y" in _w3.columns for t in [w,m,e])]
+        _valid_fl = [(l,w,m,e) for l,w,m,e in _fl_presets
+                     if all(_conv_rate(t,_conv_key) is not None for t in [w,m,e])]
         c1,c2 = st.columns([2,1])
         with c1: _fl_sel = st.multiselect("Butterflies",[l for l,*_ in _valid_fl], default=[l for l,*_ in _valid_fl[:2]], key="fl_sel")
         with c2: _fl_yr = st.slider("History (years)",1,8,5,key="fl_yr")
@@ -3223,7 +3239,11 @@ def fwd_analysis_tab():
             _p = next((x for x in _valid_fl if x[0]==_l), None)
             if not _p: continue
             _,_w,_m,_e = _p
-            _fly = (_w3[f"{_m}Y"] - 0.5*(_w3[f"{_w}Y"]+_w3[f"{_e}Y"])).dropna()
+            _rw = _conv_rate(_w, _conv_key)
+            _rm = _conv_rate(_m, _conv_key)
+            _re = _conv_rate(_e, _conv_key)
+            if _rw is None or _rm is None or _re is None: continue
+            _fly = (_rm - 0.5*(_rw+_re)).dropna()
             _fly = _fly[_fly.index>=_cut_fl]*100
             _fl_series[_l] = _fly
         if _fl_as_spread and len(_fl_series) >= 2:
@@ -3251,7 +3271,7 @@ def fwd_analysis_tab():
         st.markdown("#### Forward-Forward Swap Rates (3M BBSW)")
         _fv_presets = [("1y1y",1,1),("1y2y",1,2),("2y1y",2,1),("2y2y",2,2),("2y3y",2,3),
                        ("4y2y",4,2),("5y5y",5,5),("2y10y",2,10),("5y10y",5,10)]
-        _valid_fv = [(l,s,t) for l,s,t in _fv_presets if _fwd(_w3,s,t) is not None]
+        _valid_fv = [(l,s,t) for l,s,t in _fv_presets if _fwd_conv(s,t,_conv_key) is not None]
         c1,c2,c3 = st.columns(3)
         with c1: _fv_sel = st.multiselect("Fwd-Fwd Rates",[l for l,*_ in _valid_fv], default=[l for l,*_ in _valid_fv[:3]], key="fv_sel")
         with c2: _fv_yr = st.slider("History (years)",1,8,5,key="fv_yr")
@@ -3261,7 +3281,7 @@ def fwd_analysis_tab():
         _fv_series = {}
         for _l,_s,_t in _valid_fv:
             if _l in _fv_sel:
-                _r = _fwd(_w3,_s,_t)
+                _r = _fwd_conv(_s,_t,_conv_key)
                 if _r is not None:
                     _fv_series[_l] = _r[_r.index>=_cut_fv].dropna()
         if _fv_as_spread and len(_fv_series)>=2:
