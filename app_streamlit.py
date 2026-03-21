@@ -8510,106 +8510,268 @@ def rv_tab():
                             )
                             st.code(idea_text, language=None)
 
-            # ── Theoretical P&L at given forward rate ─────────────────
+            # ══════════════════════════════════════════════════════════
+            # ── Theoretical P&L at a Given Forward Rate ───────────────
+            # ══════════════════════════════════════════════════════════
             st.markdown("---")
             st.markdown("#### 📈 Theoretical P&L at a Given Forward Rate")
-            st.caption("Estimate net P&L for selected ideas if rates move to a target level.")
+            st.caption("Each trade uses its own specific rate exposure — not a single 5Y proxy.")
 
-            _pnl_c1, _pnl_c2, _pnl_c3, _pnl_c4 = st.columns([2, 2, 2, 2])
-            with _pnl_c1:
-                _pnl_src = st.radio("Rate source", ["Manual", "From Fwd Matrix"], horizontal=True,
-                                    key="rv_pnl_src")
-            with _pnl_c2:
-                # Try to pull from session state fwd matrix
-                _fwd_matrix_ss = st.session_state.get("fwd_matrix", {}).get("AUD")
-                _matrix_rate = None
-                if _fwd_matrix_ss is not None and not _fwd_matrix_ss.empty:
-                    try:
-                        _matrix_rate = float(_fwd_matrix_ss.iloc[6, 4])  # 1y×5Y as default
-                    except Exception:
-                        pass
-                if _pnl_src == "From Fwd Matrix" and _matrix_rate is not None:
-                    st.metric("Fwd Matrix rate (1y×5Y)", f"{_matrix_rate:.4f}%")
-                    _target_rate = _matrix_rate
-                else:
-                    _target_rate = st.number_input("Target rate (%)", min_value=0.0, max_value=15.0,
-                                                   value=round(_par_rate(5) or 4.5, 3),
-                                                   step=0.05, format="%.3f", key="rv_pnl_rate")
-            with _pnl_c3:
+            # ── Helper: parse expiry + tenor from idea Structure string ─
+            import re as _re_pnl
+            def _parse_structure(struct: str):
+                """Extract (expiry_str, tenor_y) from strings like '1m×10Y fly', '5y×5Y', '2s10s Flattener'."""
+                # Pattern: XeYY e.g. 1m×10Y, 3m×5Y
+                m = _re_pnl.search(r"(\d+(?:\.\d+)?)(m|y|w)\s*[×x*/]\s*(\d+(?:\.\d+)?)Y", struct, _re_pnl.IGNORECASE)
+                if m:
+                    qty, unit, tenor = m.group(1), m.group(2).lower(), float(m.group(3))
+                    exp_y = float(qty)/12 if unit == "m" else float(qty)/52 if unit == "w" else float(qty)
+                    return exp_y, tenor
+                # Pattern: NsMs e.g. 2s10s → expiry=1y, tenor=10Y (curve spread)
+                m2 = _re_pnl.search(r"(\d+)s(\d+)s", struct)
+                if m2:
+                    short_t = float(m2.group(1))
+                    long_t  = float(m2.group(2))
+                    return 1.0, long_t  # use 1y expiry, long-end tenor for DV01
+                # Pattern: Ny×NY e.g. 5y×5Y, 2y×10Y
+                m3 = _re_pnl.search(r"(\d+)y\s*[×x*/]\s*(\d+)Y", struct, _re_pnl.IGNORECASE)
+                if m3:
+                    return float(m3.group(1)), float(m3.group(2))
+                return 1.0, 5.0  # fallback
+
+            # ── Helper: AFMA modified-following year-fraction ───────────
+            def _to_yearfrac(val_date, exp_y: float) -> float:
+                """Convert expiry year fraction from val_date, approx AFMA modified following."""
+                from datetime import timedelta as _td
+                import calendar as _cal
+                d = val_date + _td(days=round(exp_y * 365))
+                # Roll to Monday if weekend
+                if d.weekday() == 5: d += _td(days=2)
+                if d.weekday() == 6: d += _td(days=1)
+                # Roll back if month-end crossed — simplified
+                from datetime import date as _dt2
+                _, last = _cal.monthrange(d.year, d.month)
+                if d.day > last:
+                    d = d.replace(day=last)
+                    while d.weekday() >= 5:
+                        d -= _td(days=1)
+                return (d - val_date).days / 365.0
+
+            # ── Build forward rate lookup from matrix ──────────────────
+            _fwd_matrix_ss = st.session_state.get("fwd_matrix", {}).get("AUD")
+            _has_matrix = _fwd_matrix_ss is not None and not _fwd_matrix_ss.empty
+
+            # Matrix expiry labels and their year fractions
+            _matrix_exp_labels = list(_fwd_matrix_ss.index) if _has_matrix else []
+            _matrix_exp_yf     = [label_to_years(e) for e in _matrix_exp_labels] if _has_matrix else []
+            _matrix_tenors     = [float(c[:-1]) for c in _fwd_matrix_ss.columns] if _has_matrix else []
+
+            def _matrix_rate_at(exp_y: float, tenor_y: float, val_date=None) -> float | None:
+                """Interpolate fwd matrix at (expiry_yf, tenor_y). val_date adjusts expiry_yf."""
+                if not _has_matrix:
+                    return None
+                _ey = exp_y
+                if val_date is not None:
+                    from datetime import date as _dt3
+                    _ey = _to_yearfrac(val_date, exp_y)
+                if len(_matrix_exp_yf) < 2 or len(_matrix_tenors) < 2:
+                    return None
+                try:
+                    from scipy.interpolate import CubicSpline as _CS
+                    # For given tenor column (or interpolate across tenors)
+                    if tenor_y <= _matrix_tenors[0]:
+                        col = _fwd_matrix_ss.columns[0]
+                        rates = _fwd_matrix_ss[col].values.astype(float)
+                    elif tenor_y >= _matrix_tenors[-1]:
+                        col = _fwd_matrix_ss.columns[-1]
+                        rates = _fwd_matrix_ss[col].values.astype(float)
+                    else:
+                        # Interpolate across tenor columns at fixed expiry row first
+                        # then interpolate across expiry rows
+                        col_idx = np.searchsorted(_matrix_tenors, tenor_y)
+                        col_lo = _fwd_matrix_ss.columns[col_idx - 1]
+                        col_hi = _fwd_matrix_ss.columns[col_idx]
+                        w = (tenor_y - _matrix_tenors[col_idx-1]) / (_matrix_tenors[col_idx] - _matrix_tenors[col_idx-1])
+                        rates = ((1-w) * _fwd_matrix_ss[col_lo].values + w * _fwd_matrix_ss[col_hi].values).astype(float)
+                    # Now spline across expiry axis
+                    cs = _CS(_matrix_exp_yf, rates, extrapolate=True)
+                    return float(cs(max(_ey, _matrix_exp_yf[0])))
+                except Exception:
+                    return float(np.interp(tenor_y, _matrix_tenors,
+                                           [float(np.interp(_ey, _matrix_exp_yf, _fwd_matrix_ss[c].values.astype(float)))
+                                            for c in _fwd_matrix_ss.columns]))
+
+            # ── UI ─────────────────────────────────────────────────────
+            _src_col, _notional_col = st.columns([5, 2])
+            with _src_col:
+                _pnl_src = st.radio("Rate source", ["Manual shift (bp)", "Fwd Curve from Matrix"],
+                                    horizontal=True, key="rv_pnl_src")
+            with _notional_col:
                 _notional_mm = st.number_input("Notional (AUD mm)", min_value=1.0, max_value=5000.0,
                                                value=100.0, step=25.0, key="rv_pnl_notional")
-            with _pnl_c4:
-                _current_rate = _par_rate(5) or 4.5
-                st.metric("Current 5Y rate", f"{_current_rate:.3f}%")
-                _move_bp = round((_target_rate - _current_rate) * 100, 1)
-                _color = "normal" if _move_bp == 0 else ("inverse" if _move_bp < 0 else "normal")
-                st.metric("Rate move", f"{_move_bp:+.1f}bp")
 
+            if _pnl_src == "Manual shift (bp)":
+                _shift_col, _info_col = st.columns([3, 3])
+                with _shift_col:
+                    _manual_shift_bp = st.number_input("Parallel shift (bp)", min_value=-300.0, max_value=300.0,
+                                                       value=0.0, step=5.0, key="rv_pnl_shift",
+                                                       help="Applied uniformly to every trade's specific rate")
+                with _info_col:
+                    st.info(f"Each trade's P&L uses its own expiry/tenor rate from the current curve, "
+                            f"then applies this {_manual_shift_bp:+.0f}bp shift.")
+
+                def _get_move_for_idea(exp_y, tenor_y, val_date=None):
+                    """Manual: shift is same for all."""
+                    spot = (_par_rate(tenor_y) or 4.5) if curve is not None else 4.5
+                    return _manual_shift_bp, spot, spot + _manual_shift_bp / 100
+
+                _val_date_used = None
+                _show_fwd_curve = False
+
+            else:  # Fwd Curve from Matrix
+                if not _has_matrix:
+                    st.warning("No fwd matrix loaded — go to Rate/Vol Matrix tab and click 'Generate All Matrices' first.")
+                    _get_move_for_idea = lambda e, t, d=None: (0.0, 4.5, 4.5)
+                    _val_date_used = None
+                    _show_fwd_curve = False
+                else:
+                    _dc1, _dc2, _dc3 = st.columns([2, 2, 2])
+                    with _dc1:
+                        from datetime import date as _today_cls
+                        _val_date = st.date_input("Valuation date", value=_today_cls.today(),
+                                                  key="rv_pnl_valdate", format="DD/MM/YYYY",
+                                                  help="Forward rates interpolated to this date using Modified Following")
+                    with _dc2:
+                        _show_fwd_curve = st.checkbox("Show interpolated curve for this date", value=True,
+                                                      key="rv_pnl_show_curve")
+                    with _dc3:
+                        st.caption(f"Matrix has {len(_matrix_exp_labels)} expiry rows × {len(_matrix_tenors)} tenor cols. "
+                                   f"Cubic spline across expiry axis, linear across tenors.")
+
+                    _val_date_used = _val_date
+
+                    # Show interpolated curve for selected date
+                    if _show_fwd_curve:
+                        _curve_rows = []
+                        for _tn_y in _matrix_tenors:
+                            _r = _matrix_rate_at(1/365, _tn_y, val_date=_val_date)  # spot-ish
+                            if _r is not None:
+                                _curve_rows.append({"Tenor (Y)": _tn_y, "Fwd Rate (%)": round(_r, 4)})
+                        if _curve_rows:
+                            _fc1, _fc2 = st.columns([2, 3])
+                            with _fc1:
+                                st.dataframe(pd.DataFrame(_curve_rows), use_container_width=True,
+                                             hide_index=True, height=220)
+                            with _fc2:
+                                _fig_fc = go.Figure()
+                                _fig_fc.add_trace(go.Scatter(
+                                    x=[r["Tenor (Y)"] for r in _curve_rows],
+                                    y=[r["Fwd Rate (%)"] for r in _curve_rows],
+                                    mode="lines+markers", line=dict(color="#3b82f6", width=2),
+                                    marker=dict(size=7), name=f"Fwd curve {_val_date}"))
+                                _fig_fc.update_layout(
+                                    title=f"Interpolated Forward Curve — {_val_date} (Modified Following)",
+                                    xaxis_title="Tenor (Y)", yaxis_title="Rate (%)",
+                                    template="plotly_dark", height=220,
+                                    margin=dict(t=35, b=35, l=50, r=20))
+                                st.plotly_chart(_fig_fc, use_container_width=True)
+
+                    def _get_move_for_idea(exp_y, tenor_y, val_date=_val_date):
+                        spot = (_par_rate(tenor_y) or 4.5) if curve is not None else 4.5
+                        fwd  = _matrix_rate_at(exp_y, tenor_y, val_date=val_date)
+                        if fwd is None:
+                            fwd = spot
+                        move_bp = round((fwd - spot) * 100, 2)
+                        return move_bp, spot, fwd
+
+            # ── Per-trade P&L calculation ──────────────────────────────
             if ideas:
+                _notional = _notional_mm * 1e6
                 _pnl_rows = []
+
                 for idx, idea in enumerate(ideas[:12]):
                     is_sel = idx in selected if selected else True
                     if not is_sel:
                         continue
-                    # Estimate P&L directionally from move and trade type
-                    _move = _move_bp  # bp
-                    _notional = _notional_mm * 1e6
-                    _est_pnl = None
-                    _basis = "—"
 
-                    _t = idea["Type"]
-                    if "Payer" in idea["Trade"] and "Receiver" not in idea["Trade"]:
-                        # Long payer — profits if rates rise
-                        _dv01 = _notional * 0.0001 * 5  # rough 5Y DV01
-                        _est_pnl = _move * _dv01 / 100
-                        _basis = f"DV01 ~{_dv01/1e3:.0f}k × {_move:+.0f}bp"
-                    elif "Receiver" in idea["Trade"] and "Payer" not in idea["Trade"]:
-                        _dv01 = _notional * 0.0001 * 5
-                        _est_pnl = -_move * _dv01 / 100
-                        _basis = f"DV01 ~{_dv01/1e3:.0f}k × {-_move:+.0f}bp"
-                    elif "Straddle" in idea["Trade"] or "straddle" in idea["Trade"]:
-                        # Long straddle — profits from large moves (either direction)
-                        _dv01 = _notional * 0.0001 * 5
-                        _est_pnl = abs(_move) * _dv01 / 100 * 0.5  # rough gamma capture
-                        _basis = f"|{_move:.0f}bp| move, gamma ~50%"
-                    elif "Flattener" in idea["Trade"]:
-                        _est_pnl = _move * _notional * 0.0001 * 0.3  # rough slope P&L
-                        _basis = f"Slope DV01 × {_move:+.0f}bp"
-                    elif "Steepener" in idea["Trade"]:
-                        _est_pnl = -_move * _notional * 0.0001 * 0.3
-                        _basis = f"Slope DV01 × {-_move:+.0f}bp"
+                    exp_y, tenor_y = _parse_structure(idea["Structure"])
+                    _move_bp, _spot_rate, _fwd_rate_val = _get_move_for_idea(exp_y, tenor_y, _val_date_used)
+
+                    # DV01 scaled to actual tenor of the underlying swap
+                    _dv01 = _notional * 0.0001 * tenor_y  # $1bp per unit notional × tenor years
+                    _est_pnl = None
+                    _basis = f"exp {exp_y:.2f}y × {tenor_y:.0f}Y swap"
+
+                    _trade = idea["Trade"]
+                    _type  = idea["Type"]
+
+                    if "Calendar" in _type or "Spread" in _type or "straddle" in _trade.lower():
+                        # Long straddle / calendar spread — profits from vol change + abs move
+                        _est_pnl = abs(_move_bp) * _dv01 / 100 * 0.5
+                        _basis += f" | |{_move_bp:.1f}bp| γ≈50%"
+                    elif "Payer" in _trade and "Receiver" not in _trade:
+                        _est_pnl = _move_bp * _dv01 / 100
+                        _basis += f" | +{_move_bp:+.1f}bp"
+                    elif "Receiver" in _trade and "Payer" not in _trade:
+                        _est_pnl = -_move_bp * _dv01 / 100
+                        _basis += f" | -{_move_bp:+.1f}bp"
+                    elif "Flattener" in _trade:
+                        # Flattener: gains if short end rises vs long end — use slope move
+                        _short_y = max(tenor_y - 8, 2.0)
+                        _, _, _fwd_short = _get_move_for_idea(exp_y, _short_y, _val_date_used)
+                        _, _, _fwd_long  = _get_move_for_idea(exp_y, tenor_y, _val_date_used)
+                        _slope_move = ((_fwd_long - (_par_rate(tenor_y) or 4.5)) -
+                                       (_fwd_short - (_par_rate(_short_y) or 4.0))) * 100
+                        _est_pnl = -_slope_move * _notional * 0.0001 * tenor_y / 100
+                        _basis += f" | slope {_slope_move:+.1f}bp"
+                    elif "Steepener" in _trade:
+                        _short_y = max(tenor_y - 8, 2.0)
+                        _, _, _fwd_short = _get_move_for_idea(exp_y, _short_y, _val_date_used)
+                        _, _, _fwd_long  = _get_move_for_idea(exp_y, tenor_y, _val_date_used)
+                        _slope_move = ((_fwd_long - (_par_rate(tenor_y) or 4.5)) -
+                                       (_fwd_short - (_par_rate(_short_y) or 4.0))) * 100
+                        _est_pnl = _slope_move * _notional * 0.0001 * tenor_y / 100
+                        _basis += f" | slope {_slope_move:+.1f}bp"
+                    else:
+                        # Catch-all: treat as delta-one to the move
+                        _est_pnl = _move_bp * _dv01 / 100 * 0.3
+                        _basis += f" | {_move_bp:+.1f}bp ×30%"
 
                     if _est_pnl is not None:
                         _pnl_rows.append({
                             "Structure": idea["Structure"],
-                            "Trade": idea["Trade"][:50] + ("…" if len(idea["Trade"]) > 50 else ""),
-                            f"Rate move": f"{_move:+.1f}bp",
-                            f"Est. P&L (AUD)": f"{'+'if _est_pnl>=0 else ''}{_est_pnl/1e3:.1f}k",
-                            "Basis": _basis,
+                            "Exp": f"{exp_y:.2f}y",
+                            "Tenor": f"{tenor_y:.0f}Y",
+                            "Spot (%)": f"{_spot_rate:.3f}",
+                            "Fwd (%)": f"{_fwd_rate_val:.3f}",
+                            "Move": f"{_move_bp:+.1f}bp",
+                            "DV01 (k)": f"{_dv01/1e3:.1f}",
+                            "Est. P&L": f"{'+'if _est_pnl>=0 else ''}{_est_pnl/1e3:.1f}k",
                         })
 
                 if _pnl_rows:
-                    _pnl_df = pd.DataFrame(_pnl_rows)
-                    st.dataframe(_pnl_df, use_container_width=True, hide_index=True)
-                    st.caption("⚠️ Estimates only — actual P&L depends on vol, carry, time and delta hedging. "
-                               "Use Swaptions/Caps tabs for full pricing.")
+                    st.dataframe(pd.DataFrame(_pnl_rows), use_container_width=True, hide_index=True)
+                    st.caption("⚠️ Estimates only — DV01 × rate move proxy. "
+                               "Use Swaptions/Caps tabs for full vol-adjusted pricing.")
 
-                    # P&L bar chart
-                    _vals = [float(r["Est. P&L (AUD)"].replace("k","").replace("+","")) for r in _pnl_rows]
+                    _vals = [float(r["Est. P&L"].replace("k","").replace("+","")) for r in _pnl_rows]
                     _lbls = [r["Structure"] for r in _pnl_rows]
+                    _moves = [r["Move"] for r in _pnl_rows]
                     _colors = ["#22c55e" if v >= 0 else "#ef4444" for v in _vals]
-                    _fig_pnl = go.Figure(go.Bar(x=_lbls, y=_vals, marker_color=_colors,
-                                                text=[f"{'+'if v>=0 else ''}{v:.1f}k" for v in _vals],
-                                                textposition="outside"))
+                    _fig_pnl = go.Figure(go.Bar(
+                        x=_lbls, y=_vals, marker_color=_colors,
+                        text=[f"{v:+.1f}k\n{m}" for v, m in zip(_vals, _moves)],
+                        textposition="outside"))
+                    _title_date = str(_val_date_used) if _val_date_used else "manual shift"
                     _fig_pnl.update_layout(
-                        title=f"Est. P&L at {_target_rate:.3f}% ({_move_bp:+.1f}bp move) — {_notional_mm:.0f}mm notional",
+                        title=f"Est. P&L — {_notional_mm:.0f}mm notional | {_title_date}",
                         yaxis_title="Est. P&L (AUD '000)",
-                        xaxis_tickangle=-30,
-                        template="plotly_dark", height=320,
-                        margin=dict(t=50, b=80))
+                        xaxis_tickangle=-35,
+                        template="plotly_dark", height=360,
+                        margin=dict(t=50, b=100))
                     st.plotly_chart(_fig_pnl, use_container_width=True)
                 else:
-                    st.info("Select ideas above (or generate ideas) to see P&L estimates.")
+                    st.info("Generate ideas above to see P&L estimates.")
     with rv_tabs[3]:
         st.markdown("### Cap/Floor RV Trade Recommendations")
         st.caption("Forward BBSW path vs caplet vol — find richness/cheapness by strike and maturity.")
