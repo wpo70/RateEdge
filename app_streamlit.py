@@ -519,6 +519,18 @@ def save_all_session_data(user_id: str):
                 if save_user_config(user_id, f"basis_{basis_type}", ccy, data):
                     saved += 1
     
+    # Save FWD Analysis series lists (spreads, butterflies, fwd-fwds etc.)
+    _fwd_prefs = {
+        "irs_sp_list":  [list(x) for x in st.session_state.get("irs_sp_list",  [])],
+        "irs_fl_list":  [list(x) for x in st.session_state.get("irs_fl_list",  [])],
+        "fvfv_list":    [list(x) for x in st.session_state.get("fvfv_list",    [])],
+        "b6_list":      list(st.session_state.get("b6_list", [])),
+        "fv6_list":     [list(x) for x in st.session_state.get("fv6_list",     [])],
+        "bsp_list":     [list(x) for x in st.session_state.get("bsp_list",     [])],
+    }
+    if save_user_config(user_id, "fwd_analysis_prefs", "global", _fwd_prefs):
+        saved += 1
+
     return saved
 
 
@@ -603,7 +615,27 @@ def load_all_session_data(user_id: str) -> int:
                     loaded += 1
                 except:
                     pass
-    
+
+    # Restore FWD Analysis series lists
+    if "fwd_analysis_prefs" in configs and "global" in configs["fwd_analysis_prefs"]:
+        try:
+            _p = configs["fwd_analysis_prefs"]["global"]["data"]
+            if "irs_sp_list" in _p and not st.session_state.get("irs_sp_list"):
+                st.session_state["irs_sp_list"] = [tuple(x) for x in _p["irs_sp_list"]]
+            if "irs_fl_list" in _p and not st.session_state.get("irs_fl_list"):
+                st.session_state["irs_fl_list"] = [tuple(x) for x in _p["irs_fl_list"]]
+            if "fvfv_list" in _p and not st.session_state.get("fvfv_list"):
+                st.session_state["fvfv_list"] = [tuple(x) for x in _p["fvfv_list"]]
+            if "b6_list" in _p and not st.session_state.get("b6_list"):
+                st.session_state["b6_list"] = list(_p["b6_list"])
+            if "fv6_list" in _p and not st.session_state.get("fv6_list"):
+                st.session_state["fv6_list"] = [tuple(x) for x in _p["fv6_list"]]
+            if "bsp_list" in _p and not st.session_state.get("bsp_list"):
+                st.session_state["bsp_list"] = [tuple(x) for x in _p["bsp_list"]]
+            loaded += 1
+        except:
+            pass
+
     return loaded
 
 
@@ -3430,6 +3462,20 @@ def fwd_analysis_tab():
 
     _an_tabs = st.tabs(["IRS Spreads", "IRS Butterflies", "Fwd-Fwd Rates (3M)", "6v3 Outright", "6v3 Fwd-Fwd", "6v3 Spreads"])
 
+    def _autosave_fwd_prefs():
+        """Persist FWD analysis series lists to DB so they survive session restarts."""
+        if HAS_POSTGRES and get_db_url():
+            _uid = st.session_state.get("username", "default")
+            _prefs = {
+                "irs_sp_list": [list(x) for x in st.session_state.get("irs_sp_list", [])],
+                "irs_fl_list": [list(x) for x in st.session_state.get("irs_fl_list", [])],
+                "fvfv_list":   [list(x) for x in st.session_state.get("fvfv_list",   [])],
+                "b6_list":     list(st.session_state.get("b6_list", [])),
+                "fv6_list":    [list(x) for x in st.session_state.get("fv6_list",    [])],
+                "bsp_list":    [list(x) for x in st.session_state.get("bsp_list",    [])],
+            }
+            save_user_config(_uid, "fwd_analysis_prefs", "global", _prefs)
+
     def _chart_tools(fig, series_dict: dict, key: str, ylab: str = "bp"):
         """📥 Download + date-range picker + Hi/Lo/Mean/Std/Current stats box."""
         import plotly.io as _pio
@@ -3551,6 +3597,7 @@ def fwd_analysis_tab():
                     _rm_parts = _sp_remove.split("−")
                     if len(_rm_parts)==2 and (_rm_parts[0],_rm_parts[1]) in st.session_state["irs_sp_list"]:
                         st.session_state["irs_sp_list"].remove((_rm_parts[0],_rm_parts[1]))
+                        _autosave_fwd_prefs()
                         st.rerun()
 
         if _sp_add_clicked:
@@ -3562,6 +3609,7 @@ def fwd_analysis_tab():
                 st.warning(f"{_l1}−{_l2} is already in the list.")
             else:
                 st.session_state["irs_sp_list"].append((_l1, _l2))
+                _autosave_fwd_prefs()
                 st.rerun()
 
         c1, c2, c3 = st.columns(3)
@@ -3622,7 +3670,9 @@ def fwd_analysis_tab():
                 if st.button("✕", key="fl_rm_btn", use_container_width=True) and _fl_rm != "—":
                     _rp = _fl_rm.split("/")
                     if len(_rp)==3 and tuple(_rp) in st.session_state["irs_fl_list"]:
-                        st.session_state["irs_fl_list"].remove(tuple(_rp)); st.rerun()
+                        st.session_state["irs_fl_list"].remove(tuple(_rp))
+                        _autosave_fwd_prefs()
+                        st.rerun()
 
         if _fl_add_clicked:
             _fw = st.session_state.get("fl_w", _fl_w)
@@ -3634,6 +3684,7 @@ def fwd_analysis_tab():
                 st.warning(f"{_fw}/{_fm}/{_fe} is already in the list.")
             else:
                 st.session_state["irs_fl_list"].append((_fw,_fm,_fe))
+                _autosave_fwd_prefs()
                 st.rerun()
 
         c1,c2,c3 = st.columns(3)
@@ -3695,7 +3746,9 @@ def fwd_analysis_tab():
                         try:
                             _rs,_rt = int(_rp[0]),int(_rp[1])
                             if (_rs,_rt) in st.session_state["fvfv_list"]:
-                                st.session_state["fvfv_list"].remove((_rs,_rt)); st.rerun()
+                                st.session_state["fvfv_list"].remove((_rs,_rt))
+                                _autosave_fwd_prefs()
+                                st.rerun()
                         except: pass
 
         if _fv_add_clicked:
@@ -3704,7 +3757,9 @@ def fwd_analysis_tab():
             if (_fvs, _fvt) in st.session_state["fvfv_list"]:
                 st.warning(f"{_fvs}y{_fvt}y is already in the list.")
             else:
-                st.session_state["fvfv_list"].append((_fvs, _fvt)); st.rerun()
+                st.session_state["fvfv_list"].append((_fvs, _fvt))
+                _autosave_fwd_prefs()
+                st.rerun()
 
         c1,c2,c3 = st.columns(3)
         with c1: _fv_yr = st.slider("History (years)",1,8,5,key="fv_yr")
@@ -3757,12 +3812,16 @@ def fwd_analysis_tab():
                 with rc2:
                     st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
                     if st.button("✕", key="b6_rm_btn", use_container_width=True) and _b6_rm != "—" and _b6_rm in st.session_state["b6_list"]:
-                        st.session_state["b6_list"].remove(_b6_rm); st.rerun()
+                        st.session_state["b6_list"].remove(_b6_rm)
+                        _autosave_fwd_prefs()
+                        st.rerun()
 
             if _b6_add_clicked:
                 _btn = st.session_state.get("b6_add_tn", _b6_add_tn)
                 if _btn not in st.session_state["b6_list"]:
-                    st.session_state["b6_list"].append(_btn); st.rerun()
+                    st.session_state["b6_list"].append(_btn)
+                    _autosave_fwd_prefs()
+                    st.rerun()
 
             c1,c2 = st.columns(2)
             with c1: _b6_yr = st.slider("History (years)",1,8,5,key="b6_yr")
@@ -3805,7 +3864,9 @@ def fwd_analysis_tab():
                         try:
                             _rs,_rt=int(_rp[0]),int(_rp[1])
                             if (_rs,_rt) in st.session_state["fv6_list"]:
-                                st.session_state["fv6_list"].remove((_rs,_rt)); st.rerun()
+                                st.session_state["fv6_list"].remove((_rs,_rt))
+                                _autosave_fwd_prefs()
+                                st.rerun()
                         except: pass
 
         if _fv6_add_clicked:
@@ -3814,7 +3875,9 @@ def fwd_analysis_tab():
             if (_fv6s, _fv6t) in st.session_state["fv6_list"]:
                 st.warning(f"{_fv6s}y{_fv6t}y is already in the list.")
             else:
-                st.session_state["fv6_list"].append((_fv6s, _fv6t)); st.rerun()
+                st.session_state["fv6_list"].append((_fv6s, _fv6t))
+                _autosave_fwd_prefs()
+                st.rerun()
 
         c1,c2 = st.columns(2)
         with c1: _fv6_yr = st.slider("History (years)",1,8,5,key="fv6_yr")
@@ -3872,7 +3935,9 @@ def fwd_analysis_tab():
                     if st.button("✕", key="bsp_rm_btn", use_container_width=True) and _bsp_rm != "—":
                         _rp=_bsp_rm.split("−")
                         if len(_rp)==2 and tuple(_rp) in st.session_state["bsp_list"]:
-                            st.session_state["bsp_list"].remove(tuple(_rp)); st.rerun()
+                            st.session_state["bsp_list"].remove(tuple(_rp))
+                            _autosave_fwd_prefs()
+                            st.rerun()
 
             if _bsp_add_clicked:
                 _bl1 = st.session_state.get("bsp_l1", _bsp_l1)
@@ -3882,7 +3947,9 @@ def fwd_analysis_tab():
                 elif (_bl1, _bl2) in st.session_state["bsp_list"]:
                     st.warning(f"{_bl1}−{_bl2} is already in the list.")
                 else:
-                    st.session_state["bsp_list"].append((_bl1, _bl2)); st.rerun()
+                    st.session_state["bsp_list"].append((_bl1, _bl2))
+                    _autosave_fwd_prefs()
+                    st.rerun()
 
             c1,c2,c3 = st.columns(3)
             with c1: _bsp_yr = st.slider("History (years)",1,8,5,key="bsp_yr")
@@ -7805,7 +7872,8 @@ def rv_tab():
             st.markdown("#### Calendar Vol Spread — Term Structure Shape")
             st.caption("Short/Long ratio. >1 = inverted (short-dated expensive). <1 = normal (long-dated expensive).")
 
-            cal_pairs = [("3m","1y"), ("3m","2y"), ("6m","2y"), ("1y","3y"), ("1y","5y"), ("2y","5y")]
+            cal_pairs = [("1m","3m"), ("3m","6m"), ("6m","1y"), ("1y","2y"),
+                         ("3m","1y"), ("3m","2y"), ("6m","2y"), ("1y","3y"), ("1y","5y"), ("2y","5y")]
             cal_rows  = []
             for tn in tenor_list:
                 row = {"Tenor": f"{tn}Y"}
@@ -8333,7 +8401,8 @@ def rv_tab():
             # ── Calendar Vol Spreads ──────────────────────────────────
             if atm is not None:
                 for tn in [2, 5, 10]:
-                    for short_e, long_e in [("3m","6m"),("6m","1y"),("1y","2y")]:
+                    for short_e, long_e in [("1m","3m"),("3m","6m"),("6m","1y"),("1y","2y"),
+                                         ("3m","6m"),("6m","1y"),("1y","2y")]:
                         v_short = get_matrix_value(atm, short_e, float(tn))
                         v_long  = get_matrix_value(atm, long_e,  float(tn))
                         if v_short and v_long and v_long > 0:
@@ -8382,7 +8451,7 @@ def rv_tab():
                 if "rv_selected" not in st.session_state:
                     st.session_state["rv_selected"] = set()
 
-                col_sel1, col_sel2, col_sel3 = st.columns([1, 1, 4])
+                col_sel1, col_sel2, col_sel3, col_sel4 = st.columns([1, 1, 1, 3])
                 with col_sel1:
                     if st.button("☑ Select All", key="rv_sel_all"):
                         st.session_state["rv_selected"] = set(range(len(ideas[:12])))
@@ -8392,20 +8461,24 @@ def rv_tab():
 
                 selected = st.session_state["rv_selected"]
 
-                if selected:
-                    lines = []
-                    for idx in sorted(selected):
-                        if idx < len(ideas):
-                            idea = ideas[idx]
-                            lines.append(
-                                f"[{idea['Type']}] {idea['Structure']}\n"
-                                f"Trade: {idea['Trade']}\n"
-                                f"Rationale: {idea['Rationale']}\n"
-                                f"Risk: {idea['Risk']}\n"
-                                f"Score: {idea['Score']:.1f}\n"
-                            )
-                    copy_text = "\n".join(lines)
-                    st.text_area("📋 Copy selected ideas", copy_text, height=120, key="rv_copy_box")
+                # Build copy text (all ideas if none selected, else selected)
+                _copy_pool = sorted(selected) if selected else range(len(ideas[:12]))
+                _copy_lines = []
+                for idx in _copy_pool:
+                    if idx < len(ideas):
+                        idea = ideas[idx]
+                        _copy_lines.append(
+                            f"[{idea['Type']}] {idea['Structure']}\n"
+                            f"Trade: {idea['Trade']}\n"
+                            f"Rationale: {idea['Rationale']}\n"
+                            f"Risk: {idea['Risk']}\n"
+                            f"Score: {idea['Score']:.1f}\n"
+                        )
+                _copy_text = "\n".join(_copy_lines)
+                with col_sel3:
+                    st.download_button("📋 Copy Ideas", _copy_text.encode(),
+                                       "rv_trade_ideas.txt", "text/plain",
+                                       key="rv_copy_btn")
 
                 for i, idea in enumerate(ideas[:12]):
                     score_color = "#22c55e" if idea["Score"] > 5 else "#f59e0b"
@@ -8437,9 +8510,106 @@ def rv_tab():
                             )
                             st.code(idea_text, language=None)
 
-    # ══════════════════════════════════════════════════════════════════
-    # TAB 4 — CAP/FLOOR TRADE IDEAS
-    # ══════════════════════════════════════════════════════════════════
+            # ── Theoretical P&L at given forward rate ─────────────────
+            st.markdown("---")
+            st.markdown("#### 📈 Theoretical P&L at a Given Forward Rate")
+            st.caption("Estimate net P&L for selected ideas if rates move to a target level.")
+
+            _pnl_c1, _pnl_c2, _pnl_c3, _pnl_c4 = st.columns([2, 2, 2, 2])
+            with _pnl_c1:
+                _pnl_src = st.radio("Rate source", ["Manual", "From Fwd Matrix"], horizontal=True,
+                                    key="rv_pnl_src")
+            with _pnl_c2:
+                # Try to pull from session state fwd matrix
+                _fwd_matrix_ss = st.session_state.get("fwd_matrix", {}).get("AUD")
+                _matrix_rate = None
+                if _fwd_matrix_ss is not None and not _fwd_matrix_ss.empty:
+                    try:
+                        _matrix_rate = float(_fwd_matrix_ss.iloc[6, 4])  # 1y×5Y as default
+                    except Exception:
+                        pass
+                if _pnl_src == "From Fwd Matrix" and _matrix_rate is not None:
+                    st.metric("Fwd Matrix rate (1y×5Y)", f"{_matrix_rate:.4f}%")
+                    _target_rate = _matrix_rate
+                else:
+                    _target_rate = st.number_input("Target rate (%)", min_value=0.0, max_value=15.0,
+                                                   value=round(_par_rate(5) or 4.5, 3),
+                                                   step=0.05, format="%.3f", key="rv_pnl_rate")
+            with _pnl_c3:
+                _notional_mm = st.number_input("Notional (AUD mm)", min_value=1.0, max_value=5000.0,
+                                               value=100.0, step=25.0, key="rv_pnl_notional")
+            with _pnl_c4:
+                _current_rate = _par_rate(5) or 4.5
+                st.metric("Current 5Y rate", f"{_current_rate:.3f}%")
+                _move_bp = round((_target_rate - _current_rate) * 100, 1)
+                _color = "normal" if _move_bp == 0 else ("inverse" if _move_bp < 0 else "normal")
+                st.metric("Rate move", f"{_move_bp:+.1f}bp")
+
+            if ideas:
+                _pnl_rows = []
+                for idx, idea in enumerate(ideas[:12]):
+                    is_sel = idx in selected if selected else True
+                    if not is_sel:
+                        continue
+                    # Estimate P&L directionally from move and trade type
+                    _move = _move_bp  # bp
+                    _notional = _notional_mm * 1e6
+                    _est_pnl = None
+                    _basis = "—"
+
+                    _t = idea["Type"]
+                    if "Payer" in idea["Trade"] and "Receiver" not in idea["Trade"]:
+                        # Long payer — profits if rates rise
+                        _dv01 = _notional * 0.0001 * 5  # rough 5Y DV01
+                        _est_pnl = _move * _dv01 / 100
+                        _basis = f"DV01 ~{_dv01/1e3:.0f}k × {_move:+.0f}bp"
+                    elif "Receiver" in idea["Trade"] and "Payer" not in idea["Trade"]:
+                        _dv01 = _notional * 0.0001 * 5
+                        _est_pnl = -_move * _dv01 / 100
+                        _basis = f"DV01 ~{_dv01/1e3:.0f}k × {-_move:+.0f}bp"
+                    elif "Straddle" in idea["Trade"] or "straddle" in idea["Trade"]:
+                        # Long straddle — profits from large moves (either direction)
+                        _dv01 = _notional * 0.0001 * 5
+                        _est_pnl = abs(_move) * _dv01 / 100 * 0.5  # rough gamma capture
+                        _basis = f"|{_move:.0f}bp| move, gamma ~50%"
+                    elif "Flattener" in idea["Trade"]:
+                        _est_pnl = _move * _notional * 0.0001 * 0.3  # rough slope P&L
+                        _basis = f"Slope DV01 × {_move:+.0f}bp"
+                    elif "Steepener" in idea["Trade"]:
+                        _est_pnl = -_move * _notional * 0.0001 * 0.3
+                        _basis = f"Slope DV01 × {-_move:+.0f}bp"
+
+                    if _est_pnl is not None:
+                        _pnl_rows.append({
+                            "Structure": idea["Structure"],
+                            "Trade": idea["Trade"][:50] + ("…" if len(idea["Trade"]) > 50 else ""),
+                            f"Rate move": f"{_move:+.1f}bp",
+                            f"Est. P&L (AUD)": f"{'+'if _est_pnl>=0 else ''}{_est_pnl/1e3:.1f}k",
+                            "Basis": _basis,
+                        })
+
+                if _pnl_rows:
+                    _pnl_df = pd.DataFrame(_pnl_rows)
+                    st.dataframe(_pnl_df, use_container_width=True, hide_index=True)
+                    st.caption("⚠️ Estimates only — actual P&L depends on vol, carry, time and delta hedging. "
+                               "Use Swaptions/Caps tabs for full pricing.")
+
+                    # P&L bar chart
+                    _vals = [float(r["Est. P&L (AUD)"].replace("k","").replace("+","")) for r in _pnl_rows]
+                    _lbls = [r["Structure"] for r in _pnl_rows]
+                    _colors = ["#22c55e" if v >= 0 else "#ef4444" for v in _vals]
+                    _fig_pnl = go.Figure(go.Bar(x=_lbls, y=_vals, marker_color=_colors,
+                                                text=[f"{'+'if v>=0 else ''}{v:.1f}k" for v in _vals],
+                                                textposition="outside"))
+                    _fig_pnl.update_layout(
+                        title=f"Est. P&L at {_target_rate:.3f}% ({_move_bp:+.1f}bp move) — {_notional_mm:.0f}mm notional",
+                        yaxis_title="Est. P&L (AUD '000)",
+                        xaxis_tickangle=-30,
+                        template="plotly_dark", height=320,
+                        margin=dict(t=50, b=80))
+                    st.plotly_chart(_fig_pnl, use_container_width=True)
+                else:
+                    st.info("Select ideas above (or generate ideas) to see P&L estimates.")
     with rv_tabs[3]:
         st.markdown("### Cap/Floor RV Trade Recommendations")
         st.caption("Forward BBSW path vs caplet vol — find richness/cheapness by strike and maturity.")
@@ -8855,6 +9025,25 @@ def bachelier_bond_option_yield(
 def bond_option_tab():
     """OTC AGB Bond Option Pricer."""
     st.subheader("🏛️ Bond Options — OTC Physical AGB")
+
+    # ── Licence gate ────────────────────────────────────────────────────
+    _BOND_PW = "REBO2024"   # change this to your chosen licence key
+    if not st.session_state.get("bond_options_unlocked"):
+        st.info("🔒 Bond Options is a licensed add-on. Enter your access code to continue.")
+        _pw_col, _btn_col = st.columns([3, 1])
+        with _pw_col:
+            _pw = st.text_input("Access Code", type="password", key="bond_pw_input",
+                                placeholder="Enter licence key")
+        with _btn_col:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            if st.button("Unlock", key="bond_pw_btn", type="primary"):
+                if _pw == _BOND_PW:
+                    st.session_state["bond_options_unlocked"] = True
+                    st.rerun()
+                else:
+                    st.error("Incorrect access code. Contact wpo@rateedge.au to licence Bond Options.")
+        return
+
     from datetime import date as _date, timedelta
 
     ois_curve = get_basis_curve("AUD", "ois")
