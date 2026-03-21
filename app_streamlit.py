@@ -10537,25 +10537,52 @@ def sod_report_tab():
     _usd_chg = _atm1.loc[_common_exp, _common_ten].astype(float) - \
                _atm2.loc[_common_exp, _common_ten].astype(float)
 
-    # Display as colour-coded heatmap
-    _usd_chg_disp = _usd_chg.copy()
+    # ── USD Premium change ────────────────────────────────────────
+    _usd_curve = get_ccy_curve("USD")
+    _usd_prem_t1, _ = calculate_atm_premium_matrix(
+        "USD", _usd_curve,
+        _atm1.reset_index().rename(columns={"index": "Expiry"}) if "Expiry" not in _atm1.columns else _atm1.reset_index(),
+    ) if _usd_curve is not None and not _usd_curve.empty else (pd.DataFrame(), pd.DataFrame())
+    _usd_prem_t2, _ = calculate_atm_premium_matrix(
+        "USD", _usd_curve,
+        _atm2.reset_index().rename(columns={"index": "Expiry"}) if "Expiry" not in _atm2.columns else _atm2.reset_index(),
+    ) if _usd_curve is not None and not _usd_curve.empty else (pd.DataFrame(), pd.DataFrame())
+
+    _usd_prem_chg = pd.DataFrame()
+    if not _usd_prem_t1.empty and not _usd_prem_t2.empty:
+        _pc_exp = [e for e in _usd_prem_t1.index if e in _usd_prem_t2.index]
+        _pc_ten = [c for c in _usd_prem_t1.columns if c in _usd_prem_t2.columns]
+        if _pc_exp and _pc_ten:
+            _usd_prem_chg = _usd_prem_t1.loc[_pc_exp, _pc_ten].astype(float) - \
+                            _usd_prem_t2.loc[_pc_exp, _pc_ten].astype(float)
+
+    # Display vol change
+    st.markdown("**Vol Change (bp)**")
     st.dataframe(
-        _usd_chg_disp.style
+        _usd_chg.style
             .background_gradient(cmap="RdYlGn", axis=None, vmin=-5, vmax=5)
             .format("{:+.2f}"),
         use_container_width=True
     )
-    st.caption(f"USD ATM vol change (bp). T-1: {_usd_t1_sel[:16]}  vs  T-2: {_usd_t2_sel[:16]}")
+    # Display premium change
+    if not _usd_prem_chg.empty:
+        st.markdown("**Fwd Premium Change (bp notional)**")
+        st.dataframe(
+            _usd_prem_chg.style
+                .background_gradient(cmap="RdYlGn", axis=None, vmin=-3, vmax=3)
+                .format("{:+.2f}"),
+            use_container_width=True
+        )
+    st.caption(f"USD T-1: {_usd_t1_sel[:16]}  vs  T-2: {_usd_t2_sel[:16]}")
 
     # ── IRS Curve Change ──────────────────────────────────────────
     st.markdown("### 📈 USD IRS Curve — T-1 Close")
-    _usd_curve_t1 = get_ccy_curve("USD")
     _usd_curve_aud = get_ccy_curve("AUD")
 
-    if _usd_curve_t1 is not None and not _usd_curve_t1.empty:
+    if _usd_curve is not None and not _usd_curve.empty:
         _fig_usd_crv = go.Figure()
         _fig_usd_crv.add_trace(go.Scatter(
-            x=_usd_curve_t1["MaturityY"], y=_usd_curve_t1["ZeroRatePct"],
+            x=_usd_curve["MaturityY"], y=_usd_curve["ZeroRatePct"],
             mode="lines+markers", line=dict(color="#3b82f6", width=2),
             marker=dict(size=5), name="USD IRS (loaded)"))
         _fig_usd_crv.update_layout(
@@ -10605,39 +10632,85 @@ def sod_report_tab():
         _aud_ten = [c for c in _aud_atm.columns if c in _usd_chg.columns]
 
         if _aud_exp and _aud_ten:
-            _implied_chg = pd.DataFrame(index=_aud_exp, columns=_aud_ten, dtype=float)
+            _implied_chg  = pd.DataFrame(index=_aud_exp, columns=_aud_ten, dtype=float)
             _implied_open = pd.DataFrame(index=_aud_exp, columns=_aud_ten, dtype=float)
 
             for _e in _aud_exp:
                 _b = _get_beta(_e)
                 for _t in _aud_ten:
                     try:
-                        _usd_mv = float(_usd_chg.loc[_e, _t]) if _e in _usd_chg.index and _t in _usd_chg.columns else 0.0
+                        _usd_mv  = float(_usd_chg.loc[_e, _t]) if _e in _usd_chg.index and _t in _usd_chg.columns else 0.0
                         _aud_now = float(_aud_atm.loc[_e, _t])
                         _implied_chg.loc[_e, _t]  = round(_usd_mv * _b, 2)
-                        _implied_open.loc[_e, _t]  = round(_aud_now + _usd_mv * _b, 2)
+                        _implied_open.loc[_e, _t] = round(_aud_now + _usd_mv * _b, 2)
                     except Exception:
                         pass
 
-            # ── Display: Implied Change ──────────────────────────────
-            st.markdown("#### Implied AUD Vol Change at Open (bp)")
-            st.dataframe(
-                _implied_chg.astype(float).style
-                    .background_gradient(cmap="RdYlGn", axis=None, vmin=-5, vmax=5)
-                    .format("{:+.2f}"),
-                use_container_width=True
-            )
+            # ── Compute AUD premium matrices ─────────────────────────
+            _aud_curve = get_ccy_curve("AUD")
+            _aud_prem_prev   = pd.DataFrame()
+            _aud_prem_open   = pd.DataFrame()
+            _aud_prem_chg    = pd.DataFrame()
 
-            # ── Display: Implied Open Level ─────────────────────────
-            st.markdown("#### Implied AUD Vol Open Level (bp)")
-            st.dataframe(
-                _implied_open.astype(float).style
-                    .background_gradient(cmap="RdYlGn_r", axis=None)
-                    .format("{:.2f}"),
-                use_container_width=True
-            )
+            if _aud_curve is not None and not _aud_curve.empty:
+                def _atm_df_with_expiry(idx_df):
+                    """Ensure ATM df has Expiry as column, not index."""
+                    d = idx_df.copy()
+                    if "Expiry" not in d.columns:
+                        d = d.reset_index().rename(columns={"index": "Expiry"})
+                    return d
 
-            # ── Highlight large moves ────────────────────────────────
+                _aud_prem_prev, _ = calculate_atm_premium_matrix(
+                    "AUD", _aud_curve, _atm_df_with_expiry(_aud_atm)
+                )
+                _aud_prem_open, _ = calculate_atm_premium_matrix(
+                    "AUD", _aud_curve, _atm_df_with_expiry(_implied_open)
+                )
+                if not _aud_prem_prev.empty and not _aud_prem_open.empty:
+                    _pchg_exp = [e for e in _aud_prem_open.index if e in _aud_prem_prev.index]
+                    _pchg_ten = [c for c in _aud_prem_open.columns if c in _aud_prem_prev.columns]
+                    if _pchg_exp and _pchg_ten:
+                        _aud_prem_chg = _aud_prem_open.loc[_pchg_exp, _pchg_ten].astype(float) - \
+                                        _aud_prem_prev.loc[_pchg_exp, _pchg_ten].astype(float)
+
+            # ── Display: toggle Vol vs Premium ───────────────────────
+            if _show_bp:
+                st.markdown("#### Implied AUD Vol Change at Open (bp)")
+                st.dataframe(
+                    _implied_chg.astype(float).style
+                        .background_gradient(cmap="RdYlGn", axis=None, vmin=-5, vmax=5)
+                        .format("{:+.2f}"),
+                    use_container_width=True
+                )
+                st.markdown("#### Implied AUD Vol Open Level (bp)")
+                st.dataframe(
+                    _implied_open.astype(float).style
+                        .background_gradient(cmap="RdYlGn_r", axis=None)
+                        .format("{:.2f}"),
+                    use_container_width=True
+                )
+            else:
+                # Premium mode
+                if not _aud_prem_chg.empty:
+                    st.markdown("#### Implied AUD Fwd Premium Change at Open (bp notional)")
+                    st.dataframe(
+                        _aud_prem_chg.astype(float).style
+                            .background_gradient(cmap="RdYlGn", axis=None, vmin=-3, vmax=3)
+                            .format("{:+.2f}"),
+                        use_container_width=True
+                    )
+                if not _aud_prem_open.empty:
+                    st.markdown("#### Implied AUD Fwd Premium Open Level (bp notional)")
+                    st.dataframe(
+                        _aud_prem_open.astype(float).style
+                            .background_gradient(cmap="RdYlGn_r", axis=None)
+                            .format("{:.2f}"),
+                        use_container_width=True
+                    )
+                if _aud_prem_chg.empty:
+                    st.info("Load AUD IRS curve in Curves tab to compute premium matrices.")
+
+            # ── Notable moves ────────────────────────────────────────
             _thresh = st.slider("Highlight moves larger than (bp)", 1, 10, 3, key="sod_thresh")
             _big_moves = []
             for _e in _aud_exp:
@@ -10646,13 +10719,17 @@ def sod_report_tab():
                         _mv = float(_implied_chg.loc[_e, _t])
                         if abs(_mv) >= _thresh:
                             _usd_raw = float(_usd_chg.loc[_e, _t]) if _e in _usd_chg.index and _t in _usd_chg.columns else 0.0
+                            _pchg_str = ""
+                            if not _aud_prem_chg.empty and _e in _aud_prem_chg.index and _t in _aud_prem_chg.columns:
+                                _pchg_str = f"{float(_aud_prem_chg.loc[_e, _t]):+.2f}bp"
                             _big_moves.append({
                                 "Expiry": _e, "Tenor": _t,
                                 "USD Δvol": f"{_usd_raw:+.2f}bp",
                                 "Beta": f"{_get_beta(_e)*100:.0f}%",
-                                "Implied AUD Δ": f"{_mv:+.2f}bp",
+                                "Implied AUD Δvol": f"{_mv:+.2f}bp",
                                 "AUD Prev Close": f"{float(_aud_atm.loc[_e, _t]):.2f}bp",
                                 "AUD Implied Open": f"{float(_implied_open.loc[_e, _t]):.2f}bp",
+                                "Δ Fwd Premium": _pchg_str,
                                 "Alert": "🔴 LARGE MOVE" if abs(_mv) >= _thresh * 1.5 else "🟡 Notable",
                             })
                     except Exception:
@@ -10660,8 +10737,83 @@ def sod_report_tab():
 
             if _big_moves:
                 st.markdown(f"#### ⚡ Notable Moves (≥{_thresh}bp implied AUD change)")
-                _bm_df = pd.DataFrame(_big_moves).sort_values("Implied AUD Δ", key=lambda x: x.str.replace("bp","").str.replace("+","").astype(float).abs(), ascending=False)
+                _bm_df = pd.DataFrame(_big_moves).sort_values(
+                    "Implied AUD Δvol",
+                    key=lambda x: x.str.replace("bp","").str.replace("+","").astype(float).abs(),
+                    ascending=False
+                )
                 st.dataframe(_bm_df, use_container_width=True, hide_index=True)
+
+            # ── Narrative Summary ────────────────────────────────────
+            st.markdown("---")
+            st.markdown("### 📝 SOD Summary")
+
+            # Build narrative
+            _usd_avg_chg = float(_usd_chg.values.astype(float).mean())
+            _usd_max_chg = float(_usd_chg.values.astype(float).max())
+            _usd_min_chg = float(_usd_chg.values.astype(float).min())
+            _usd_direction = "higher" if _usd_avg_chg > 0 else "lower"
+
+            _aud_avg_chg = float(_implied_chg.values.astype(float).mean())
+            _aud_direction = "higher" if _aud_avg_chg > 0 else "lower"
+
+            # Find biggest USD moves
+            _usd_flat = _usd_chg.stack().reset_index()
+            _usd_flat.columns = ["Expiry", "Tenor", "Chg"]
+            _usd_flat["AbsChg"] = _usd_flat["Chg"].abs()
+            _usd_flat = _usd_flat.sort_values("AbsChg", ascending=False)
+            _top_usd = _usd_flat.head(3)
+
+            # Find biggest AUD implied moves
+            _aud_flat = _implied_chg.stack().reset_index()
+            _aud_flat.columns = ["Expiry", "Tenor", "Chg"]
+            _aud_flat["AbsChg"] = _aud_flat["Chg"].abs()
+            _aud_flat = _aud_flat.sort_values("AbsChg", ascending=False)
+            _top_aud = _aud_flat.head(3)
+
+            _usd_move_str = ", ".join(
+                f"{r['Expiry']}×{r['Tenor']} {r['Chg']:+.1f}bp"
+                for _, r in _top_usd.iterrows()
+            )
+            _aud_move_str = ", ".join(
+                f"{r['Expiry']}×{r['Tenor']} {r['Chg']:+.1f}bp"
+                for _, r in _top_aud.iterrows()
+            )
+
+            # USD premium context
+            _usd_prem_ctx = ""
+            if not _usd_prem_chg.empty:
+                _usd_avg_pchg = float(_usd_prem_chg.values.astype(float).mean())
+                _usd_prem_ctx = (
+                    f" In premium terms, the average USD fwd premium moved "
+                    f"{'up' if _usd_avg_pchg > 0 else 'down'} "
+                    f"{abs(_usd_avg_pchg):.1f}bp across the surface."
+                )
+
+            _aud_prem_ctx = ""
+            if not _aud_prem_chg.empty:
+                _aud_avg_pchg = float(_aud_prem_chg.values.astype(float).mean())
+                _aud_prem_ctx = (
+                    f" Translating to AUD premium: the implied open fwd premium moves "
+                    f"an average of {abs(_aud_avg_pchg):.1f}bp "
+                    f"({'higher' if _aud_avg_pchg > 0 else 'lower'}) vs yesterday's AUD close."
+                )
+
+            _narrative = f"""
+**USD overnight vol session (T-2 → T-1 NYC close):** USD ATM vols moved broadly {_usd_direction} \
+overnight, with the surface averaging {abs(_usd_avg_chg):.1f}bp change. \
+The largest moves were in {_usd_move_str}. \
+The range across the surface was {_usd_min_chg:+.1f}bp to {_usd_max_chg:+.1f}bp.{_usd_prem_ctx}
+
+**Implied AUD open (vs yesterday's 4:30pm Sydney close):** Applying USD/AUD vol betas \
+(short-end {int(_beta_short*100)}%, mid {int(_beta_mid*100)}%, long-end {int(_beta_long*100)}%), \
+AUD vols are implied to open broadly {_aud_direction}, averaging {abs(_aud_avg_chg):.1f}bp change. \
+Key AUD moves to watch: {_aud_move_str}.{_aud_prem_ctx}
+
+**Tactical note:** {"Short-dated AUD gamma looks relatively more affected given the short-end beta pickup. Consider reviewing 3m–6m expiry trades before the open." if abs(_aud_avg_chg) > 1.5 else "Moves are modest — no urgent repricing expected at the AUD open, but monitor live market confirmation."} \
+These are indicative adjustments based on observed USD/AUD correlations and should be verified against live interdealer markets at open.
+"""
+            st.markdown(_narrative)
 
             # ── Download report ──────────────────────────────────────
             _report_lines = [
@@ -10672,6 +10824,10 @@ def sod_report_tab():
                 "",
                 "USD Vol Changes (bp):",
                 _usd_chg.to_string(),
+            ]
+            if not _usd_prem_chg.empty:
+                _report_lines += ["", "USD Fwd Premium Changes (bp):", _usd_prem_chg.to_string()]
+            _report_lines += [
                 "",
                 "Implied AUD Vol Change at Open (bp):",
                 _implied_chg.astype(float).to_string(),
@@ -10679,6 +10835,9 @@ def sod_report_tab():
                 "Implied AUD Vol Open Level (bp):",
                 _implied_open.astype(float).to_string(),
             ]
+            if not _aud_prem_chg.empty:
+                _report_lines += ["", "Implied AUD Fwd Premium Change (bp):", _aud_prem_chg.to_string()]
+            _report_lines += ["", "--- SUMMARY ---", _narrative.replace("**", "").replace("\n", " ")]
             st.download_button(
                 "📥 Download SOD Report",
                 "\n".join(_report_lines).encode(),
