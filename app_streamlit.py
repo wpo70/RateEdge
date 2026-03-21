@@ -10701,7 +10701,9 @@ def vol_export_tab():
     """Vol Export tab - Export and email vol surfaces"""
     st.subheader("📤 Vol Surface Export & Distribution")
     st.caption("Export vol surfaces to Excel and email to multiple recipients")
-    
+
+    user_id = st.session_state.get("username", "default")
+
     # Get theme colors
     is_dark = st.session_state.get("theme_name", "Dealer Dark") == "Dealer Dark"
     card_bg = "#1e293b" if is_dark else "#ffffff"
