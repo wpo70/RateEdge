@@ -528,7 +528,7 @@ def save_all_session_data(user_id: str):
         "fv6_list":     [list(x) for x in st.session_state.get("fv6_list",     [])],
         "bsp_list":     [list(x) for x in st.session_state.get("bsp_list",     [])],
     }
-    if save_user_config(user_id, "fwd_analysis_prefs", "global", _fwd_prefs):
+    if save_user_config(user_id, "fwd_analysis_prefs", "GLB", _fwd_prefs):
         saved += 1
 
     return saved
@@ -617,9 +617,9 @@ def load_all_session_data(user_id: str) -> int:
                     pass
 
     # Restore FWD Analysis series lists
-    if "fwd_analysis_prefs" in configs and "global" in configs["fwd_analysis_prefs"]:
+    if "fwd_analysis_prefs" in configs and "GLB" in configs["fwd_analysis_prefs"]:
         try:
-            _p = configs["fwd_analysis_prefs"]["global"]["data"]
+            _p = configs["fwd_analysis_prefs"]["GLB"]["data"]
             if "irs_sp_list" in _p and not st.session_state.get("irs_sp_list"):
                 st.session_state["irs_sp_list"] = [tuple(x) for x in _p["irs_sp_list"]]
             if "irs_fl_list" in _p and not st.session_state.get("irs_fl_list"):
@@ -3474,7 +3474,7 @@ def fwd_analysis_tab():
                 "fv6_list":    [list(x) for x in st.session_state.get("fv6_list",    [])],
                 "bsp_list":    [list(x) for x in st.session_state.get("bsp_list",    [])],
             }
-            save_user_config(_uid, "fwd_analysis_prefs", "global", _prefs)
+            save_user_config(_uid, "fwd_analysis_prefs", "GLB", _prefs)
 
     def _chart_tools(fig, series_dict: dict, key: str, ylab: str = "bp"):
         """📥 Download + date-range picker + Hi/Lo/Mean/Std/Current stats box."""
