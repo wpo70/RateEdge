@@ -9685,9 +9685,11 @@ def home_tab():
             | Settlement | Physical delivery |
             | Cash Settlement | Par rate (rare) |
             | Premium | Forward premium (T+1) |
-            | Exercise | European |
+            | Exercise | European — 10:00am AEST |
             | Vol Quote | Normal (bp/annum) |
-            | Annuity | BBSW/AONIA curve |
+            | Annuity | BBSW/AONIA dual-curve |
+            | Expiry Style | Quarterly ≤3y, semi-annual ≥4y |
+            | Partial Exercise | Uncommon — bilateral agreement |
             """)
         with col2:
             st.markdown("""
@@ -9699,8 +9701,75 @@ def home_tab():
             | Float Index | 3M BBSW / AONIA (OIS) |
             | Spot Lag | T+1 (was T+2 pre-2024) |
             | Roll | Modified Following |
-            | Calendar | Sydney |
+            | Calendar | Sydney (NSW bank days) |
+            | Discounting | OIS (AONIA) in all cases |
+            | Clearing | Generally centrally cleared |
             """)
+
+        st.markdown("#### AUD Cap / Floor Conventions *(AFMA IRO Conventions, June 2025)*")
+        cf1, cf2, cf3 = st.columns(3)
+        with cf1:
+            st.markdown("""
+            **Structure**
+            | Convention | Standard |
+            |------------|----------|
+            | Definition | Cap: ceiling on floating rate borrowing |
+            | | Floor: protection against rate falls |
+            | Caplet/Floorlet | Series of individual options |
+            | Floating Index | 3M BBSW (quarterly resets) |
+            | Reset Frequency | Quarterly |
+            | Day Count | ACT/365 Fixed |
+            | Business Days | NSW calendar, Modified Following |
+            """)
+        with cf2:
+            st.markdown("""
+            **Quotation & Premium**
+            | Convention | Standard |
+            |------------|----------|
+            | Vol Quote | Normal vol (bp/annum) |
+            | Premium Quote | Basis points of notional face value |
+            | Premium Payment | Upfront on trade date |
+            | Settlement Style | Non-discounted, paid in arrears |
+            | ATM Reference | Swap rate for the underlying tenor |
+            | Transaction Size | By notional as agreed bilaterally |
+            | FRA Yield Discounting | Explicitly excluded for caps/floors ¹ |
+            """)
+        with cf3:
+            st.markdown("""
+            **Settlement & Exercise**
+            | Convention | Standard |
+            |------------|----------|
+            | Settlement Index | BBSW (Refinitiv "BBSW" page) |
+            | Non-std Dates | Linear interpolation vs RBA cash rate |
+            | Caplet Settlement | Non-discounted in arrears |
+            | Payment Date | Reference date (end of accrual period) |
+            | Exercise | Automatic at expiry |
+            | Spot Lag | T+1 |
+            | ISDA Note | Confirm "FRA Yield Discounting will not apply" ¹ |
+            """)
+        st.caption(
+            "¹ AFMA IRO Conventions (June 2025, s4.3.1): where ISDA 2021 Definitions are incorporated, "
+            "FRA Yield Discounting applies by default to AUD cap/floor/collar transactions. "
+            "Confirmations must explicitly state 'FRA Yield Discounting will not apply' because these products pay in arrears. "
+            "In AUD interdealer CFS practice this is typically handled via explicit settlement terms in the bilateral confirm "
+            "rather than the ISDA election — but must be verified bilaterally. "
+            "**⚠️ WPO: confirm FRA Yield Discounting election approach with each client at deployment.**"
+        )
+
+        st.markdown("#### AUD Cap/Floor vs Swaption — Key Differences")
+        st.markdown("""
+        | Feature | Cap / Floor | Swaption |
+        |---------|-------------|----------|
+        | Underlying | Series of BBSW caplets/floorlets | Single swap |
+        | Reset | Quarterly (each caplet) | Once at expiry |
+        | Settlement | Non-discounted, in arrears per caplet | Zero-coupon (upfront on exercise) |
+        | Vol model | Black / Normal per caplet | Normal (Bachelier) |
+        | ATM strike | Each caplet has its own forward BBSW | Forward swap rate |
+        | Premium timing | Upfront | Upfront |
+        | Market parcel | Bilateral — notional agreed at deal | $25k DV01 equivalent |
+        | Clearing | Generally not centrally cleared | Generally centrally cleared |
+        """)
+        st.caption("Source: AFMA Interest Rate Options Conventions (June 2025) & AFMA Interest Rate Derivative Conventions (June 2024)")
     
     with conv_tabs[1]:  # NZD
         st.markdown("#### NZD Swaption Conventions")
@@ -10743,6 +10812,92 @@ def sod_report_tab():
                     ascending=False
                 )
                 st.dataframe(_bm_df, use_container_width=True, hide_index=True)
+
+            # ── Implied AUD CFS Open ─────────────────────────────────
+            # Build cumulative CFS levels using prev-day wedge spreads from session state
+            # CFS(nY) = sum of [swaption_leg_prem + wedge] for each wedge in the chain
+            st.markdown("---")
+            st.markdown("### 📐 Implied AUD CFS Open — Using Previous Day Wedge Spreads")
+            st.caption(
+                "Cumulative CFS = running sum of (swaption leg fwd premium + wedge spread). "
+                "Wedge spreads from current session state (previous close). No caplet stripping."
+            )
+
+            # CFS chain: (label, wedge_spr_key, expiry_in_matrix, tenor_in_matrix)
+            _CFS_CHAIN = [
+                ("1Y CFS",  "cf_spr_3m1y",  "3m",  "1Y"),
+                ("2Y CFS",  "cf_spr_1y1y",  "1y",  "1Y"),
+                ("3Y CFS",  "cf_spr_2y1y",  "2y",  "1Y"),
+                ("4Y CFS",  "cf_spr_3y1y",  "3y",  "1Y"),
+                ("5Y CFS",  "cf_spr_4y1y",  "4y",  "1Y"),
+                ("7Y CFS",  "cf_spr_5y2y",  "5y",  "2Y"),
+                ("10Y CFS", "cf_spr_7y3y",  "7y",  "3Y"),
+                ("12Y CFS", "cf_spr_10y2y", "10y", "2Y"),
+                ("15Y CFS", "cf_spr_12y3y", "12y", "3Y"),
+            ]
+
+            def _prem_lookup(df, exp, ten):
+                """Case-insensitive lookup in premium DataFrame."""
+                if df is None or df.empty:
+                    return None
+                for _e in df.index:
+                    if str(_e).lower() == exp.lower():
+                        for _t in df.columns:
+                            if str(_t).lower() == ten.lower():
+                                try:
+                                    v = float(df.loc[_e, _t])
+                                    return v if not math.isnan(v) else None
+                                except Exception:
+                                    return None
+                return None
+
+            _cfs_rows = []
+            _cum_prev = 0.0
+            _cum_open = 0.0
+            _cfs_ok = not _aud_prem_prev.empty and not _aud_prem_open.empty
+
+            for _cfs_lbl, _spr_key, _exp, _ten in _CFS_CHAIN:
+                _spr = st.session_state.get(_spr_key, 0.0)
+                _p_prev = _prem_lookup(_aud_prem_prev, _exp, _ten)
+                _p_open = _prem_lookup(_aud_prem_open, _exp, _ten)
+
+                if _p_prev is not None and _p_open is not None:
+                    _leg_prev = _p_prev + _spr
+                    _leg_open = _p_open + _spr
+                    _cum_prev += _leg_prev
+                    _cum_open += _leg_open
+                    _delta = _cum_open - _cum_prev
+                    _cfs_rows.append({
+                        "CFS Tenor": _cfs_lbl,
+                        "Swptn Leg (prev)": f"{_p_prev:.2f}",
+                        "Wedge": f"{_spr:+.2f}",
+                        "CFS Leg (prev)": f"{_leg_prev:.2f}",
+                        "Swptn Leg (open)": f"{_p_open:.2f}",
+                        "CFS Leg (open)": f"{_leg_open:.2f}",
+                        "CFS Total (prev)": f"{_cum_prev:.2f}",
+                        "CFS Total (open)": f"{_cum_open:.2f}",
+                        "Δ CFS": f"{_delta:+.2f}",
+                    })
+                else:
+                    _cfs_rows.append({
+                        "CFS Tenor": _cfs_lbl,
+                        "Swptn Leg (prev)": "—",
+                        "Wedge": f"{_spr:+.2f}",
+                        "CFS Leg (prev)": "—",
+                        "Swptn Leg (open)": "—",
+                        "CFS Leg (open)": "—",
+                        "CFS Total (prev)": "—",
+                        "CFS Total (open)": "—",
+                        "Δ CFS": "—",
+                    })
+
+            if _cfs_rows:
+                _cfs_df = pd.DataFrame(_cfs_rows)
+                st.dataframe(_cfs_df, use_container_width=True, hide_index=True)
+                if not _cfs_ok:
+                    st.info("Load AUD IRS curve to compute CFS premium levels.")
+            else:
+                st.info("CFS chain requires AUD curve and ATM vol surface to be loaded.")
 
             # ── Narrative Summary ────────────────────────────────────
             st.markdown("---")
