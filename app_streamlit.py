@@ -10293,12 +10293,13 @@ def main():
             " Swaptions",
             " Caps & Floors",
             " Portfolio",
+            " RV / Calendar",
             " Exotics",
+            "🌅 SOD Report",
             " Vol Editor",
             " Vol Export",
             " Multi-CCY",
             " Backtesting",
-            " RV / Calendar",
             "🏛️ Bond Options",
         ]
     )
@@ -10320,19 +10321,286 @@ def main():
     with tabs[7]:
         portfolio_tab()
     with tabs[8]:
-        exotics_tab(vol_mode)
-    with tabs[9]:
-        vol_surface_editor_tab()
-    with tabs[10]:
-        vol_export_tab()
-    with tabs[11]:
-        multi_ccy_tab(vol_mode)
-    with tabs[12]:
-        backtesting_tab()
-    with tabs[13]:
         rv_tab()
+    with tabs[9]:
+        exotics_tab(vol_mode)
+    with tabs[10]:
+        sod_report_tab()
+    with tabs[11]:
+        vol_surface_editor_tab()
+    with tabs[12]:
+        vol_export_tab()
+    with tabs[13]:
+        multi_ccy_tab(vol_mode)
     with tabs[14]:
+        backtesting_tab()
+    with tabs[15]:
         bond_option_tab()
+
+
+def sod_report_tab():
+    """Start-of-Day Report — USD overnight moves → implied AUD vol open."""
+    st.subheader("🌅 Start-of-Day Report — USD Overnight → AUD Implied Open")
+    st.caption(
+        "Compares USD previous close vs the close before that. "
+        "Uses USD IRS + vol moves to imply theoretical AUD vol changes at the open. "
+        "Useful for time-sensitive gamma trades after large overnight USD moves."
+    )
+
+    user_id = st.session_state.get("username", "default")
+
+    # ── Load available snapshots ──────────────────────────────────
+    _snaps_usd = list_vol_snapshots(user_id, "USD") if HAS_POSTGRES else []
+    _snaps_aud = list_vol_snapshots(user_id, "AUD") if HAS_POSTGRES else []
+
+    if not HAS_POSTGRES:
+        st.warning("Database not connected — SOD Report requires saved vol snapshots.")
+        return
+
+    if len(_snaps_usd) < 2:
+        st.info(
+            "Need at least 2 USD vol snapshots to compute overnight changes. "
+            "Save EOD snapshots from the Vol Export tab each day."
+        )
+        return
+
+    # ── Snapshot selectors ────────────────────────────────────────
+    st.markdown("### 📋 Select Closing Snapshots")
+    _sc1, _sc2, _sc3 = st.columns(3)
+
+    def _snap_label(s):
+        d = s["snapshot_date"]
+        lbl = s["label"] or ""
+        return f"{str(d)[:16]}  {lbl}"
+
+    with _sc1:
+        st.markdown("**USD — Previous Close (T-1 NYC)**")
+        _usd_t1_opts = {_snap_label(s): s for s in _snaps_usd}
+        _usd_t1_sel  = st.selectbox("USD T-1", list(_usd_t1_opts.keys()), index=0, key="sod_usd_t1")
+        _usd_t1      = _usd_t1_opts[_usd_t1_sel]
+
+    with _sc2:
+        st.markdown("**USD — Two Sessions Ago (T-2 NYC)**")
+        _usd_t2_opts = {_snap_label(s): s for s in _snaps_usd if s["id"] != _usd_t1["id"]}
+        _usd_t2_sel  = st.selectbox("USD T-2", list(_usd_t2_opts.keys()), index=0, key="sod_usd_t2")
+        _usd_t2      = _usd_t2_opts[_usd_t2_sel]
+
+    with _sc3:
+        st.markdown("**AUD — Previous Close (4:30pm Sydney)**")
+        if _snaps_aud:
+            _aud_opts = {_snap_label(s): s for s in _snaps_aud}
+            _aud_sel  = st.selectbox("AUD prev close", list(_aud_opts.keys()), index=0, key="sod_aud")
+            _aud_snap = _aud_opts[_aud_sel]
+        else:
+            st.warning("No AUD snapshots found.")
+            _aud_snap = None
+
+    # ── Vol mode toggle ───────────────────────────────────────────
+    _vm_col, _disp_col = st.columns([2, 4])
+    with _vm_col:
+        _disp_mode = st.radio("Display", ["Normal vol (bp)", "Premium ($)"],
+                              horizontal=True, key="sod_disp_mode")
+    _show_bp = "Normal" in _disp_mode
+
+    st.markdown("---")
+
+    # ── Load snapshot data ────────────────────────────────────────
+    _d1 = load_vol_snapshot(_usd_t1["id"])
+    _d2 = load_vol_snapshot(_usd_t2["id"])
+
+    if _d1 is None or _d2 is None:
+        st.error("Failed to load USD snapshots.")
+        return
+
+    _atm1 = _d1.get("atm")  # T-1 (most recent)
+    _atm2 = _d2.get("atm")  # T-2
+
+    if _atm1 is None or _atm2 is None:
+        st.error("Snapshot ATM vol data missing.")
+        return
+
+    # Normalise: ensure Expiry is index
+    def _norm(df):
+        if df is None: return None
+        df = df.copy()
+        if "Expiry" in df.columns:
+            df = df.set_index("Expiry")
+        return df
+
+    _atm1 = _norm(_atm1)
+    _atm2 = _norm(_atm2)
+
+    # ── USD Vol Change Matrix ─────────────────────────────────────
+    st.markdown("### 🇺🇸 USD Vol Changes — Overnight (T-1 close vs T-2 close)")
+
+    _common_exp = [e for e in _atm1.index if e in _atm2.index]
+    _common_ten = [c for c in _atm1.columns if c in _atm2.columns]
+
+    if not _common_exp or not _common_ten:
+        st.error("No overlapping expiry/tenor between USD snapshots.")
+        return
+
+    _usd_chg = _atm1.loc[_common_exp, _common_ten].astype(float) - \
+               _atm2.loc[_common_exp, _common_ten].astype(float)
+
+    # Display as colour-coded heatmap
+    _usd_chg_disp = _usd_chg.copy()
+    st.dataframe(
+        _usd_chg_disp.style
+            .background_gradient(cmap="RdYlGn", axis=None, vmin=-5, vmax=5)
+            .format("{:+.2f}"),
+        use_container_width=True
+    )
+    st.caption(f"USD ATM vol change (bp). T-1: {_usd_t1_sel[:16]}  vs  T-2: {_usd_t2_sel[:16]}")
+
+    # ── IRS Curve Change ──────────────────────────────────────────
+    st.markdown("### 📈 USD IRS Curve — T-1 Close")
+    _usd_curve_t1 = get_ccy_curve("USD")
+    _usd_curve_aud = get_ccy_curve("AUD")
+
+    if _usd_curve_t1 is not None and not _usd_curve_t1.empty:
+        _fig_usd_crv = go.Figure()
+        _fig_usd_crv.add_trace(go.Scatter(
+            x=_usd_curve_t1["MaturityY"], y=_usd_curve_t1["ZeroRatePct"],
+            mode="lines+markers", line=dict(color="#3b82f6", width=2),
+            marker=dict(size=5), name="USD IRS (loaded)"))
+        _fig_usd_crv.update_layout(
+            title="USD IRS Zero Curve", xaxis_title="Maturity (Y)", yaxis_title="Rate (%)",
+            template="plotly_dark", height=240, margin=dict(t=35, b=35))
+        st.plotly_chart(_fig_usd_crv, use_container_width=True)
+    else:
+        st.info("Load USD IRS curve in Curves tab for full analysis.")
+
+    # ── AUD Vol Snapshot ──────────────────────────────────────────
+    _aud_atm = None
+    if _aud_snap:
+        _aud_data = load_vol_snapshot(_aud_snap["id"])
+        if _aud_data:
+            _aud_atm = _norm(_aud_data.get("atm"))
+
+    # ── Implied AUD Vol Open ──────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 🦘 Implied AUD Vol Open — Based on USD Overnight Moves")
+    st.caption(
+        "AUD vol sensitivity to USD: short-dated AUD vols (≤6m) correlate ~40–60% with USD, "
+        "long-dated (≥2y) ~20–35%. Adjustments are indicative — verify with live market."
+    )
+
+    # Sensitivity parameters — editable
+    with st.expander("⚙️ Sensitivity Parameters (edit if needed)", expanded=False):
+        _sens_c1, _sens_c2, _sens_c3 = st.columns(3)
+        with _sens_c1:
+            _beta_short = st.slider("Short-end beta (≤6m, %)", 10, 90, 50, 5,
+                                    key="sod_beta_short",
+                                    help="% of USD vol move passed through to AUD ≤6m expiries") / 100
+        with _sens_c2:
+            _beta_mid = st.slider("Mid beta (1y–2y, %)", 10, 70, 35, 5,
+                                  key="sod_beta_mid") / 100
+        with _sens_c3:
+            _beta_long = st.slider("Long-end beta (≥3y, %)", 5, 50, 20, 5,
+                                   key="sod_beta_long") / 100
+
+    def _get_beta(expiry_lbl: str) -> float:
+        ey = label_to_years(expiry_lbl)
+        if ey <= 0.5:   return _beta_short
+        if ey <= 2.0:   return _beta_mid
+        return _beta_long
+
+    if _aud_atm is not None:
+        _aud_exp = [e for e in _aud_atm.index if e in _usd_chg.index]
+        _aud_ten = [c for c in _aud_atm.columns if c in _usd_chg.columns]
+
+        if _aud_exp and _aud_ten:
+            _implied_chg = pd.DataFrame(index=_aud_exp, columns=_aud_ten, dtype=float)
+            _implied_open = pd.DataFrame(index=_aud_exp, columns=_aud_ten, dtype=float)
+
+            for _e in _aud_exp:
+                _b = _get_beta(_e)
+                for _t in _aud_ten:
+                    try:
+                        _usd_mv = float(_usd_chg.loc[_e, _t]) if _e in _usd_chg.index and _t in _usd_chg.columns else 0.0
+                        _aud_now = float(_aud_atm.loc[_e, _t])
+                        _implied_chg.loc[_e, _t]  = round(_usd_mv * _b, 2)
+                        _implied_open.loc[_e, _t]  = round(_aud_now + _usd_mv * _b, 2)
+                    except Exception:
+                        pass
+
+            # ── Display: Implied Change ──────────────────────────────
+            st.markdown("#### Implied AUD Vol Change at Open (bp)")
+            st.dataframe(
+                _implied_chg.astype(float).style
+                    .background_gradient(cmap="RdYlGn", axis=None, vmin=-5, vmax=5)
+                    .format("{:+.2f}"),
+                use_container_width=True
+            )
+
+            # ── Display: Implied Open Level ─────────────────────────
+            st.markdown("#### Implied AUD Vol Open Level (bp)")
+            st.dataframe(
+                _implied_open.astype(float).style
+                    .background_gradient(cmap="RdYlGn_r", axis=None)
+                    .format("{:.2f}"),
+                use_container_width=True
+            )
+
+            # ── Highlight large moves ────────────────────────────────
+            _thresh = st.slider("Highlight moves larger than (bp)", 1, 10, 3, key="sod_thresh")
+            _big_moves = []
+            for _e in _aud_exp:
+                for _t in _aud_ten:
+                    try:
+                        _mv = float(_implied_chg.loc[_e, _t])
+                        if abs(_mv) >= _thresh:
+                            _usd_raw = float(_usd_chg.loc[_e, _t]) if _e in _usd_chg.index and _t in _usd_chg.columns else 0.0
+                            _big_moves.append({
+                                "Expiry": _e, "Tenor": _t,
+                                "USD Δvol": f"{_usd_raw:+.2f}bp",
+                                "Beta": f"{_get_beta(_e)*100:.0f}%",
+                                "Implied AUD Δ": f"{_mv:+.2f}bp",
+                                "AUD Prev Close": f"{float(_aud_atm.loc[_e, _t]):.2f}bp",
+                                "AUD Implied Open": f"{float(_implied_open.loc[_e, _t]):.2f}bp",
+                                "Alert": "🔴 LARGE MOVE" if abs(_mv) >= _thresh * 1.5 else "🟡 Notable",
+                            })
+                    except Exception:
+                        pass
+
+            if _big_moves:
+                st.markdown(f"#### ⚡ Notable Moves (≥{_thresh}bp implied AUD change)")
+                _bm_df = pd.DataFrame(_big_moves).sort_values("Implied AUD Δ", key=lambda x: x.str.replace("bp","").str.replace("+","").astype(float).abs(), ascending=False)
+                st.dataframe(_bm_df, use_container_width=True, hide_index=True)
+
+            # ── Download report ──────────────────────────────────────
+            _report_lines = [
+                f"RateEdge SOD Report — {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')} AEST",
+                f"USD T-1: {_usd_t1_sel[:40]}",
+                f"USD T-2: {_usd_t2_sel[:40]}",
+                f"AUD prev close: {_aud_sel[:40]}",
+                "",
+                "USD Vol Changes (bp):",
+                _usd_chg.to_string(),
+                "",
+                "Implied AUD Vol Change at Open (bp):",
+                _implied_chg.astype(float).to_string(),
+                "",
+                "Implied AUD Vol Open Level (bp):",
+                _implied_open.astype(float).to_string(),
+            ]
+            st.download_button(
+                "📥 Download SOD Report",
+                "\n".join(_report_lines).encode(),
+                f"RateEdge_SOD_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.txt",
+                "text/plain", key="sod_download"
+            )
+        else:
+            st.warning("No overlapping expiry/tenor between AUD snapshot and USD change matrix.")
+    else:
+        # No AUD snapshot — show USD change only and instructions
+        st.info(
+            "No AUD vol snapshot selected. "
+            "Save an AUD EOD snapshot from the Vol Export tab to see implied AUD open levels."
+        )
+        st.markdown("**USD Change Matrix available above.** "
+                    "Load an AUD snapshot to compute implied AUD opening vols.")
 
 
 def vol_export_tab():
