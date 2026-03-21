@@ -2990,7 +2990,7 @@ def _load_curve_from_db_latest(floating_rate: str, ccy: str = "AUD") -> pd.DataF
             if not m: continue
             v, u = float(m.group(1)), m.group(2)
             mat_y = v if u == "Y" else v / 12
-            records.append({"MaturityY": mat_y, "ZeroRatePct": float(rate) * 100})  # DB = decimal, saved = %, normalise here
+            records.append({"MaturityY": mat_y, "ZeroRatePct": float(rate)})  # Supabase stores as % (e.g. 4.78); ZeroRatePct in percent
         if not records:
             return None
         df = pd.DataFrame(records).sort_values("MaturityY").reset_index(drop=True)
@@ -3033,7 +3033,7 @@ def _load_ois_from_db_latest(ccy: str = "AUD") -> pd.DataFrame:
             if not m: continue
             v, u = float(m.group(1)), m.group(2)
             mat_y = v if u == "Y" else v / 12
-            records.append({"MaturityY": mat_y, "ZeroRatePct": float(rate) * 100})  # DB = decimal, saved = %, normalise here
+            records.append({"MaturityY": mat_y, "ZeroRatePct": float(rate)})  # Supabase stores as % (e.g. 4.78); ZeroRatePct in percent
         if not records:
             return None
         df = pd.DataFrame(records).sort_values("MaturityY").reset_index(drop=True)
