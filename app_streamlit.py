@@ -9756,19 +9756,6 @@ def home_tab():
             "**⚠️ WPO: confirm FRA Yield Discounting election approach with each client at deployment.**"
         )
 
-        st.markdown("#### AUD Cap/Floor vs Swaption — Key Differences")
-        st.markdown("""
-        | Feature | Cap / Floor | Swaption |
-        |---------|-------------|----------|
-        | Underlying | Series of BBSW caplets/floorlets | Single swap |
-        | Reset | Quarterly (each caplet) | Once at expiry |
-        | Settlement | Non-discounted, in arrears per caplet | Zero-coupon (upfront on exercise) |
-        | Vol model | Black / Normal per caplet | Normal (Bachelier) |
-        | ATM strike | Each caplet has its own forward BBSW | Forward swap rate |
-        | Premium timing | Upfront | Upfront |
-        | Market parcel | Bilateral — notional agreed at deal | $25k DV01 equivalent |
-        | Clearing | Generally not centrally cleared | Generally centrally cleared |
-        """)
         st.caption("Source: AFMA Interest Rate Options Conventions (June 2025) & AFMA Interest Rate Derivative Conventions (June 2024)")
     
     with conv_tabs[1]:  # NZD
@@ -10363,21 +10350,21 @@ def main():
     # Only show tabs if authenticated
     tabs = st.tabs(
         [
-            " Home",
-            " Vol / SABR",
-            " Curves",
-            " Rate/Vol Matrix",
+            "🏠 Home",
+            "📐 Vol / SABR",
+            "📉 Curves",
+            "🔢 Rate/Vol Matrix",
             "📈 FWD Analysis",
-            " Swaptions",
-            " Caps & Floors",
-            " Portfolio",
-            " RV / Calendar",
-            " Exotics",
+            "🎯 Swaptions",
+            "🪣 Caps & Floors",
+            "💼 Portfolio",
+            "⚖️ RV / Calendar",
+            "🔬 Exotics",
             "🌅 SOD Report",
-            " Vol Editor",
-            " Vol Export",
-            " Multi-CCY",
-            " Backtesting",
+            "✏️ Vol Editor",
+            "📤 Vol Export",
+            "🌐 Multi-CCY",
+            "📊 Backtesting",
             "🏛️ Bond Options",
         ]
     )
@@ -10892,7 +10879,7 @@ def sod_report_tab():
                     })
 
             if _cfs_rows:
-                _cfs_df = pd.DataFrame(_cfs_rows)
+                _cfs_df = pd.DataFrame(_cfs_rows)[["CFS Tenor", "CFS Total (prev)", "CFS Total (open)", "Δ CFS"]]
                 st.dataframe(_cfs_df, use_container_width=True, hide_index=True)
                 if not _cfs_ok:
                     st.info("Load AUD IRS curve to compute CFS premium levels.")
@@ -10992,6 +10979,9 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             ]
             if not _aud_prem_chg.empty:
                 _report_lines += ["", "Implied AUD Fwd Premium Change (bp):", _aud_prem_chg.to_string()]
+            if _cfs_rows:
+                _cfs_report_df = pd.DataFrame(_cfs_rows)[["CFS Tenor", "CFS Total (prev)", "CFS Total (open)", "Δ CFS"]]
+                _report_lines += ["", "Implied AUD CFS Open Levels (bp fwd premium, cumulative):", _cfs_report_df.to_string(index=False)]
             _report_lines += ["", "--- SUMMARY ---", _narrative.replace("**", "").replace("\n", " ")]
             st.download_button(
                 "📥 Download SOD Report",
