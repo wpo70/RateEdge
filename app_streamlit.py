@@ -10883,6 +10883,35 @@ RateEdge Options Platform""",
                 </div>
                 """, unsafe_allow_html=True)
         
+        # Save EOD Snapshot
+        st.markdown("### 💾 Save EOD Snapshot")
+        st.caption("Save current vol surface to database for SOD Report / implied open calculations")
+
+        _eod_label = st.text_input(
+            "Snapshot Label",
+            value=f"EOD {pd.Timestamp.now().strftime('%Y-%m-%d')}",
+            key="eod_snap_label"
+        )
+        _eod_notes = st.text_input("Notes (optional)", value="", key="eod_snap_notes")
+
+        if st.button("💾 Save EOD Snapshot", key="save_eod_snap_btn", type="primary", use_container_width=True):
+            if not HAS_POSTGRES:
+                st.error("Database not connected — cannot save snapshot.")
+            elif not export_currencies:
+                st.error("Select at least one currency above first.")
+            else:
+                _saved, _failed = [], []
+                for _ccy in export_currencies:
+                    _sid = save_vol_snapshot(user_id, _ccy, _eod_label.strip(), _eod_notes.strip())
+                    if _sid:
+                        _saved.append(_ccy)
+                    else:
+                        _failed.append(_ccy)
+                if _saved:
+                    st.success(f"✅ Saved EOD snapshot for: {', '.join(_saved)}")
+                if _failed:
+                    st.error(f"❌ Failed for: {', '.join(_failed)} — check vol data is loaded.")
+
         # Quick tips
         st.markdown(f"""
         <div style="background:{card_bg};border:1px solid {border_color};border-radius:10px;padding:1rem;margin:1rem 0;">
@@ -10892,7 +10921,7 @@ RateEdge Options Platform""",
                 • Recipients can be comma or newline separated<br>
                 • SMTP settings are saved for the session<br>
                 • Files are generated fresh on each send<br>
-                • Perfect for EOD distribution workflows
+                • Save EOD Snapshot each day for next morning's implied open report
             </div>
         </div>
         """, unsafe_allow_html=True)
