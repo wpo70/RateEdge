@@ -8566,40 +8566,35 @@ def rv_tab():
             _matrix_exp_yf     = [label_to_years(e) for e in _matrix_exp_labels] if _has_matrix else []
             _matrix_tenors     = [float(c[:-1]) for c in _fwd_matrix_ss.columns] if _has_matrix else []
 
-            def _matrix_rate_at(exp_y: float, tenor_y: float, val_date=None) -> float | None:
-                """Interpolate fwd matrix at (expiry_yf, tenor_y). val_date adjusts expiry_yf."""
+            def _matrix_rate_at(exp_y: float, tenor_y: float) -> float | None:
+                """Interpolate fwd matrix at (expiry_yf_from_today, tenor_y).
+                exp_y is already the year fraction from today — no date conversion needed here."""
                 if not _has_matrix:
                     return None
-                _ey = exp_y
-                if val_date is not None:
-                    from datetime import date as _dt3
-                    _ey = _to_yearfrac(val_date, exp_y)
                 if len(_matrix_exp_yf) < 2 or len(_matrix_tenors) < 2:
                     return None
+                _ey = max(exp_y, _matrix_exp_yf[0])
                 try:
                     from scipy.interpolate import CubicSpline as _CS
-                    # For given tenor column (or interpolate across tenors)
+                    # Interpolate across tenor columns first, then spline across expiry axis
                     if tenor_y <= _matrix_tenors[0]:
-                        col = _fwd_matrix_ss.columns[0]
-                        rates = _fwd_matrix_ss[col].values.astype(float)
+                        rates = _fwd_matrix_ss[_fwd_matrix_ss.columns[0]].values.astype(float)
                     elif tenor_y >= _matrix_tenors[-1]:
-                        col = _fwd_matrix_ss.columns[-1]
-                        rates = _fwd_matrix_ss[col].values.astype(float)
+                        rates = _fwd_matrix_ss[_fwd_matrix_ss.columns[-1]].values.astype(float)
                     else:
-                        # Interpolate across tenor columns at fixed expiry row first
-                        # then interpolate across expiry rows
-                        col_idx = np.searchsorted(_matrix_tenors, tenor_y)
-                        col_lo = _fwd_matrix_ss.columns[col_idx - 1]
-                        col_hi = _fwd_matrix_ss.columns[col_idx]
+                        col_idx = int(np.searchsorted(_matrix_tenors, tenor_y))
+                        col_lo  = _fwd_matrix_ss.columns[col_idx - 1]
+                        col_hi  = _fwd_matrix_ss.columns[col_idx]
                         w = (tenor_y - _matrix_tenors[col_idx-1]) / (_matrix_tenors[col_idx] - _matrix_tenors[col_idx-1])
-                        rates = ((1-w) * _fwd_matrix_ss[col_lo].values + w * _fwd_matrix_ss[col_hi].values).astype(float)
-                    # Now spline across expiry axis
+                        rates = ((1-w) * _fwd_matrix_ss[col_lo].values +
+                                    w  * _fwd_matrix_ss[col_hi].values).astype(float)
                     cs = _CS(_matrix_exp_yf, rates, extrapolate=True)
-                    return float(cs(max(_ey, _matrix_exp_yf[0])))
+                    return float(cs(_ey))
                 except Exception:
-                    return float(np.interp(tenor_y, _matrix_tenors,
-                                           [float(np.interp(_ey, _matrix_exp_yf, _fwd_matrix_ss[c].values.astype(float)))
-                                            for c in _fwd_matrix_ss.columns]))
+                    return float(np.interp(_ey, _matrix_exp_yf,
+                               [float(np.interp(tenor_y, _matrix_tenors,
+                                [float(_fwd_matrix_ss[c].iloc[i]) for c in _fwd_matrix_ss.columns]))
+                                for i in range(len(_matrix_exp_yf))]))
 
             # ── UI ─────────────────────────────────────────────────────
             _src_col, _notional_col = st.columns([5, 2])
@@ -8650,11 +8645,16 @@ def rv_tab():
 
                     _val_date_used = _val_date
 
+                    # Compute year fraction from today to val_date (the base offset)
+                    from datetime import date as _today_ref
+                    _val_exp_y = max((_val_date - _today_ref.today()).days / 365.0, 0.0)
+
                     # Show interpolated curve for selected date
                     if _show_fwd_curve:
                         _curve_rows = []
                         for _tn_y in _matrix_tenors:
-                            _r = _matrix_rate_at(1/365, _tn_y, val_date=_val_date)  # spot-ish
+                            # Curve AT val_date = matrix lookup at expiry = val_exp_y
+                            _r = _matrix_rate_at(_val_exp_y, _tn_y)
                             if _r is not None:
                                 _curve_rows.append({"Tenor (Y)": _tn_y, "Fwd Rate (%)": round(_r, 4)})
                         if _curve_rows:
@@ -8669,16 +8669,28 @@ def rv_tab():
                                     y=[r["Fwd Rate (%)"] for r in _curve_rows],
                                     mode="lines+markers", line=dict(color="#3b82f6", width=2),
                                     marker=dict(size=7), name=f"Fwd curve {_val_date}"))
+                                # Also show today's curve for comparison
+                                _today_rows = [_matrix_rate_at(0.0, t) for t in _matrix_tenors]
+                                if any(r is not None for r in _today_rows):
+                                    _fig_fc.add_trace(go.Scatter(
+                                        x=_matrix_tenors,
+                                        y=[r for r in _today_rows if r is not None],
+                                        mode="lines", line=dict(color="#94a3b8", width=1.5, dash="dot"),
+                                        name="Today"))
                                 _fig_fc.update_layout(
-                                    title=f"Interpolated Forward Curve — {_val_date} (Modified Following)",
+                                    title=f"Forward Curve at {_val_date} vs Today (Modified Following approx.)",
                                     xaxis_title="Tenor (Y)", yaxis_title="Rate (%)",
-                                    template="plotly_dark", height=220,
-                                    margin=dict(t=35, b=35, l=50, r=20))
+                                    template="plotly_dark", height=240,
+                                    margin=dict(t=40, b=35, l=50, r=20),
+                                    legend=dict(orientation="h", y=1.05))
                                 st.plotly_chart(_fig_fc, use_container_width=True)
 
-                    def _get_move_for_idea(exp_y, tenor_y, val_date=_val_date):
+                    def _get_move_for_idea(exp_y, tenor_y, val_date=None):
+                        """Fwd rate at (val_date offset + trade expiry), vs today's spot."""
                         spot = (_par_rate(tenor_y) or 4.5) if curve is not None else 4.5
-                        fwd  = _matrix_rate_at(exp_y, tenor_y, val_date=val_date)
+                        # Total expiry from today = time to val_date + trade's own expiry
+                        total_exp_y = _val_exp_y + exp_y
+                        fwd = _matrix_rate_at(total_exp_y, tenor_y)
                         if fwd is None:
                             fwd = spot
                         move_bp = round((fwd - spot) * 100, 2)
