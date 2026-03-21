@@ -616,21 +616,21 @@ def load_all_session_data(user_id: str) -> int:
                 except:
                     pass
 
-    # Restore FWD Analysis series lists
+    # Restore FWD Analysis series lists — DB always wins, overrides tab defaults
     if "fwd_analysis_prefs" in configs and "GLB" in configs["fwd_analysis_prefs"]:
         try:
             _p = configs["fwd_analysis_prefs"]["GLB"]["data"]
-            if "irs_sp_list" in _p and not st.session_state.get("irs_sp_list"):
+            if "irs_sp_list" in _p:
                 st.session_state["irs_sp_list"] = [tuple(x) for x in _p["irs_sp_list"]]
-            if "irs_fl_list" in _p and not st.session_state.get("irs_fl_list"):
+            if "irs_fl_list" in _p:
                 st.session_state["irs_fl_list"] = [tuple(x) for x in _p["irs_fl_list"]]
-            if "fvfv_list" in _p and not st.session_state.get("fvfv_list"):
+            if "fvfv_list" in _p:
                 st.session_state["fvfv_list"] = [tuple(x) for x in _p["fvfv_list"]]
-            if "b6_list" in _p and not st.session_state.get("b6_list"):
+            if "b6_list" in _p:
                 st.session_state["b6_list"] = list(_p["b6_list"])
-            if "fv6_list" in _p and not st.session_state.get("fv6_list"):
+            if "fv6_list" in _p:
                 st.session_state["fv6_list"] = [tuple(x) for x in _p["fv6_list"]]
-            if "bsp_list" in _p and not st.session_state.get("bsp_list"):
+            if "bsp_list" in _p:
                 st.session_state["bsp_list"] = [tuple(x) for x in _p["bsp_list"]]
             loaded += 1
         except:
@@ -3575,7 +3575,7 @@ def fwd_analysis_tab():
         st.markdown("#### IRS Curve Spreads")
         # Init active spreads list
         if "irs_sp_list" not in st.session_state:
-            st.session_state["irs_sp_list"] = [("2Y","5Y"),("2Y","10Y"),("5Y","10Y")]
+            st.session_state["irs_sp_list"] = []  # DB populates; empty = no defaults
 
         # Builder row
         bc1, bc2, bc3, bc4 = st.columns([1.2, 1.2, 0.8, 1.8])
@@ -3652,7 +3652,7 @@ def fwd_analysis_tab():
     with _an_tabs[1]:
         st.markdown("#### IRS Rate Butterflies")
         if "irs_fl_list" not in st.session_state:
-            st.session_state["irs_fl_list"] = [("2Y","5Y","10Y"),("5Y","10Y","15Y")]
+            st.session_state["irs_fl_list"] = []  # DB populates
 
         bc1,bc2,bc3,bc4,bc5 = st.columns([1,1,1,0.7,1.5])
         with bc1: _fl_w = st.selectbox("Wing 1", _tn_opts, index=_tn_opts.index("2Y") if "2Y" in _tn_opts else 0, key="fl_w")
@@ -3726,7 +3726,7 @@ def fwd_analysis_tab():
     with _an_tabs[2]:
         st.markdown("#### Forward-Forward Swap Rates")
         if "fvfv_list" not in st.session_state:
-            st.session_state["fvfv_list"] = [(1,1),(2,2),(5,5)]
+            st.session_state["fvfv_list"] = []  # DB populates
 
         bc1,bc2,bc3,bc4 = st.columns([1,1,0.7,1.5])
         with bc1: _fv_st = st.selectbox("Start (years)", _fwd_starts, index=_fwd_starts.index(2) if 2 in _fwd_starts else 0, key="fv_st")
@@ -3799,7 +3799,7 @@ def fwd_analysis_tab():
             st.info("No overlapping tenors between 3M and 6M BBSW.")
         else:
             if "b6_list" not in st.session_state:
-                st.session_state["b6_list"] = _com6v3[:4]
+                st.session_state["b6_list"] = []  # DB populates
             bc1,bc2,bc3 = st.columns([1.5,0.7,1.5])
             with bc1: _b6_add_tn = st.selectbox("Add tenor", [t for t in _com6v3 if t not in st.session_state["b6_list"]] or _com6v3, key="b6_add_tn")
             with bc2:
@@ -3844,7 +3844,7 @@ def fwd_analysis_tab():
         st.markdown("#### 6v3 Forward-Forward Basis")
         st.caption("Fwd-fwd 6M BBSW − fwd-fwd 3M BBSW for same start/tenor")
         if "fv6_list" not in st.session_state:
-            st.session_state["fv6_list"] = [(1,1),(2,2),(5,5)]
+            st.session_state["fv6_list"] = []  # DB populates
 
         bc1,bc2,bc3,bc4 = st.columns([1,1,0.7,1.5])
         with bc1: _fv6_st = st.selectbox("Start (years)", _fwd_starts, index=_fwd_starts.index(2) if 2 in _fwd_starts else 0, key="fv6_st")
@@ -3918,7 +3918,7 @@ def fwd_analysis_tab():
             st.info("Need at least 2 overlapping tenors.")
         else:
             if "bsp_list" not in st.session_state:
-                st.session_state["bsp_list"] = [("4Y","10Y"),("5Y","10Y"),("10Y","20Y")]
+                st.session_state["bsp_list"] = []  # DB populates
 
             bc1,bc2,bc3,bc4 = st.columns([1.2,1.2,0.7,1.5])
             with bc1: _bsp_l1 = st.selectbox("Leg 1 (6v3 tenor)", _com6v3_sp, index=0, key="bsp_l1")
