@@ -9675,21 +9675,20 @@ def home_tab():
     conv_tabs = st.tabs([" AUD", " NZD", " USD", " EUR", " GBP", " JPY", " CAD"])
     
     with conv_tabs[0]:  # AUD
-        st.markdown("#### AUD Swaption Conventions")
+        st.markdown("#### AUD Swaption Conventions *(AFMA IRD & IRO Conventions, June 2025)*")
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("""
             **Swaption Specifics**
             | Convention | Standard |
             |------------|----------|
-            | Settlement | Physical delivery |
-            | Cash Settlement | Par rate (rare) |
-            | Premium | Forward premium (T+1) |
+            | Settlement | Physical — LCH Cleared Swap |
+            | Premium Quote | Basis points of notional face value |
+            | Premium Payment | Forward premium (T+1) |
             | Exercise | European — 10:00am AEST |
             | Vol Quote | Normal (bp/annum) |
-            | Annuity | BBSW/AONIA dual-curve |
+            | Discount Curve | AONIA OIS |
             | Expiry Style | Quarterly ≤3y, semi-annual ≥4y |
-            | Partial Exercise | Uncommon — bilateral agreement |
             """)
         with col2:
             st.markdown("""
@@ -9697,15 +9696,33 @@ def home_tab():
             | Convention | Standard |
             |------------|----------|
             | Fixed Leg | Q/Q to 3y, S/S beyond, ACT/365F |
-            | Float Leg | Quarterly |
+            | Float Leg | 3M BBSW (Q/Q) or 6M BBSW (S/S) |
             | Float Index | 3M BBSW / AONIA (OIS) |
-            | Spot Lag | T+1 (was T+2 pre-2024) |
+            | Spot Lag | T+1 |
             | Roll | Modified Following |
-            | Calendar | Sydney (NSW bank days) |
+            | Business Days | Sydney (NSW bank holidays) |
             | Discounting | OIS (AONIA) in all cases |
-            | Clearing | Generally centrally cleared |
+            | Clearing | LCH Cleared Swaps (default) |
             """)
 
+        st.markdown("#### Standard Transaction Size — Swaptions (AUD million) *(AFMA IRO 3.4)*")
+        st.markdown("""
+        | Expiry \\ Tenor | 1Y | 2Y | 3Y | 4Y | 5Y | 7Y | 10Y | 15Y | 20Y | 30Y |
+        |---|---|---|---|---|---|---|---|---|---|---|
+        | 1m | 200 | 200 | 100 | 50 | 50 | 50 | 25 | 25 | 10 | 10 |
+        | 3m | 200 | 200 | 100 | 50 | 50 | 50 | 25 | 15 | 10 | 10 |
+        | 6m | 200 | 100 | 100 | 50 | 50 | 50 | 25 | 15 | 10 | 10 |
+        | 1y | 100 | 100 | 100 | 50 | 50 | 50 | 25 | 15 | 10 | 10 |
+        | 2y | 100 | 100 | 75 | 50 | 50 | 25 | 25 | 15 | 10 | 10 |
+        | 3y | 100 | 75 | 50 | 50 | 50 | 25 | 25 | 15 | 10 | 10 |
+        | 4y | 75 | 75 | 50 | 50 | 50 | 25 | 25 | 15 | 10 | 10 |
+        | 5y | 50 | 50 | 50 | 50 | 50 | 25 | 25 | 15 | 10 | 10 |
+        | 7y | 50 | 50 | 25 | 25 | 25 | 25 | 25 | 15 | 10 | 10 |
+        | 10y | 50 | 25 | 25 | 25 | 25 | 25 | 25 | 15 | 10 | 10 |
+        """)
+        st.caption("Bermuda Swaption minimum: AUD 10 million. Fly belly parcel: $50k DV01 equivalent.")
+
+        st.markdown("---")
         st.markdown("#### AUD Cap / Floor Conventions *(AFMA IRO Conventions, June 2025)*")
         cf1, cf2, cf3 = st.columns(3)
         with cf1:
@@ -9713,26 +9730,25 @@ def home_tab():
             **Structure**
             | Convention | Standard |
             |------------|----------|
-            | Definition | Cap: ceiling on floating rate borrowing |
-            | | Floor: protection against rate falls |
             | Caplet/Floorlet | Series of individual options |
             | Floating Index | 3M BBSW (quarterly resets) |
             | Reset Frequency | Quarterly |
             | Day Count | ACT/365 Fixed |
-            | Business Days | NSW calendar, Modified Following |
+            | Business Days | Sydney (NSW bank holidays) |
+            | Roll | Modified Following |
             """)
         with cf2:
             st.markdown("""
             **Quotation & Premium**
             | Convention | Standard |
             |------------|----------|
-            | Vol Quote | Normal vol (bp/annum) |
             | Premium Quote | Basis points of notional face value |
-            | Premium Payment | Upfront on trade date |
+            | Vol Quote | Normal vol (bp/annum) |
+            | Premium Payment | T+1 |
             | Settlement Style | Non-discounted, paid in arrears |
-            | ATM Reference | Swap rate for the underlying tenor |
-            | Transaction Size | By notional as agreed bilaterally |
-            | FRA Yield Discounting | Explicitly excluded for caps/floors ¹ |
+            | ATM Reference | Forward swap rate for underlying tenor |
+            | CSA Default | AUD — premium adj agreed post-trade |
+            | FRA Yield Discounting | Must be excluded in confirm ¹ |
             """)
         with cf3:
             st.markdown("""
@@ -9740,13 +9756,28 @@ def home_tab():
             | Convention | Standard |
             |------------|----------|
             | Settlement Index | BBSW (Refinitiv "BBSW" page) |
-            | Non-std Dates | Linear interpolation vs RBA cash rate |
             | Caplet Settlement | Non-discounted in arrears |
             | Payment Date | Reference date (end of accrual period) |
             | Exercise | Automatic at expiry |
             | Spot Lag | T+1 |
             | ISDA Note | Confirm "FRA Yield Discounting will not apply" ¹ |
             """)
+
+        st.markdown("#### Standard Transaction Size — Cap/Floor Straddles (AUD million) *(AFMA IRO 3.4.2)*")
+        st.markdown("""
+        | Tenor | CFS Notional (A$m) |
+        |-------|-------------------|
+        | 1Y | 200 |
+        | 2Y | 100 |
+        | 3Y | 50 |
+        | 4Y | 35 |
+        | 5Y | 25 |
+        | 6Y | 20 |
+        | 7Y | 20 |
+        | 8Y | 15 |
+        | 9Y | 15 |
+        | 10Y | 15 |
+        """)
         st.caption(
             "¹ AFMA IRO Conventions (June 2025, s4.3.1): where ISDA 2021 Definitions are incorporated, "
             "FRA Yield Discounting applies by default to AUD cap/floor/collar transactions. "
@@ -9755,8 +9786,7 @@ def home_tab():
             "rather than the ISDA election — but must be verified bilaterally. "
             "**⚠️ WPO: confirm FRA Yield Discounting election approach with each client at deployment.**"
         )
-
-        st.caption("Source: AFMA Interest Rate Options Conventions (June 2025) & AFMA Interest Rate Derivative Conventions (June 2024)")
+        st.caption("Source: AFMA Interest Rate Options Conventions (June 2025) & AFMA Interest Rate Derivative Conventions (June 2025)")
     
     with conv_tabs[1]:  # NZD
         st.markdown("#### NZD Swaption Conventions")
@@ -10354,13 +10384,7 @@ def main():
             )
             _mailto = f"mailto:wpo@rateedge.au?subject={_subj.replace(' ', '%20').replace('—','--')}&body={_body}"
 
-            st.markdown(
-                f'<a href="{_mailto}" target="_blank">'
-                f'<button style="width:100%;padding:8px;background:#1e3a5f;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem;">📧 Open Support Email</button>'
-                f'</a>',
-                unsafe_allow_html=True
-            )
-            st.caption("Opens your email client pre-filled. Send to wpo@rateedge.au")
+            st.info(f"📧 Email **wpo@rateedge.au** with the details above.\n\nSubject: {_issue_type} — {_severity.split('—')[0].strip()}")
 
         st.markdown("---")
         st.markdown(
@@ -11469,14 +11493,12 @@ def show_login_page():
                     else:
                         st.error("Please enter the 6-digit code")
         
-        st.markdown("""
-        <div style="text-align:center;margin-top:1rem;">
-            <a href="mailto:wpo@rateedge.au?subject=RateEdge%20Login%20Support"
-               style="color:#64748b;font-size:0.85rem;text-decoration:none;">
-                📧 Contact support for login issues
-            </a>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            "<div style='text-align:center;margin-top:1rem;color:#64748b;font-size:0.85rem'>"
+            "Login issues? Email <b>wpo@rateedge.au</b>"
+            "</div>",
+            unsafe_allow_html=True
+        )
     
     st.stop()
 
