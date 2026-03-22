@@ -11471,7 +11471,7 @@ def show_login_page():
         
         st.markdown("""
         <div style="text-align:center;margin-top:1rem;">
-            <a href="mailto:wpo@rateedge.au?subject=RateEdge%20Login%20Support&body=Hi%20William%2C%0A%0AI%20am%20having%20trouble%20logging%20in%20to%20RateEdge%20Options.%0A%0AEmail%20address%3A%20%0AOrganisation%3A%20%0AIssue%3A%20%0A"
+            <a href="mailto:wpo@rateedge.au?subject=RateEdge%20Login%20Support"
                style="color:#64748b;font-size:0.85rem;text-decoration:none;">
                 📧 Contact support for login issues
             </a>
