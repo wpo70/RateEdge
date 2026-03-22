@@ -9684,7 +9684,7 @@ def home_tab():
             |------------|----------|
             | Settlement | Physical — LCH Cleared Swap |
             | Premium Quote | Basis points of notional face value |
-            | Premium Payment | Forward premium (T+1) |
+            | Premium Payment | Same day as expiry |
             | Exercise | European — 10:00am AEST |
             | Vol Quote | Normal (bp/annum) |
             | Discount Curve | AONIA OIS |
@@ -9705,6 +9705,17 @@ def home_tab():
             | Clearing | LCH Cleared Swaps (default) |
             """)
 
+        st.markdown("**Swaption Date Conventions** *(AFMA IRO 3.12)*")
+        st.markdown("""
+        | | Swaptions |
+        |---|---|
+        | **Expiry Date** | T + Tenor (FOLL) |
+        | **Start Date** | Expiry Date + Swap Spot Offset (1BD) (FOLL) |
+        | **End Date** | Start Date + Underlying Tenor (MODFOLL) |
+        | **Roll Date** | Underlying Start Date (MODFOLL) |
+        | **Termination Option Notice** | n/a |
+        """)
+
         st.markdown("#### Standard Transaction Size — Swaptions (AUD million) *(AFMA IRO 3.4)*")
         st.markdown("""
         | Expiry \\ Tenor | 1Y | 2Y | 3Y | 4Y | 5Y | 7Y | 10Y | 15Y | 20Y | 30Y |
@@ -9720,7 +9731,7 @@ def home_tab():
         | 7y | 50 | 50 | 25 | 25 | 25 | 25 | 25 | 15 | 10 | 10 |
         | 10y | 50 | 25 | 25 | 25 | 25 | 25 | 25 | 15 | 10 | 10 |
         """)
-        st.caption("Bermuda Swaption minimum: AUD 10 million. Fly belly parcel: $50k DV01 equivalent.")
+        st.caption("Bermuda Swaption minimum: AUD 10 million.")
 
         st.markdown("---")
         st.markdown("#### AUD Cap / Floor Conventions *(AFMA IRO Conventions, June 2025)*")
@@ -9744,7 +9755,7 @@ def home_tab():
             |------------|----------|
             | Premium Quote | Basis points of notional face value |
             | Vol Quote | Normal vol (bp/annum) |
-            | Premium Payment | T+1 |
+            | Premium Payment | T+2 |
             | Settlement Style | Non-discounted, paid in arrears |
             | ATM Reference | Forward swap rate for underlying tenor |
             | CSA Default | AUD — premium adj agreed post-trade |
@@ -9762,6 +9773,17 @@ def home_tab():
             | Spot Lag | T+1 |
             | ISDA Note | Confirm "FRA Yield Discounting will not apply" ¹ |
             """)
+
+        st.markdown("**Cap / Floor Date Conventions** *(AFMA IRO 3.12)*")
+        st.markdown("""
+        | | Caps / Floors |
+        |---|---|
+        | **Expiry Date** | n/a |
+        | **Start Date** | T + Start Tenor (FOLL) + Swap Spot Offset (1BD) (FOLL) |
+        | **End Date** | Start Date + Tenor (MODFOLL) |
+        | **Roll Date** | Start Date (MODFOLL) |
+        | **Termination Option Notice** | n/a |
+        """)
 
         st.markdown("#### Standard Transaction Size — Cap/Floor Straddles (AUD million) *(AFMA IRO 3.4.2)*")
         st.markdown("""
