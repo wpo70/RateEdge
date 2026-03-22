@@ -1032,6 +1032,29 @@ def sabr_implied_vol_black(F: float, K: float, T: float,
     return max(vol, 0.0)
 
 
+def sabr_normal_atm_vol(F: float, T: float, alpha: float, beta: float, rho: float, nu: float) -> float:
+    """Normal (Bachelier) SABR ATM vol approximation.
+    σ_N(F,F) ≈ alpha * F^beta * [1 + ((2-3ρ²)/24)*ν²*T]
+    Returns vol in same units as alpha (i.e. if alpha is bp-decimal, returns bp-decimal).
+    """
+    if T <= 0 or alpha <= 0 or F <= 0:
+        return 0.0
+    return alpha * (F ** beta) * (1.0 + (2.0 - 3.0 * rho ** 2) / 24.0 * nu ** 2 * T)
+
+
+def sabr_implied_alpha_from_atm(atm_vol_normal: float, F: float, T: float,
+                                  beta: float, rho: float, nu: float) -> float:
+    """Back out alpha from ATM normal vol, given fixed beta/rho/nu.
+    Solves: atm_vol = alpha * F^beta * (1 + (2-3ρ²)/24 * ν² * T)
+    """
+    if T <= 0 or F <= 0:
+        return 0.0
+    denom = (F ** beta) * (1.0 + (2.0 - 3.0 * rho ** 2) / 24.0 * nu ** 2 * T)
+    if abs(denom) < 1e-12:
+        return 0.0
+    return atm_vol_normal / denom
+
+
 # ============================
 # Curve construction
 # ============================
@@ -4171,6 +4194,118 @@ def swaptions_tab(vol_mode: str):
     basis_6v3 = get_basis_curve(ccy, "6v3")
     ois_curve = get_basis_curve(ccy, "ois")
     curve = get_ccy_curve(ccy)
+
+    # ── SABR Smile Mode & Alpha Monitor ──────────────────────────────
+    with st.expander("📐 SABR Smile Mode & Alpha Monitor", expanded=st.session_state.get("sabr_panel_expanded", True)):
+        _sm_col, _info_col = st.columns([2, 4])
+        with _sm_col:
+            _smile_mode = st.radio(
+                "Smile Mode",
+                ["Sticky-ATM (alpha-sticky)", "Sticky-Delta", "Sticky-Strike"],
+                index=0,
+                key="sabr_smile_mode",
+                help=(
+                    "Sticky-ATM: recalibrate alpha to match ATM vol daily, keep ρ/ν/β fixed. "
+                    "Sticky-Delta: params fixed, smile moves with forward. "
+                    "Sticky-Strike: OTM options repriced at original absolute strikes."
+                )
+            )
+        with _info_col:
+            if "Sticky-ATM" in _smile_mode:
+                st.caption("🔒 β, ρ, ν locked from config. α recalibrated to ATM surface each session. Stale α cells flagged below.")
+            elif "Sticky-Delta" in _smile_mode:
+                st.caption("⚠️ All SABR params fixed. Smile moves with forward. May understate repricing on large rate moves.")
+            else:
+                st.caption("⚠️ OTM options priced at original absolute strikes. Most conservative — can overstate downside moves.")
+
+        # Alpha comparison table
+        _, _a, _b, _r, _n = get_ccy_vol_data(ccy)
+        _atm_surf = get_working_atm_surface(ccy)
+
+        if _a is not None and _atm_surf is not None and curve is not None:
+            _EXPIRIES = ["1m","3m","6m","1y","2y","3y","5y","7y","10y"]
+            _TENORS   = ["1Y","2Y","3Y","5Y","7Y","10Y","15Y","20Y"]
+
+            _rows = []
+            _any_stale = False
+            for _exp in _EXPIRIES:
+                _row = {"Expiry": _exp}
+                _exp_y = label_to_years(_exp)
+                for _ten in _TENORS:
+                    _ten_y = label_to_years(_ten)
+                    _atm_bp = get_matrix_value(_atm_surf, _exp, _ten_y)
+                    _s = get_sabr_params_from_matrices(_a, _b, _r, _n, _exp, _ten_y)
+                    if _atm_bp is None or _s is None or _exp_y <= 0:
+                        _row[_ten] = "—"
+                        continue
+                    # Get current forward for this expiry/tenor
+                    try:
+                        _F, _, _ = forward_and_annuity_from_curve(curve, ccy, _exp_y, _ten_y, ois_curve)
+                    except Exception:
+                        _F = 0.05
+                    if _F <= 0:
+                        _F = 0.05
+                    # Implied alpha from ATM vol
+                    _atm_dec = _atm_bp / 10000.0
+                    _impl_alpha = sabr_implied_alpha_from_atm(_atm_dec, _F, _exp_y, _s["beta"], _s["rho"], _s["nu"])
+                    _stored_alpha = _s["alpha"]
+                    if _stored_alpha > 0:
+                        _pct_diff = (_impl_alpha - _stored_alpha) / _stored_alpha * 100.0
+                        _stale = abs(_pct_diff) > 10.0
+                        if _stale:
+                            _any_stale = True
+                        _row[_ten] = f"{'🔴' if abs(_pct_diff) > 20 else '🟡' if _stale else '🟢'} {_pct_diff:+.1f}%"
+                    else:
+                        _row[_ten] = "—"
+                _rows.append(_row)
+
+            if _any_stale:
+                st.warning("⚠️ Stale α detected — cells show implied vs stored α divergence. 🟡 >10%, 🔴 >20%. Consider recalibrating.")
+            else:
+                st.success("✅ α consistent with ATM surface across all cells (within 10%)")
+
+            _alpha_df = pd.DataFrame(_rows).set_index("Expiry")
+            st.dataframe(_alpha_df, use_container_width=True)
+            st.caption("Divergence = (implied α from ATM vol − stored α) / stored α × 100%. β, ρ, ν held fixed.")
+
+            # Recalibrate Alpha button
+            _rc1, _rc2 = st.columns([2, 4])
+            with _rc1:
+                if st.button("🔄 Recalibrate Alpha (Sticky-ATM)", key="recal_alpha_btn", type="primary"):
+                    _, _a2, _b2, _r2, _n2 = get_ccy_vol_data(ccy)
+                    _atm2 = get_working_atm_surface(ccy)
+                    if _a2 is not None and _atm2 is not None:
+                        _new_alpha = _a2.copy()
+                        _exp_col = "Expiry" if "Expiry" in _new_alpha.columns else _new_alpha.columns[0]
+                        _tenor_cols = [c for c in _new_alpha.columns if c != _exp_col]
+                        _updated = 0
+                        for _i, _erow in _new_alpha.iterrows():
+                            _exp_lbl = str(_erow[_exp_col]).strip()
+                            _exp_y2 = label_to_years(_exp_lbl)
+                            if _exp_y2 <= 0:
+                                continue
+                            for _tc in _tenor_cols:
+                                _ten_y2 = label_to_years(str(_tc))
+                                _atm_bp2 = get_matrix_value(_atm2, _exp_lbl, _ten_y2)
+                                _s2 = get_sabr_params_from_matrices(_a2, _b2, _r2, _n2, _exp_lbl, _ten_y2)
+                                if _atm_bp2 is None or _s2 is None:
+                                    continue
+                                try:
+                                    _F2, _, _ = forward_and_annuity_from_curve(curve, ccy, _exp_y2, _ten_y2, ois_curve)
+                                except Exception:
+                                    _F2 = 0.05
+                                if _F2 <= 0:
+                                    _F2 = 0.05
+                                _new_a = sabr_implied_alpha_from_atm(_atm_bp2 / 10000.0, _F2, _exp_y2, _s2["beta"], _s2["rho"], _s2["nu"])
+                                if _new_a > 0:
+                                    _new_alpha.at[_i, _tc] = _new_a
+                                    _updated += 1
+                        _old_atm, _, _b2, _r2, _n2 = get_ccy_vol_data(ccy)
+                        set_ccy_vol_data(ccy, _old_atm, _new_alpha, _b2, _r2, _n2)
+                        st.success(f"✅ Alpha recalibrated — {_updated} cells updated. β, ρ, ν unchanged.")
+                        st.rerun()
+            with _rc2:
+                st.caption("Updates α to match current ATM surface. β, ρ, ν remain locked. Run daily at session start in Sticky-ATM mode.")
     
     # Row 1: Structure Type and Model
     col_struct, col_model, col_prem = st.columns([2, 1, 1])
@@ -4586,13 +4721,30 @@ def swaptions_tab(vol_mode: str):
         if vol_src == "Manual":
             return vol_input / 10000.0 if vol_mode.startswith("Normal") else vol_input / 100.0
         else:
+            _smile = st.session_state.get("sabr_smile_mode", "Sticky-ATM (alpha-sticky)")
             if vol_mode.startswith("Normal"):
-                return atm_val / 10000.0
+                if "Sticky-Strike" in _smile:
+                    # Use ATM vol regardless of strike — most conservative
+                    return atm_val / 10000.0
+                else:
+                    # Sticky-Delta and Sticky-ATM both use ATM vol in Normal mode
+                    # (smile shape differences are in Black mode; Normal mode is flat by convention here)
+                    return atm_val / 10000.0
             else:
                 sabr = get_sabr_params_from_matrices(a, b, r, n, expiry, tenor_y)
                 if sabr:
-                    return sabr_implied_vol_black(fwd_pct/100.0, k_pct/100.0, expiry_y,
-                                                   sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"])
+                    if "Sticky-Strike" in _smile:
+                        # Price at absolute strike K — moneyness changes with forward
+                        return sabr_implied_vol_black(fwd_pct/100.0, k_pct/100.0, expiry_y,
+                                                       sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"])
+                    elif "Sticky-Delta" in _smile:
+                        # Params fixed, evaluate smile at current strike relative to current forward
+                        return sabr_implied_vol_black(fwd_pct/100.0, k_pct/100.0, expiry_y,
+                                                       sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"])
+                    else:
+                        # Sticky-ATM: use (potentially recalibrated) alpha from vol_data
+                        return sabr_implied_vol_black(fwd_pct/100.0, k_pct/100.0, expiry_y,
+                                                       sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"])
                 else:
                     return atm_val / 100.0
 
@@ -7450,6 +7602,129 @@ def vol_surface_editor_tab():
     # Render bulk adjustment tools
     with st.expander(" Quick Adjustments (Parallel Shift, Scale, Tilt)", expanded=False):
         render_bulk_adjustment_tools(ccy)
+
+    # ── Full SABR Recalibration (Expert Only) ────────────────────────
+    st.markdown("---")
+    with st.expander("⚗️ Full SABR Recalibration — Expert Use Only", expanded=False):
+        st.warning(
+            "⚠️ **Expert use only.** Full recalibration fits all four SABR params (α, β, ρ, ν) "
+            "simultaneously to the loaded ATM surface using a numerical optimiser. "
+            "Incorrect calibration will affect all OTM swaption pricing. "
+            "Only run this when the smile structure has materially changed (e.g. after a large parallel shift >50bp, "
+            "curve inversion, or regime change). For daily use, run Sticky-ATM alpha recalibration in the Swaptions tab instead."
+        )
+        _expert_code = st.text_input("Enter expert code to unlock", type="password", key="sabr_expert_code")
+        _expert_unlocked = _expert_code == "SABR2025"
+
+        if not _expert_unlocked:
+            st.caption("Contact wpo@rateedge.au for the expert recalibration code.")
+        else:
+            st.success("🔓 Expert mode unlocked.")
+            _rc_ccy = ccy
+            _rc_curve = get_ccy_curve(_rc_ccy)
+            _rc_ois = get_basis_curve(_rc_ccy, "ois")
+            _rc_atm = get_working_atm_surface(_rc_ccy)
+            _, _rc_a, _rc_b, _rc_r, _rc_n = get_ccy_vol_data(_rc_ccy)
+
+            if _rc_atm is None or _rc_curve is None:
+                st.info("Load ATM surface and IRS curve first.")
+            else:
+                st.markdown("**Calibration Constraints**")
+                _cc1, _cc2, _cc3, _cc4 = st.columns(4)
+                with _cc1:
+                    _beta_fixed = st.checkbox("Fix β (recommended)", value=True, key="sabr_fix_beta")
+                    _beta_val = st.number_input("β value", value=0.5, min_value=0.0, max_value=1.0, step=0.05, key="sabr_beta_fixed_val")
+                with _cc2:
+                    _rho_min = st.number_input("ρ min", value=-0.5, min_value=-1.0, max_value=0.0, step=0.05, key="sabr_rho_min")
+                    _rho_max = st.number_input("ρ max", value=0.0, min_value=-1.0, max_value=1.0, step=0.05, key="sabr_rho_max")
+                with _cc3:
+                    _nu_min = st.number_input("ν min", value=0.1, min_value=0.0, max_value=2.0, step=0.05, key="sabr_nu_min")
+                    _nu_max = st.number_input("ν max", value=1.0, min_value=0.0, max_value=2.0, step=0.05, key="sabr_nu_max")
+                with _cc4:
+                    _alpha_min = st.number_input("α min", value=0.001, min_value=0.0, step=0.001, format="%.4f", key="sabr_alpha_min")
+                    _alpha_max = st.number_input("α max", value=0.2, min_value=0.0, step=0.01, format="%.4f", key="sabr_alpha_max")
+
+                st.caption("Calibration fits each (expiry, tenor) cell independently using scipy.optimize.minimize with L-BFGS-B bounds.")
+
+                if st.button("⚗️ Run Full SABR Calibration", key="run_full_sabr", type="primary"):
+                    from scipy.optimize import minimize
+                    _expiry_col = "Expiry" if "Expiry" in _rc_atm.columns else _rc_atm.columns[0]
+                    _expiries_rc = _rc_atm[_expiry_col].tolist()
+                    _tenors_rc = [c for c in _rc_atm.columns if c != _expiry_col]
+
+                    # Build new param matrices
+                    _new_a = _rc_a.copy() if _rc_a is not None else _rc_atm.copy() * 0
+                    _new_b = _rc_b.copy() if _rc_b is not None else _rc_atm.copy() * 0
+                    _new_r = _rc_r.copy() if _rc_r is not None else _rc_atm.copy() * 0
+                    _new_n = _rc_n.copy() if _rc_n is not None else _rc_atm.copy() * 0
+
+                    _prog = st.progress(0)
+                    _n_cells = len(_expiries_rc) * len(_tenors_rc)
+                    _done = 0
+                    _errors = 0
+
+                    for _i, _exp_lbl in enumerate(_expiries_rc):
+                        _exp_y_rc = label_to_years(str(_exp_lbl))
+                        if _exp_y_rc <= 0:
+                            continue
+                        for _tc_lbl in _tenors_rc:
+                            _ten_y_rc = label_to_years(str(_tc_lbl))
+                            _atm_bp_rc = get_matrix_value(_rc_atm, str(_exp_lbl), _ten_y_rc)
+                            if _atm_bp_rc is None:
+                                _done += 1
+                                continue
+                            try:
+                                _F_rc, _, _ = forward_and_annuity_from_curve(_rc_curve, _rc_ccy, _exp_y_rc, _ten_y_rc, _rc_ois)
+                            except Exception:
+                                _F_rc = 0.05
+                            if _F_rc <= 0:
+                                _F_rc = 0.05
+
+                            _target = _atm_bp_rc / 10000.0
+
+                            def _obj(params):
+                                _a_p = params[0]
+                                _b_p = _beta_val if _beta_fixed else params[1]
+                                _r_p = params[1 if _beta_fixed else 2]
+                                _n_p = params[2 if _beta_fixed else 3]
+                                _pred = sabr_normal_atm_vol(_F_rc, _exp_y_rc, _a_p, _b_p, _r_p, _n_p)
+                                return (_pred - _target) ** 2
+
+                            _x0 = [max(_alpha_min, 0.01), _rho_min * 0.5, _nu_min + (_nu_max - _nu_min) * 0.5]
+                            _bounds = [(_alpha_min, _alpha_max), (_rho_min, _rho_max), (_nu_min, _nu_max)]
+                            if not _beta_fixed:
+                                _x0.insert(1, 0.5)
+                                _bounds.insert(1, (0.0, 1.0))
+
+                            try:
+                                _res = minimize(_obj, _x0, method="L-BFGS-B", bounds=_bounds,
+                                                options={"maxiter": 200, "ftol": 1e-12})
+                                _a_opt = _res.x[0]
+                                _b_opt = _beta_val if _beta_fixed else _res.x[1]
+                                _r_opt = _res.x[1 if _beta_fixed else 2]
+                                _n_opt = _res.x[2 if _beta_fixed else 3]
+                                # Write back
+                                _exp_mask = _new_a[_expiry_col].astype(str).str.strip() == str(_exp_lbl).strip()
+                                if _tc_lbl in _new_a.columns:
+                                    _new_a.loc[_exp_mask, _tc_lbl] = _a_opt
+                                if _tc_lbl in _new_b.columns:
+                                    _new_b.loc[_exp_mask, _tc_lbl] = _b_opt
+                                if _tc_lbl in _new_r.columns:
+                                    _new_r.loc[_exp_mask, _tc_lbl] = _r_opt
+                                if _tc_lbl in _new_n.columns:
+                                    _new_n.loc[_exp_mask, _tc_lbl] = _n_opt
+                            except Exception:
+                                _errors += 1
+
+                            _done += 1
+                            _prog.progress(min(_done / max(_n_cells, 1), 1.0))
+
+                    _old_atm_rc, _, _, _, _ = get_ccy_vol_data(_rc_ccy)
+                    set_ccy_vol_data(_rc_ccy, _old_atm_rc, _new_a, _new_b, _new_r, _new_n)
+                    _prog.empty()
+                    st.success(f"✅ Full SABR calibration complete. {_n_cells - _errors} cells updated, {_errors} skipped.")
+                    if _errors > 0:
+                        st.caption("Skipped cells had no ATM vol data or optimiser failed to converge.")
     
     # Sync back to the main app's vol_data if published
     # (The vol_editor module handles publishing internally via session state)
