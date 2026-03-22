@@ -10305,6 +10305,64 @@ def main():
             st.caption("Use the main login page to sign in with your email")
         
         st.markdown("---")
+
+        # Technical Support
+        with st.expander("🛠️ Technical Support", expanded=False):
+            _user_email = st.session_state.get("user_email", "")
+            _user_name  = st.session_state.get("username", "")
+
+            _issue_type = st.selectbox(
+                "Issue type",
+                [
+                    "Pricing Issue",
+                    "Curve / Data Issue",
+                    "Vol Surface Issue",
+                    "CFS / Wedge Issue",
+                    "SOD Report Issue",
+                    "Login / Access Issue",
+                    "Performance / Loading",
+                    "Other",
+                ],
+                key="support_issue_type"
+            )
+
+            _severity = st.selectbox(
+                "Severity",
+                [
+                    "🔴  Critical — platform unusable",
+                    "🟠  High — major feature broken",
+                    "🟡  Medium — partial functionality affected",
+                    "🟢  Low — cosmetic / minor issue",
+                ],
+                key="support_severity"
+            )
+
+            _support_desc = st.text_area(
+                "Describe the issue",
+                placeholder="What happened? What were you pricing? Any error messages?",
+                height=80,
+                key="support_desc"
+            )
+
+            # Build mailto
+            _subj = f"RateEdge Support — {_issue_type}"
+            _body = (
+                f"User: {_user_name} ({_user_email})%0A"
+                f"Issue Type: {_issue_type}%0A"
+                f"Severity: {_severity.split('—')[0].strip()}%0A%0A"
+                f"Description:%0A{_support_desc.replace(chr(10), '%0A') if _support_desc else '[please describe]'}%0A"
+            )
+            _mailto = f"mailto:wpo@rateedge.au?subject={_subj.replace(' ', '%20').replace('—','--')}&body={_body}"
+
+            st.markdown(
+                f'<a href="{_mailto}" target="_blank">'
+                f'<button style="width:100%;padding:8px;background:#1e3a5f;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem;">📧 Open Support Email</button>'
+                f'</a>',
+                unsafe_allow_html=True
+            )
+            st.caption("Opens your email client pre-filled. Send to wpo@rateedge.au")
+
+        st.markdown("---")
         st.markdown(
             """
             <div style="color:#64748b;font-size:0.7rem;text-align:center;">
@@ -10879,7 +10937,7 @@ def sod_report_tab():
                     })
 
             if _cfs_rows:
-                _cfs_df = pd.DataFrame(_cfs_rows)[["CFS Tenor", "CFS Total (prev)", "CFS Total (open)", "Δ CFS"]]
+                _cfs_df = pd.DataFrame(_cfs_rows)
                 st.dataframe(_cfs_df, use_container_width=True, hide_index=True)
                 if not _cfs_ok:
                     st.info("Load AUD IRS curve to compute CFS premium levels.")
@@ -11413,7 +11471,10 @@ def show_login_page():
         
         st.markdown("""
         <div style="text-align:center;margin-top:1rem;">
-            <a href="mailto:wpo@rateedge.au" style="color:#64748b;font-size:0.85rem;text-decoration:none;">Contact support</a>
+            <a href="mailto:wpo@rateedge.au?subject=RateEdge%20Login%20Support&body=Hi%20William%2C%0A%0AI%20am%20having%20trouble%20logging%20in%20to%20RateEdge%20Options.%0A%0AEmail%20address%3A%20%0AOrganisation%3A%20%0AIssue%3A%20%0A"
+               style="color:#64748b;font-size:0.85rem;text-decoration:none;">
+                📧 Contact support for login issues
+            </a>
         </div>
         """, unsafe_allow_html=True)
     
