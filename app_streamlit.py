@@ -4196,7 +4196,14 @@ def swaptions_tab(vol_mode: str):
     curve = get_ccy_curve(ccy)
 
     # ── SABR Smile Mode & Alpha Monitor ──────────────────────────────
-    with st.expander("📐 SABR Smile Mode & Alpha Monitor", expanded=st.session_state.get("sabr_panel_expanded", True)):
+    _sabr_visible = st.session_state.get("sabr_panel_visible", True)
+    _toggle_label = "🔼 Hide SABR Panel" if _sabr_visible else "📐 Show SABR Smile Mode & Alpha Monitor"
+    if st.button(_toggle_label, key="sabr_panel_toggle"):
+        st.session_state["sabr_panel_visible"] = not _sabr_visible
+        st.rerun()
+
+    if _sabr_visible:
+      with st.container():
         _sm_col, _info_col = st.columns([2, 4])
         with _sm_col:
             _smile_mode = st.radio(
@@ -4223,8 +4230,8 @@ def swaptions_tab(vol_mode: str):
         _atm_surf = get_working_atm_surface(ccy)
 
         if _a is not None and _atm_surf is not None and curve is not None:
-            _EXPIRIES = ["1m","3m","6m","1y","2y","3y","5y","7y","10y"]
-            _TENORS   = ["1Y","2Y","3Y","5Y","7Y","10Y","15Y","20Y"]
+            _EXPIRIES = ["1m","3m","6m","1y","2y","3y","5y","7y","10y","15y","20y"]
+            _TENORS   = ["1Y","2Y","3Y","5Y","7Y","10Y","15Y","20Y","25Y","30Y"]
 
             _rows = []
             _any_stale = False
@@ -4238,14 +4245,12 @@ def swaptions_tab(vol_mode: str):
                     if _atm_bp is None or _s is None or _exp_y <= 0:
                         _row[_ten] = "—"
                         continue
-                    # Get current forward for this expiry/tenor
                     try:
                         _F, _, _ = forward_and_annuity_from_curve(curve, ccy, _exp_y, _ten_y, ois_curve)
                     except Exception:
                         _F = 0.05
                     if _F <= 0:
                         _F = 0.05
-                    # Implied alpha from ATM vol
                     _atm_dec = _atm_bp / 10000.0
                     _impl_alpha = sabr_implied_alpha_from_atm(_atm_dec, _F, _exp_y, _s["beta"], _s["rho"], _s["nu"])
                     _stored_alpha = _s["alpha"]
@@ -4268,7 +4273,6 @@ def swaptions_tab(vol_mode: str):
             st.dataframe(_alpha_df, use_container_width=True)
             st.caption("Divergence = (implied α from ATM vol − stored α) / stored α × 100%. β, ρ, ν held fixed.")
 
-            # Recalibrate Alpha button
             _rc1, _rc2 = st.columns([2, 4])
             with _rc1:
                 if st.button("🔄 Recalibrate Alpha (Sticky-ATM)", key="recal_alpha_btn", type="primary"):
