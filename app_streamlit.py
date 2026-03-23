@@ -700,12 +700,21 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
         sabr_rho_json = sabr_rho.to_dict(orient="records") if sabr_rho is not None else None
         sabr_nu_json = sabr_nu.to_dict(orient="records") if sabr_nu is not None else None
         
+        # Get premium matrix if available
+        prem_matrix = st.session_state.get("prem_matrix", {}).get(currency)
+        atm_prems_json = None
+        if prem_matrix is not None:
+            try:
+                atm_prems_json = prem_matrix.to_dict(orient="records")
+            except Exception:
+                atm_prems_json = None
+
         # Insert into vol_history table
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO vol_history 
-            (user_id, currency, snapshot_date, label, atm_vols, sabr_alpha, sabr_beta, sabr_rho, sabr_nu, notes)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (user_id, currency, snapshot_date, label, atm_vols, atm_prems, sabr_alpha, sabr_beta, sabr_rho, sabr_nu, notes)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (
             user_id, 
@@ -713,6 +722,7 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
             datetime.now(),
             label,
             Json({"values": atm_json}),
+            Json({"values": atm_prems_json}) if atm_prems_json else None,
             Json({"values": sabr_alpha_json}) if sabr_alpha_json else None,
             Json({"values": sabr_beta_json}) if sabr_beta_json else None,
             Json({"values": sabr_rho_json}) if sabr_rho_json else None,
