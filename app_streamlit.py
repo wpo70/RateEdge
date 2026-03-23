@@ -360,6 +360,21 @@ def init_database():
             
             CREATE INDEX IF NOT EXISTS idx_vol_history_date 
             ON vol_history(snapshot_date DESC);
+
+            CREATE TABLE IF NOT EXISTS sod_reports (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(50) NOT NULL,
+                report_date DATE NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW(),
+                usd_t1_label TEXT,
+                usd_t2_label TEXT,
+                aud_snap_label TEXT,
+                report_data JSONB,
+                notes TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_sod_reports_user_date
+            ON sod_reports(user_id, report_date DESC);
         """)
         conn.commit()
         cur.close()
@@ -812,6 +827,92 @@ def delete_vol_snapshot(snapshot_id: int):
         
     except Exception as e:
         st.error(f"Failed to delete snapshot: {e}")
+        return False
+
+
+def save_sod_report(user_id: str, report_date, usd_t1_label: str, usd_t2_label: str,
+                    aud_snap_label: str, report_data: dict, notes: str = "") -> Optional[int]:
+    """Save a SOD report to the database."""
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO sod_reports (user_id, report_date, usd_t1_label, usd_t2_label, aud_snap_label, report_data, notes)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (user_id, report_date, usd_t1_label, usd_t2_label, aud_snap_label,
+              Json(report_data), notes))
+        report_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        return report_id
+    except Exception as e:
+        st.error(f"Failed to save SOD report: {e}")
+        return None
+
+
+def list_sod_reports(user_id: str, limit: int = 30) -> list:
+    """List saved SOD reports for a user."""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, report_date, created_at, usd_t1_label, usd_t2_label, aud_snap_label, notes
+            FROM sod_reports
+            WHERE user_id = %s
+            ORDER BY report_date DESC, created_at DESC
+            LIMIT %s
+        """, (user_id, limit))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [{"id": r[0], "report_date": r[1], "created_at": r[2],
+                 "usd_t1": r[3], "usd_t2": r[4], "aud_snap": r[5], "notes": r[6]}
+                for r in rows]
+    except Exception as e:
+        return []
+
+
+def load_sod_report(report_id: int) -> Optional[dict]:
+    """Load a SOD report from the database."""
+    conn = get_db_connection()
+    if not conn:
+        return None
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT report_date, usd_t1_label, usd_t2_label, aud_snap_label, report_data, notes, created_at
+            FROM sod_reports WHERE id = %s
+        """, (report_id,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
+            return None
+        return {"report_date": row[0], "usd_t1": row[1], "usd_t2": row[2],
+                "aud_snap": row[3], "data": row[4], "notes": row[5], "created_at": row[6]}
+    except Exception as e:
+        return None
+
+
+def delete_sod_report(report_id: int) -> bool:
+    """Delete a SOD report."""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM sod_reports WHERE id = %s", (report_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception:
         return False
 
 
@@ -8537,8 +8638,8 @@ def rv_tab():
                         except Exception:
                             return float('nan')
                     try:
-                        df_sc["fwd1"] = df_sc.apply(lambda r: _fwd_simple(r[f1sk], r[f1k], f1_s, f1_s+f1_t)*100, axis=1)
-                        df_sc["fwd2"] = df_sc.apply(lambda r: _fwd_simple(r[f2sk], r[f2k], f2_s, f2_s+f2_t)*100, axis=1)
+                        df_sc["fwd1"] = df_sc.apply(lambda r: float(_fwd_simple(float(r[f1sk]), float(r[f1k]), f1_s, f1_s+f1_t))*100, axis=1)
+                        df_sc["fwd2"] = df_sc.apply(lambda r: float(_fwd_simple(float(r[f2sk]), float(r[f2k]), f2_s, f2_s+f2_t))*100, axis=1)
                         df_sc = df_sc.dropna(subset=["fwd1","fwd2"])
                     except Exception as _e:
                         st.warning(f"Could not compute forward rates: {_e}")
@@ -11491,7 +11592,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
 """
             st.markdown(_narrative)
 
-            # ── Download report ──────────────────────────────────────
+            # ── Save & Download report ───────────────────────────────
             _report_lines = [
                 f"RateEdge SOD Report — {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')} AEST",
                 f"USD T-1: {_usd_t1_sel[:40]}",
@@ -11517,12 +11618,105 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 _cfs_report_df = pd.DataFrame(_cfs_rows)[["CFS Tenor", "CFS Total (prev)", "CFS Total (open)", "Δ CFS"]]
                 _report_lines += ["", "Implied AUD CFS Open Levels (bp fwd premium, cumulative):", _cfs_report_df.to_string(index=False)]
             _report_lines += ["", "--- SUMMARY ---", _narrative.replace("**", "").replace("\n", " ")]
-            st.download_button(
-                "📥 Download SOD Report",
-                "\n".join(_report_lines).encode(),
-                f"RateEdge_SOD_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.txt",
-                "text/plain", key="sod_download"
-            )
+
+            _report_text = "\n".join(_report_lines)
+
+            # Build JSON payload for DB storage
+            _report_payload = {
+                "usd_chg": _usd_chg.to_dict(),
+                "usd_prem_chg": _usd_prem_chg.to_dict() if not _usd_prem_chg.empty else {},
+                "aud_implied_chg": _implied_chg.astype(float).to_dict(),
+                "aud_implied_open": _implied_open.astype(float).to_dict(),
+                "aud_prem_chg": _aud_prem_chg.to_dict() if not _aud_prem_chg.empty else {},
+                "cfs_rows": _cfs_rows if _cfs_rows else [],
+                "narrative": _narrative,
+                "betas": {"short": _beta_short, "mid": _beta_mid, "long": _beta_long},
+                "generated_at": pd.Timestamp.now().isoformat(),
+            }
+
+            st.markdown("---")
+            _btn_col1, _btn_col2 = st.columns(2)
+            with _btn_col1:
+                st.download_button(
+                    "📥 Download SOD Report",
+                    _report_text.encode(),
+                    f"RateEdge_SOD_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.txt",
+                    "text/plain", key="sod_download"
+                )
+            with _btn_col2:
+                if HAS_POSTGRES:
+                    _sod_notes = st.text_input("Notes (optional)", value="", key="sod_save_notes", label_visibility="collapsed",
+                                               placeholder="Notes (optional)")
+                    if st.button("💾 Save Report to Supabase", key="sod_save_btn", type="primary", use_container_width=True):
+                        _rid = save_sod_report(
+                            user_id=user_id,
+                            report_date=pd.Timestamp.now().date(),
+                            usd_t1_label=_usd_t1_sel[:100],
+                            usd_t2_label=_usd_t2_sel[:100],
+                            aud_snap_label=_aud_sel[:100],
+                            report_data=_report_payload,
+                            notes=_sod_notes.strip()
+                        )
+                        if _rid:
+                            st.success(f"✅ Report saved (ID: {_rid})")
+                        else:
+                            st.error("Failed to save report.")
+
+            # ── Past Reports Browser ─────────────────────────────────
+            if HAS_POSTGRES:
+                st.markdown("---")
+                with st.expander("📂 Past SOD Reports", expanded=False):
+                    _past = list_sod_reports(user_id, limit=30)
+                    if not _past:
+                        st.info("No saved reports yet.")
+                    else:
+                        _past_opts = {f"{r['report_date']} — {r['usd_t1'][:30]} | {r['notes'] or ''}": r for r in _past}
+                        _past_sel_lbl = st.selectbox("Select report", list(_past_opts.keys()), key="sod_past_sel")
+                        _past_rec = _past_opts[_past_sel_lbl]
+                        _pcol1, _pcol2 = st.columns(2)
+                        with _pcol1:
+                            if st.button("📖 Load & Display", key="sod_past_load", type="primary"):
+                                _loaded = load_sod_report(_past_rec["id"])
+                                if _loaded:
+                                    st.session_state["sod_loaded_report"] = _loaded
+                                    st.success(f"Loaded: {_past_sel_lbl}")
+                        with _pcol2:
+                            if st.button("🗑 Delete", key="sod_past_del"):
+                                if delete_sod_report(_past_rec["id"]):
+                                    st.success("Deleted.")
+                                    st.rerun()
+
+                        # Display loaded report
+                        if "sod_loaded_report" in st.session_state:
+                            _lr = st.session_state["sod_loaded_report"]
+                            _ld = _lr.get("data", {})
+                            st.markdown(f"**Report date:** {_lr['report_date']}  |  **Generated:** {str(_lr.get('created_at',''))[:16]}")
+                            st.markdown(f"USD T-1: `{_lr['usd_t1']}` | USD T-2: `{_lr['usd_t2']}` | AUD: `{_lr['aud_snap']}`")
+
+                            if _ld.get("usd_chg"):
+                                st.markdown("**USD Vol Changes (bp)**")
+                                st.dataframe(pd.DataFrame(_ld["usd_chg"]).style
+                                    .background_gradient(cmap="RdYlGn", axis=None, vmin=-5, vmax=5)
+                                    .format("{:+.2f}"), use_container_width=True)
+
+                            if _ld.get("aud_implied_chg"):
+                                st.markdown("**Implied AUD Vol Change (bp)**")
+                                st.dataframe(pd.DataFrame(_ld["aud_implied_chg"]).style
+                                    .background_gradient(cmap="RdYlGn", axis=None, vmin=-5, vmax=5)
+                                    .format("{:+.2f}"), use_container_width=True)
+
+                            if _ld.get("cfs_rows"):
+                                st.markdown("**CFS Open Levels**")
+                                st.dataframe(pd.DataFrame(_ld["cfs_rows"])[["CFS Tenor","CFS Total (prev)","CFS Total (open)","Δ CFS"]],
+                                             use_container_width=True, hide_index=True)
+
+                            if _ld.get("narrative"):
+                                st.markdown("**Summary**")
+                                st.markdown(_ld["narrative"])
+
+                            if st.button("✕ Clear loaded report", key="sod_clear_loaded"):
+                                del st.session_state["sod_loaded_report"]
+                                st.rerun()
         else:
             st.warning("No overlapping expiry/tenor between AUD snapshot and USD change matrix.")
     else:
