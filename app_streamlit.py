@@ -3483,7 +3483,7 @@ def fwd_analysis_tab():
 
     st.caption(f"3M BBSW: 1Y–3Y full history (2018–today) | 6M BBSW: 4Y–30Y full history (2018–today)")
 
-    _an_tabs = st.tabs(["IRS Spreads", "IRS Butterflies", "Fwd-Fwd Rates (3M)", "6v3 Outright", "6v3 Fwd-Fwd", "6v3 Spreads"])
+    _an_tabs = st.tabs(["IRS Spreads", "IRS Butterflies", "Fwd-Fwd Rates (3M)", "6v3 Outright", "6v3 Fwd-Fwd", "6v3 Spreads", "6v3 Butterflies"])
 
     def _autosave_fwd_prefs():
         """Persist FWD analysis series lists to DB so they survive session restarts."""
@@ -3638,7 +3638,6 @@ def fwd_analysis_tab():
         c1, c2, c3 = st.columns(3)
         with c1: _sp_yr = st.slider("History (years)", 1, 8, 5, key="sp_yr")
         with c2: _sp_bands = st.checkbox("Mean ± 1σ bands", True, key="sp_bands")
-        with c3: _sp_as_spread = st.checkbox("Show as spread (1st vs 2nd)", False, key="sp_as_spread")
 
         _cut = pd.Timestamp.now() - pd.DateOffset(years=_sp_yr)
         _fig = go.Figure()
@@ -3651,24 +3650,34 @@ def fwd_analysis_tab():
             _sr = _sr[_sr.index >= _cut] * 100
             _sp_series[f"{_a}−{_b}"] = _sr
 
-        if _sp_as_spread and len(_sp_series) >= 2:
-            _ks = list(_sp_series.keys())
-            _cmb = (_sp_series[_ks[0]] - _sp_series[_ks[1]]).dropna()
-            _fig.add_trace(go.Scatter(x=_cmb.index, y=_cmb.values, mode="lines",
-                name=f"{_ks[0]} − {_ks[1]}", line=dict(color=_sp_colors[0], width=1.8)))
-            _fig.add_hline(y=_cmb.mean(), line=dict(color="#94a3b8", dash="dash", width=1))
+        _sp_keys = list(_sp_series.keys())
+        with c3:
+            _sp_as_spread = st.checkbox("Show as spread", False, key="sp_as_spread")
+        if _sp_as_spread and len(_sp_keys) >= 2:
+            _sc1, _sc2 = st.columns(2)
+            with _sc1:
+                _sp_s1 = st.selectbox("Series A", _sp_keys, index=0, key="sp_s1")
+            with _sc2:
+                _sp_s2_opts = [k for k in _sp_keys if k != _sp_s1]
+                _sp_s2 = st.selectbox("Series B (subtract)", _sp_s2_opts, index=0, key="sp_s2") if _sp_s2_opts else None
+            if _sp_s2 and _sp_s1 in _sp_series and _sp_s2 in _sp_series:
+                _cmb = (_sp_series[_sp_s1] - _sp_series[_sp_s2]).dropna()
+                _fig.add_trace(go.Scatter(x=_cmb.index, y=_cmb.values, mode="lines",
+                    name=f"{_sp_s1} − {_sp_s2}", line=dict(color=_sp_colors[0], width=1.8)))
+                _fig.add_hline(y=_cmb.mean(), line=dict(color="#94a3b8", dash="dash", width=1))
+                _sp_active = {f"{_sp_s1} − {_sp_s2}": _cmb}
+            else:
+                _sp_as_spread = False
+                _sp_active = _sp_series
         else:
+            _sp_active = _sp_series
+
+        if not _sp_as_spread:
             for _i, (_lbl, _sr) in enumerate(_sp_series.items()):
                 _add_series(_fig, _lbl, _sr, _sp_colors[_i % len(_sp_colors)], _sp_bands)
 
         _fig_layout(_fig, _cut, "Spread (bp)")
         st.plotly_chart(_fig, use_container_width=True)
-        # Build active series for stats (handles spread-of-spread mode)
-        if _sp_as_spread and len(_sp_series) >= 2:
-            _ks = list(_sp_series.keys())
-            _sp_active = {f"{_ks[0]} − {_ks[1]}": (_sp_series[_ks[0]] - _sp_series[_ks[1]]).dropna()}
-        else:
-            _sp_active = _sp_series
         _chart_tools(_fig, _sp_active, "sp", "bp")
 
     # ── TAB 2: IRS BUTTERFLIES ──────────────────────────────────
@@ -3712,7 +3721,6 @@ def fwd_analysis_tab():
 
         c1,c2,c3 = st.columns(3)
         with c1: _fl_yr = st.slider("History (years)",1,8,5,key="fl_yr")
-        with c2: _fl_as_spread = st.checkbox("Show as spread (1st vs 2nd)", False, key="fl_as_spread")
 
         _cut_fl = pd.Timestamp.now() - pd.DateOffset(years=_fl_yr)
         _fig_fl = go.Figure()
@@ -3725,24 +3733,35 @@ def fwd_analysis_tab():
             _fly = _fly[_fly.index>=_cut_fl]*100
             _fl_series[f"{_fw}/{_fm}/{_fe}"] = _fly
 
-        if _fl_as_spread and len(_fl_series) >= 2:
-            _ks = list(_fl_series.keys())
-            _cmb = (_fl_series[_ks[0]] - _fl_series[_ks[1]]).dropna()
-            _fig_fl.add_trace(go.Scatter(x=_cmb.index,y=_cmb.values,mode="lines",
-                name=f"{_ks[0]} − {_ks[1]}",line=dict(color=_sp_colors[0],width=1.8)))
-            _fig_fl.add_hline(y=_cmb.mean(),line=dict(color="#94a3b8",dash="dash",width=1))
+        _fl_keys = list(_fl_series.keys())
+        with c2:
+            _fl_as_spread = st.checkbox("Show as spread", False, key="fl_as_spread")
+        if _fl_as_spread and len(_fl_keys) >= 2:
+            _fc1, _fc2 = st.columns(2)
+            with _fc1:
+                _fl_s1 = st.selectbox("Series A", _fl_keys, index=0, key="fl_s1")
+            with _fc2:
+                _fl_s2_opts = [k for k in _fl_keys if k != _fl_s1]
+                _fl_s2 = st.selectbox("Series B (subtract)", _fl_s2_opts, index=0, key="fl_s2") if _fl_s2_opts else None
+            if _fl_s2 and _fl_s1 in _fl_series and _fl_s2 in _fl_series:
+                _cmb = (_fl_series[_fl_s1] - _fl_series[_fl_s2]).dropna()
+                _fig_fl.add_trace(go.Scatter(x=_cmb.index,y=_cmb.values,mode="lines",
+                    name=f"{_fl_s1} − {_fl_s2}",line=dict(color=_sp_colors[0],width=1.8)))
+                _fig_fl.add_hline(y=_cmb.mean(),line=dict(color="#94a3b8",dash="dash",width=1))
+                _fl_active = {f"{_fl_s1} − {_fl_s2}": _cmb}
+            else:
+                _fl_as_spread = False
+                _fl_active = _fl_series
         else:
+            _fl_active = _fl_series
+
+        if not _fl_as_spread:
             for _i,(_lbl,_fly) in enumerate(_fl_series.items()):
                 _add_series(_fig_fl, _lbl, _fly, _sp_colors[_i%len(_sp_colors)])
 
         _fig_fl.add_hline(y=0, line=dict(color="#64748b",width=1))
         _fig_layout(_fig_fl, _cut_fl, "Fly (bp)")
         st.plotly_chart(_fig_fl, use_container_width=True)
-        if _fl_as_spread and len(_fl_series) >= 2:
-            _ks = list(_fl_series.keys())
-            _fl_active = {f"{_ks[0]} − {_ks[1]}": (_fl_series[_ks[0]] - _fl_series[_ks[1]]).dropna()}
-        else:
-            _fl_active = _fl_series
         _chart_tools(_fig_fl, _fl_active, "fl", "bp")
 
     # ── TAB 3: FWD-FWD RATES ────────────────────────────────────
@@ -3786,7 +3805,6 @@ def fwd_analysis_tab():
 
         c1,c2,c3 = st.columns(3)
         with c1: _fv_yr = st.slider("History (years)",1,8,5,key="fv_yr")
-        with c2: _fv_as_spread = st.checkbox("Show as spread (1st vs 2nd)",False,key="fv_sprd")
 
         _cut_fv = pd.Timestamp.now() - pd.DateOffset(years=_fv_yr)
         _fig_fv = go.Figure()
@@ -3796,23 +3814,34 @@ def fwd_analysis_tab():
             if _r is not None:
                 _fv_series[f"{_s}y{_t}y"] = _r[_r.index>=_cut_fv].dropna()
 
-        if _fv_as_spread and len(_fv_series)>=2:
-            _ks=list(_fv_series.keys())
-            _cmb=(_fv_series[_ks[0]]-_fv_series[_ks[1]]).dropna()*100
-            _fig_fv.add_trace(go.Scatter(x=_cmb.index,y=_cmb.values,mode="lines",
-                name=f"{_ks[0]} − {_ks[1]}",line=dict(color=_sp_colors[0],width=1.8)))
-            _fig_fv.add_hline(y=_cmb.mean(),line=dict(color="#94a3b8",dash="dash",width=1))
-            _fig_layout(_fig_fv, _cut_fv, "Spread (bp)")
+        _fv_keys = list(_fv_series.keys())
+        with c2:
+            _fv_as_spread = st.checkbox("Show as spread", False, key="fv_sprd")
+        if _fv_as_spread and len(_fv_keys) >= 2:
+            _vc1, _vc2 = st.columns(2)
+            with _vc1:
+                _fv_s1 = st.selectbox("Series A", _fv_keys, index=0, key="fv_s1")
+            with _vc2:
+                _fv_s2_opts = [k for k in _fv_keys if k != _fv_s1]
+                _fv_s2 = st.selectbox("Series B (subtract)", _fv_s2_opts, index=0, key="fv_s2") if _fv_s2_opts else None
+            if _fv_s2 and _fv_s1 in _fv_series and _fv_s2 in _fv_series:
+                _cmb=(_fv_series[_fv_s1]-_fv_series[_fv_s2]).dropna()*100
+                _fig_fv.add_trace(go.Scatter(x=_cmb.index,y=_cmb.values,mode="lines",
+                    name=f"{_fv_s1} − {_fv_s2}",line=dict(color=_sp_colors[0],width=1.8)))
+                _fig_fv.add_hline(y=_cmb.mean(),line=dict(color="#94a3b8",dash="dash",width=1))
+                _fig_layout(_fig_fv, _cut_fv, "Spread (bp)")
+                _fv_active = {f"{_fv_s1} − {_fv_s2}": _cmb}
+            else:
+                _fv_as_spread = False
+                _fv_active = _fv_series
         else:
+            _fv_active = _fv_series
+
+        if not _fv_as_spread:
             for _i,(_l,_s) in enumerate(_fv_series.items()):
                 _add_series(_fig_fv, _l, _s, _sp_colors[_i%len(_sp_colors)])
             _fig_layout(_fig_fv, _cut_fv, "Rate (%)")
         st.plotly_chart(_fig_fv, use_container_width=True)
-        if _fv_as_spread and len(_fv_series) >= 2:
-            _ks = list(_fv_series.keys())
-            _fv_active = {f"{_ks[0]} − {_ks[1]}": (_fv_series[_ks[0]] - _fv_series[_ks[1]]).dropna() * 100}
-        else:
-            _fv_active = _fv_series
         _chart_tools(_fig_fv, _fv_active, "fv", "%")
     with _an_tabs[3]:
         st.markdown("#### 6v3 Basis — Outright (6M BBSW − 3M BBSW)")
@@ -3904,7 +3933,6 @@ def fwd_analysis_tab():
 
         c1,c2 = st.columns(2)
         with c1: _fv6_yr = st.slider("History (years)",1,8,5,key="fv6_yr")
-        with c2: _fv6_as_spread = st.checkbox("Show as spread (1st vs 2nd)", False, key="fv6_as_spread")
 
         _cut_fv6 = pd.Timestamp.now() - pd.DateOffset(years=_fv6_yr)
         _fig_fv6 = go.Figure()
@@ -3915,23 +3943,34 @@ def fwd_analysis_tab():
                 _b = (_r6-_r3).dropna()
                 _fv6_series[f"{_s}y{_t}y 6v3"] = _b[_b.index>=_cut_fv6]*100
 
-        if _fv6_as_spread and len(_fv6_series) >= 2:
-            _ks=list(_fv6_series.keys())
-            _cmb=(_fv6_series[_ks[0]]-_fv6_series[_ks[1]]).dropna()
-            _fig_fv6.add_trace(go.Scatter(x=_cmb.index,y=_cmb.values,mode="lines",
-                name=f"{_ks[0]} − {_ks[1]}",line=dict(color=_sp_colors[0],width=1.8)))
-            _fig_fv6.add_hline(y=_cmb.mean(),line=dict(color="#94a3b8",dash="dash",width=1))
+        _fv6_keys = list(_fv6_series.keys())
+        with c2:
+            _fv6_as_spread = st.checkbox("Show as spread", False, key="fv6_as_spread")
+        if _fv6_as_spread and len(_fv6_keys) >= 2:
+            _v6c1, _v6c2 = st.columns(2)
+            with _v6c1:
+                _fv6_s1 = st.selectbox("Series A", _fv6_keys, index=0, key="fv6_s1")
+            with _v6c2:
+                _fv6_s2_opts = [k for k in _fv6_keys if k != _fv6_s1]
+                _fv6_s2 = st.selectbox("Series B (subtract)", _fv6_s2_opts, index=0, key="fv6_s2") if _fv6_s2_opts else None
+            if _fv6_s2 and _fv6_s1 in _fv6_series and _fv6_s2 in _fv6_series:
+                _cmb=(_fv6_series[_fv6_s1]-_fv6_series[_fv6_s2]).dropna()
+                _fig_fv6.add_trace(go.Scatter(x=_cmb.index,y=_cmb.values,mode="lines",
+                    name=f"{_fv6_s1} − {_fv6_s2}",line=dict(color=_sp_colors[0],width=1.8)))
+                _fig_fv6.add_hline(y=_cmb.mean(),line=dict(color="#94a3b8",dash="dash",width=1))
+                _fv6_active = {f"{_fv6_s1} − {_fv6_s2}": _cmb}
+            else:
+                _fv6_as_spread = False
+                _fv6_active = _fv6_series
         else:
+            _fv6_active = _fv6_series
+
+        if not _fv6_as_spread:
             for _i,(_l,_b) in enumerate(_fv6_series.items()):
                 _add_series(_fig_fv6, _l, _b, _sp_colors[_i%len(_sp_colors)])
         _fig_fv6.add_hline(y=0,line=dict(color="#64748b",width=1))
         _fig_layout(_fig_fv6, _cut_fv6, "6v3 Fwd-Fwd Basis (bp)")
         st.plotly_chart(_fig_fv6, use_container_width=True)
-        if _fv6_as_spread and len(_fv6_series) >= 2:
-            _ks = list(_fv6_series.keys())
-            _fv6_active = {f"{_ks[0]} − {_ks[1]}": (_fv6_series[_ks[0]] - _fv6_series[_ks[1]]).dropna()}
-        else:
-            _fv6_active = _fv6_series
         _chart_tools(_fig_fv6, _fv6_active, "fv6", "bp")
     with _an_tabs[5]:
         st.markdown("#### 6v3 Basis Spreads")
@@ -3976,7 +4015,7 @@ def fwd_analysis_tab():
 
             c1,c2,c3 = st.columns(3)
             with c1: _bsp_yr = st.slider("History (years)",1,8,5,key="bsp_yr")
-            with c2: _bsp_as_spread = st.checkbox("Show as spread (1st vs 2nd)", False, key="bsp_as_spread")
+            with c2: _bsp_as_spread = st.checkbox("Show as spread", False, key="bsp_as_spread")
 
             _cut_bsp = pd.Timestamp.now() - pd.DateOffset(years=_bsp_yr)
             _fig_bsp = go.Figure()
@@ -3989,24 +4028,124 @@ def fwd_analysis_tab():
                 _bsprd=(_ba-_bb).dropna()
                 _bsp_series[f"{_a}−{_b} 6v3 sprd"] = _bsprd[_bsprd.index>=_cut_bsp]
 
-            if _bsp_as_spread and len(_bsp_series) >= 2:
-                _ks=list(_bsp_series.keys())
-                _cmb=(_bsp_series[_ks[0]]-_bsp_series[_ks[1]]).dropna()
-                _fig_bsp.add_trace(go.Scatter(x=_cmb.index,y=_cmb.values,mode="lines",
-                    name=f"{_ks[0]} − {_ks[1]}",line=dict(color=_sp_colors[0],width=1.8)))
-                _fig_bsp.add_hline(y=_cmb.mean(),line=dict(color="#94a3b8",dash="dash",width=1))
+            _bsp_keys = list(_bsp_series.keys())
+            if _bsp_as_spread and len(_bsp_keys) >= 2:
+                _bc1, _bc2 = st.columns(2)
+                with _bc1:
+                    _bsp_s1 = st.selectbox("Series A", _bsp_keys, index=0, key="bsp_s1")
+                with _bc2:
+                    _bsp_s2_opts = [k for k in _bsp_keys if k != _bsp_s1]
+                    _bsp_s2 = st.selectbox("Series B (subtract)", _bsp_s2_opts, index=0, key="bsp_s2") if _bsp_s2_opts else None
+                if _bsp_s2 and _bsp_s1 in _bsp_series and _bsp_s2 in _bsp_series:
+                    _cmb=(_bsp_series[_bsp_s1]-_bsp_series[_bsp_s2]).dropna()
+                    _fig_bsp.add_trace(go.Scatter(x=_cmb.index,y=_cmb.values,mode="lines",
+                        name=f"{_bsp_s1} − {_bsp_s2}",line=dict(color=_sp_colors[0],width=1.8)))
+                    _fig_bsp.add_hline(y=_cmb.mean(),line=dict(color="#94a3b8",dash="dash",width=1))
+                    _bsp_active = {f"{_bsp_s1} − {_bsp_s2}": _cmb}
+                else:
+                    _bsp_as_spread = False
+                    _bsp_active = _bsp_series
             else:
+                _bsp_active = _bsp_series
+
+            if not _bsp_as_spread:
                 for _i,(_lbl,_bsprd) in enumerate(_bsp_series.items()):
                     _add_series(_fig_bsp, _lbl, _bsprd, _sp_colors[_i%len(_sp_colors)])
             _fig_bsp.add_hline(y=0,line=dict(color="#64748b",width=1))
             _fig_layout(_fig_bsp, _cut_bsp, "6v3 Spread (bp)")
             st.plotly_chart(_fig_bsp, use_container_width=True)
-            if _bsp_as_spread and len(_bsp_series) >= 2:
-                _ks = list(_bsp_series.keys())
-                _bsp_active = {f"{_ks[0]} − {_ks[1]}": (_bsp_series[_ks[0]] - _bsp_series[_ks[1]]).dropna()}
-            else:
-                _bsp_active = _bsp_series
             _chart_tools(_fig_bsp, _bsp_active, "bsp", "bp")
+
+    # ── TAB 7: 6v3 BUTTERFLIES ──────────────────────────────────
+    with _an_tabs[6]:
+        st.markdown("#### 6v3 Basis Butterflies")
+        st.caption("Fly = 6v3(body) − 0.5×[6v3(wing1) + 6v3(wing2)]")
+        _com6v3_bfly = sorted([c for c in _w6.columns if c in _w3.columns and c.endswith("Y")],
+                               key=lambda x: int(x[:-1]))
+        if len(_com6v3_bfly) < 3:
+            st.info("Need at least 3 overlapping tenors.")
+        else:
+            if "b6bfly_list" not in st.session_state:
+                st.session_state["b6bfly_list"] = []
+
+            bc1,bc2,bc3,bc4,bc5 = st.columns([1,1,1,0.7,1.5])
+            with bc1: _b6bfly_w1 = st.selectbox("Wing 1", _com6v3_bfly, index=0, key="b6bfly_w1")
+            with bc2: _b6bfly_bd = st.selectbox("Body",   _com6v3_bfly, index=min(2,len(_com6v3_bfly)-1), key="b6bfly_bd")
+            with bc3: _b6bfly_w2 = st.selectbox("Wing 2", _com6v3_bfly, index=min(4,len(_com6v3_bfly)-1), key="b6bfly_w2")
+            with bc4:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                _b6bfly_add = st.button("＋ Add", key="b6bfly_add", use_container_width=True)
+            with bc5:
+                rc1,rc2 = st.columns([3,1])
+                with rc1:
+                    _b6bfly_rm = st.selectbox("Remove", ["—"]+[f"{w}/{m}/{e}" for w,m,e in st.session_state["b6bfly_list"]], key="b6bfly_rm")
+                with rc2:
+                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                    if st.button("✕", key="b6bfly_rm_btn", use_container_width=True) and _b6bfly_rm != "—":
+                        _rp = _b6bfly_rm.split("/")
+                        if len(_rp)==3 and tuple(_rp) in st.session_state["b6bfly_list"]:
+                            st.session_state["b6bfly_list"].remove(tuple(_rp))
+                            st.rerun()
+
+            if _b6bfly_add:
+                _bw1 = st.session_state.get("b6bfly_w1", _b6bfly_w1)
+                _bbd = st.session_state.get("b6bfly_bd", _b6bfly_bd)
+                _bw2 = st.session_state.get("b6bfly_w2", _b6bfly_w2)
+                if len({_bw1,_bbd,_bw2}) < 3:
+                    st.warning("Wing 1, Body and Wing 2 must all be different tenors.")
+                elif (_bw1,_bbd,_bw2) in st.session_state["b6bfly_list"]:
+                    st.warning(f"{_bw1}/{_bbd}/{_bw2} already in list.")
+                else:
+                    st.session_state["b6bfly_list"].append((_bw1,_bbd,_bw2))
+                    st.rerun()
+
+            c1,c2,c3 = st.columns(3)
+            with c1: _b6bfly_yr = st.slider("History (years)",1,8,5,key="b6bfly_yr")
+            with c2: _b6bfly_as_spread = st.checkbox("Show as spread", False, key="b6bfly_as_spread")
+
+            _cut_b6bfly = pd.Timestamp.now() - pd.DateOffset(years=_b6bfly_yr)
+            _fig_b6bfly = go.Figure()
+            _b6bfly_series = {}
+
+            for _bw1,_bbd,_bw2 in st.session_state["b6bfly_list"]:
+                for _tn in [_bw1,_bbd,_bw2]:
+                    if _tn not in _w6.columns or _tn not in _w3.columns:
+                        break
+                else:
+                    _b6_w1 = (_w6[_bw1]-_w3[_bw1]).dropna()*100
+                    _b6_bd = (_w6[_bbd]-_w3[_bbd]).dropna()*100
+                    _b6_w2 = (_w6[_bw2]-_w3[_bw2]).dropna()*100
+                    _bfly = (_b6_bd - 0.5*(_b6_w1+_b6_w2)).dropna()
+                    _b6bfly_series[f"{_bw1}/{_bbd}/{_bw2}"] = _bfly[_bfly.index>=_cut_b6bfly]
+
+            _b6bfly_keys = list(_b6bfly_series.keys())
+            if _b6bfly_as_spread and len(_b6bfly_keys) >= 2:
+                _bbc1,_bbc2 = st.columns(2)
+                with _bbc1:
+                    _bbs1 = st.selectbox("Series A", _b6bfly_keys, index=0, key="b6bfly_s1")
+                with _bbc2:
+                    _bbs2_opts = [k for k in _b6bfly_keys if k != _bbs1]
+                    _bbs2 = st.selectbox("Series B (subtract)", _bbs2_opts, index=0, key="b6bfly_s2") if _bbs2_opts else None
+                if _bbs2 and _bbs1 in _b6bfly_series and _bbs2 in _b6bfly_series:
+                    _cmb = (_b6bfly_series[_bbs1]-_b6bfly_series[_bbs2]).dropna()
+                    _fig_b6bfly.add_trace(go.Scatter(x=_cmb.index,y=_cmb.values,mode="lines",
+                        name=f"{_bbs1} − {_bbs2}",line=dict(color=_sp_colors[0],width=1.8)))
+                    _fig_b6bfly.add_hline(y=_cmb.mean(),line=dict(color="#94a3b8",dash="dash",width=1))
+                    _b6bfly_active = {f"{_bbs1} − {_bbs2}": _cmb}
+                else:
+                    _b6bfly_as_spread = False
+                    _b6bfly_active = _b6bfly_series
+            else:
+                _b6bfly_active = _b6bfly_series
+
+            if not _b6bfly_as_spread:
+                for _i,(_lbl,_bfly) in enumerate(_b6bfly_series.items()):
+                    _add_series(_fig_b6bfly, _lbl, _bfly, _sp_colors[_i%len(_sp_colors)])
+
+            _fig_b6bfly.add_hline(y=0,line=dict(color="#64748b",width=1))
+            _fig_layout(_fig_b6bfly, _cut_b6bfly, "6v3 Fly (bp)")
+            st.plotly_chart(_fig_b6bfly, use_container_width=True)
+            _chart_tools(_fig_b6bfly, _b6bfly_active, "b6bfly", "bp")
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: Optional[tuple] = None,
@@ -10370,10 +10509,10 @@ def rate_vol_matrix_tab(ccy: str):
     elif rate_view == "6v3 Basis" and has_basis:
         df = st.session_state["basis_matrix"][ccy]
         if show_heatmap:
-            st.dataframe(df.style.format("{:.2f}").background_gradient(cmap="RdYlGn", axis=None),
+            st.dataframe(df.style.format("{:.4f}").background_gradient(cmap="RdYlGn", axis=None),
                          use_container_width=True, height=600)
         else:
-            st.dataframe(df.style.format("{:.2f}"), use_container_width=True, height=600)
+            st.dataframe(df.style.format("{:.4f}"), use_container_width=True, height=600)
     elif rate_view == "6v3 Basis":
         st.info("6v3 basis not available for this currency")
 
