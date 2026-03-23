@@ -5817,7 +5817,8 @@ def caps_floors_tab(vol_mode: str):
                 _atm_cfs_data = {}  # store for publish
 
                 _curve_local  = get_ccy_curve(ccy)
-                _ois_local    = get_basis_curve(ccy, "ois") or _curve_local
+                _ois_tmp = get_basis_curve(ccy, "ois")
+                _ois_local = _ois_tmp if _ois_tmp is not None else _curve_local
 
                 if caplet_vol_curve and _curve_local is not None:
                     from datetime import date, timedelta
