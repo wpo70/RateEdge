@@ -5820,7 +5820,9 @@ def caps_floors_tab(vol_mode: str):
                 _ois_tmp = get_basis_curve(ccy, "ois")
                 _ois_local = _ois_tmp if _ois_tmp is not None else _curve_local
 
-                if caplet_vol_curve and _curve_local is not None:
+                _caplet_vc = st.session_state.get("caplet_vol_curve_aud")
+                if _caplet_vc and _curve_local is not None:
+                    caplet_vol_curve = _caplet_vc
                     from datetime import date, timedelta
                     import math as _math
 
@@ -5969,6 +5971,8 @@ def caps_floors_tab(vol_mode: str):
             spread_5y2y=spread_5y2y,
             spread_7y3y=spread_7y3y
         )
+        if caplet_vol_curve:
+            st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
         
         if caplet_vol_curve is None or len(caplet_vol_curve) == 0:
             st.warning("No ATM surface found. Falling back to 35bp flat.")
