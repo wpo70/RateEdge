@@ -5801,6 +5801,106 @@ def caps_floors_tab(vol_mode: str):
                             pass
                 st.rerun()
 
+            # ── ATM CFS Straddle Table ─────────────────────────────────
+            st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
+            if "atm_cfs_expanded" not in st.session_state:
+                st.session_state["atm_cfs_expanded"] = True
+            _atm_icon = "▼ Hide ATM CFS Straddles" if st.session_state["atm_cfs_expanded"] else "▶ Show ATM CFS Straddles"
+            if st.button(_atm_icon, key="atm_cfs_toggle"):
+                st.session_state["atm_cfs_expanded"] = not st.session_state["atm_cfs_expanded"]
+                st.rerun()
+
+            if st.session_state["atm_cfs_expanded"]:
+                # Build ATM CFS straddle table for 1Y-15Y using caplet_vol_curve
+                _atm_cfs_tenors = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15]
+                _atm_cfs_rows = []
+                _atm_cfs_data = {}  # store for publish
+
+                _curve_local  = get_ccy_curve(ccy)
+                _ois_local    = get_basis_curve(ccy, "ois") or _curve_local
+
+                if caplet_vol_curve and _curve_local is not None:
+                    from datetime import date, timedelta
+                    import math as _math
+
+                    _today = date.today()
+                    _spot_lag = 1  # AUD T+1
+                    _spot_date = _today + timedelta(days=_spot_lag)
+                    # 3m fwd start
+                    _fwd_start_y = 0.25
+
+                    for _t in _atm_cfs_tenors:
+                        try:
+                            # Dates
+                            _start_dt = _today + timedelta(days=int(_fwd_start_y * 365.25))
+                            _end_dt   = _today + timedelta(days=int((_fwd_start_y + _t) * 365.25))
+
+                            # ATM fwd swap rate Q/Q from 3m forward
+                            _fwd_rate, _, _ = forward_and_annuity_from_curve(
+                                _curve_local, ccy, _fwd_start_y, float(_t), _ois_local, freq_override=0.25
+                            )
+
+                            # Straddle premium = 2 * cap premium (ATM cap = ATM floor)
+                            _cap_prem = price_caplets_with_vol_curve(
+                                ccy, float(_t), caplet_vol_curve, notional_mm=1.0, expiry_y=_fwd_start_y
+                            )
+                            _straddle_prem = round(_cap_prem * 2, 2)
+
+                            # Flat vol at this tenor from caplet curve
+                            _flat_vol = caplet_vol_curve.get(float(_t), None)
+                            if _flat_vol is None:
+                                # interpolate
+                                _mats = sorted(caplet_vol_curve.keys())
+                                if _t <= _mats[0]:
+                                    _flat_vol = caplet_vol_curve[_mats[0]]
+                                elif _t >= _mats[-1]:
+                                    _flat_vol = caplet_vol_curve[_mats[-1]]
+                                else:
+                                    for _j in range(len(_mats)-1):
+                                        if _mats[_j] <= _t <= _mats[_j+1]:
+                                            _a = (_t - _mats[_j]) / (_mats[_j+1] - _mats[_j])
+                                            _flat_vol = caplet_vol_curve[_mats[_j]] + _a * (caplet_vol_curve[_mats[_j+1]] - caplet_vol_curve[_mats[_j]])
+                                            break
+
+                            _atm_cfs_rows.append({
+                                "Tenor": f"{_t}Y",
+                                "Start": _start_dt.strftime("%d %b %y"),
+                                "End":   _end_dt.strftime("%d %b %y"),
+                                "ATM Fwd %": f"{_fwd_rate*100:.3f}" if _fwd_rate else "—",
+                                "Straddle bp": f"{_straddle_prem:.1f}",
+                                "Flat Vol bp": f"{_flat_vol:.1f}" if _flat_vol else "—",
+                            })
+                            _atm_cfs_data[f"cf_straddle_{_t}y"] = {
+                                "value": _straddle_prem,
+                                "label": f"{_t}Y ATM CFS straddle"
+                            }
+                            if _flat_vol:
+                                _atm_cfs_data[f"cf_vol_{_t}y"] = {
+                                    "value": round(float(_flat_vol), 2),
+                                    "label": f"{_t}Y ATM CFS flat vol"
+                                }
+                            if _fwd_rate:
+                                _atm_cfs_data[f"cf_strike_{_t}y"] = {
+                                    "value": round(float(_fwd_rate * 100), 4),
+                                    "label": f"{_t}Y ATM fwd strike"
+                                }
+                        except Exception as _ex:
+                            _atm_cfs_rows.append({
+                                "Tenor": f"{_t}Y", "Start": "—", "End": "—",
+                                "ATM Fwd %": "—", "Straddle bp": "—", "Flat Vol bp": "—"
+                            })
+
+                    # Store for publish
+                    st.session_state["atm_cfs_data"] = _atm_cfs_data
+
+                    if _atm_cfs_rows:
+                        st.dataframe(
+                            pd.DataFrame(_atm_cfs_rows),
+                            use_container_width=True, hide_index=True
+                        )
+                else:
+                    st.info("Generate swaption premiums first to compute ATM CFS straddles.")
+
             # ── Publish Wedge Mids to Blotter ─────────────────────────
             st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
             _pub_col1, _pub_col2 = st.columns([2, 3])
@@ -5829,13 +5929,16 @@ def caps_floors_tab(vol_mode: str):
                                 "value": round(float(st.session_state.get(spr_key, 0)), 4),
                                 "label": f"{wedge_lbl} wedge bp"
                             }
+                        # Add ATM CFS straddle data
+                        _atm_cfs_pub = st.session_state.get("atm_cfs_data", {})
+                        _mids_to_pub.update(_atm_cfs_pub)
                         _n = publish_blotter_mids(ccy, _mids_to_pub)
                         if _n > 0:
                             st.success(f"✅ Published {_n} mid values to blotter.")
                         else:
                             st.error("No mids published — generate premiums first.")
             with _pub_col2:
-                st.caption("Publishes swaption premiums, CFS straddle mids and wedge spreads to Supabase for the live blotter to consume via 🔄 Load Fresh Mids.")
+                st.caption("Publishes swaption premiums, CFS straddle mids, wedge spreads and ATM CFS straddles to Supabase for the live blotter to consume via 🔄 Load Fresh Mids.")
 
                 # CALCULATE CFS VALUES BEFORE BUILDING VOL CURVE
         if "cfs_table_data" in st.session_state:
