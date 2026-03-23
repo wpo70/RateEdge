@@ -375,6 +375,17 @@ def init_database():
 
             CREATE INDEX IF NOT EXISTS idx_sod_reports_user_date
             ON sod_reports(user_id, report_date DESC);
+
+            CREATE TABLE IF NOT EXISTS blotter_mids (
+                id SERIAL PRIMARY KEY,
+                ccy VARCHAR(3) NOT NULL,
+                key VARCHAR(50) NOT NULL,
+                value NUMERIC,
+                label TEXT,
+                updated_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(ccy, key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_blotter_mids_ccy ON blotter_mids(ccy, key);
         """)
         conn.commit()
         cur.close()
@@ -914,6 +925,40 @@ def delete_sod_report(report_id: int) -> bool:
         return True
     except Exception:
         return False
+
+
+def publish_blotter_mids(ccy: str, mids: dict) -> int:
+    """Publish mid market values to blotter_mids table for the React blotter to consume.
+    mids = {key: {"value": float, "label": str}}
+    Returns number of rows upserted.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return 0
+    try:
+        cur = conn.cursor()
+        count = 0
+        for key, data in mids.items():
+            val = data.get("value")
+            lbl = data.get("label", "")
+            if val is None:
+                continue
+            cur.execute("""
+                INSERT INTO blotter_mids (ccy, key, value, label, updated_at)
+                VALUES (%s, %s, %s, %s, NOW())
+                ON CONFLICT (ccy, key) DO UPDATE
+                    SET value = EXCLUDED.value,
+                        label = EXCLUDED.label,
+                        updated_at = NOW()
+            """, (ccy, key, float(val), lbl))
+            count += 1
+        conn.commit()
+        cur.close()
+        conn.close()
+        return count
+    except Exception as e:
+        st.error(f"Failed to publish blotter mids: {e}")
+        return 0
 
 
 def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Optional[bytes]:
@@ -5745,6 +5790,42 @@ def caps_floors_tab(vol_mode: str):
                         except:
                             pass
                 st.rerun()
+
+            # ── Publish Wedge Mids to Blotter ─────────────────────────
+            st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
+            _pub_col1, _pub_col2 = st.columns([2, 3])
+            with _pub_col1:
+                if st.button("📡 Publish Wedge Mids to Blotter", key="publish_wedge_mids", use_container_width=True):
+                    if not HAS_POSTGRES:
+                        st.error("Database not connected.")
+                    else:
+                        _mids_to_pub = {}
+                        for spr_key, wedge_lbl, tbl_lbl, tbl_wedge, cfs_lbl, spread in ROW_DATA:
+                            tdata = st.session_state.get("cfs_table_data", {}).get(tbl_lbl, {})
+                            swpt_mid = tdata.get("swaption")
+                            if swpt_mid is not None:
+                                _mids_to_pub[tbl_lbl] = {
+                                    "value": round(float(swpt_mid), 4),
+                                    "label": f"{wedge_lbl} swptn mid"
+                                }
+                            cfs_mid = tdata.get("cfs_straddle")
+                            if cfs_mid is not None:
+                                _mids_to_pub[f"cfs_{tbl_lbl}"] = {
+                                    "value": round(float(cfs_mid), 4),
+                                    "label": f"{cfs_lbl} straddle mid"
+                                }
+                            # Wedge spread
+                            _mids_to_pub[f"wedge_{spr_key}"] = {
+                                "value": round(float(st.session_state.get(spr_key, 0)), 4),
+                                "label": f"{wedge_lbl} wedge bp"
+                            }
+                        _n = publish_blotter_mids(ccy, _mids_to_pub)
+                        if _n > 0:
+                            st.success(f"✅ Published {_n} mid values to blotter.")
+                        else:
+                            st.error("No mids published — generate premiums first.")
+            with _pub_col2:
+                st.caption("Publishes swaption premiums, CFS straddle mids and wedge spreads to Supabase for the live blotter to consume via 🔄 Load Fresh Mids.")
 
                 # CALCULATE CFS VALUES BEFORE BUILDING VOL CURVE
         if "cfs_table_data" in st.session_state:
