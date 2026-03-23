@@ -8531,73 +8531,85 @@ def rv_tab():
                     df_sc = df_rates[["date"] + needed].dropna().tail(lb_d).copy()
                     # Forward rate approximation: simple interpolation
                     def _fwd_simple(r_start, r_end, t1_, t2_):
-                        return ((1 + r_end/100)**t2_ / (1 + r_start/100)**t1_)**(1/(t2_-t1_)) - 1 if t2_ > t1_ else 0
-                    df_sc["fwd1"] = df_sc.apply(lambda r: _fwd_simple(r[f1sk], r[f1k], f1_s, f1_s+f1_t)*100, axis=1)
-                    df_sc["fwd2"] = df_sc.apply(lambda r: _fwd_simple(r[f2sk], r[f2k], f2_s, f2_s+f2_t)*100, axis=1)
-                    df_sc["fwd_spread"] = (df_sc["fwd1"] - df_sc["fwd2"]) * 100  # bp
-                    df_sc["curve_spread"] = df_sc[c2k] - df_sc[c1k]
-
-                    # Regression
-                    from scipy import stats as _stats
-                    slope, intercept, r_val, _, _ = _stats.linregress(
-                        df_sc["curve_spread"], df_sc["fwd_spread"])
-                    df_sc["predicted_fwd"] = slope * df_sc["curve_spread"] + intercept
-                    df_sc["residual"] = df_sc["fwd_spread"] - df_sc["predicted_fwd"]
-                    curr_curve_sp = _par_rate(c_t2) - _par_rate(c_t1)
-                    curr_fwd_sp = _fwd_rate(f1_s, f1_s+f1_t) and _fwd_rate(f2_s, f2_s+f2_t)
-                    if curr_fwd_sp is not None and _fwd_rate(f1_s, f1_s+f1_t) is not None:
-                        curr_fwd_spread = (_fwd_rate(f1_s, f1_s+f1_t) - _fwd_rate(f2_s, f2_s+f2_t)) * 100 if _fwd_rate(f2_s, f2_s+f2_t) else 0
+                        try:
+                            if t2_ <= t1_: return float('nan')
+                            return ((1 + r_end/100)**t2_ / (1 + r_start/100)**t1_)**(1/(t2_-t1_)) - 1
+                        except Exception:
+                            return float('nan')
+                    try:
+                        df_sc["fwd1"] = df_sc.apply(lambda r: _fwd_simple(r[f1sk], r[f1k], f1_s, f1_s+f1_t)*100, axis=1)
+                        df_sc["fwd2"] = df_sc.apply(lambda r: _fwd_simple(r[f2sk], r[f2k], f2_s, f2_s+f2_t)*100, axis=1)
+                        df_sc = df_sc.dropna(subset=["fwd1","fwd2"])
+                    except Exception as _e:
+                        st.warning(f"Could not compute forward rates: {_e}")
+                        df_sc = pd.DataFrame()
+                    if df_sc.empty:
+                        st.info("No data for selected forward start/tenor combination.")
                     else:
-                        curr_fwd_spread = None
+                        df_sc["fwd_spread"] = (df_sc["fwd1"] - df_sc["fwd2"]) * 100  # bp
+                        df_sc["curve_spread"] = df_sc[c2k] - df_sc[c1k]
 
-                    fig_sc = go.Figure()
-                    # Colour points by recency
-                    n_pts = len(df_sc)
-                    colours = [f"rgba(59,130,246,{0.3 + 0.7*i/n_pts})" for i in range(n_pts)]
-                    fig_sc.add_trace(go.Scatter(
-                        x=df_sc["curve_spread"], y=df_sc["fwd_spread"],
-                        mode="markers",
-                        marker=dict(color=colours, size=5),
-                        name="Historical",
-                        customdata=df_sc["date"].dt.strftime("%d %b %Y"),
-                        hovertemplate="%{customdata}<br>Curve: %{x:.1f}bp<br>Fwd: %{y:.1f}bp<extra></extra>"))
-                    # Regression line
-                    x_line = [df_sc["curve_spread"].min(), df_sc["curve_spread"].max()]
-                    y_line = [slope*x + intercept for x in x_line]
-                    fig_sc.add_trace(go.Scatter(x=x_line, y=y_line, name=f"Regression (R²={r_val**2:.2f})",
-                                                line=dict(color="#f59e0b", dash="dash")))
-                    # Current
-                    if curr_fwd_spread is not None:
-                        pred = slope * curr_curve_sp + intercept
-                        resid = curr_fwd_spread - pred
+                        # Regression
+                        from scipy import stats as _stats
+                        slope, intercept, r_val, _, _ = _stats.linregress(
+                            df_sc["curve_spread"], df_sc["fwd_spread"])
+                        df_sc["predicted_fwd"] = slope * df_sc["curve_spread"] + intercept
+                        df_sc["residual"] = df_sc["fwd_spread"] - df_sc["predicted_fwd"]
+                        curr_curve_sp = _par_rate(c_t2) - _par_rate(c_t1)
+                        curr_fwd_sp = _fwd_rate(f1_s, f1_s+f1_t) and _fwd_rate(f2_s, f2_s+f2_t)
+                        if curr_fwd_sp is not None and _fwd_rate(f1_s, f1_s+f1_t) is not None:
+                            curr_fwd_spread = (_fwd_rate(f1_s, f1_s+f1_t) - _fwd_rate(f2_s, f2_s+f2_t)) * 100 if _fwd_rate(f2_s, f2_s+f2_t) else 0
+                        else:
+                            curr_fwd_spread = None
+
+                        fig_sc = go.Figure()
+                        # Colour points by recency
+                        n_pts = len(df_sc)
+                        colours = [f"rgba(59,130,246,{0.3 + 0.7*i/n_pts})" for i in range(n_pts)]
                         fig_sc.add_trace(go.Scatter(
-                            x=[curr_curve_sp], y=[curr_fwd_spread],
-                            mode="markers", marker=dict(color="#ef4444", size=14, symbol="star"),
-                            name=f"Now (resid {resid:+.1f}bp)"))
-                        fig_sc.add_annotation(x=curr_curve_sp, y=curr_fwd_spread,
-                            text=f" NOW: {resid:+.1f}bp vs model",
-                            font=dict(color="#ef4444", size=11), showarrow=False, xshift=60)
-                    fig_sc.update_layout(
-                        title=f"Fwd Spread ({fwd_sel_start}×{fwd_sel_tenor} − {fwd2_sel_start}×{fwd2_sel_tenor}) vs {curve_t1}/{curve_t2} Curve",
-                        xaxis_title=f"{curve_t1}/{curve_t2} Curve Spread (bp)",
-                        yaxis_title="Forward Spread (bp)",
-                        template="plotly_dark", height=400,
-                        legend=dict(orientation="h", y=1.05))
-                    st.plotly_chart(fig_sc, use_container_width=True)
+                            x=df_sc["curve_spread"], y=df_sc["fwd_spread"],
+                            mode="markers",
+                            marker=dict(color=colours, size=5),
+                            name="Historical",
+                            customdata=df_sc["date"].dt.strftime("%d %b %Y"),
+                            hovertemplate="%{customdata}<br>Curve: %{x:.1f}bp<br>Fwd: %{y:.1f}bp<extra></extra>"))
+                        # Regression line
+                        x_line = [df_sc["curve_spread"].min(), df_sc["curve_spread"].max()]
+                        y_line = [slope*x + intercept for x in x_line]
+                        fig_sc.add_trace(go.Scatter(x=x_line, y=y_line, name=f"Regression (R²={r_val**2:.2f})",
+                                                    line=dict(color="#f59e0b", dash="dash")))
+                        # Current
+                        if curr_fwd_spread is not None:
+                            pred = slope * curr_curve_sp + intercept
+                            resid = curr_fwd_spread - pred
+                            fig_sc.add_trace(go.Scatter(
+                                x=[curr_curve_sp], y=[curr_fwd_spread],
+                                mode="markers", marker=dict(color="#ef4444", size=14, symbol="star"),
+                                name=f"Now (resid {resid:+.1f}bp)"))
+                            fig_sc.add_annotation(x=curr_curve_sp, y=curr_fwd_spread,
+                                text=f" NOW: {resid:+.1f}bp vs model",
+                                font=dict(color="#ef4444", size=11), showarrow=False, xshift=60)
+                        fig_sc.update_layout(
+                            title=f"Fwd Spread ({fwd_sel_start}×{fwd_sel_tenor} − {fwd2_sel_start}×{fwd2_sel_tenor}) vs {curve_t1}/{curve_t2} Curve",
+                            xaxis_title=f"{curve_t1}/{curve_t2} Curve Spread (bp)",
+                            yaxis_title="Forward Spread (bp)",
+                            template="plotly_dark", height=400,
+                            legend=dict(orientation="h", y=1.05))
+                        st.plotly_chart(fig_sc, use_container_width=True)
 
-                    # Residual time series
-                    fig_resid = go.Figure()
-                    fig_resid.add_trace(go.Scatter(x=df_sc["date"], y=df_sc["residual"],
-                                                    line=dict(color="#a78bfa", width=1.5), name="Residual"))
-                    fig_resid.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
-                    fig_resid.add_hline(y=df_sc["residual"].std(), line_dash="dot",
-                                        line_color="#22c55e", annotation_text="+1σ")
-                    fig_resid.add_hline(y=-df_sc["residual"].std(), line_dash="dot",
-                                        line_color="#ef4444", annotation_text="−1σ")
-                    fig_resid.update_layout(title="Residual vs Regression (Rich/Cheap Signal)",
-                                            template="plotly_dark", height=220)
-                    st.plotly_chart(fig_resid, use_container_width=True)
-                    st.caption("Residual > +1σ = forward spread RICH vs curve → fade. Residual < −1σ = CHEAP → buy.")
+                        # Residual time series
+                        fig_resid = go.Figure()
+                        fig_resid.add_trace(go.Scatter(x=df_sc["date"], y=df_sc["residual"],
+                                                        line=dict(color="#a78bfa", width=1.5), name="Residual"))
+                        fig_resid.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
+                        fig_resid.add_hline(y=df_sc["residual"].std(), line_dash="dot",
+                                            line_color="#22c55e", annotation_text="+1σ")
+                        fig_resid.add_hline(y=-df_sc["residual"].std(), line_dash="dot",
+                                            line_color="#ef4444", annotation_text="−1σ")
+                        fig_resid.update_layout(title="Residual vs Regression (Rich/Cheap Signal)",
+                                                template="plotly_dark", height=220)
+                        st.plotly_chart(fig_resid, use_container_width=True)
+                        st.caption("Residual > +1σ = forward spread RICH vs curve → fade. Residual < −1σ = CHEAP → buy.")
 
     # ══════════════════════════════════════════════════════════════════
     # TAB 3 — SWAPTION TRADE IDEAS
