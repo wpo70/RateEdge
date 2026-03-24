@@ -10931,21 +10931,21 @@ def main():
     # Only show tabs if authenticated
     tabs = st.tabs(
         [
-            "Home",
-            "Vol Upload",
-            "Curves",
-            "FWD Analysis",
-            "Swaptions",
-            "Caps & Floors",
-            "Portfolio",
-            "RV / Calendar",
-            "Exotics",
-            "SOD Report",
-            "Vol Editor",
-            "Vol Export",
-            "Multi-CCY",
-            "Backtesting",
-            "Bond Options",
+            "🏠 Home",
+            "📉 Vol / Upload",
+            "📋 Curves",
+            "📊 FWD Analysis",
+            "⚡ Swaptions",
+            "🔔 Caps & Floors",
+            "💼 Portfolio",
+            "⚛️ RV / Calendar",
+            "🔮 Exotics",
+            "📋 SOD Report",
+            "✅ Vol Editor",
+            "📤 Vol Export",
+            "🌐 Multi-CCY",
+            "📈 Backtesting",
+            "🔗 Bond Options",
         ]
     )
 
