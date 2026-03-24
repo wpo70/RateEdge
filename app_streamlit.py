@@ -5973,19 +5973,21 @@ def caps_floors_tab(vol_mode: str):
                         cfs_straddle = swpt + spread
                         st.session_state["cfs_table_data"][label]["cfs_straddle"] = cfs_straddle
         
-        # Build caplet curve
+        # Build caplet curve (spreads may not be defined if wedges section is hidden — use session state fallback)
         atm = get_working_atm_surface(ccy)
-        
-        caplet_vol_curve = build_caplet_vol_curve(
-            ccy, atm, None,
-            spread_3m1y=spread_3m1y,
-            spread_1y1y=spread_1y1y,
-            spread_2y1y=spread_2y1y,
-            spread_3y1y=spread_3y1y,
-            spread_4y1y=spread_4y1y,
-            spread_5y2y=spread_5y2y,
-            spread_7y3y=spread_7y3y
-        )
+        try:
+            caplet_vol_curve = build_caplet_vol_curve(
+                ccy, atm, None,
+                spread_3m1y=spread_3m1y,
+                spread_1y1y=spread_1y1y,
+                spread_2y1y=spread_2y1y,
+                spread_3y1y=spread_3y1y,
+                spread_4y1y=spread_4y1y,
+                spread_5y2y=spread_5y2y,
+                spread_7y3y=spread_7y3y
+            )
+        except Exception:
+            caplet_vol_curve = st.session_state.get("caplet_vol_curve_aud")
         if caplet_vol_curve:
             st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
         
