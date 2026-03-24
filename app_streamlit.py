@@ -6018,6 +6018,8 @@ def caps_floors_tab(vol_mode: str):
                 from scipy.interpolate import CubicSpline
                 import plotly.graph_objects as _pgo
 
+                if not caplet_vol_curve:
+                    caplet_vol_curve = {t: 35.0 for t in [0.25,0.5,0.75,1.0,2.0,3.0,4.0,5.0,7.0,10.0]}
                 maturities = np.array(sorted(caplet_vol_curve.keys()))
                 vols       = np.array([caplet_vol_curve[t] for t in maturities])
 
