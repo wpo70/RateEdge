@@ -5908,17 +5908,21 @@ def caps_floors_tab(vol_mode: str):
                 for _t, _key in _CFS_MAP:
                     try:
                         _end_dt = _spot_dt + relativedelta(years=_t)
-                        # ATM fwd rate from fwd_matrix if available, else curve
+                        # ATM fwd swap rate: cap tenor _t starts 3m fwd, so underlying swap = _t - 0.25
+                        # e.g. 1Y cap = 3m start, 9m swap; 2Y cap = 3m start, 21m swap
+                        _cap_swap_tenor = float(_t) - 0.25
                         _fwd_rate = None
-                        _fwd_matrix_local = st.session_state.get("fwd_matrix", {}).get(ccy)
-                        if _fwd_matrix_local is not None:
-                            try: _fwd_rate = _fwd_matrix_local.loc["3m", f"{_t}Y"] / 100.0
-                            except: pass
-                        if _fwd_rate is None:
+                        if _curve_local is not None:
                             import numpy as _np
                             _cx = _curve_local["MaturityY"].to_numpy().astype(float)
                             _cy = _curve_local["ZeroRatePct"].to_numpy().astype(float) / 100.0
-                            _fwd_rate, _, _ = forward_and_annuity_from_curve(_curve_local, ccy, _fwd_start_y, float(_t), _ois_local)
+                            _ox = _oy = None
+                            if _ois_local is not None:
+                                _oc2 = _ois_local.drop(columns=["_source_date"], errors="ignore") if hasattr(_ois_local, "drop") else _ois_local
+                                if hasattr(_oc2, "columns") and "MaturityY" in _oc2.columns:
+                                    _ox = _oc2["MaturityY"].to_numpy().astype(float)
+                                    _oy = _oc2["ZeroRatePct"].to_numpy().astype(float) / 100.0
+                            _fwd_rate = fast_forward_rate(_cx, _cy, _fwd_start_y, _cap_swap_tenor, ccy, freq_override=None, ois_x=_ox, ois_y=_oy)
                         # Cumulative CFS straddle
                         _wedge_straddle = _cfs_tdata.get(_key, {}).get("cfs_straddle")
                         if _wedge_straddle is not None:
