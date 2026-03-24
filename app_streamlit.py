@@ -5850,10 +5850,26 @@ def caps_floors_tab(vol_mode: str):
                             # End date = spot + tenor years (MODFOLL)
                             _end_dt = _spot_dt + relativedelta(years=_t)
 
-                            # ATM fwd swap rate Q/Q from 3m fwd start
-                            _fwd_rate, _, _ = forward_and_annuity_from_curve(
-                                _curve_local, ccy, _fwd_start_y, float(_t), _ois_local
-                            )
+                            # ATM fwd swap rate - use fwd_matrix (same source as pricer) if available
+                            _fwd_matrix_local = st.session_state.get("fwd_matrix", {}).get(ccy)
+                            _fwd_rate = None
+                            if _fwd_matrix_local is not None:
+                                try:
+                                    _fwd_rate = _fwd_matrix_local.loc["3m", f"{_t}Y"] / 100.0
+                                except Exception:
+                                    _fwd_rate = None
+                            if _fwd_rate is None and _curve_local is not None:
+                                # Fallback: use fast_forward_rate same as matrix generator
+                                import numpy as np
+                                _cx = _curve_local["MaturityY"].to_numpy().astype(float)
+                                _cy = _curve_local["ZeroRatePct"].to_numpy().astype(float) / 100.0
+                                _ox = _oy = None
+                                if _ois_local is not None:
+                                    _oc = _ois_local.drop(columns=["_source_date"], errors="ignore")
+                                    if "MaturityY" in _oc.columns:
+                                        _ox = _oc["MaturityY"].to_numpy().astype(float)
+                                        _oy = _oc["ZeroRatePct"].to_numpy().astype(float) / 100.0
+                                _fwd_rate = fast_forward_rate(_cx, _cy, _fwd_start_y, float(_t), ccy, freq_override=None, ois_x=_ox, ois_y=_oy)
 
                             # Cumulative CFS straddle = sum of all wedge cfs_straddle values to this tenor
                             _wedge_straddle = _cfs_tdata.get(_key, {}).get("cfs_straddle")
