@@ -5770,7 +5770,7 @@ def caps_floors_tab(vol_mode: str):
             with col_sabr:
                 st.markdown("<div style='margin-top:-46px;font-size:0.75rem;font-weight:600;color:#64748b;margin-bottom:2px'>SABR Parameters (Caplet Skew)</div>", unsafe_allow_html=True)
                 _sh_cols = st.columns([0.5, 0.9, 0.9, 0.9, 0.9])
-                for _lbl, _c in zip(["Tenor","~","ρ,ν","×","Shift"], _sh_cols):
+                for _lbl, _c in zip(["Tenor","B","r,v","x","Shift"], _sh_cols):
                     _c.markdown(f"<div style='font-size:0.75rem;font-weight:600;color:#64748b;text-align:center'>{_lbl}</div>", unsafe_allow_html=True)
                 st.markdown("<hr style='margin:2px 0 0 0;border-color:#334155'>", unsafe_allow_html=True)
                 for _exp, _b_def, _r_def, _n_def, _sh_def in _SABR_ROWS:
@@ -11039,7 +11039,7 @@ def main():
             "📏 Curves",
             "📈 FWD Analysis",
             "📊 Swaptions",
-            "ƒöö Caps & Floors",
+            "🔔 Caps & Floors",
             "💼 Portfolio",
             "⚛️ RV / Calendar",
             "🔮 Exotics",
