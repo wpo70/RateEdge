@@ -5972,9 +5972,9 @@ def caps_floors_tab(vol_mode: str):
                 # CALCULATE CFS VALUES BEFORE BUILDING VOL CURVE
         if "cfs_table_data" in st.session_state:
             spreads_map = {
-                "3m1y": spread_3m1y, "1y1y": spread_1y1y, "2y1y": spread_2y1y,
-                "3y1y": spread_3y1y, "4y1y": spread_4y1y, "5y2y": spread_5y2y,
-                "7y3y": spread_7y3y, "10y2y": spread_10y2y, "12y3y": spread_12y3y
+                "3m1y": st.session_state.get("cf_spr_3m1y", spread_3m1y), "1y1y": st.session_state.get("cf_spr_1y1y", spread_1y1y), "2y1y": st.session_state.get("cf_spr_2y1y", spread_2y1y),
+                "3y1y": st.session_state.get("cf_spr_3y1y", spread_3y1y), "4y1y": st.session_state.get("cf_spr_4y1y", spread_4y1y), "5y2y": st.session_state.get("cf_spr_5y2y", spread_5y2y),
+                "7y3y": st.session_state.get("cf_spr_7y3y", spread_7y3y), "10y2y": st.session_state.get("cf_spr_10y2y", spread_10y2y), "12y3y": st.session_state.get("cf_spr_12y3y", spread_12y3y)
             }
             for label in ["3m1y", "1y1y", "2y1y", "3y1y", "4y1y", "5y2y", "7y3y", "10y2y", "12y3y"]:
                 if label in st.session_state["cfs_table_data"]:
