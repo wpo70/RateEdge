@@ -3005,9 +3005,9 @@ def vol_config_tab():
         atm, a, b, r, n = get_ccy_vol_data(ccy)
         curve = get_ccy_curve(ccy)
         
-        atm_status = "Ô£à" if atm is not None else "Not loaded"
-        sabr_status = "Ô£à" if a is not None else "Not loaded"
-        curve_status = "Ô£à" if curve is not None else "Not loaded"
+        atm_status = "✅" if atm is not None else "Not loaded"
+        sabr_status = "✅" if a is not None else "Not loaded"
+        curve_status = "✅" if curve is not None else "Not loaded"
         
         atm_time = get_timestamp_str("atm", ccy)
         sabr_time = get_timestamp_str("sabr", ccy)
@@ -3067,7 +3067,7 @@ def vol_config_tab():
                     user_id = st.session_state.get("username", "default")
                     snapshot_id = save_vol_snapshot(user_id, snap_ccy, snap_label.strip(), snap_notes.strip())
                     if snapshot_id:
-                        st.success(f"Ô£à Snapshot saved! ID: {snapshot_id}")
+                        st.success(f"✅ Snapshot saved! ID: {snapshot_id}")
                     else:
                         st.error("Failed to save snapshot. Make sure vol data is loaded.")
         
@@ -3119,7 +3119,7 @@ def vol_config_tab():
                                     st.session_state["timestamps"][f"atm_{ccy}"] = loaded_snap['snapshot_date'].strftime('%Y-%m-%d %H:%M:%S')
                                     st.session_state["timestamps"][f"sabr_{ccy}"] = loaded_snap['snapshot_date'].strftime('%Y-%m-%d %H:%M:%S')
                                     
-                                    st.success(f"Ô£à Loaded snapshot: {snap['label']}")
+                                    st.success(f"✅ Loaded snapshot: {snap['label']}")
                                     st.rerun()
                                 else:
                                     st.error("Failed to load snapshot")
@@ -3127,7 +3127,7 @@ def vol_config_tab():
                         with col3:
                             if st.button("ƒùæ´©Å Delete", key=f"del_snap_{snap['id']}", use_container_width=True):
                                 if delete_vol_snapshot(snap['id']):
-                                    st.success("Ô£à Deleted")
+                                    st.success("✅ Deleted")
                                     st.rerun()
                                 else:
                                     st.error("Failed to delete")
@@ -3528,8 +3528,8 @@ def curves_tab():
         has_vega = ccy in st.session_state.get("vega_matrix", {})
         atm_vols, _, _, _, _ = get_ccy_vol_data(ccy)
 
-        _atm_gen_col, _atm_hm_col = st.columns([2, 2])
-        with _atm_gen_col:
+        _atm_c1, _atm_c2, _atm_c3 = st.columns([2, 2, 1])
+        with _atm_c1:
             if st.button(" Generate ATM Matrix", key="gen_atm_matrix", type="primary"):
                 if curve is not None and atm_vols is not None:
                     with st.spinner("Generating..."):
@@ -3539,7 +3539,7 @@ def curves_tab():
                     st.rerun()
                 else:
                     st.warning("Load curve and ATM vols first.")
-        with _atm_hm_col:
+        with _atm_c2:
             show_heatmap_atm = st.checkbox(" Show Heatmap", value=False, key="show_heatmap_atm")
 
         if atm_vols is None:
@@ -4585,7 +4585,7 @@ def swaptions_tab(vol_mode: str):
             if _any_stale:
                 st.warning("ÔÜá´©Å Stale ╬▒ detected  —  cells show implied vs stored ╬▒ divergence. ƒƒí >10%, ƒö┤ >20%. Consider recalibrating.")
             else:
-                st.success("Ô£à ╬▒ consistent with ATM surface across all cells (within 10%)")
+                st.success("✅ ╬▒ consistent with ATM surface across all cells (within 10%)")
 
             _alpha_df = pd.DataFrame(_rows).set_index("Expiry")
             st.dataframe(_alpha_df, use_container_width=True)
@@ -4624,7 +4624,7 @@ def swaptions_tab(vol_mode: str):
                                     _updated += 1
                         _old_atm, _, _b2, _r2, _n2 = get_ccy_vol_data(ccy)
                         set_ccy_vol_data(ccy, _old_atm, _new_alpha, _b2, _r2, _n2)
-                        st.success(f"Ô£à Alpha recalibrated  —  {_updated} cells updated. ╬▓, ¤ü, ╬¢ unchanged.")
+                        st.success(f"✅ Alpha recalibrated  —  {_updated} cells updated. ╬▓, ¤ü, ╬¢ unchanged.")
                         st.rerun()
             with _rc2:
                 st.caption("Updates ╬▒ to match current ATM surface. ╬▓, ¤ü, ╬¢ remain locked. Run daily at session start in Sticky-ATM mode.")
@@ -5784,7 +5784,7 @@ def caps_floors_tab(vol_mode: str):
             st.markdown("<hr style='margin:4px 0;border-color:#334155'>", unsafe_allow_html=True)
 
             bl, _, br = st.columns([2, 0.2, 2])
-            if bl.button("Ô£à Calculate CFS from Spreads", key="apply_spreads", type="primary"):
+            if bl.button("✅ Calculate CFS from Spreads", key="apply_spreads", type="primary"):
                 for spr_key, *_ in ROW_DATA:
                     st.session_state[spr_key] = new_spread_values[spr_key]
                 # Persist to disk
@@ -5854,7 +5854,7 @@ def caps_floors_tab(vol_mode: str):
                             }
                         _n = publish_blotter_mids(ccy, _mids_to_pub)
                         if _n > 0:
-                            st.success(f"Ô£à Published {_n} mid values to blotter.")
+                            st.success(f"✅ Published {_n} mid values to blotter.")
                         else:
                             st.error("No mids published  —  generate premiums first.")
             with _pub_col2:
@@ -6134,7 +6134,7 @@ def caps_floors_tab(vol_mode: str):
             horizon_df = math.exp(-disc_rate * first_fixing_y)
             one_bp_annuity = horizon_df * notional * 1e6 * tenor_y * 0.0001
 
-            st.success(f"Ô£à Priced: **{label}** | PV = ${pv_total:,.0f} ({pv_bp:.4f} bp)")
+            st.success(f"✅ Priced: **{label}** | PV = ${pv_total:,.0f} ({pv_bp:.4f} bp)")
             
             # Store for display
             st.session_state["cf_last_result"] = {
@@ -7383,7 +7383,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
         with zp2:
             st.caption(" ")
             st.markdown(f"**Par ZCS rate:** `{zcs_par_rate*100:.4f}%`  "
-                        f"{'Ô£à ATM' if abs(zcs_fixed_rate - zcs_par_rate) < 0.00005 else f'╬ö {(zcs_fixed_rate-zcs_par_rate)*10000:+.1f}bp'}")
+                        f"{'✅ ATM' if abs(zcs_fixed_rate - zcs_par_rate) < 0.00005 else f'╬ö {(zcs_fixed_rate-zcs_par_rate)*10000:+.1f}bp'}")
 
         # ÔöÇÔöÇ Notional derivation ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
         # N_start = N_end / (1 + r)^T    —  back-calculated from ending notional + fixed rate
@@ -7907,7 +7907,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="zcs_dl"
             )
-            st.success(f"Ô£à Schedule generated  —  {len(reset_dates)} reset periods  |  "
+            st.success(f"✅ Schedule generated  —  {len(reset_dates)} reset periods  |  "
                        f"Fixed: AUD {zcs_fixed_payment:,.0f}  |  "
                        f"Float est.: AUD {zcs_float_payment:,.0f}  |  "
                        f"Net: AUD {abs(zcs_net_payment):,.0f}")
@@ -8080,7 +8080,7 @@ def vol_surface_editor_tab():
                     _old_atm_rc, _, _, _, _ = get_ccy_vol_data(_rc_ccy)
                     set_ccy_vol_data(_rc_ccy, _old_atm_rc, _new_a, _new_b, _new_r, _new_n)
                     _prog.empty()
-                    st.success(f"Ô£à Full SABR calibration complete. {_n_cells - _errors} cells updated, {_errors} skipped.")
+                    st.success(f"✅ Full SABR calibration complete. {_n_cells - _errors} cells updated, {_errors} skipped.")
                     if _errors > 0:
                         st.caption("Skipped cells had no ATM vol data or optimiser failed to converge.")
     
@@ -9138,7 +9138,7 @@ def rv_tab():
                     score_color = "#22c55e" if idea["Score"] > 5 else "#f59e0b"
                     is_selected = i in selected
                     with st.expander(
-                        f"{'Ô£à' if is_selected else '  '} **{idea['Type']}**  —  {idea['Structure']}  |  {idea['Signal']}  "
+                        f"{'✅' if is_selected else '  '} **{idea['Type']}**  —  {idea['Structure']}  |  {idea['Signal']}  "
                         f"| Score: {idea['Score']:.1f}", expanded=i < 2):
                         c1, c2 = st.columns([3, 1])
                         with c1:
@@ -10932,7 +10932,7 @@ def main():
     tabs = st.tabs(
         [
             "Home",
-            "Vol / Upload",
+            "Vol Upload",
             "Curves",
             "FWD Analysis",
             "Swaptions",
@@ -11082,7 +11082,7 @@ def sod_report_tab():
                     conn.commit()
                     cur.close()
                     conn.close()
-                    st.success(f"Ô£à Seeded {_seeded} dummy USD snapshots. Reload the page to see them.")
+                    st.success(f"✅ Seeded {_seeded} dummy USD snapshots. Reload the page to see them.")
                     st.rerun()
 
     if len(_snaps_usd) < 2:
@@ -11601,7 +11601,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                             notes=_sod_notes.strip()
                         )
                         if _rid:
-                            st.success(f"Ô£à Report saved (ID: {_rid})")
+                            st.success(f"✅ Report saved (ID: {_rid})")
                         else:
                             st.error("Failed to save report.")
 
@@ -11780,7 +11780,7 @@ RateEdge Options Platform""",
             st.caption("🌕 For Office 365/Outlook: smtp.office365.com:587 with TLS")
             st.caption("🌕 For Gmail: smtp.gmail.com:587 with TLS (requires app password)")
             if default_password:
-                st.caption("Ô£à Password loaded from environment variable EMAIL_PASSWORD")
+                st.caption("✅ Password loaded from environment variable EMAIL_PASSWORD")
             else:
                 st.caption("ÔÜá´©Å Set EMAIL_PASSWORD environment variable in Streamlit secrets to auto-fill")
         
@@ -11821,7 +11821,7 @@ RateEdge Options Platform""",
                         )
                     
                     if success:
-                        st.success(f"Ô£à Email sent successfully to {len(recipients)} recipient(s)!")
+                        st.success(f"✅ Email sent successfully to {len(recipients)} recipient(s)!")
                     else:
                         st.error("ÔØî Failed to send email. Check SMTP settings and try again.")
     
@@ -11885,7 +11885,7 @@ RateEdge Options Platform""",
                     else:
                         _failed.append(_ccy)
                 if _saved:
-                    st.success(f"Ô£à Saved EOD snapshot for: {', '.join(_saved)}")
+                    st.success(f"✅ Saved EOD snapshot for: {', '.join(_saved)}")
                 if _failed:
                     st.error(f"ÔØî Failed for: {', '.join(_failed)}  —  check vol data is loaded.")
 
