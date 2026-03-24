@@ -6006,6 +6006,11 @@ def caps_floors_tab(vol_mode: str):
             st.warning("No ATM surface found. Falling back to 35bp flat.")
             caplet_vol_curve = {t: 35.0 for t in [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0]}
         
+        # Final safety net - ensure caplet_vol_curve is always a valid dict
+        if not isinstance(caplet_vol_curve, dict) or len(caplet_vol_curve) == 0:
+            _saved = st.session_state.get("caplet_vol_curve_aud")
+            caplet_vol_curve = _saved if isinstance(_saved, dict) and len(_saved) > 0 else {t: 35.0 for t in [0.25,0.5,0.75,1.0,2.0,3.0,4.0,5.0,7.0,10.0]}
+
         # Show the curve
         if caplet_vol_curve:
             with st.expander("📊 Resulting Caplet Vol Curve", expanded=False):
@@ -6018,7 +6023,7 @@ def caps_floors_tab(vol_mode: str):
                 from scipy.interpolate import CubicSpline
                 import plotly.graph_objects as _pgo
 
-                if not caplet_vol_curve:
+                if not isinstance(caplet_vol_curve, dict) or len(caplet_vol_curve) == 0:
                     caplet_vol_curve = {t: 35.0 for t in [0.25,0.5,0.75,1.0,2.0,3.0,4.0,5.0,7.0,10.0]}
                 maturities = np.array(sorted(caplet_vol_curve.keys()))
                 vols       = np.array([caplet_vol_curve[t] for t in maturities])
