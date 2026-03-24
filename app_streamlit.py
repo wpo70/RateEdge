@@ -5569,7 +5569,18 @@ def caps_floors_tab(vol_mode: str):
     )
 
     caplet_vol_curve = None  # Initialize
-    
+
+    # Initialise spread defaults so caplet_vol_curve build never hits NameError
+    spread_3m1y  = st.session_state.get("cf_spr_3m1y",  10.0)
+    spread_1y1y  = st.session_state.get("cf_spr_1y1y",  11.5)
+    spread_2y1y  = st.session_state.get("cf_spr_2y1y",  13.0)
+    spread_3y1y  = st.session_state.get("cf_spr_3y1y",  17.5)
+    spread_4y1y  = st.session_state.get("cf_spr_4y1y",  20.0)
+    spread_5y2y  = st.session_state.get("cf_spr_5y2y",  45.0)
+    spread_7y3y  = st.session_state.get("cf_spr_7y3y",  50.0)
+    spread_10y2y = st.session_state.get("cf_spr_10y2y", 35.0)
+    spread_12y3y = st.session_state.get("cf_spr_12y3y", 75.0)
+
     if vol_src == "Manual Flat":
         vol_input = st.number_input(
             "Vol (normal bp or Black %)",
