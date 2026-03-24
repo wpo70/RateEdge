@@ -8,7 +8,7 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass  # python-dotenv not installed ÔÇö use environment variables directly
+    pass  # python-dotenv not installed  —  use environment variables directly
 from dataclasses import dataclass
 from datetime import date, timedelta
 try:
@@ -30,14 +30,14 @@ from scipy.interpolate import PchipInterpolator
 
 # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
 # AFMA AUSTRALIAN BUSINESS DAY CALENDAR
-# Sydney/NSW calendar ÔÇö national + NSW state holidays.
+# Sydney/NSW calendar  —  national + NSW state holidays.
 # Used throughout all date calculations: spot lags, roll dates, resets.
 # AFMA convention: Modified Following (moves to next BD, unless that
 # crosses month end in which case use preceding BD).
 # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
 
 def _easter(year: int):
-    """Return (Good Friday, Easter Monday) for year ÔÇö Anonymous Gregorian."""
+    """Return (Good Friday, Easter Monday) for year  —  Anonymous Gregorian."""
     a = year % 19
     b, c = divmod(year, 100)
     d, e = divmod(b, 4)
@@ -68,21 +68,21 @@ def _au_holidays(year: int) -> set:
 
     # New Year's Day
     h.add(_sub_mon(date(year, 1, 1)))
-    # Australia Day ÔÇö 26 Jan
+    # Australia Day  —  26 Jan
     h.add(_sub_mon(date(year, 1, 26)))
     # Good Friday + Easter Saturday (NSW bank holiday) + Easter Monday
     gf, em = _easter(year)
     h.add(gf)
     h.add(gf + timedelta(days=1))   # Easter Saturday
     h.add(em)
-    # Anzac Day ÔÇö 25 Apr (NSW: if Sunday ÔåÆ Monday sub)
+    # Anzac Day  —  25 Apr (NSW: if Sunday → Monday sub)
     anzac = date(year, 4, 25)
     h.add(anzac + timedelta(days=1) if anzac.weekday() == 6 else anzac)
-    # King's/Queen's Birthday ÔÇö 2nd Monday in June (NSW)
+    # King's/Queen's Birthday  —  2nd Monday in June (NSW)
     june_mons = [date(year, 6, d) for d in range(1, 31) if date(year, 6, d).weekday() == 0]
     if len(june_mons) >= 2:
         h.add(june_mons[1])
-    # Bank Holiday ÔÇö 1st Monday in August (NSW)
+    # Bank Holiday  —  1st Monday in August (NSW)
     aug_mons = [date(year, 8, d) for d in range(1, 32) if date(year, 8, d).weekday() == 0]
     if aug_mons:
         h.add(aug_mons[0])
@@ -642,7 +642,7 @@ def load_all_session_data(user_id: str) -> int:
                 except:
                     pass
 
-    # Restore FWD Analysis series lists ÔÇö DB always wins, overrides tab defaults
+    # Restore FWD Analysis series lists  —  DB always wins, overrides tab defaults
     if "fwd_analysis_prefs" in configs and "GLB" in configs["fwd_analysis_prefs"]:
         try:
             _p = configs["fwd_analysis_prefs"]["GLB"]["data"]
@@ -1291,7 +1291,7 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
     freq_override: 0.25 = Q/Q, 0.5 = S/S, None = market convention
     """
     if freq_override is not None:
-        # T+2 BD for NZD/USD, T+1 BD for AUD (AFMA calendar ÔÇö year frac approx here)
+        # T+2 BD for NZD/USD, T+1 BD for AUD (AFMA calendar  —  year frac approx here)
         spot_lag = 2.0 / 252.0 if ccy in ["NZD", "USD"] else 1.0 / 252.0
         sched = build_generic_schedule(expiry, tenor, freq=freq_override, spot_lag=spot_lag * 252)
     elif ccy == "AUD":
@@ -1686,9 +1686,9 @@ def build_caplet_vol_curve_from_surface(ccy: str, atm_surface):
     # Build cumulative CFS targets from swaption surface alone
     # Each CFS = sum of all swaption wedge premiums up to that maturity
     wedge_chain = [
-        ("3m1y", "3m", 1.0, 1.0),    # 3m1y swaption ÔåÆ 1Y CFS
-        ("1y1y", "1y", 1.0, 2.0),    # + 1y1y wedge  ÔåÆ 2Y CFS
-        ("2y1y", "2y", 1.0, 3.0),    # + 2y1y wedge  ÔåÆ 3Y CFS
+        ("3m1y", "3m", 1.0, 1.0),    # 3m1y swaption → 1Y CFS
+        ("1y1y", "1y", 1.0, 2.0),    # + 1y1y wedge  → 2Y CFS
+        ("2y1y", "2y", 1.0, 3.0),    # + 2y1y wedge  → 3Y CFS
         ("3y1y", "3y", 1.0, 4.0),
         ("4y1y", "4y", 1.0, 5.0),
         ("5y2y", "5y", 2.0, 7.0),
@@ -2605,7 +2605,7 @@ def init_session():
     # Track if we've auto-loaded from DB this session
     if "db_auto_loaded" not in st.session_state:
         st.session_state["db_auto_loaded"] = False
-    # Correlation matrix + CMS bumps ÔÇö load from file if exists
+    # Correlation matrix + CMS bumps  —  load from file if exists
     if not any(f"corr_{k}" in st.session_state for k in _CORR_DEFAULTS):
         _loaded_cfg = _load_exotics_config()
         _loaded_corr = _loaded_cfg.get("correlations", {})
@@ -2787,7 +2787,7 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                 except:
                     curve_df = load_curve(raw_curve, curve_name)
                 set_ccy_curve(ccy, curve_df)
-                # Backup to config_curves so curves_tab can restore on switch from live ÔåÆ saved
+                # Backup to config_curves so curves_tab can restore on switch from live → saved
                 if "config_curves" not in st.session_state:
                     st.session_state["config_curves"] = {}
                 st.session_state["config_curves"][ccy] = curve_df
@@ -3044,10 +3044,10 @@ def vol_config_tab():
     # Vol History Management Section
     if HAS_POSTGRES and get_db_url():
         st.markdown("---")
-        st.markdown("### ­ƒô© Vol History Snapshots")
+        st.markdown("### 📩 Vol History Snapshots")
         st.caption("Save and manage historical volatility snapshots")
         
-        tab_save, tab_manage = st.tabs(["­ƒÆ¥ Save Snapshot", "­ƒôï Manage Snapshots"])
+        tab_save, tab_manage = st.tabs(["🌿 Save Snapshot", "📏 Manage Snapshots"])
         
         with tab_save:
             st.markdown("#### Save Current Vol Surface")
@@ -3060,7 +3060,7 @@ def vol_config_tab():
             
             snap_notes = st.text_area("Notes (optional)", placeholder="Additional context about this snapshot...", key="snap_notes", height=100)
             
-            if st.button("­ƒÆ¥ Save Snapshot", key="save_snapshot_btn", type="primary"):
+            if st.button("🌿 Save Snapshot", key="save_snapshot_btn", type="primary"):
                 if not snap_label.strip():
                     st.error("Please provide a label for this snapshot")
                 else:
@@ -3086,7 +3086,7 @@ def vol_config_tab():
                 st.caption(f"Found {len(snapshots)} snapshot(s)")
                 
                 for snap in snapshots:
-                    with st.expander(f"­ƒô© {snap['currency']} - {snap['label']} ({snap['snapshot_date'].strftime('%Y-%m-%d %H:%M')})", expanded=False):
+                    with st.expander(f"📩 {snap['currency']} - {snap['label']} ({snap['snapshot_date'].strftime('%Y-%m-%d %H:%M')})", expanded=False):
                         col1, col2, col3 = st.columns([3, 1, 1])
                         
                         with col1:
@@ -3097,7 +3097,7 @@ def vol_config_tab():
                             st.caption(f"Created: {snap['created_at'].strftime('%Y-%m-%d %H:%M:%S')}")
                         
                         with col2:
-                            if st.button("­ƒôÑ Load", key=f"load_snap_{snap['id']}", use_container_width=True):
+                            if st.button("📑 Load", key=f"load_snap_{snap['id']}", use_container_width=True):
                                 loaded_snap = load_vol_snapshot(snap['id'])
                                 if loaded_snap:
                                     # Load into session state
@@ -3125,7 +3125,7 @@ def vol_config_tab():
                                     st.error("Failed to load snapshot")
                         
                         with col3:
-                            if st.button("­ƒùæ´©Å Delete", key=f"del_snap_{snap['id']}", use_container_width=True):
+                            if st.button("ƒùæ´©Å Delete", key=f"del_snap_{snap['id']}", use_container_width=True):
                                 if delete_vol_snapshot(snap['id']):
                                     st.success("Ô£à Deleted")
                                     st.rerun()
@@ -3223,7 +3223,7 @@ def _load_ois_from_db_latest(ccy: str = "AUD") -> pd.DataFrame:
 
 
 def generate_forward_matrix(ccy: str, curve: pd.DataFrame, basis_6v3: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-    """Public wrapper ÔÇö converts DataFrames ÔåÆ tuples and calls the cached matrix generator."""
+    """Public wrapper  —  converts DataFrames → tuples and calls the cached matrix generator."""
     if curve is None or curve.empty:
         return pd.DataFrame()
     curve_tuple = (
@@ -3250,7 +3250,7 @@ def generate_forward_matrix(ccy: str, curve: pd.DataFrame, basis_6v3: Optional[p
 
 def generate_forward_matrix_convention(ccy: str, curve: pd.DataFrame, basis_6v3: Optional[pd.DataFrame] = None,
                                         convention: str = "market") -> pd.DataFrame:
-    """Public wrapper ÔÇö like generate_forward_matrix but with explicit convention override."""
+    """Public wrapper  —  like generate_forward_matrix but with explicit convention override."""
     if curve is None or curve.empty:
         return pd.DataFrame()
     curve_tuple = (
@@ -3528,11 +3528,9 @@ def curves_tab():
         has_vega = ccy in st.session_state.get("vega_matrix", {})
         atm_vols, _, _, _, _ = get_ccy_vol_data(ccy)
 
-        atm_ctrl1, atm_ctrl2 = st.columns([3, 1])
-        with atm_ctrl1:
-            show_heatmap_atm = st.checkbox(" Show Heatmap", value=False, key="show_heatmap_atm")
-        with atm_ctrl2:
-            if st.button(" Generate ATM Matrices", key="gen_atm_matrices", type="primary"):
+        _atm_gen_col, _atm_hm_col = st.columns([2, 2])
+        with _atm_gen_col:
+            if st.button(" Generate ATM Matrix", key="gen_atm_matrix", type="primary"):
                 if curve is not None and atm_vols is not None:
                     with st.spinner("Generating..."):
                         prem_matrix, vega_matrix = calculate_atm_premium_matrix(ccy, curve, atm_vols, basis_6v3)
@@ -3541,6 +3539,8 @@ def curves_tab():
                     st.rerun()
                 else:
                     st.warning("Load curve and ATM vols first.")
+        with _atm_hm_col:
+            show_heatmap_atm = st.checkbox(" Show Heatmap", value=False, key="show_heatmap_atm")
 
         if atm_vols is None:
             st.warning(" No ATM vols loaded. Please upload config first.")
@@ -3610,8 +3610,8 @@ def _load_swap_rates_from_db(floating_rate: str) -> pd.DataFrame:
 
 def fwd_analysis_tab():
     """FWD Swap & Basis Historical Analysis tab"""
-    st.subheader("­ƒôê FWD Swap & Basis Historical Analysis")
-    st.caption("IRS spreads, butterflies, fwd-fwd rates and 6v3 basis from Supabase (BlueGamma data 2018ÔÇôtoday).")
+    st.subheader("📊 FWD Swap & Basis Historical Analysis")
+    st.caption("IRS spreads, butterflies, fwd-fwd rates and 6v3 basis from Supabase (BlueGamma data 2018-today).")
 
     with st.spinner("Loading swap rate history..."):
         _w3 = _load_swap_rates_from_db("3M BBSW")
@@ -3632,7 +3632,7 @@ def fwd_analysis_tab():
 
     _sp_colors = ["#3b82f6","#ef4444","#22c55e","#f59e0b","#a855f7","#06b6d4","#f43f5e","#84cc16"]
 
-    # Convention helper ÔÇö market default: <=3Y = 3M BBSW, >=4Y = 6M BBSW
+    # Convention helper  —  market default: <=3Y = 3M BBSW, >=4Y = 6M BBSW
     def _conv_rate(tenor_y, conv="Market"):
         """Return rate series for a given tenor using selected convention."""
         def _lbl(y): return f"{int(y)}Y" if y == int(y) else f"{round(y*12)}M"
@@ -3656,11 +3656,11 @@ def fwd_analysis_tab():
         return (r_e * end_y - r_s * start_y) / tenor_y
 
     # Convention selector shown once at top
-    _conv = st.radio("Rate Convention", ["Market (Ôëñ3Y Q/Q, ÔëÑ4Y S/S)", "Q/Q (3M BBSW)", "S/S (6M BBSW)"],
+    _conv = st.radio("Rate Convention", ["Market (≤3Y Q/Q, ≥4Y S/S)", "Q/Q (3M BBSW)", "S/S (6M BBSW)"],
                      horizontal=True, key="fwd_conv")
     _conv_key = "Market" if "Market" in _conv else ("Q/Q (3M BBSW)" if "Q/Q" in _conv else "S/S (6M BBSW)")
 
-    st.caption(f"3M BBSW: 1YÔÇô3Y full history (2018ÔÇôtoday) | 6M BBSW: 4YÔÇô30Y full history (2018ÔÇôtoday)")
+    st.caption(f"3M BBSW: 1Y-3Y full history (2018-today) | 6M BBSW: 4Y-30Y full history (2018-today)")
 
     _an_tabs = st.tabs(["IRS Spreads", "IRS Butterflies", "Fwd-Fwd Rates (3M)", "6v3 Outright", "6v3 Fwd-Fwd", "6v3 Spreads", "6v3 Butterflies"])
 
@@ -3679,17 +3679,17 @@ def fwd_analysis_tab():
             save_user_config(_uid, "fwd_analysis_prefs", "GLB", _prefs)
 
     def _chart_tools(fig, series_dict: dict, key: str, ylab: str = "bp"):
-        """­ƒôÑ Download + date-range picker + Hi/Lo/Mean/Std/Current stats box."""
+        """📑 Download + date-range picker + Hi/Lo/Mean/Std/Current stats box."""
         import plotly.io as _pio
 
         # ÔöÇÔöÇ Download button ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
         try:
             _img = _pio.to_image(fig, format="png", width=1400, height=520)
-            st.download_button("­ƒôÑ Copy Chart", _img, f"RateEdge_{key}.png", "image/png",
+            st.download_button("📑 Copy Chart", _img, f"RateEdge_{key}.png", "image/png",
                                key=f"dl_{key}", use_container_width=False)
         except Exception:
             _html = fig.to_html(include_plotlyjs="cdn", full_html=True)
-            st.download_button("­ƒôÑ Copy Chart", _html.encode(), f"RateEdge_{key}.html", "text/html",
+            st.download_button("📑 Copy Chart", _html.encode(), f"RateEdge_{key}.html", "text/html",
                                key=f"dl_{key}", use_container_width=False)
 
         if not series_dict:
@@ -3705,7 +3705,7 @@ def fwd_analysis_tab():
         _min_d = _all_idx.min().date()
         _max_d = _all_idx.max().date()
 
-        st.markdown("**­ƒôè Range Stats**")
+        st.markdown("**📈 Range Stats**")
         _rc1, _rc2, _rc3 = st.columns([2, 2, 2])
         with _rc1:
             _pt1 = st.date_input("From", value=_min_d, min_value=_min_d, max_value=_max_d,
@@ -3715,7 +3715,7 @@ def fwd_analysis_tab():
                                  key=f"pt2_{key}", format="DD/MM/YYYY")
         with _rc3:
             st.markdown(f"<div style='padding-top:30px;color:#94a3b8;font-size:0.8rem'>"
-                        f"{_pt1} ÔåÆ {_pt2}</div>", unsafe_allow_html=True)
+                        f"{_pt1} → {_pt2}</div>", unsafe_allow_html=True)
 
         _t1 = pd.Timestamp(_pt1)
         _t2 = pd.Timestamp(_pt2) + pd.Timedelta(days=1)
@@ -3736,7 +3736,7 @@ def fwd_analysis_tab():
             })
         if _rows:
             _sdf = pd.DataFrame(_rows).set_index("Series")
-            st.dataframe(_sdf.style.format("{:.4f}", na_rep="ÔÇö"),
+            st.dataframe(_sdf.style.format("{:.4f}", na_rep=" — "),
                          use_container_width=True, height=min(38 + 38*len(_rows), 280))
 
     # Available tenors for dropdowns
@@ -3792,10 +3792,10 @@ def fwd_analysis_tab():
         with bc4:
             rc1, rc2 = st.columns([3,1])
             with rc1:
-                _sp_remove = st.selectbox("Remove spread", ["ÔÇö"] + [f"{a}ÔêÆ{b}" for a,b in st.session_state["irs_sp_list"]], key="sp_rm")
+                _sp_remove = st.selectbox("Remove spread", [" — "] + [f"{a}ÔêÆ{b}" for a,b in st.session_state["irs_sp_list"]], key="sp_rm")
             with rc2:
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                if st.button("Ô£ò", key="sp_rm_btn", use_container_width=True) and _sp_remove != "ÔÇö":
+                if st.button("Ô£ò", key="sp_rm_btn", use_container_width=True) and _sp_remove != " — ":
                     _rm_parts = _sp_remove.split("ÔêÆ")
                     if len(_rm_parts)==2 and (_rm_parts[0],_rm_parts[1]) in st.session_state["irs_sp_list"]:
                         st.session_state["irs_sp_list"].remove((_rm_parts[0],_rm_parts[1]))
@@ -3875,10 +3875,10 @@ def fwd_analysis_tab():
         with bc5:
             rc1, rc2 = st.columns([3,1])
             with rc1:
-                _fl_rm = st.selectbox("Remove", ["ÔÇö"]+[f"{w}/{m}/{e}" for w,m,e in st.session_state["irs_fl_list"]], key="fl_rm")
+                _fl_rm = st.selectbox("Remove", [" — "]+[f"{w}/{m}/{e}" for w,m,e in st.session_state["irs_fl_list"]], key="fl_rm")
             with rc2:
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                if st.button("Ô£ò", key="fl_rm_btn", use_container_width=True) and _fl_rm != "ÔÇö":
+                if st.button("Ô£ò", key="fl_rm_btn", use_container_width=True) and _fl_rm != " — ":
                     _rp = _fl_rm.split("/")
                     if len(_rp)==3 and tuple(_rp) in st.session_state["irs_fl_list"]:
                         st.session_state["irs_fl_list"].remove(tuple(_rp))
@@ -3958,10 +3958,10 @@ def fwd_analysis_tab():
         with bc4:
             rc1, rc2 = st.columns([3,1])
             with rc1:
-                _fv_rm = st.selectbox("Remove", ["ÔÇö"]+[f"{s}y{t}y" for s,t in st.session_state["fvfv_list"]], key="fv_rm")
+                _fv_rm = st.selectbox("Remove", [" — "]+[f"{s}y{t}y" for s,t in st.session_state["fvfv_list"]], key="fv_rm")
             with rc2:
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                if st.button("Ô£ò", key="fv_rm_btn", use_container_width=True) and _fv_rm != "ÔÇö":
+                if st.button("Ô£ò", key="fv_rm_btn", use_container_width=True) and _fv_rm != " — ":
                     _rp = _fv_rm[:-1].split("y")
                     if len(_rp)==2:
                         try:
@@ -4023,7 +4023,7 @@ def fwd_analysis_tab():
         st.plotly_chart(_fig_fv, use_container_width=True)
         _chart_tools(_fig_fv, _fv_active, "fv", "%")
     with _an_tabs[3]:
-        st.markdown("#### 6v3 Basis ÔÇö Outright (6M BBSW ÔêÆ 3M BBSW)")
+        st.markdown("#### 6v3 Basis  —  Outright (6M BBSW ÔêÆ 3M BBSW)")
         _com6v3 = sorted([c for c in _w6.columns if c in _w3.columns and c.endswith("Y")],
                           key=lambda x: int(x[:-1]))
         if not _com6v3:
@@ -4039,10 +4039,10 @@ def fwd_analysis_tab():
             with bc3:
                 rc1, rc2 = st.columns([3,1])
                 with rc1:
-                    _b6_rm = st.selectbox("Remove", ["ÔÇö"]+st.session_state["b6_list"], key="b6_rm")
+                    _b6_rm = st.selectbox("Remove", [" — "]+st.session_state["b6_list"], key="b6_rm")
                 with rc2:
                     st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                    if st.button("Ô£ò", key="b6_rm_btn", use_container_width=True) and _b6_rm != "ÔÇö" and _b6_rm in st.session_state["b6_list"]:
+                    if st.button("Ô£ò", key="b6_rm_btn", use_container_width=True) and _b6_rm != " — " and _b6_rm in st.session_state["b6_list"]:
                         st.session_state["b6_list"].remove(_b6_rm)
                         _autosave_fwd_prefs()
                         st.rerun()
@@ -4086,10 +4086,10 @@ def fwd_analysis_tab():
         with bc4:
             rc1, rc2 = st.columns([3,1])
             with rc1:
-                _fv6_rm = st.selectbox("Remove", ["ÔÇö"]+[f"{s}y{t}y" for s,t in st.session_state["fv6_list"]], key="fv6_rm")
+                _fv6_rm = st.selectbox("Remove", [" — "]+[f"{s}y{t}y" for s,t in st.session_state["fv6_list"]], key="fv6_rm")
             with rc2:
                 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                if st.button("Ô£ò", key="fv6_rm_btn", use_container_width=True) and _fv6_rm != "ÔÇö":
+                if st.button("Ô£ò", key="fv6_rm_btn", use_container_width=True) and _fv6_rm != " — ":
                     _rp = _fv6_rm[:-1].split("y")
                     if len(_rp)==2:
                         try:
@@ -4170,10 +4170,10 @@ def fwd_analysis_tab():
             with bc4:
                 rc1, rc2 = st.columns([3,1])
                 with rc1:
-                    _bsp_rm = st.selectbox("Remove", ["ÔÇö"]+[f"{a}ÔêÆ{b}" for a,b in st.session_state["bsp_list"]], key="bsp_rm")
+                    _bsp_rm = st.selectbox("Remove", [" — "]+[f"{a}ÔêÆ{b}" for a,b in st.session_state["bsp_list"]], key="bsp_rm")
                 with rc2:
                     st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                    if st.button("Ô£ò", key="bsp_rm_btn", use_container_width=True) and _bsp_rm != "ÔÇö":
+                    if st.button("Ô£ò", key="bsp_rm_btn", use_container_width=True) and _bsp_rm != " — ":
                         _rp=_bsp_rm.split("ÔêÆ")
                         if len(_rp)==2 and tuple(_rp) in st.session_state["bsp_list"]:
                             st.session_state["bsp_list"].remove(tuple(_rp))
@@ -4257,10 +4257,10 @@ def fwd_analysis_tab():
             with bc5:
                 rc1,rc2 = st.columns([3,1])
                 with rc1:
-                    _b6bfly_rm = st.selectbox("Remove", ["ÔÇö"]+[f"{w}/{m}/{e}" for w,m,e in st.session_state["b6bfly_list"]], key="b6bfly_rm")
+                    _b6bfly_rm = st.selectbox("Remove", [" — "]+[f"{w}/{m}/{e}" for w,m,e in st.session_state["b6bfly_list"]], key="b6bfly_rm")
                 with rc2:
                     st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-                    if st.button("Ô£ò", key="b6bfly_rm_btn", use_container_width=True) and _b6bfly_rm != "ÔÇö":
+                    if st.button("Ô£ò", key="b6bfly_rm_btn", use_container_width=True) and _b6bfly_rm != " — ":
                         _rp = _b6bfly_rm.split("/")
                         if len(_rp)==3 and tuple(_rp) in st.session_state["b6bfly_list"]:
                             st.session_state["b6bfly_list"].remove(tuple(_rp))
@@ -4367,13 +4367,13 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
                     basis_bp = float(np.interp(mid_t, basis_x, basis_y))
                 
                 if convention == "market":
-                    # Market: Ôëñ3Y is Q/Q, >3Y is S/S ÔÇö no adjustment needed, curve reflects this
+                    # Market: ≤3Y is Q/Q, >3Y is S/S  —  no adjustment needed, curve reflects this
                     fwd = mkt_rate
 
                 elif convention == "qq":
                     # Q/Q forced:
-                    # Ôëñ3Y tenors: market is already Q/Q ÔÇö same rate, just recalc with Q/Q frequency
-                    # >3Y tenors: market is S/S ÔÇö subtract basis to get Q/Q equivalent
+                    # ≤3Y tenors: market is already Q/Q  —  same rate, just recalc with Q/Q frequency
+                    # >3Y tenors: market is S/S  —  subtract basis to get Q/Q equivalent
                     if tenor_y <= 3.0:
                         fwd = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy, freq_override=0.25, ois_x=ois_x, ois_y=ois_y)
                     else:
@@ -4381,8 +4381,8 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
 
                 elif convention == "ss":
                     # S/S forced:
-                    # Ôëñ3Y tenors: market is Q/Q ÔÇö add basis to get S/S equivalent
-                    # >3Y tenors: market is already S/S ÔÇö same rate, just recalc with S/S frequency
+                    # ≤3Y tenors: market is Q/Q  —  add basis to get S/S equivalent
+                    # >3Y tenors: market is already S/S  —  same rate, just recalc with S/S frequency
                     if tenor_y <= 3.0:
                         fwd = mkt_rate + basis_bp / 10000.0  # BasisBp in bp, rate in decimal
                     else:
@@ -4411,7 +4411,7 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
     ois_x/ois_y: OIS zero rate arrays. Falls back to IRS curve if not provided.
     """
     # Spot lag in year fraction (approximate for matrix/pricer year-fraction calcs)
-    # Actual date rolls use AFMA calendar ÔÇö see au_spot_date() / au_end_date()
+    # Actual date rolls use AFMA calendar  —  see au_spot_date() / au_end_date()
     if ccy in ["NZD", "USD"]:
         spot_lag = 2.0 / 252.0   # T+2 BD
     else:
@@ -4479,7 +4479,7 @@ def swaptions_tab(vol_mode: str):
     # Apply any pending reload from blotter/portfolio BEFORE widgets render
     _pending = st.session_state.get("sw_pending_reload")
     if _pending:
-        EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","­ƒôà Custom Date..."]
+        EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","📀 Custom Date..."]
         tenor_options = ["1Y","2Y","3Y","4Y","5Y","6Y","7Y","8Y","9Y","10Y","12Y","15Y","20Y","25Y","30Y"]
         structures = ["Payer","Receiver","ATM Straddle","Strangle","Risk Reversal","Payer Ladder","Receiver Ladder"]
         if _pending.get("expiry") in EXPIRY_PRESETS:
@@ -4497,7 +4497,7 @@ def swaptions_tab(vol_mode: str):
     # Currency selector
     col_ccy, col_spacer = st.columns([1, 3])
     with col_ccy:
-        ccy_select = st.selectbox("­ƒîì Currency", ALL_CURRENCIES, key="sw_ccy")
+        ccy_select = st.selectbox("📌 Currency", ALL_CURRENCIES, key="sw_ccy")
     
     # Extract actual currency code (remove PENDING)
     ccy = ccy_select.split(" ")[0]
@@ -4515,7 +4515,7 @@ def swaptions_tab(vol_mode: str):
 
     # ÔöÇÔöÇ SABR Smile Mode & Alpha Monitor ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     _sabr_visible = st.session_state.get("sabr_panel_visible", True)
-    _toggle_label = "­ƒö╝ Hide SABR Panel" if _sabr_visible else "­ƒôÉ Show SABR Smile Mode & Alpha Monitor"
+    _toggle_label = "ƒö╝ Hide SABR Panel" if _sabr_visible else "📉 Show SABR Smile Mode & Alpha Monitor"
     if st.button(_toggle_label, key="sabr_panel_toggle"):
         st.session_state["sabr_panel_visible"] = not _sabr_visible
         st.rerun()
@@ -4537,11 +4537,11 @@ def swaptions_tab(vol_mode: str):
             )
         with _info_col:
             if "Sticky-ATM" in _smile_mode:
-                st.caption("­ƒöÆ ╬▓, ¤ü, ╬¢ locked from config. ╬▒ recalibrated to ATM surface each session. Stale ╬▒ cells flagged below.")
+                st.caption("ƒöÆ ╬▓, ¤ü, ╬¢ locked from config. ╬▒ recalibrated to ATM surface each session. Stale ╬▒ cells flagged below.")
             elif "Sticky-Delta" in _smile_mode:
                 st.caption("ÔÜá´©Å All SABR params fixed. Smile moves with forward. May understate repricing on large rate moves.")
             else:
-                st.caption("ÔÜá´©Å OTM options priced at original absolute strikes. Most conservative ÔÇö can overstate downside moves.")
+                st.caption("ÔÜá´©Å OTM options priced at original absolute strikes. Most conservative  —  can overstate downside moves.")
 
         # Alpha comparison table
         _, _a, _b, _r, _n = get_ccy_vol_data(ccy)
@@ -4561,7 +4561,7 @@ def swaptions_tab(vol_mode: str):
                     _atm_bp = get_matrix_value(_atm_surf, _exp, _ten_y)
                     _s = get_sabr_params_from_matrices(_a, _b, _r, _n, _exp, _ten_y)
                     if _atm_bp is None or _s is None or _exp_y <= 0:
-                        _row[_ten] = "ÔÇö"
+                        _row[_ten] = " — "
                         continue
                     try:
                         _F, _, _ = forward_and_annuity_from_curve(curve, ccy, _exp_y, _ten_y, ois_curve)
@@ -4577,13 +4577,13 @@ def swaptions_tab(vol_mode: str):
                         _stale = abs(_pct_diff) > 10.0
                         if _stale:
                             _any_stale = True
-                        _row[_ten] = f"{'­ƒö┤' if abs(_pct_diff) > 20 else '­ƒƒí' if _stale else '­ƒƒó'} {_pct_diff:+.1f}%"
+                        _row[_ten] = f"{'ƒö┤' if abs(_pct_diff) > 20 else 'ƒƒí' if _stale else 'ƒƒó'} {_pct_diff:+.1f}%"
                     else:
-                        _row[_ten] = "ÔÇö"
+                        _row[_ten] = " — "
                 _rows.append(_row)
 
             if _any_stale:
-                st.warning("ÔÜá´©Å Stale ╬▒ detected ÔÇö cells show implied vs stored ╬▒ divergence. ­ƒƒí >10%, ­ƒö┤ >20%. Consider recalibrating.")
+                st.warning("ÔÜá´©Å Stale ╬▒ detected  —  cells show implied vs stored ╬▒ divergence. ƒƒí >10%, ƒö┤ >20%. Consider recalibrating.")
             else:
                 st.success("Ô£à ╬▒ consistent with ATM surface across all cells (within 10%)")
 
@@ -4593,7 +4593,7 @@ def swaptions_tab(vol_mode: str):
 
             _rc1, _rc2 = st.columns([2, 4])
             with _rc1:
-                if st.button("­ƒöä Recalibrate Alpha (Sticky-ATM)", key="recal_alpha_btn", type="primary"):
+                if st.button("ƒöä Recalibrate Alpha (Sticky-ATM)", key="recal_alpha_btn", type="primary"):
                     _, _a2, _b2, _r2, _n2 = get_ccy_vol_data(ccy)
                     _atm2 = get_working_atm_surface(ccy)
                     if _a2 is not None and _atm2 is not None:
@@ -4624,7 +4624,7 @@ def swaptions_tab(vol_mode: str):
                                     _updated += 1
                         _old_atm, _, _b2, _r2, _n2 = get_ccy_vol_data(ccy)
                         set_ccy_vol_data(ccy, _old_atm, _new_alpha, _b2, _r2, _n2)
-                        st.success(f"Ô£à Alpha recalibrated ÔÇö {_updated} cells updated. ╬▓, ¤ü, ╬¢ unchanged.")
+                        st.success(f"Ô£à Alpha recalibrated  —  {_updated} cells updated. ╬▓, ¤ü, ╬¢ unchanged.")
                         st.rerun()
             with _rc2:
                 st.caption("Updates ╬▒ to match current ATM surface. ╬▓, ¤ü, ╬¢ remain locked. Run daily at session start in Sticky-ATM mode.")
@@ -4651,9 +4651,9 @@ def swaptions_tab(vol_mode: str):
     with col_not:
         notional = st.number_input("Notional (mm)", min_value=1.0, max_value=10000.0, value=100.0, step=10.0, key="sw_not")
     with col_exp:
-        EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","­ƒôà Custom Date..."]
+        EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","📀 Custom Date..."]
         expiry_sel = st.selectbox("Expiry", EXPIRY_PRESETS, index=4, key="sw_expiry")
-        if expiry_sel == "­ƒôà Custom Date...":
+        if expiry_sel == "📀 Custom Date...":
             from datetime import date as _sw_date, timedelta as _sw_td
             custom_dt = st.date_input(
                 "Expiry Date",
@@ -4677,7 +4677,7 @@ def swaptions_tab(vol_mode: str):
         leg_conv = st.radio("Leg Convention", ["Market", "Q/Q", "S/S"], horizontal=True, key="sw_leg_conv")
         freq_override = None if leg_conv == "Market" else (0.25 if leg_conv == "Q/Q" else 0.5)
 
-    # Forward: use matrix value when available (Market convention) ÔÇö guarantees match with Rate/Vol Matrix.
+    # Forward: use matrix value when available (Market convention)  —  guarantees match with Rate/Vol Matrix.
     # For Q/Q or S/S overrides, or when matrix not loaded, compute from curve.
     fwd_from_matrix = None
     if leg_conv == "Market" and fwd_matrix is not None:
@@ -4688,7 +4688,7 @@ def swaptions_tab(vol_mode: str):
 
     if fwd_from_matrix is not None:
         fwd = fwd_from_matrix / 100.0
-        # Annuity still needed for pricing ÔÇö compute from curve with OIS discounting
+        # Annuity still needed for pricing  —  compute from curve with OIS discounting
         if curve is not None:
             _, ann, _ = forward_and_annuity_from_curve(curve, ccy, expiry_y, tenor_y, ois_curve, freq_override=None)
         else:
@@ -4871,8 +4871,8 @@ def swaptions_tab(vol_mode: str):
     st.markdown("---")
     vol_src = st.radio("Vol", ["Surface", "Manual"], horizontal=True, key="sw_volsrc")
 
-    # 3D Vol Surface ÔÇö collapsible, below Vol source buttons
-    with st.expander("­ƒôè ATM Vol Surface (3D)", expanded=False):
+    # 3D Vol Surface  —  collapsible, below Vol source buttons
+    with st.expander("📈 ATM Vol Surface (3D)", expanded=False):
         atm_3d = get_working_atm_surface(ccy)
         if atm_3d is not None:
             try:
@@ -4923,7 +4923,7 @@ def swaptions_tab(vol_mode: str):
                 zlabel = "Vol (bp)" if surf_mode_sw == "Vol (bp)" else "Fwd Premium (bp)"
                 z_arr = np.array(z_vals, dtype=float)
 
-                # Surface trace ÔÇö matches Vol Editor style
+                # Surface trace  —  matches Vol Editor style
                 surf_trace = go.Surface(
                     x=ten_yrs, y=exp_yrs, z=z_arr,
                     colorscale=[
@@ -4940,7 +4940,7 @@ def swaptions_tab(vol_mode: str):
                     lighting=dict(ambient=0.7, diffuse=0.8, specular=0.3, roughness=0.5),
                     lightposition=dict(x=1000, y=1000, z=2000),
                 )
-                # Scatter dots on grid points ÔÇö matches Vol Editor nodes
+                # Scatter dots on grid points  —  matches Vol Editor nodes
                 dot_x, dot_y, dot_z, dot_text = [], [], [], []
                 for i, exp in enumerate(sorted_exp):
                     for j, ten in enumerate(sorted_ten):
@@ -4965,13 +4965,13 @@ def swaptions_tab(vol_mode: str):
                 fig3d = go.Figure(data=[surf_trace, dots_trace])
                 fig3d.update_layout(
                     scene=dict(
-                        # X = Tenor (leftÔåÆright, shortÔåÆlong) matching vol editor
+                        # X = Tenor (left→right, short→long) matching vol editor
                         xaxis=dict(title="Tenor", tickmode="array",
                                    tickvals=ten_yrs, ticktext=sorted_ten,
                                    tickangle=0, nticks=len(sorted_ten),
                                    gridcolor="#1e3a5f", color="#94a3b8",
                                    backgroundcolor="rgba(2,6,23,0.8)", showbackground=True),
-                        # Y = Expiry (frontÔåÆback) matching vol editor
+                        # Y = Expiry (front→back) matching vol editor
                         yaxis=dict(title="Expiry", tickmode="array",
                                    tickvals=exp_yrs, ticktext=sorted_exp,
                                    nticks=len(sorted_exp),
@@ -4981,7 +4981,7 @@ def swaptions_tab(vol_mode: str):
                                    gridcolor="#1e3a5f", color="#94a3b8",
                                    backgroundcolor="rgba(2,6,23,0.6)", showbackground=True),
                         bgcolor="rgba(2,6,23,0.0)",
-                        # Camera matches vol editor angle ÔÇö tenor left-right, expiry front-back
+                        # Camera matches vol editor angle  —  tenor left-right, expiry front-back
                         camera=dict(eye=dict(x=-1.8, y=-1.8, z=1.0)),
                         aspectmode="manual",
                         aspectratio=dict(x=2.0, y=1.5, z=0.8),
@@ -5046,7 +5046,7 @@ def swaptions_tab(vol_mode: str):
             _smile = st.session_state.get("sabr_smile_mode", "Sticky-ATM (alpha-sticky)")
             if vol_mode.startswith("Normal"):
                 if "Sticky-Strike" in _smile:
-                    # Use ATM vol regardless of strike ÔÇö most conservative
+                    # Use ATM vol regardless of strike  —  most conservative
                     return atm_val / 10000.0
                 else:
                     # Sticky-Delta and Sticky-ATM both use ATM vol in Normal mode
@@ -5056,7 +5056,7 @@ def swaptions_tab(vol_mode: str):
                 sabr = get_sabr_params_from_matrices(a, b, r, n, expiry, tenor_y)
                 if sabr:
                     if "Sticky-Strike" in _smile:
-                        # Price at absolute strike K ÔÇö moneyness changes with forward
+                        # Price at absolute strike K  —  moneyness changes with forward
                         return sabr_implied_vol_black(fwd_pct/100.0, k_pct/100.0, expiry_y,
                                                        sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"])
                     elif "Sticky-Delta" in _smile:
@@ -5304,10 +5304,10 @@ def swaptions_tab(vol_mode: str):
             display_prem_bp = r.get("display_prem_bp", res.get("pv_bp", 0))
 
             if stored_prem_type == "Fwd":
-                st.metric("Premium (bp) ÔÇö Fwd", f"{display_prem_bp:.2f}",
+                st.metric("Premium (bp)  —  Fwd", f"{display_prem_bp:.2f}",
                           help="Forward premium in bp: df cancels in PV/BPV = market convention")
             else:
-                st.metric("Premium (bp) ÔÇö Spot", f"{display_prem_bp:.2f}",
+                st.metric("Premium (bp)  —  Spot", f"{display_prem_bp:.2f}",
                           help="Spot premium: PV/BPV ├ù df_expiry")
             st.metric("Total PV", f"${res['pv']:,.0f}")
             
@@ -5343,7 +5343,7 @@ def swaptions_tab(vol_mode: str):
         with ph1:
             st.markdown("### Swaption Blotter")
         with ph2:
-            if st.button("­ƒùæ´©Å Clear All", key="sw_clear_portfolio"):
+            if st.button("ƒùæ´©Å Clear All", key="sw_clear_portfolio"):
                 st.session_state["swaption_portfolio"] = []
                 st.session_state["portfolio"] = []
                 _save_portfolio()
@@ -5373,17 +5373,17 @@ def swaptions_tab(vol_mode: str):
         )
         st.dataframe(df_display, use_container_width=True)
 
-        # Reload / Reprice ÔÇö load a blotter row back into the pricer
+        # Reload / Reprice  —  load a blotter row back into the pricer
         st.markdown("##### Reload into Pricer")
         row_labels = [
             f"{i}: {r.get('label', f"{r.get('expiry','')}x{r.get('tenor','')}")}"
             for i, r in df.iterrows()
         ]
-        reload_sel = st.selectbox("Select ticket", ["ÔÇö"] + row_labels, key="sw_reload_sel")
-        if st.button("Ôå®´©Å Reload & Reprice", key="sw_reload_btn") and reload_sel != "ÔÇö":
+        reload_sel = st.selectbox("Select ticket", [" — "] + row_labels, key="sw_reload_sel")
+        if st.button("Ôå®´©Å Reload & Reprice", key="sw_reload_btn") and reload_sel != " — ":
             row_idx = int(reload_sel.split(":")[0])
             row = df.loc[row_idx]
-            EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","­ƒôà Custom Date..."]
+            EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","📀 Custom Date..."]
             tenor_options = ["1Y","2Y","3Y","4Y","5Y","6Y","7Y","8Y","9Y","10Y","12Y","15Y","20Y","25Y","30Y"]
             exp_val = str(row.get("expiry", "5y"))
             tenor_val = str(row.get("tenor", "5Y"))
@@ -5403,7 +5403,7 @@ def caps_floors_tab(vol_mode: str):
     # Currency selector
     col_ccy, col_spacer = st.columns([1, 3])
     with col_ccy:
-        ccy_select = st.selectbox("­ƒîì Currency", ALL_CURRENCIES, key="cf_ccy")
+        ccy_select = st.selectbox("📌 Currency", ALL_CURRENCIES, key="cf_ccy")
     
     # Extract actual currency code (remove PENDING)
     ccy = ccy_select.split(" ")[0]
@@ -5446,7 +5446,7 @@ def caps_floors_tab(vol_mode: str):
         swap_tenor = tenor_y - first_fixing_y
         fwd, _, _ = forward_and_annuity_from_curve(curve, ccy, first_fixing_y, swap_tenor, ois_curve)
         
-        # Build QUARTERLY cap schedule ÔÇö MUST use same 1/252 base as bootstrap
+        # Build QUARTERLY cap schedule  —  MUST use same 1/252 base as bootstrap
         # so pricer T values exactly match the bootstrapped vol curve anchor points.
         # Skip caplets where T_fix <= first_fixing_y (those fixings are "known").
         base = 1.0 / 252.0
@@ -5604,7 +5604,7 @@ def caps_floors_tab(vol_mode: str):
         st.caption(f"Using flat vol: **{vol_input:.2f}** ({'bp normal' if model=='Normal' else '% Black'})")
         
     elif vol_src == "Manual Term Structure":
-        st.caption("Enter caplet vols at anchor maturities (bp) ÔÇö cubic spline interpolated between points")
+        st.caption("Enter caplet vols at anchor maturities (bp)  —  cubic spline interpolated between points")
 
         MTS_ANCHORS = [
             ("cf_mts_025", "0.25Y"), ("cf_mts_050", "0.50Y"), ("cf_mts_075", "0.75Y"),
@@ -5690,7 +5690,7 @@ def caps_floors_tab(vol_mode: str):
                         st.session_state[_k] = _d
 
             ROW_DATA = [
-                ("cf_spr_3m1y",  "3m1yÔåÆ1Y",     "3m1y",  "3mx1",  "1Y CFS",  spread_3m1y),
+                ("cf_spr_3m1y",  "3m1y→1Y",     "3m1y",  "3mx1",  "1Y CFS",  spread_3m1y),
                 ("cf_spr_1y1y",  "1y1y vs 1x2",    "1y1y",  "1x2",   "2Y CFS",  spread_1y1y),
                 ("cf_spr_2y1y",  "2y1y vs 2x3",    "2y1y",  "2x3",   "3Y CFS",  spread_2y1y),
                 ("cf_spr_3y1y",  "3y1y vs 3x4",    "3y1y",  "3x4",   "4Y CFS",  spread_3y1y),
@@ -5737,8 +5737,8 @@ def caps_floors_tab(vol_mode: str):
                         cfs_str  = f"{cfs:.4f}"
                     else:
                         cfs = None
-                        swpt_str = "ÔÇö"
-                        cfs_str  = "ÔÇö"
+                        swpt_str = " — "
+                        cfs_str  = " — "
                     st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_label"] = cfs_lbl
                     rc = st.columns(CW)
                     fs = "font-size:0.80rem;padding-top:6px"
@@ -5828,7 +5828,7 @@ def caps_floors_tab(vol_mode: str):
             st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
             _pub_col1, _pub_col2 = st.columns([2, 3])
             with _pub_col1:
-                if st.button("­ƒôí Publish Wedge Mids to Blotter", key="publish_wedge_mids", use_container_width=True):
+                if st.button("📍 Publish Wedge Mids to Blotter", key="publish_wedge_mids", use_container_width=True):
                     if not HAS_POSTGRES:
                         st.error("Database not connected.")
                     else:
@@ -5856,9 +5856,9 @@ def caps_floors_tab(vol_mode: str):
                         if _n > 0:
                             st.success(f"Ô£à Published {_n} mid values to blotter.")
                         else:
-                            st.error("No mids published ÔÇö generate premiums first.")
+                            st.error("No mids published  —  generate premiums first.")
             with _pub_col2:
-                st.caption("Publishes swaption premiums, CFS straddle mids and wedge spreads to Supabase for the live blotter to consume via ­ƒöä Load Fresh Mids.")
+                st.caption("Publishes swaption premiums, CFS straddle mids and wedge spreads to Supabase for the live blotter to consume via ƒöä Load Fresh Mids.")
 
                 # CALCULATE CFS VALUES BEFORE BUILDING VOL CURVE
         if "cfs_table_data" in st.session_state:
@@ -5895,7 +5895,7 @@ def caps_floors_tab(vol_mode: str):
         
         # Show the curve
         if caplet_vol_curve:
-            with st.expander("­ƒôè Resulting Caplet Vol Curve", expanded=False):
+            with st.expander("📈 Resulting Caplet Vol Curve", expanded=False):
                 # Show exact bootstrapped vols in table
                 curve_data = []
                 for t in sorted(caplet_vol_curve.keys()):
@@ -5957,7 +5957,7 @@ def caps_floors_tab(vol_mode: str):
             st.warning("Unable to build caplet vol curve from surface. Falling back to 35bp flat.")
             caplet_vol_curve = {t: 35.0 for t in [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0]}
         else:
-            with st.expander("­ƒôè Caplet Vol Term Structure (Auto)", expanded=False):
+            with st.expander("📈 Caplet Vol Term Structure (Auto)", expanded=False):
                 curve_data = []
                 for t in sorted(caplet_vol_curve.keys()):
                     curve_data.append({"Maturity (Y)": f"{t:.2f}", "Vol (bp)": f"{caplet_vol_curve[t]:.2f}"})
@@ -6207,7 +6207,7 @@ def caps_floors_tab(vol_mode: str):
             st.metric("Total PV", f"${r['pv_total']:,.0f}")
             
             st.markdown("##### Greeks (Net)")
-            # Cap/Floor delta ÔÇö same convention as swaptions
+            # Cap/Floor delta  —  same convention as swaptions
             # delta_total = sum of caplet DV01s
             # delta_ratio = delta_total / one_bp = hedge % of notional (50% ATM)
             # delta_swap  = delta_ratio * notional_$ = notional-equivalent swap hedge
@@ -6249,7 +6249,7 @@ def exotics_tab(vol_mode: str):
     # Currency selector
     col_ccy, col_spacer = st.columns([1, 3])
     with col_ccy:
-        ccy_select = st.selectbox("­ƒîì Currency", ALL_CURRENCIES, key="ex_ccy")
+        ccy_select = st.selectbox("📌 Currency", ALL_CURRENCIES, key="ex_ccy")
     ccy = ccy_select.split(" ")[0]
     if "PENDING" in ccy_select:
         st.warning(f"ÔÅ│ {ccy} pricing coming soon. Currently supported: AUD, NZD, USD")
@@ -6261,9 +6261,9 @@ def exotics_tab(vol_mode: str):
     atm       = get_working_atm_surface(ccy)
     _, a_m, b_m, r_m, n_m = get_ccy_vol_data(ccy)
 
-    # ÔöÇÔöÇ Correlation & CMS Config (always visible ÔÇö check before pricing) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+    # ÔöÇÔöÇ Correlation & CMS Config (always visible  —  check before pricing) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     with st.expander("ÔÜÖ´©Å Correlation Matrix & CMS Convexity Config", expanded=False):
-        st.markdown("**Swap Rate Correlation Matrix** ÔÇö used by Spread Options and CMS Spread products")
+        st.markdown("**Swap Rate Correlation Matrix**  —  used by Spread Options and CMS Spread products")
         st.caption("Edit cells then click Save. These persist across sessions.")
 
         cfg_changed = False
@@ -6280,7 +6280,7 @@ def exotics_tab(vol_mode: str):
             row_cols[0].markdown(f"**{t_row}**")
             for ci, t_col in enumerate(_CORR_TENORS):
                 if ci < ri:
-                    row_cols[ci+1].markdown("")          # below diagonal ÔÇö blank
+                    row_cols[ci+1].markdown("")          # below diagonal  —  blank
                 elif ci == ri:
                     row_cols[ci+1].markdown("1.000")     # diagonal
                 else:
@@ -6298,7 +6298,7 @@ def exotics_tab(vol_mode: str):
                         cfg_changed = True
 
         st.markdown("---")
-        st.markdown("**CMS Convexity Adjustment Bumps (bp)** ÔÇö added to Hagan formula output")
+        st.markdown("**CMS Convexity Adjustment Bumps (bp)**  —  added to Hagan formula output")
         st.caption("Positive = increase convexity adj above model. Zero = use Hagan formula as-is.")
         bump_cols = st.columns(len(_CORR_TENORS))
         for ci, t in enumerate(_CORR_TENORS):
@@ -6313,7 +6313,7 @@ def exotics_tab(vol_mode: str):
 
         save_col, reset_col, _ = st.columns([1, 1, 4])
         with save_col:
-            if st.button("­ƒÆ¥ Save Config", key="ex_save_cfg"):
+            if st.button("🌿 Save Config", key="ex_save_cfg"):
                 _save_exotics_config()
                 st.success("Saved to exotics_config.json")
         with reset_col:
@@ -6325,14 +6325,14 @@ def exotics_tab(vol_mode: str):
                 _save_exotics_config()
                 st.rerun()
 
-    sub = st.tabs(["­ƒôÉ Spread / Curve Options", "­ƒôè CMS Products", "­ƒöö Bermudan / Callable", "­ƒ¬£ Digital Ladder", "ÒÇ░´©Å Zero Coupon Swap"])
+    sub = st.tabs(["📉 Spread / Curve Options", "📈 CMS Products", "ƒöö Bermudan / Callable", "🬣 Digital Ladder", "ÒÇ░´©Å Zero Coupon Swap"])
 
     # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
-    # TAB 1 ÔÇö SPREAD / CURVE OPTIONS
+    # TAB 1  —  SPREAD / CURVE OPTIONS
     # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
     with sub[0]:
         st.markdown("### Curve Spread Options")
-        st.caption("Option on the spread between two swap rates ÔÇö steepener/flattener. Bachelier (Normal) model.")
+        st.caption("Option on the spread between two swap rates  —  steepener/flattener. Bachelier (Normal) model.")
 
         # ÔöÇÔöÇ Leg inputs ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
         col1, col2, col3 = st.columns(3)
@@ -6400,7 +6400,7 @@ def exotics_tab(vol_mode: str):
             st.session_state["so_vs2"] = float(round(_pre_vol(short_y), 1))
 
         with vc1:
-            # Pull vol from ATM surface ÔÇö try exact expiry then interpolate between neighbours
+            # Pull vol from ATM surface  —  try exact expiry then interpolate between neighbours
             _so_expiry_order = ["1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","7y","10y","12y","15y","20y"]
             def _get_atm_vol_interp(tenor_y):
                 if atm is None:
@@ -6562,14 +6562,14 @@ def exotics_tab(vol_mode: str):
         fig_so.add_vline(x=K, line_dash="dot", line_color="#f59e0b",
                          annotation_text=f"Strike {K:.1f}bp")
         fig_so.update_layout(
-            title=f"{long_tenor_sel}-{short_tenor_sel} Spread Option ÔÇö Premium vs Forward Spread",
+            title=f"{long_tenor_sel}-{short_tenor_sel} Spread Option  —  Premium vs Forward Spread",
             xaxis_title="Forward Spread (bp)", yaxis_title="Premium (bp notional)",
             template="plotly_dark", height=370,
             legend=dict(orientation="h", y=1.1))
         st.plotly_chart(fig_so, use_container_width=True)
 
         # ÔöÇÔöÇ Correlation sensitivity ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
-        with st.expander("­ƒôè Correlation Sensitivity"):
+        with st.expander("📈 Correlation Sensitivity"):
             rho_range = np.linspace(0.60, 0.99, 40)
             prem_vs_rho = []
             for rho_ in rho_range:
@@ -6590,15 +6590,15 @@ def exotics_tab(vol_mode: str):
                                    xaxis_title="¤ü", yaxis_title="Premium (bp)",
                                    template="plotly_dark", height=300)
             st.plotly_chart(fig_rho, use_container_width=True)
-            st.caption("Higher correlation ÔåÆ lower spread vol ÔåÆ cheaper spread option. "
+            st.caption("Higher correlation → lower spread vol → cheaper spread option. "
                        "¤ü is the key uncertainty in spread option pricing.")
 
     # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
-    # TAB 2 ÔÇö CMS PRODUCTS
+    # TAB 2  —  CMS PRODUCTS
     # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
     with sub[1]:
         st.markdown("### CMS Products")
-        st.caption("CMS caplets/floorlets/swaplets ÔÇö floating rate is the prevailing CMS swap rate, not BBSW. "
+        st.caption("CMS caplets/floorlets/swaplets  —  floating rate is the prevailing CMS swap rate, not BBSW. "
                    "Hagan linear swap rate (LSR) convexity adjustment + Bachelier pricing.")
 
         cms_product = st.radio("Product",
@@ -6720,7 +6720,7 @@ def exotics_tab(vol_mode: str):
             dA_dF = -delta_cpn**2 * sum(k * v_factor**(k + 1) for k in range(1, n_cpn + 1))
             G = dA_dF / A if A > 0 else 0.0
             # adj in rate units: F┬▓ ├ù ¤â┬▓ ├ù T ├ù G (sign: positive for cap-style)
-            adj = -F**2 * sigma**2 * T_fix * G   # G is negative ÔåÆ adj positive
+            adj = -F**2 * sigma**2 * T_fix * G   # G is negative → adj positive
             return adj * 10000.0   # return in bp
 
         # CMS coupon frequency for AUD
@@ -6810,7 +6810,7 @@ def exotics_tab(vol_mode: str):
                 mr5.metric("Avg Conv Adj", f"{sum(r['adj_bp'] for r in results_cms)/len(results_cms):.2f}bp")
 
             # Schedule table
-            with st.expander("­ƒôï Caplet Schedule"):
+            with st.expander("📏 Caplet Schedule"):
                 df_sched = pd.DataFrame([{
                     "Fix (y)": f"{r['T_fix']:.3f}",
                     "CMS Fwd (%)": f"{r['F']*100:.4f}",
@@ -6837,7 +6837,7 @@ def exotics_tab(vol_mode: str):
             fig_cms.add_vline(x=K_cms * 100, line_dash="dot", line_color="#f59e0b",
                                annotation_text=f"Strike {K_cms*100:.3f}%")
             fig_cms.update_layout(
-                title=f"CMS {cms_rate_tenor} {'Cap' if cms_is_cap else 'Floor'} ÔÇö PV vs Strike",
+                title=f"CMS {cms_rate_tenor} {'Cap' if cms_is_cap else 'Floor'}  —  PV vs Strike",
                 xaxis_title="Strike (%)", yaxis_title="PV (bp notional)",
                 template="plotly_dark", height=360)
             st.plotly_chart(fig_cms, use_container_width=True)
@@ -6847,7 +6847,7 @@ def exotics_tab(vol_mode: str):
                 st.markdown(f"""
 **Why CMS rates need a convexity adjustment:**
 
-A CMS coupon pays the {cms_rate_tenor} swap rate at fixing, but discounted to the payment date using a shorter-maturity discount factor. The CMS rate is a martingale under the *swap annuity measure*, not under the *payment date forward measure* ÔÇö so a measure-change correction is required.
+A CMS coupon pays the {cms_rate_tenor} swap rate at fixing, but discounted to the payment date using a shorter-maturity discount factor. The CMS rate is a martingale under the *swap annuity measure*, not under the *payment date forward measure*  —  so a measure-change correction is required.
 
 **Hagan LSR formula used here:**
 
@@ -6858,7 +6858,7 @@ Where:
 - `¤â` = normal vol of the {cms_rate_tenor} rate
 - `T_fix` = time to fixing
 - `A(F)` = swap annuity (PV of $1 paid every {cms_cpn_freq*12:.0f} months for {cms_rate_tenor})
-- `dA/dF` = sensitivity of annuity to rate ÔÇö always negative (rates up ÔåÆ annuity down)
+- `dA/dF` = sensitivity of annuity to rate  —  always negative (rates up → annuity down)
 
 The adjustment is always **positive** (CMS forward rate > standard forward rate) because higher rates reduce the annuity, creating a natural bias toward higher CMS fixings under the payment measure.
 
@@ -6867,7 +6867,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
 
         else:
             # ÔöÇÔöÇ CMS SPREAD CAP/FLOOR ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
-            st.markdown("**CMS Spread Cap/Floor** ÔÇö option on spread between two CMS rates")
+            st.markdown("**CMS Spread Cap/Floor**  —  option on spread between two CMS rates")
             ss1, ss2, ss3 = st.columns(3)
             with ss1:
                 cms2_tenor = st.selectbox("Second CMS Tenor",
@@ -6921,7 +6921,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
             st.metric("PV (bp notional)", f"{total_pv_sp/(cms_notional*1e6)*10000:.3f}bp")
 
     # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
-    # TAB 3 ÔÇö BERMUDAN / CALLABLE (Hull-White 1F trinomial tree)
+    # TAB 3  —  BERMUDAN / CALLABLE (Hull-White 1F trinomial tree)
     # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
     with sub[2]:
         st.markdown("### Bermudan Swaption / Callable Swap")
@@ -6965,7 +6965,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
             ex_dates.append(round(t, 4))
             t += berm_freq
         if not ex_dates:
-            st.warning("No valid exercise dates ÔÇö check First Call Ôëñ Final Maturity ÔêÆ Swap Tenor.")
+            st.warning("No valid exercise dates  —  check First Call ≤ Final Maturity ÔêÆ Swap Tenor.")
             st.stop()
 
         st.caption(f"Exercise dates: {', '.join(f'{t}y' for t in ex_dates)} "
@@ -7140,7 +7140,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
                     # Initialise: terminal swap values
                     t_grid = [i * dt for i in range(N_steps + 1)]
 
-                    # Option value at each node ÔÇö backward induction
+                    # Option value at each node  —  backward induction
                     # V[j] = value at node j at current time step
                     # j ranges from -M to +M
                     import numpy as _np2
@@ -7238,7 +7238,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
                     br4.metric("Bermudan Premium", f"${berm_pv - euro_pv:,.0f}",
                                delta=f"{berm_pv_bp - euro_bp:.2f}bp over European")
 
-                    with st.expander("­ƒôï HW1F Calibration ÔÇö Co-terminal ¤â"):
+                    with st.expander("📏 HW1F Calibration  —  Co-terminal ¤â"):
                         df_cal = pd.DataFrame([{
                             "Exercise Date": f"{te:.2f}y",
                             "Co-terminal Swap": f"{T_final-te:.1f}Y",
@@ -7255,7 +7255,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
                     st.code(traceback.format_exc())
 
     # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
-    # TAB 4 ÔÇö DIGITAL LADDER (existing)
+    # TAB 4  —  DIGITAL LADDER (existing)
     # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
     with sub[3]:
         st.markdown("### Digital Ladder")
@@ -7314,7 +7314,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
     with sub[4]:
         st.markdown("### Zero Coupon Swap")
         st.caption(
-            "**Notional = Ending (Maturity) Amount** ÔÇö market convention. "
+            "**Notional = Ending (Maturity) Amount**  —  market convention. "
             "Starting notional is back-calculated from the fixed rate. "
             "Fixed leg: N_end ÔêÆ N_start (single payment). "
             "Floating leg: N_start ├ù [ÔêÅ(1+BBSW_i├ù╬┤_i) ÔêÆ 1] (single payment). "
@@ -7326,7 +7326,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
         with zi1:
             zcs_notional = st.number_input("Ending Notional / Maturity Amount (AUD mm)", 1.0, 5000.0,
                                             100.0, step=10.0, key="zcs_notl")
-            zcs_end_notional = zcs_notional * 1e6   # N_end ÔÇö the maturity amount
+            zcs_end_notional = zcs_notional * 1e6   # N_end  —  the maturity amount
         with zi2:
             zcs_tenor_sel = st.selectbox("Tenor",
                 ["1Y","2Y","3Y","4Y","5Y","7Y","10Y","12Y","15Y","20Y","25Y","30Y"],
@@ -7350,11 +7350,11 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
             zcs_trade_date = st.date_input("Trade Date",
                 value=_d.today(), format="DD/MM/YYYY", key="zcs_tdate")
         with zd2:
-            # AUD: T+1 BD (AFMA) ÔÇö uses full holiday calendar
+            # AUD: T+1 BD (AFMA)  —  uses full holiday calendar
             zcs_eff_date = au_spot_date(zcs_trade_date, ccy)
             st.metric("Effective Date", zcs_eff_date.strftime("%d %b %Y"))
         with zd3:
-            # Modified Following maturity ÔÇö AFMA convention
+            # Modified Following maturity  —  AFMA convention
             zcs_mat_date = au_end_date(zcs_eff_date, zcs_n)
             st.metric("Maturity Date", zcs_mat_date.strftime("%d %b %Y"))
 
@@ -7386,7 +7386,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
                         f"{'Ô£à ATM' if abs(zcs_fixed_rate - zcs_par_rate) < 0.00005 else f'╬ö {(zcs_fixed_rate-zcs_par_rate)*10000:+.1f}bp'}")
 
         # ÔöÇÔöÇ Notional derivation ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
-        # N_start = N_end / (1 + r)^T   ÔÇö back-calculated from ending notional + fixed rate
+        # N_start = N_end / (1 + r)^T    —  back-calculated from ending notional + fixed rate
         zcs_compound_factor_fixed = (1.0 + zcs_fixed_rate) ** zcs_T
         zcs_start_notional = zcs_end_notional / zcs_compound_factor_fixed
         # For legacy compatibility keep zcs_face = start notional (used in float schedule)
@@ -7449,7 +7449,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
             zcs_net_pv = zcs_fixed_pv - zcs_float_pv
             zcs_net_payment = zcs_fixed_payment - zcs_float_payment
 
-        # DV01 ÔÇö bump fixed rate 1bp
+        # DV01  —  bump fixed rate 1bp
         # DV01: bump fixed rate +1bp, recompute start notional and fixed payment
         _rate_up = zcs_fixed_rate + 0.0001
         _start_up = zcs_end_notional / ((1.0 + _rate_up) ** zcs_T)
@@ -7484,7 +7484,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
         st.markdown("#### Floating Leg Reset Schedule (Estimated)")
         st.caption(
             "Compounding: each period's interest accrues on the PREVIOUS period's balance (interest on interest). "
-            "No payments until maturity. Forward BBSW rates from curve ÔÇö actual fixings will differ."
+            "No payments until maturity. Forward BBSW rates from curve  —  actual fixings will differ."
         )
         _prev_bal = zcs_start_notional
         _rows_zcs = []
@@ -7532,13 +7532,13 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
 
         # ÔöÇÔöÇ Excel schedule generator ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
         st.markdown("---")
-        st.markdown("#### ­ƒôä Client Payment Schedule")
+        st.markdown("#### 📄 Client Payment Schedule")
 
         st.caption(
-            "LEI = Legal Entity Identifier (20-char) ÔÇö required for ASIC trade reporting by both swap counterparties. "
+            "LEI = Legal Entity Identifier (20-char)  —  required for ASIC trade reporting by both swap counterparties. "
             "RateEdge as arranger/broker is not a principal and does not require an LEI. "
             "BIC = SWIFT code identifying the party's LCH clearing member. "
-            "AUD ZCS: LCH SwapClear eligible (BBSW, up to 31Y), CFTC-mandated cleared 28dÔÇô30Y."
+            "AUD ZCS: LCH SwapClear eligible (BBSW, up to 31Y), CFTC-mandated cleared 28d-30Y."
         )
 
         zc1, zc2, zc3 = st.columns(3)
@@ -7561,7 +7561,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
             client_entity = client_lei
             dealer_entity = dealer_lei
 
-        if st.button("­ƒôÑ Generate Client Schedule (Excel)", key="zcs_gen_excel"):
+        if st.button("📑 Generate Client Schedule (Excel)", key="zcs_gen_excel"):
             import openpyxl
             from openpyxl.styles import (Font, PatternFill, Alignment,
                                           Border, Side, numbers)
@@ -7570,7 +7570,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
 
             wb = openpyxl.Workbook()
 
-            # Party labels ÔÇö always by role, not "client/dealer"
+            # Party labels  —  always by role, not "client/dealer"
             party_fixed_payer    = dealer_name if zcs_pay_fixed else client_name
             party_fixed_receiver = client_name if zcs_pay_fixed else dealer_name
             lei_fixed_payer      = dealer_lei  if zcs_pay_fixed else client_lei
@@ -7606,7 +7606,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
                 if fmt: c.number_format = fmt
 
             # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
-            # SHEET 1 ÔÇö TRADE CONFIRMATION SUMMARY
+            # SHEET 1  —  TRADE CONFIRMATION SUMMARY
             # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
             ws1 = wb.active
             ws1.title = "Trade Summary"
@@ -7619,13 +7619,13 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
             # Title banner
             ws1.merge_cells("A1:E1")
             c = ws1["A1"]
-            c.value = "ZERO COUPON SWAP ÔÇö INDICATIVE TRADE CONFIRMATION"
+            c.value = "ZERO COUPON SWAP  —  INDICATIVE TRADE CONFIRMATION"
             c.font = Font(name="Arial", bold=True, color="FFFFFF", size=13)
             c.fill = navy_fill; c.alignment = centre_al
 
             ws1.merge_cells("A2:E2")
             c = ws1["A2"]
-            c.value = f"RateEdge Options Platform  |  {zcs_trade_date.strftime('%d %B %Y')}  |  Arranged by: {broker_co} ÔÇö {broker_name}  |  {broker_email}"
+            c.value = f"RateEdge Options Platform  |  {zcs_trade_date.strftime('%d %B %Y')}  |  Arranged by: {broker_co}  —  {broker_name}  |  {broker_email}"
             c.font = Font(name="Arial", color="FFFFFF", size=9, italic=True)
             c.fill = red_fill; c.alignment = centre_al
 
@@ -7693,7 +7693,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
                 ("Payer Floating", party_fixed_receiver),
                 ("Receives Fixed", party_fixed_payer),
                 ("Floating Index", f"{int(zcs_delta*12)}M BBSW"),
-                ("Compounding", "Quarterly ÔÇö no interim payments"),
+                ("Compounding", "Quarterly  —  no interim payments"),
                 ("Payment", "Single payment at maturity"),
                 ("Estimated Amount", f"AUD {zcs_float_payment:,.2f}"),
                 ("Calculation", f"AUD {zcs_start_notional:,.2f} ├ù [ÔêÅ(1 + BBSWßÁó ├ù ╬┤ßÁó) ÔêÆ 1]"),
@@ -7730,8 +7730,8 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
                 ("Payer Fixed BIC", f"{bic_fixed_payer}"),
                 ("Payer Floating LEI", f"{lei_fixed_receiver}"),
                 ("Payer Floating BIC", f"{bic_fixed_receiver}"),
-                ("Clearing Venue", "LCH SwapClear (AUD BBSW ZCS ÔÇö eligible up to 31Y)"),
-                ("CFTC Mandate", "Mandatory cleared: 28dÔÇô30Y residual maturity"),
+                ("Clearing Venue", "LCH SwapClear (AUD BBSW ZCS  —  eligible up to 31Y)"),
+                ("CFTC Mandate", "Mandatory cleared: 28d-30Y residual maturity"),
                 ("ASIC Reporting", "Both parties to report under ASIC derivative rules"),
             ]
             for i, (lbl, val) in enumerate(net_rows, start=row_net+1):
@@ -7745,18 +7745,18 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
             row_disc = row_net + len(net_rows) + 2
             ws1.merge_cells(f"A{row_disc}:E{row_disc+2}")
             ws1[f"A{row_disc}"].value = (
-                "INDICATIVE TERMS ONLY ÔÇö NOT A BINDING CONFIRMATION. "
+                "INDICATIVE TERMS ONLY  —  NOT A BINDING CONFIRMATION. "
                 "Estimated floating amounts are based on prevailing forward BBSW rates as at trade date and will differ from actual fixings. "
                 "Final amounts to be confirmed on maturity date based on published BBSW fixings. "
                 "Subject to ISDA Master Agreement and Credit Support Annex. "
-                "RateEdge is not an AFSL holder ÔÇö for indicative purposes only."
+                "RateEdge is not an AFSL holder  —  for indicative purposes only."
             )
             ws1[f"A{row_disc}"].font = Font(name="Arial", size=8, italic=True, color="64748B")
             ws1[f"A{row_disc}"].alignment = Alignment(wrap_text=True)
             ws1.row_dimensions[row_disc].height = 45
 
             # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
-            # SHEET 2 ÔÇö FLOATING LEG RESET SCHEDULE
+            # SHEET 2  —  FLOATING LEG RESET SCHEDULE
             # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
             ws2 = wb.create_sheet("Floating Reset Schedule")
             col_widths = [6, 14, 14, 14, 8, 14, 22, 22, 22, 22]
@@ -7772,10 +7772,10 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
             ws2.insert_rows(1)
             ws2.merge_cells(f"A1:{get_column_letter(len(col_hdrs))}1")
             ws2["A1"].value = (
-                f"FLOATING LEG ÔÇö ESTIMATED BBSW RESET SCHEDULE  |  {client_name}  |  "
+                f"FLOATING LEG  —  ESTIMATED BBSW RESET SCHEDULE  |  {client_name}  |  "
                 f"Starting Notional AUD {zcs_start_notional/1e6:,.4f}mm  |  "
                 f"Ending Notional AUD {zcs_end_notional/1e6:,.2f}mm  |  "
-                f"No interim payments ÔÇö all interest compounds and pays at maturity"
+                f"No interim payments  —  all interest compounds and pays at maturity"
             )
             ws2["A1"].font = Font(name="Arial", bold=True, color="FFFFFF", size=11)
             ws2["A1"].fill = navy_fill; ws2["A1"].alignment = centre_al
@@ -7825,14 +7825,14 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
             ws2[f"A{note_row}"].value = (
                 "Note: Forward BBSW rates are indicative estimates based on market curve at trade date. "
                 "Actual floating payment will be determined by published 3M/6M BBSW fixings on each reset date. "
-                "No interim payments are made ÔÇö the entire compounded amount is paid as a single sum at maturity."
+                "No interim payments are made  —  the entire compounded amount is paid as a single sum at maturity."
             )
             ws2[f"A{note_row}"].font = Font(name="Arial", size=8, italic=True, color="64748B")
             ws2[f"A{note_row}"].alignment = Alignment(wrap_text=True)
             ws2.row_dimensions[note_row].height = 35
 
             # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
-            # SHEET 3 ÔÇö FIXED LEG & FINAL EXCHANGE
+            # SHEET 3  —  FIXED LEG & FINAL EXCHANGE
             # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
             ws3 = wb.create_sheet("Fixed Leg & Final Exchange")
             ws3.column_dimensions["A"].width = 30
@@ -7872,7 +7872,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
             # Final exchange
             row_fx = len(fixed_detail) + 6
             ws3.merge_cells(f"A{row_fx}:E{row_fx}")
-            ws3[f"A{row_fx}"].value = f"FINAL EXCHANGE ÔÇö MATURITY DATE {zcs_mat_date.strftime('%d %B %Y')}"
+            ws3[f"A{row_fx}"].value = f"FINAL EXCHANGE  —  MATURITY DATE {zcs_mat_date.strftime('%d %B %Y')}"
             ws3[f"A{row_fx}"].font = hdr_font; ws3[f"A{row_fx}"].fill = red_fill
             ws3[f"A{row_fx}"].alignment = centre_al
 
@@ -7907,7 +7907,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="zcs_dl"
             )
-            st.success(f"Ô£à Schedule generated ÔÇö {len(reset_dates)} reset periods  |  "
+            st.success(f"Ô£à Schedule generated  —  {len(reset_dates)} reset periods  |  "
                        f"Fixed: AUD {zcs_fixed_payment:,.0f}  |  "
                        f"Float est.: AUD {zcs_float_payment:,.0f}  |  "
                        f"Net: AUD {abs(zcs_net_payment):,.0f}")
@@ -7963,7 +7963,7 @@ def vol_surface_editor_tab():
 
     # ÔöÇÔöÇ Full SABR Recalibration (Expert Only) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     st.markdown("---")
-    with st.expander("ÔÜù´©Å Full SABR Recalibration ÔÇö Expert Use Only", expanded=False):
+    with st.expander("ÔÜù´©Å Full SABR Recalibration  —  Expert Use Only", expanded=False):
         st.warning(
             "ÔÜá´©Å **Expert use only.** Full recalibration fits all four SABR params (╬▒, ╬▓, ¤ü, ╬¢) "
             "simultaneously to the loaded ATM surface using a numerical optimiser. "
@@ -7977,7 +7977,7 @@ def vol_surface_editor_tab():
         if not _expert_unlocked:
             st.caption("Contact wpo@rateedge.au for the expert recalibration code.")
         else:
-            st.success("­ƒöô Expert mode unlocked.")
+            st.success("ƒöô Expert mode unlocked.")
             _rc_ccy = ccy
             _rc_curve = get_ccy_curve(_rc_ccy)
             _rc_ois = get_basis_curve(_rc_ccy, "ois")
@@ -8434,10 +8434,10 @@ def _rv_get_vols(data: dict, ccy: str = "AUD") -> pd.DataFrame:
     return df.sort_values("date").reset_index(drop=True)
 
 def rv_tab():
-    st.subheader("­ƒôè Relative Value ÔÇö Swaption & Cap/Floor Trade Ideas")
+    st.subheader("📈 Relative Value  —  Swaption & Cap/Floor Trade Ideas")
     st.caption(
         "Live vol surface + IRS curve for richness/cheapness signals. "
-        "Historical context from local data (dummy 2022ÔÇô2025). "
+        "Historical context from local data (dummy 2022-2025). "
         "Wires to rateedge.com.au PostgreSQL when licensed."
     )
 
@@ -8453,14 +8453,14 @@ def rv_tab():
     has_hist  = len(df_rates) > 10
 
     rv_tabs = st.tabs([
-        "­ƒÄ» Vol Surface RV",
-        "­ƒôê Curve RV & Spread Analysis",
-        "­ƒÆí Swaption Trade Ideas",
-        "­ƒÆí Cap/Floor Trade Ideas",
+        "⚡ Vol Surface RV",
+        "📊 Curve RV & Spread Analysis",
+        "🌕 Swaption Trade Ideas",
+        "🌕 Cap/Floor Trade Ideas",
     ])
 
     # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
-    # TAB 1 ÔÇö VOL SURFACE RV
+    # TAB 1  —  VOL SURFACE RV
     # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
     with rv_tabs[0]:
         st.markdown("### Vol Surface Richness / Cheapness")
@@ -8502,7 +8502,7 @@ def rv_tab():
                 st.caption("Units: bp. Red = ATM vol expensive vs calendar wings. Green = ATM cheap.")
 
             # ÔöÇÔöÇ Calendar spread ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
-            st.markdown("#### Calendar Vol Spread ÔÇö Term Structure Shape")
+            st.markdown("#### Calendar Vol Spread  —  Term Structure Shape")
             st.caption("Short/Long ratio. >1 = inverted (short-dated expensive). <1 = normal (long-dated expensive).")
 
             cal_pairs = [("1m","3m"), ("3m","6m"), ("6m","1y"), ("1y","2y"),
@@ -8525,10 +8525,10 @@ def rv_tab():
                                           .format("{:.3f}"),
                     use_container_width=True)
 
-            # ÔöÇÔöÇ Vol cone ÔÇö current vs historical percentile ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+            # ÔöÇÔöÇ Vol cone  —  current vs historical percentile ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
             if has_hist and not df_vols.empty:
-                st.markdown("#### Vol Cone ÔÇö Current vs Historical Percentile")
-                st.caption("Compares current vol surface to 2022ÔÇô2025 distribution. "
+                st.markdown("#### Vol Cone  —  Current vs Historical Percentile")
+                st.caption("Compares current vol surface to 2022-2025 distribution. "
                            "Percentile = % of history where vol was BELOW current.")
 
                 cone_rows = []
@@ -8557,7 +8557,7 @@ def rv_tab():
                     st.caption("Red = high percentile (vol expensive vs history). Green = cheap.")
 
     # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
-    # TAB 2 ÔÇö CURVE RV & SPREAD ANALYSIS
+    # TAB 2  —  CURVE RV & SPREAD ANALYSIS
     # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
     with rv_tabs[1]:
         st.markdown("### Curve Shape & Forward Spread RV")
@@ -8612,7 +8612,7 @@ def rv_tab():
                 if not h:
                     return ""
                 return (f" Historically {h['pct']:.0f}th percentile "
-                        f"(range {h['p10']*100:.0f}ÔÇô{h['p90']*100:.0f}bp, mean {h['mean']*100:.0f}bp, 2018ÔÇô2025).")
+                        f"(range {h['p10']*100:.0f}-{h['p90']*100:.0f}bp, mean {h['mean']*100:.0f}bp, 2018-2025).")
 
             # Fwd rates
             def _fwd_rate(t1, t2):
@@ -8658,7 +8658,7 @@ def rv_tab():
                         text=f"{lbl}: {v:.2f}%",
                         showarrow=True, arrowhead=2, arrowcolor="#f59e0b",
                         font=dict(color="#f59e0b", size=10))
-            fig_curve.update_layout(title="AUD IRS Curve ÔÇö Current", xaxis_title="Tenor (y)",
+            fig_curve.update_layout(title="AUD IRS Curve  —  Current", xaxis_title="Tenor (y)",
                 yaxis_title="Rate (%)", template="plotly_dark", height=300)
             st.plotly_chart(fig_curve, use_container_width=True)
 
@@ -8718,7 +8718,7 @@ def rv_tab():
 
             # Fwd spread scatter (replicated from swap_relative_value.py)
             if has_hist:
-                st.markdown("#### Forward Spread vs Curve Spread ÔÇö Scatter RV")
+                st.markdown("#### Forward Spread vs Curve Spread  —  Scatter RV")
                 sc1, sc2, sc3, sc4 = st.columns(4)
                 with sc1:
                     fwd_sel_start = st.selectbox("Fwd Start", ["1y","2y","3y","5y"], index=1, key="rv_fwd_s")
@@ -8824,10 +8824,10 @@ def rv_tab():
                         fig_resid.update_layout(title="Residual vs Regression (Rich/Cheap Signal)",
                                                 template="plotly_dark", height=220)
                         st.plotly_chart(fig_resid, use_container_width=True)
-                        st.caption("Residual > +1¤â = forward spread RICH vs curve ÔåÆ fade. Residual < ÔêÆ1¤â = CHEAP ÔåÆ buy.")
+                        st.caption("Residual > +1¤â = forward spread RICH vs curve → fade. Residual < ÔêÆ1¤â = CHEAP → buy.")
 
     # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
-    # TAB 3 ÔÇö SWAPTION TRADE IDEAS
+    # TAB 3  —  SWAPTION TRADE IDEAS
     # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
     with rv_tabs[2]:
         st.markdown("### Swaption RV Trade Recommendations")
@@ -8839,7 +8839,7 @@ def rv_tab():
             ideas = []
 
             # ÔöÇÔöÇ Idea engine ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
-            # 1. Vol butterfly ÔÇö ATM vs wings in expiry dim
+            # 1. Vol butterfly  —  ATM vs wings in expiry dim
             for tn in [2, 5, 10]:
                 for mid_e, lo_e, hi_e in [("3m","1m","6m"),("6m","3m","1y"),
                                            ("1y","6m","2y"),("2y","1y","3y")]:
@@ -8862,7 +8862,7 @@ def rv_tab():
                             "Score": abs(fly),
                         })
 
-            # 2. Calendar spread ÔÇö term structure steepness
+            # 2. Calendar spread  —  term structure steepness
             for tn in [2, 5, 10]:
                 v_short = get_matrix_value(atm, "3m", float(tn))
                 v_long  = get_matrix_value(atm, "2y", float(tn))
@@ -8874,7 +8874,7 @@ def rv_tab():
                             "Structure": f"3m/2y├ù{tn}Y calendar",
                             "Signal": f"Ratio = {ratio:.3f}",
                             "Trade": f"Sell 3m├ù{tn}Y / Buy 2y├ù{tn}Y (sell calendar)",
-                            "Rationale": f"3m vol {(ratio-1)*100:.0f}% above 2y vol ÔÇö inverted ts, mean-reverts",
+                            "Rationale": f"3m vol {(ratio-1)*100:.0f}% above 2y vol  —  inverted ts, mean-reverts",
                             "Risk": "Short gamma if rates move sharply near-term",
                             "Score": (ratio - 1.0) * 100,
                         })
@@ -8884,7 +8884,7 @@ def rv_tab():
                             "Structure": f"3m/2y├ù{tn}Y calendar",
                             "Signal": f"Ratio = {ratio:.3f}",
                             "Trade": f"Buy 3m├ù{tn}Y / Sell 2y├ù{tn}Y (buy calendar)",
-                            "Rationale": f"Short-dated vol cheap vs 2Y ÔÇö normal structure unusually steep",
+                            "Rationale": f"Short-dated vol cheap vs 2Y  —  normal structure unusually steep",
                             "Risk": "Carry negative; vol may stay low near-term",
                             "Score": (1.0 - ratio) * 100,
                         })
@@ -8905,7 +8905,7 @@ def rv_tab():
                         "Structure": "5y├ù5Y Payer Swaption",
                         "Signal": f"5y5y fwd {fwd_5y5y:.3f}% vs spot 5Y {r5:.3f}%",
                         "Trade": "Buy 5y├ù5Y ATM Payer",
-                        "Rationale": f"Curve pricing {(fwd_5y5y-r5)*100:.0f}bp of steepening by 5Y point ÔÇö asymmetric "
+                        "Rationale": f"Curve pricing {(fwd_5y5y-r5)*100:.0f}bp of steepening by 5Y point  —  asymmetric "
                                      f"risk if RBA easier than fwd. Vol at {v_5y5y:.1f}bp.",
                         "Risk": "Pays premium; loses if rates fall or stay flat",
                         "Score": (fwd_5y5y - r5) * 80,
@@ -8917,12 +8917,12 @@ def rv_tab():
                         "Structure": "5y├ù5Y Receiver Swaption",
                         "Signal": f"5y5y fwd {fwd_5y5y:.3f}% vs spot 5Y {r5:.3f}%",
                         "Trade": "Buy 5y├ù5Y ATM Receiver",
-                        "Rationale": f"Inverted fwd curve pricing easing ÔÇö if RBA cuts more aggressively, receiver pays well.",
+                        "Rationale": f"Inverted fwd curve pricing easing  —  if RBA cuts more aggressively, receiver pays well.",
                         "Risk": "Pays premium; loses if easing is less than priced",
                         "Score": abs(fwd_5y5y - r5) * 80,
                     })
 
-            # 4. Gamma vs theta ÔÇö short-dated high gamma
+            # 4. Gamma vs theta  —  short-dated high gamma
             for tn in [2, 5, 10]:
                 v1m = get_matrix_value(atm, "1m", float(tn))
                 v3m = get_matrix_value(atm, "3m", float(tn))
@@ -8939,13 +8939,13 @@ def rv_tab():
                             "Structure": f"1m├ù{tn}Y short gamma",
                             "Signal": f"╬│ ratio = {gamma_ratio:.2f}x fair",
                             "Trade": f"Sell 1m├ù{tn}Y straddle (short gamma)",
-                            "Rationale": f"1m vol {gamma_actual:.0f}bp vs fair {gamma_fair:.0f}bp ÔÇö "
+                            "Rationale": f"1m vol {gamma_actual:.0f}bp vs fair {gamma_fair:.0f}bp  —  "
                                          f"gamma {(gamma_ratio-1)*100:.0f}% expensive on ╬©-adj basis",
                             "Risk": "Large near-term rate move would hurt",
                             "Score": (gamma_ratio - 1) * 60,
                         })
 
-            # ÔöÇÔöÇ Curve Steepener / Flattener ÔÇö IRS ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+            # ÔöÇÔöÇ Curve Steepener / Flattener  —  IRS ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
             if curve is not None:
                 r2  = _par_rate(2)
                 r5  = _par_rate(5)
@@ -8961,7 +8961,7 @@ def rv_tab():
                             "Structure": "2s10s Flattener",
                             "Signal": f"2s10s = {slope_2s10s*100:.0f}bp steep",
                             "Trade": "Pay 2Y / Receive 10Y (IRS flattener)",
-                            "Rationale": f"2s10s at {slope_2s10s*100:.0f}bp ÔÇö historically elevated. "
+                            "Rationale": f"2s10s at {slope_2s10s*100:.0f}bp  —  historically elevated. "
                                          f"Flattener profits if curve reverts toward fair." + _hist_note("2s10s"),
                             "Risk": "Carry negative in steep curve; stop if curve steepens further",
                             "Score": slope_2s10s * 120,
@@ -8972,7 +8972,7 @@ def rv_tab():
                             "Structure": "2s10s Steepener",
                             "Signal": f"2s10s = {slope_2s10s*100:.0f}bp inverted",
                             "Trade": "Receive 2Y / Pay 10Y (IRS steepener)",
-                            "Rationale": f"2s10s inverted {abs(slope_2s10s)*100:.0f}bp ÔÇö "
+                            "Rationale": f"2s10s inverted {abs(slope_2s10s)*100:.0f}bp  —  "
                                          f"steepener profits on RBA pivot / normalisation." + _hist_note("2s10s"),
                             "Risk": "Carry positive but inversion can persist",
                             "Score": abs(slope_2s10s) * 100,
@@ -8986,8 +8986,8 @@ def rv_tab():
                         "Structure": f"2s5s {direction}",
                         "Signal": f"2s5s = {slope_2s5s*100:.0f}bp",
                         "Trade": f"{trade} (IRS {direction.lower()})",
-                        "Rationale": f"2s5s at {slope_2s5s*100:.0f}bp ÔÇö "
-                                     f"{'steep relative to history' if slope_2s5s>0 else 'inverted ÔÇö cuts priced'}." + _hist_note("2s5s"),
+                        "Rationale": f"2s5s at {slope_2s5s*100:.0f}bp  —  "
+                                     f"{'steep relative to history' if slope_2s5s>0 else 'inverted  —  cuts priced'}." + _hist_note("2s5s"),
                         "Risk": "Mark-to-market vol on DV01 mismatch",
                         "Score": abs(slope_2s5s) * 90,
                     })
@@ -9005,7 +9005,7 @@ def rv_tab():
                         "Score": abs(slope_5s10s) * 80,
                     })
 
-            # ÔöÇÔöÇ Curve Steepener / Flattener ÔÇö Vol Expression ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
+            # ÔöÇÔöÇ Curve Steepener / Flattener  —  Vol Expression ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
             if curve is not None and atm is not None:
                 r2  = _par_rate(2)
                 r5  = _par_rate(5)
@@ -9020,7 +9020,7 @@ def rv_tab():
                         "Structure": "2s10s Flattener via Swaptions",
                         "Signal": f"2s10s = {slope_2s10s*100:.0f}bp",
                         "Trade": "Buy 1y├ù2Y Receiver / Buy 1y├ù10Y Payer (vol flattener)",
-                        "Rationale": f"Express curve flattener via swaptions ÔÇö receiver on front "
+                        "Rationale": f"Express curve flattener via swaptions  —  receiver on front "
                                      f"(short rates fall), payer on back (long rates rise or stay). "
                                      f"Vols: 2Y={v_rec_2y2:.0f}bp, 10Y={v_pay_2y10:.0f}bp." if v_rec_2y2 and v_pay_2y10 else
                                      f"Express curve flattener via swaptions.",
@@ -9035,7 +9035,7 @@ def rv_tab():
                         "Structure": "2s10s Steepener via Swaptions",
                         "Signal": f"2s10s = {slope_2s10s*100:.0f}bp inverted",
                         "Trade": "Buy 1y├ù2Y Payer / Buy 1y├ù10Y Receiver (vol steepener)",
-                        "Rationale": f"Express curve steepener ÔÇö payer on 2Y (front rates up on inflation), "
+                        "Rationale": f"Express curve steepener  —  payer on 2Y (front rates up on inflation), "
                                      f"receiver on 10Y (longs rally on flight to quality). "
                                      f"Vols: 2Y={v_pay_2y2:.0f}bp, 10Y={v_rec_2y10:.0f}bp." if v_pay_2y2 and v_rec_2y10 else
                                      f"Vol expression of curve steepening.",
@@ -9052,7 +9052,7 @@ def rv_tab():
                         v_long  = get_matrix_value(atm, long_e,  float(tn))
                         if v_short and v_long and v_long > 0:
                             ratio = v_short / v_long
-                            # Normalise by sqrt(T) ÔÇö fair ratio should be ~sqrt(T_short/T_long)
+                            # Normalise by sqrt(T)  —  fair ratio should be ~sqrt(T_short/T_long)
                             import re as _re
                             def _e2y(e):
                                 m = _re.match(r"(\d+)(m|y)", e)
@@ -9122,12 +9122,12 @@ def rv_tab():
                 _copy_text = "\n".join(_copy_lines)
                 with col_sel3:
                     # Use text_area + clipboard JS instead of download_button to avoid rerun freezing P&L
-                    if st.button("­ƒôï Copy Ideas", key="rv_copy_btn"):
+                    if st.button("📏 Copy Ideas", key="rv_copy_btn"):
                         st.session_state["rv_copy_text"] = _copy_text
                         st.session_state["rv_copy_show"] = True
 
                 if st.session_state.get("rv_copy_show"):
-                    st.text_area("­ƒôï Select all and copy (Ctrl+A, Ctrl+C)",
+                    st.text_area("📏 Select all and copy (Ctrl+A, Ctrl+C)",
                                  st.session_state.get("rv_copy_text", ""),
                                  height=120, key="rv_copy_area")
                     if st.button("Ô£ò Close", key="rv_copy_close"):
@@ -9138,7 +9138,7 @@ def rv_tab():
                     score_color = "#22c55e" if idea["Score"] > 5 else "#f59e0b"
                     is_selected = i in selected
                     with st.expander(
-                        f"{'Ô£à' if is_selected else '  '} **{idea['Type']}** ÔÇö {idea['Structure']}  |  {idea['Signal']}  "
+                        f"{'Ô£à' if is_selected else '  '} **{idea['Type']}**  —  {idea['Structure']}  |  {idea['Signal']}  "
                         f"| Score: {idea['Score']:.1f}", expanded=i < 2):
                         c1, c2 = st.columns([3, 1])
                         with c1:
@@ -9168,8 +9168,8 @@ def rv_tab():
             # ÔöÇÔöÇ Theoretical P&L at a Given Forward Rate ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
             # ÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉÔòÉ
             st.markdown("---")
-            st.markdown("#### ­ƒôê Theoretical P&L at a Given Forward Rate")
-            st.caption("Each trade uses its own specific rate exposure ÔÇö not a single 5Y proxy.")
+            st.markdown("#### 📊 Theoretical P&L at a Given Forward Rate")
+            st.caption("Each trade uses its own specific rate exposure  —  not a single 5Y proxy.")
 
             # ÔöÇÔöÇ Helper: parse expiry + tenor from idea Structure string ÔöÇ
             import re as _re_pnl
@@ -9181,7 +9181,7 @@ def rv_tab():
                     qty, unit, tenor = m.group(1), m.group(2).lower(), float(m.group(3))
                     exp_y = float(qty)/12 if unit == "m" else float(qty)/52 if unit == "w" else float(qty)
                     return exp_y, tenor
-                # Pattern: NsMs e.g. 2s10s ÔåÆ expiry=1y, tenor=10Y (curve spread)
+                # Pattern: NsMs e.g. 2s10s → expiry=1y, tenor=10Y (curve spread)
                 m2 = _re_pnl.search(r"(\d+)s(\d+)s", struct)
                 if m2:
                     short_t = float(m2.group(1))
@@ -9202,7 +9202,7 @@ def rv_tab():
                 # Roll to Monday if weekend
                 if d.weekday() == 5: d += _td(days=2)
                 if d.weekday() == 6: d += _td(days=1)
-                # Roll back if month-end crossed ÔÇö simplified
+                # Roll back if month-end crossed  —  simplified
                 from datetime import date as _dt2
                 _, last = _cal.monthrange(d.year, d.month)
                 if d.day > last:
@@ -9222,7 +9222,7 @@ def rv_tab():
 
             def _matrix_rate_at(exp_y: float, tenor_y: float) -> float | None:
                 """Interpolate fwd matrix at (expiry_yf_from_today, tenor_y).
-                exp_y is already the year fraction from today ÔÇö no date conversion needed here."""
+                exp_y is already the year fraction from today  —  no date conversion needed here."""
                 if not _has_matrix:
                     return None
                 if len(_matrix_exp_yf) < 2 or len(_matrix_tenors) < 2:
@@ -9279,7 +9279,7 @@ def rv_tab():
 
             else:  # Fwd Curve from Matrix
                 if not _has_matrix:
-                    st.warning("No fwd matrix loaded ÔÇö go to Rate/Vol Matrix tab and click 'Generate All Matrices' first.")
+                    st.warning("No fwd matrix loaded  —  go to Rate/Vol Matrix tab and click 'Generate All Matrices' first.")
                     _get_move_for_idea = lambda e, t, d=None: (0.0, 4.5, 4.5)
                     _val_date_used = None
                     _show_fwd_curve = False
@@ -9372,7 +9372,7 @@ def rv_tab():
                     _type  = idea["Type"]
 
                     if "Calendar" in _type or "Spread" in _type or "straddle" in _trade.lower():
-                        # Long straddle / calendar spread ÔÇö profits from vol change + abs move
+                        # Long straddle / calendar spread  —  profits from vol change + abs move
                         _est_pnl = abs(_move_bp) * _dv01 / 100 * 0.5
                         _basis += f" | |{_move_bp:.1f}bp| ╬│Ôëê50%"
                     elif "Payer" in _trade and "Receiver" not in _trade:
@@ -9382,7 +9382,7 @@ def rv_tab():
                         _est_pnl = -_move_bp * _dv01 / 100
                         _basis += f" | -{_move_bp:+.1f}bp"
                     elif "Flattener" in _trade:
-                        # Flattener: gains if short end rises vs long end ÔÇö use slope move
+                        # Flattener: gains if short end rises vs long end  —  use slope move
                         _short_y = max(tenor_y - 8, 2.0)
                         _, _, _fwd_short = _get_move_for_idea(exp_y, _short_y, _val_date_used)
                         _, _, _fwd_long  = _get_move_for_idea(exp_y, tenor_y, _val_date_used)
@@ -9417,7 +9417,7 @@ def rv_tab():
 
                 if _pnl_rows:
                     st.dataframe(pd.DataFrame(_pnl_rows), use_container_width=True, hide_index=True)
-                    st.caption("ÔÜá´©Å Estimates only ÔÇö DV01 ├ù rate move proxy. "
+                    st.caption("ÔÜá´©Å Estimates only  —  DV01 ├ù rate move proxy. "
                                "Use Swaptions/Caps tabs for full vol-adjusted pricing.")
 
                     _vals = [float(r["Est. P&L"].replace("k","").replace("+","")) for r in _pnl_rows]
@@ -9430,7 +9430,7 @@ def rv_tab():
                         textposition="outside"))
                     _title_date = str(_val_date_used) if _val_date_used else "manual shift"
                     _fig_pnl.update_layout(
-                        title=f"Est. P&L ÔÇö {_notional_mm:.0f}mm notional | {_title_date}",
+                        title=f"Est. P&L  —  {_notional_mm:.0f}mm notional | {_title_date}",
                         yaxis_title="Est. P&L (AUD '000)",
                         xaxis_tickangle=-35,
                         template="plotly_dark", height=360,
@@ -9440,7 +9440,7 @@ def rv_tab():
                     st.info("Generate ideas above to see P&L estimates.")
     with rv_tabs[3]:
         st.markdown("### Cap/Floor RV Trade Recommendations")
-        st.caption("Forward BBSW path vs caplet vol ÔÇö find richness/cheapness by strike and maturity.")
+        st.caption("Forward BBSW path vs caplet vol  —  find richness/cheapness by strike and maturity.")
 
         if curve is None:
             st.warning("Load AUD IRS curve to generate cap/floor ideas.")
@@ -9478,11 +9478,11 @@ def rv_tab():
             peak_fwd = max((p["Fwd 3m BBSW (%)"] for p in fwd_bbsw_pts), default=spot_3m)
             trough_fwd = min((p["Fwd 3m BBSW (%)"] for p in fwd_bbsw_pts), default=spot_3m)
 
-            # Idea 1: curve shape ÔåÆ cap vs floor preference
+            # Idea 1: curve shape → cap vs floor preference
             curve_slope_2s5s = _par_rate(5) - _par_rate(2)
             fwd_peak_t = t_pts[r_pts.index(max(r_pts))] if r_pts else 0
 
-            if curve_slope_2s5s > 0.20:  # steep ÔåÆ rates going up
+            if curve_slope_2s5s > 0.20:  # steep → rates going up
                 v_2y_cap = get_matrix_value(atm, "2y", 2.0)
                 cf_ideas.append({
                     "Type": "Cap",
@@ -9495,14 +9495,14 @@ def rv_tab():
                     "Risk": "Pays premium; loses if rates stay flat or fall",
                     "Score": curve_slope_2s5s * 300,
                 })
-            elif curve_slope_2s5s < -0.10:  # inverted ÔåÆ cuts priced
+            elif curve_slope_2s5s < -0.10:  # inverted → cuts priced
                 v_2y_floor = get_matrix_value(atm, "2y", 2.0)
                 cf_ideas.append({
                     "Type": "Floor",
                     "Structure": "2Y ATM Floor",
                     "Signal": f"2s5s = {curve_slope_2s5s*100:.0f}bp inverted",
                     "Trade": "Buy 2Y ATM Floor (receive if BBSW < strike)",
-                    "Rationale": f"Inverted 2s5s ÔÇö market pricing cuts. Floor benefits from deeper/faster cuts.",
+                    "Rationale": f"Inverted 2s5s  —  market pricing cuts. Floor benefits from deeper/faster cuts.",
                     "Risk": "Pays premium; loses if cuts slower than priced",
                     "Score": abs(curve_slope_2s5s) * 250,
                 })
@@ -9515,11 +9515,11 @@ def rv_tab():
                     "Type": "Cap",
                     "Structure": f"2Y Cap struck at fwd peak ({peak_rate:.3f}%)",
                     "Signal": f"Fwd peak {peak_rate:.3f}% at {fwd_peak_t:.1f}y",
-                    "Trade": f"Buy 2Y Cap struck at {peak_rate:.3f}% ÔÇö OTM cap on peak BBSW",
+                    "Trade": f"Buy 2Y Cap struck at {peak_rate:.3f}%  —  OTM cap on peak BBSW",
                     "Rationale": f"Curve implies BBSW peaks at {peak_rate:.3f}% around {fwd_peak_t:.1f}y. "
                                  f"OTM cap cheap if realised path overshoots. "
                                  f"{'Cap vol ~' + str(round(v_exp,1)) + 'bp.' if v_exp else ''}",
-                    "Risk": "OTM ÔÇö needs BBSW to exceed forward peak",
+                    "Risk": "OTM  —  needs BBSW to exceed forward peak",
                     "Score": 15,
                 })
 
@@ -9563,7 +9563,7 @@ def rv_tab():
                 st.markdown(f"**{len(cf_ideas)} cap/floor ideas generated**")
                 for i, idea in enumerate(cf_ideas[:6]):
                     with st.expander(
-                        f"**{idea['Type']}** ÔÇö {idea['Structure']}  |  {idea['Signal']}",
+                        f"**{idea['Type']}**  —  {idea['Structure']}  |  {idea['Signal']}",
                         expanded=i < 2):
                         c1, c2 = st.columns([3, 1])
                         with c1:
@@ -9576,7 +9576,7 @@ def rv_tab():
             # ÔöÇÔöÇ Data source note ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
             st.markdown("---")
             st.caption(
-                "­ƒôî **Data source:** Local dummy data 2022ÔÇô2025 (AUD). "
+                "📎 **Data source:** Local dummy data 2022-2025 (AUD). "
                 "To connect live PostgreSQL from rateedge.com.au: replace `_load_rv_data()` "
                 "with a psycopg2 query to `swap_rates` / `benchmark_rates` tables. "
                 "Schema: `(rate_date DATE, currency VARCHAR, tenor VARCHAR, rate_pct FLOAT)`."
@@ -9586,12 +9586,12 @@ def rv_tab():
 
 
 # ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
-# AGB BOND OPTION PRICER ÔÇö OTC Physical Bond Options
+# AGB BOND OPTION PRICER  —  OTC Physical Bond Options
 # ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 # Current AGB lines on issue (coupon %, maturity date, label)
 AGB_LINES = [
-    # Active bonds as of Mar-2026 ÔÇö remove matured: Nov-24, Apr-25, Oct-25
+    # Active bonds as of Mar-2026  —  remove matured: Nov-24, Apr-25, Oct-25
     (4.50, "2026-04-21", "4.50% Apr-26"),
     (1.75, "2026-11-21", "1.75% Nov-26"),
     (4.75, "2027-04-21", "4.75% Apr-27"),
@@ -9647,7 +9647,7 @@ def aofm_dirty_price(coupon_pct: float, maturity: date, yield_pct: float, settle
     # Find next coupon date after settlement
     all_cpdates = _coupon_dates(maturity, settlement)
     if not all_cpdates:
-        # Bond matured or near maturity ÔÇö simple formula
+        # Bond matured or near maturity  —  simple formula
         if i == 0:
             return 100.0 + g
         f_days = (maturity - settlement).days
@@ -9732,7 +9732,7 @@ def agb_forward_price(
     T_days = (expiry - settle).days
     T = T_days / 365.0
 
-    # Coupons paid between settle and expiry ÔÇö strip and PV at OIS rate
+    # Coupons paid between settle and expiry  —  strip and PV at OIS rate
     all_cpdates = _coupon_dates(maturity, settle)
     g = coupon_pct / 2.0
     coupons_stripped = []
@@ -9852,12 +9852,12 @@ def bachelier_bond_option_yield(
 
 def bond_option_tab():
     """OTC AGB Bond Option Pricer."""
-    st.subheader("­ƒÅø´©Å Bond Options ÔÇö OTC Physical AGB")
+    st.subheader("🅸´©Å Bond Options  —  OTC Physical AGB")
 
     # ÔöÇÔöÇ Licence gate ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     _BOND_PW = "REBO2024"   # change this to your chosen licence key
     if not st.session_state.get("bond_options_unlocked"):
-        st.info("­ƒöÆ Bond Options is a licensed add-on. Enter your access code to continue.")
+        st.info("ƒöÆ Bond Options is a licensed add-on. Enter your access code to continue.")
         _pw_col, _btn_col = st.columns([3, 1])
         with _pw_col:
             _pw = st.text_input("Access Code", type="password", key="bond_pw_input",
@@ -9901,9 +9901,9 @@ def bond_option_tab():
         today = _date.today()
         expiry_presets = {"1m": 30, "2m": 60, "3m": 91, "6m": 182, "9m": 273, "1y": 365,
                           "2y": 730, "3y": 1095, "5y": 1825}
-        exp_sel = st.selectbox("Expiry", list(expiry_presets.keys()) + ["­ƒôà Custom..."],
+        exp_sel = st.selectbox("Expiry", list(expiry_presets.keys()) + ["📀 Custom..."],
                                index=3, key="bo_expiry")
-        if exp_sel == "­ƒôà Custom...":
+        if exp_sel == "📀 Custom...":
             exp_date = st.date_input("Expiry Date", value=today + timedelta(days=182),
                                      format="DD/MM/YYYY", key="bo_exp_custom")
         else:
@@ -9928,7 +9928,7 @@ def bond_option_tab():
         repo_rate = st.number_input("Repo Rate (% pa)", min_value=0.01, max_value=20.0,
                                      value=4.30, step=0.01, format="%.3f", key="bo_repo")
     with col_spread:
-        st.caption("GC AGB repo Ôëê AONIA + 5ÔÇô15bp")
+        st.caption("GC AGB repo Ôëê AONIA + 5-15bp")
         aonia_proxy = repo_rate  # user sets directly
 
     # ÔöÇÔöÇÔöÇ Pricing engine ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
@@ -10055,7 +10055,7 @@ def bond_option_tab():
 
     # ÔöÇÔöÇÔöÇ Vol smile / payoff chart ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     st.markdown("---")
-    chart_tab1, chart_tab2 = st.tabs(["­ƒôê Premium vs Strike", "­ƒôè Vol Sensitivity"])
+    chart_tab1, chart_tab2 = st.tabs(["📊 Premium vs Strike", "📈 Vol Sensitivity"])
 
     with chart_tab1:
         strikes_y = np.linspace(max(fwd_yield - 1.5, 0.1), fwd_yield + 1.5, 60)
@@ -10112,7 +10112,7 @@ def bond_option_tab():
         st.plotly_chart(fig2, use_container_width=True)
 
     # ÔöÇÔöÇÔöÇ Bond schedule ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
-    with st.expander("­ƒôï Bond & Option Details"):
+    with st.expander("📏 Bond & Option Details"):
         col_a, col_b = st.columns(2)
         with col_a:
             st.markdown("**Bond Cashflows to Expiry (stripped)**")
@@ -10197,11 +10197,11 @@ def portfolio_tab():
         if r.get("instrument_type", "Swaption") == "Swaption"
     ]
     if row_labels_ptf:
-        reload_sel_ptf = st.selectbox("Select ticket", ["ÔÇö"] + row_labels_ptf, key="ptf_reload_sel")
-        if st.button("Ôå®´©Å Reload & Reprice", key="ptf_reload_btn") and reload_sel_ptf != "ÔÇö":
+        reload_sel_ptf = st.selectbox("Select ticket", [" — "] + row_labels_ptf, key="ptf_reload_sel")
+        if st.button("Ôå®´©Å Reload & Reprice", key="ptf_reload_btn") and reload_sel_ptf != " — ":
             row_idx = int(reload_sel_ptf.split(":")[0])
             row = df.loc[row_idx]
-            EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","­ƒôà Custom Date..."]
+            EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","📀 Custom Date..."]
             tenor_options = ["1Y","2Y","3Y","4Y","5Y","6Y","7Y","8Y","9Y","10Y","12Y","15Y","20Y","25Y","30Y"]
             exp_val = str(row.get("expiry", "5y"))
             tenor_val = str(row.get("tenor", "5Y"))
@@ -10327,13 +10327,13 @@ def home_tab():
             **Swaption Specifics**
             | Convention | Standard |
             |------------|----------|
-            | Settlement | Physical ÔÇö LCH Cleared Swap |
+            | Settlement | Physical  —  LCH Cleared Swap |
             | Premium Quote | Basis points of notional face value |
             | Premium Payment | Same day as expiry |
-            | Exercise | European ÔÇö 10:00am AEST |
+            | Exercise | European  —  10:00am AEST |
             | Vol Quote | Normal (bp/annum) |
             | Discount Curve | AONIA OIS |
-            | Expiry Style | Quarterly Ôëñ3y, semi-annual ÔëÑ4y |
+            | Expiry Style | Quarterly ≤3y, semi-annual ≥4y |
             """)
         with col2:
             st.markdown("""
@@ -10361,7 +10361,7 @@ def home_tab():
         | **Termination Option Notice** | n/a |
         """)
 
-        st.markdown("#### Standard Transaction Size ÔÇö Swaptions (AUD million) *(AFMA IRO 3.4)*")
+        st.markdown("#### Standard Transaction Size  —  Swaptions (AUD million) *(AFMA IRO 3.4)*")
         st.markdown("""
         | Expiry \\ Tenor | 1Y | 2Y | 3Y | 4Y | 5Y | 7Y | 10Y | 15Y | 20Y | 30Y |
         |---|---|---|---|---|---|---|---|---|---|---|
@@ -10403,7 +10403,7 @@ def home_tab():
             | Premium Payment | T+2 |
             | Settlement Style | Non-discounted, paid in arrears |
             | ATM Reference | Forward swap rate for underlying tenor |
-            | CSA Default | AUD ÔÇö premium adj agreed post-trade |
+            | CSA Default | AUD  —  premium adj agreed post-trade |
             | FRA Yield Discounting | Must be excluded in confirm ┬╣ |
             """)
         with cf3:
@@ -10430,7 +10430,7 @@ def home_tab():
         | **Termination Option Notice** | n/a |
         """)
 
-        st.markdown("#### Standard Transaction Size ÔÇö Cap/Floor Straddles (AUD million) *(AFMA IRO 3.4.2)*")
+        st.markdown("#### Standard Transaction Size  —  Cap/Floor Straddles (AUD million) *(AFMA IRO 3.4.2)*")
         st.markdown("""
         | Tenor | CFS Notional (A$m) |
         |-------|-------------------|
@@ -10450,7 +10450,7 @@ def home_tab():
             "FRA Yield Discounting applies by default to AUD cap/floor/collar transactions. "
             "Confirmations must explicitly state 'FRA Yield Discounting will not apply' because these products pay in arrears. "
             "In AUD interdealer CFS practice this is typically handled via explicit settlement terms in the bilateral confirm "
-            "rather than the ISDA election ÔÇö but must be verified bilaterally. "
+            "rather than the ISDA election  —  but must be verified bilaterally. "
             "**ÔÜá´©Å WPO: confirm FRA Yield Discounting election approach with each client at deployment.**"
         )
         st.caption("Source: AFMA Interest Rate Options Conventions (June 2025) & AFMA Interest Rate Derivative Conventions (June 2025)")
@@ -10658,8 +10658,8 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
                                   basis_6v3: Optional[pd.DataFrame] = None):
     """Calculate ATM straddle premiums and vega matrix using real annuities from curve.
     Returns: (prem_df, vega_df)
-      prem_df  ÔÇö ATM straddle forward premium in bp
-      vega_df  ÔÇö Vega in $ per 1bp vol move, scaled to 100mm notional
+      prem_df   —  ATM straddle forward premium in bp
+      vega_df   —  Vega in $ per 1bp vol move, scaled to 100mm notional
     """
     if "Expiry" not in atm_vols.columns:
         empty = pd.DataFrame()
@@ -10758,7 +10758,7 @@ def main():
     st.set_page_config(
         page_title="RateEdge Options",
         layout="wide",
-        page_icon="­ƒÆÄ",
+        page_icon="🌄",
         initial_sidebar_state="expanded"
     )
     init_session()
@@ -10836,7 +10836,7 @@ def main():
         st.markdown("---")
 
         # Technical Support
-        with st.expander("­ƒøá´©Å Technical Support", expanded=False):
+        with st.expander("ƒøá´©Å Technical Support", expanded=False):
             _user_email = st.session_state.get("user_email", "")
             _user_name  = st.session_state.get("username", "")
 
@@ -10858,10 +10858,10 @@ def main():
             _severity = st.selectbox(
                 "Severity",
                 [
-                    "­ƒö┤  Critical ÔÇö platform unusable",
-                    "­ƒƒá  High ÔÇö major feature broken",
-                    "­ƒƒí  Medium ÔÇö partial functionality affected",
-                    "­ƒƒó  Low ÔÇö cosmetic / minor issue",
+                    "ƒö┤  Critical  —  platform unusable",
+                    "ƒƒá  High  —  major feature broken",
+                    "ƒƒí  Medium  —  partial functionality affected",
+                    "ƒƒó  Low  —  cosmetic / minor issue",
                 ],
                 key="support_severity"
             )
@@ -10874,16 +10874,16 @@ def main():
             )
 
             # Build mailto
-            _subj = f"RateEdge Support ÔÇö {_issue_type}"
+            _subj = f"RateEdge Support  —  {_issue_type}"
             _body = (
                 f"User: {_user_name} ({_user_email})%0A"
                 f"Issue Type: {_issue_type}%0A"
-                f"Severity: {_severity.split('ÔÇö')[0].strip()}%0A%0A"
+                f"Severity: {_severity.split(' — ')[0].strip()}%0A%0A"
                 f"Description:%0A{_support_desc.replace(chr(10), '%0A') if _support_desc else '[please describe]'}%0A"
             )
-            _mailto = f"mailto:wpo@rateedge.au?subject={_subj.replace(' ', '%20').replace('ÔÇö','--')}&body={_body}"
+            _mailto = f"mailto:wpo@rateedge.au?subject={_subj.replace(' ', '%20').replace(' — ','--')}&body={_body}"
 
-            st.info(f"­ƒôº Email **wpo@rateedge.au** with the details above.\n\nSubject: {_issue_type} ÔÇö {_severity.split('ÔÇö')[0].strip()}")
+            st.info(f"📺 Email **wpo@rateedge.au** with the details above.\n\nSubject: {_issue_type}  —  {_severity.split(' — ')[0].strip()}")
 
         st.markdown("---")
         st.markdown(
@@ -10910,7 +10910,7 @@ def main():
         show_login_page()
         return
     
-    # Single session validation ÔÇö check token still valid in DB
+    # Single session validation  —  check token still valid in DB
     try:
         if HAS_POSTGRES and st.session_state.get("session_token"):
             _vconn = get_db_connection()
@@ -10931,21 +10931,21 @@ def main():
     # Only show tabs if authenticated
     tabs = st.tabs(
         [
-            "­ƒÅá Home",
-            "­ƒôÉ Vol / SABR",
-            "­ƒôë Curves",
-            "­ƒôê FWD Analysis",
-            "­ƒÄ» Swaptions",
-            "­ƒ¬ú Caps & Floors",
-            "­ƒÆ╝ Portfolio",
-            "ÔÜû´©Å RV / Calendar",
-            "­ƒö¼ Exotics",
-            "­ƒîà SOD Report",
-            "Ô£Å´©Å Vol Editor",
-            "­ƒôñ Vol Export",
-            "­ƒîÉ Multi-CCY",
-            "­ƒôè Backtesting",
-            "­ƒÅø´©Å Bond Options",
+            "Home",
+            "Vol / Upload",
+            "Curves",
+            "FWD Analysis",
+            "Swaptions",
+            "Caps & Floors",
+            "Portfolio",
+            "RV / Calendar",
+            "Exotics",
+            "SOD Report",
+            "Vol Editor",
+            "Vol Export",
+            "Multi-CCY",
+            "Backtesting",
+            "Bond Options",
         ]
     )
 
@@ -10982,8 +10982,8 @@ def main():
 
 
 def sod_report_tab():
-    """Start-of-Day Report ÔÇö USD overnight moves ÔåÆ implied AUD vol open."""
-    st.subheader("­ƒîà Start-of-Day Report ÔÇö USD Overnight ÔåÆ AUD Implied Open")
+    """Start-of-Day Report  —  USD overnight moves → implied AUD vol open."""
+    st.subheader("📠 Start-of-Day Report  —  USD Overnight → AUD Implied Open")
     st.caption(
         "Compares USD previous close vs the close before that. "
         "Uses USD IRS + vol moves to imply theoretical AUD vol changes at the open. "
@@ -10997,11 +10997,11 @@ def sod_report_tab():
     _snaps_aud = list_vol_snapshots(user_id, "AUD") if HAS_POSTGRES else []
 
     if not HAS_POSTGRES:
-        st.warning("Database not connected ÔÇö SOD Report requires saved vol snapshots.")
+        st.warning("Database not connected  —  SOD Report requires saved vol snapshots.")
         return
 
     # ÔöÇÔöÇ Dev Tool: Seed dummy USD snapshots for testing ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
-    with st.expander("­ƒøá´©Å Seed Test Data (Dev)", expanded=len(_snaps_usd) < 2):
+    with st.expander("ƒøá´©Å Seed Test Data (Dev)", expanded=len(_snaps_usd) < 2):
         st.caption("Seeds dummy USD vol snapshots based on the currently loaded USD vol surface, "
                    "with randomised daily moves. Use this to test the SOD Report without real EOD data.")
         _seed_c1, _seed_c2, _seed_c3 = st.columns([2, 2, 2])
@@ -11013,7 +11013,7 @@ def sod_report_tab():
                                               value=2.0, step=0.5, key="sod_seed_sigma")
         with _seed_c3:
             st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            _seed_btn = st.button("­ƒî▒ Seed Dummy USD Snapshots", key="sod_seed_btn", type="primary")
+            _seed_btn = st.button("📱 Seed Dummy USD Snapshots", key="sod_seed_btn", type="primary")
 
         if _seed_btn:
             _usd_vol_data = st.session_state.get("vol_data", {}).get("USD", {})
@@ -11093,7 +11093,7 @@ def sod_report_tab():
         return
 
     # ÔöÇÔöÇ Snapshot selectors ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
-    st.markdown("### ­ƒôï Select Closing Snapshots")
+    st.markdown("### 📏 Select Closing Snapshots")
     _sc1, _sc2, _sc3 = st.columns(3)
 
     def _snap_label(s):
@@ -11102,19 +11102,19 @@ def sod_report_tab():
         return f"{str(d)[:16]}  {lbl}"
 
     with _sc1:
-        st.markdown("**USD ÔÇö Previous Close (T-1 NYC)**")
+        st.markdown("**USD  —  Previous Close (T-1 NYC)**")
         _usd_t1_opts = {_snap_label(s): s for s in _snaps_usd}
         _usd_t1_sel  = st.selectbox("USD T-1", list(_usd_t1_opts.keys()), index=0, key="sod_usd_t1")
         _usd_t1      = _usd_t1_opts[_usd_t1_sel]
 
     with _sc2:
-        st.markdown("**USD ÔÇö Two Sessions Ago (T-2 NYC)**")
+        st.markdown("**USD  —  Two Sessions Ago (T-2 NYC)**")
         _usd_t2_opts = {_snap_label(s): s for s in _snaps_usd if s["id"] != _usd_t1["id"]}
         _usd_t2_sel  = st.selectbox("USD T-2", list(_usd_t2_opts.keys()), index=0, key="sod_usd_t2")
         _usd_t2      = _usd_t2_opts[_usd_t2_sel]
 
     with _sc3:
-        st.markdown("**AUD ÔÇö Previous Close (4:30pm Sydney)**")
+        st.markdown("**AUD  —  Previous Close (4:30pm Sydney)**")
         if _snaps_aud:
             _aud_opts = {_snap_label(s): s for s in _snaps_aud}
             _aud_sel  = st.selectbox("AUD prev close", list(_aud_opts.keys()), index=0, key="sod_aud")
@@ -11159,7 +11159,7 @@ def sod_report_tab():
     _atm2 = _norm(_atm2)
 
     # ÔöÇÔöÇ USD Vol Change Matrix ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
-    st.markdown("### ­ƒç║­ƒç© USD Vol Changes ÔÇö Overnight (T-1 close vs T-2 close)")
+    st.markdown("### 🇦🇺 USD Vol Changes  —  Overnight (T-1 close vs T-2 close)")
 
     _common_exp = [e for e in _atm1.index if e in _atm2.index]
     _common_ten = [c for c in _atm1.columns if c in _atm2.columns]
@@ -11210,7 +11210,7 @@ def sod_report_tab():
     st.caption(f"USD T-1: {_usd_t1_sel[:16]}  vs  T-2: {_usd_t2_sel[:16]}")
 
     # ÔöÇÔöÇ IRS Curve Change ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
-    st.markdown("### ­ƒôê USD IRS Curve ÔÇö T-1 Close")
+    st.markdown("### 📊 USD IRS Curve  —  T-1 Close")
     _usd_curve_aud = get_ccy_curve("AUD")
 
     if _usd_curve is not None and not _usd_curve.empty:
@@ -11235,24 +11235,24 @@ def sod_report_tab():
 
     # ÔöÇÔöÇ Implied AUD Vol Open ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
     st.markdown("---")
-    st.markdown("### ­ƒªÿ Implied AUD Vol Open ÔÇö Based on USD Overnight Moves")
+    st.markdown("### 🪿 Implied AUD Vol Open  —  Based on USD Overnight Moves")
     st.caption(
-        "AUD vol sensitivity to USD: short-dated AUD vols (Ôëñ6m) correlate ~40ÔÇô60% with USD, "
-        "long-dated (ÔëÑ2y) ~20ÔÇô35%. Adjustments are indicative ÔÇö verify with live market."
+        "AUD vol sensitivity to USD: short-dated AUD vols (≤6m) correlate ~40-60% with USD, "
+        "long-dated (≥2y) ~20-35%. Adjustments are indicative  —  verify with live market."
     )
 
-    # Sensitivity parameters ÔÇö editable
+    # Sensitivity parameters  —  editable
     with st.expander("ÔÜÖ´©Å Sensitivity Parameters (edit if needed)", expanded=False):
         _sens_c1, _sens_c2, _sens_c3 = st.columns(3)
         with _sens_c1:
-            _beta_short = st.slider("Short-end beta (Ôëñ6m, %)", 10, 90, 50, 5,
+            _beta_short = st.slider("Short-end beta (≤6m, %)", 10, 90, 50, 5,
                                     key="sod_beta_short",
-                                    help="% of USD vol move passed through to AUD Ôëñ6m expiries") / 100
+                                    help="% of USD vol move passed through to AUD ≤6m expiries") / 100
         with _sens_c2:
-            _beta_mid = st.slider("Mid beta (1yÔÇô2y, %)", 10, 70, 35, 5,
+            _beta_mid = st.slider("Mid beta (1y-2y, %)", 10, 70, 35, 5,
                                   key="sod_beta_mid") / 100
         with _sens_c3:
-            _beta_long = st.slider("Long-end beta (ÔëÑ3y, %)", 5, 50, 20, 5,
+            _beta_long = st.slider("Long-end beta (≥3y, %)", 5, 50, 20, 5,
                                    key="sod_beta_long") / 100
 
     def _get_beta(expiry_lbl: str) -> float:
@@ -11364,13 +11364,13 @@ def sod_report_tab():
                                 "AUD Prev Close": f"{float(_aud_atm.loc[_e, _t]):.2f}bp",
                                 "AUD Implied Open": f"{float(_implied_open.loc[_e, _t]):.2f}bp",
                                 "╬ö Fwd Premium": _pchg_str,
-                                "Alert": "­ƒö┤ LARGE MOVE" if abs(_mv) >= _thresh * 1.5 else "­ƒƒí Notable",
+                                "Alert": "ƒö┤ LARGE MOVE" if abs(_mv) >= _thresh * 1.5 else "ƒƒí Notable",
                             })
                     except Exception:
                         pass
 
             if _big_moves:
-                st.markdown(f"#### ÔÜí Notable Moves (ÔëÑ{_thresh}bp implied AUD change)")
+                st.markdown(f"#### ÔÜí Notable Moves (≥{_thresh}bp implied AUD change)")
                 _bm_df = pd.DataFrame(_big_moves).sort_values(
                     "Implied AUD ╬övol",
                     key=lambda x: x.str.replace("bp","").str.replace("+","").astype(float).abs(),
@@ -11382,7 +11382,7 @@ def sod_report_tab():
             # Build cumulative CFS levels using prev-day wedge spreads from session state
             # CFS(nY) = sum of [swaption_leg_prem + wedge] for each wedge in the chain
             st.markdown("---")
-            st.markdown("### ­ƒôÉ Implied AUD CFS Open ÔÇö Using Previous Day Wedge Spreads")
+            st.markdown("### 📉 Implied AUD CFS Open  —  Using Previous Day Wedge Spreads")
             st.caption(
                 "Cumulative CFS = running sum of (swaption leg fwd premium + wedge spread). "
                 "Wedge spreads from current session state (previous close). No caplet stripping."
@@ -11446,14 +11446,14 @@ def sod_report_tab():
                 else:
                     _cfs_rows.append({
                         "CFS Tenor": _cfs_lbl,
-                        "Swptn Leg (prev)": "ÔÇö",
+                        "Swptn Leg (prev)": " — ",
                         "Wedge": f"{_spr:+.2f}",
-                        "CFS Leg (prev)": "ÔÇö",
-                        "Swptn Leg (open)": "ÔÇö",
-                        "CFS Leg (open)": "ÔÇö",
-                        "CFS Total (prev)": "ÔÇö",
-                        "CFS Total (open)": "ÔÇö",
-                        "╬ö CFS": "ÔÇö",
+                        "CFS Leg (prev)": " — ",
+                        "Swptn Leg (open)": " — ",
+                        "CFS Leg (open)": " — ",
+                        "CFS Total (prev)": " — ",
+                        "CFS Total (open)": " — ",
+                        "╬ö CFS": " — ",
                     })
 
             if _cfs_rows:
@@ -11466,7 +11466,7 @@ def sod_report_tab():
 
             # ÔöÇÔöÇ Narrative Summary ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
             st.markdown("---")
-            st.markdown("### ­ƒôØ SOD Summary")
+            st.markdown("### 📘 SOD Summary")
 
             # Build narrative
             _usd_avg_chg = float(_usd_chg.values.astype(float).mean())
@@ -11520,7 +11520,7 @@ def sod_report_tab():
                 )
 
             _narrative = f"""
-**USD overnight vol session (T-2 ÔåÆ T-1 NYC close):** USD ATM vols moved broadly {_usd_direction} \
+**USD overnight vol session (T-2 → T-1 NYC close):** USD ATM vols moved broadly {_usd_direction} \
 overnight, with the surface averaging {abs(_usd_avg_chg):.1f}bp change. \
 The largest moves were in {_usd_move_str}. \
 The range across the surface was {_usd_min_chg:+.1f}bp to {_usd_max_chg:+.1f}bp.{_usd_prem_ctx}
@@ -11530,14 +11530,14 @@ The range across the surface was {_usd_min_chg:+.1f}bp to {_usd_max_chg:+.1f}bp.
 AUD vols are implied to open broadly {_aud_direction}, averaging {abs(_aud_avg_chg):.1f}bp change. \
 Key AUD moves to watch: {_aud_move_str}.{_aud_prem_ctx}
 
-**Tactical note:** {"Short-dated AUD gamma looks relatively more affected given the short-end beta pickup. Consider reviewing 3mÔÇô6m expiry trades before the open." if abs(_aud_avg_chg) > 1.5 else "Moves are modest ÔÇö no urgent repricing expected at the AUD open, but monitor live market confirmation."} \
+**Tactical note:** {"Short-dated AUD gamma looks relatively more affected given the short-end beta pickup. Consider reviewing 3m-6m expiry trades before the open." if abs(_aud_avg_chg) > 1.5 else "Moves are modest  —  no urgent repricing expected at the AUD open, but monitor live market confirmation."} \
 These are indicative adjustments based on observed USD/AUD correlations and should be verified against live interdealer markets at open.
 """
             st.markdown(_narrative)
 
             # ÔöÇÔöÇ Save & Download report ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
             _report_lines = [
-                f"RateEdge SOD Report ÔÇö {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')} AEST",
+                f"RateEdge SOD Report  —  {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')} AEST",
                 f"USD T-1: {_usd_t1_sel[:40]}",
                 f"USD T-2: {_usd_t2_sel[:40]}",
                 f"AUD prev close: {_aud_sel[:40]}",
@@ -11581,7 +11581,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             _btn_col1, _btn_col2 = st.columns(2)
             with _btn_col1:
                 st.download_button(
-                    "­ƒôÑ Download SOD Report",
+                    "📑 Download SOD Report",
                     _report_text.encode(),
                     f"RateEdge_SOD_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.txt",
                     "text/plain", key="sod_download"
@@ -11590,7 +11590,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 if HAS_POSTGRES:
                     _sod_notes = st.text_input("Notes (optional)", value="", key="sod_save_notes", label_visibility="collapsed",
                                                placeholder="Notes (optional)")
-                    if st.button("­ƒÆ¥ Save Report to Supabase", key="sod_save_btn", type="primary", use_container_width=True):
+                    if st.button("🌿 Save Report to Supabase", key="sod_save_btn", type="primary", use_container_width=True):
                         _rid = save_sod_report(
                             user_id=user_id,
                             report_date=pd.Timestamp.now().date(),
@@ -11608,23 +11608,23 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             # ÔöÇÔöÇ Past Reports Browser ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
             if HAS_POSTGRES:
                 st.markdown("---")
-                with st.expander("­ƒôé Past SOD Reports", expanded=False):
+                with st.expander("📙 Past SOD Reports", expanded=False):
                     _past = list_sod_reports(user_id, limit=30)
                     if not _past:
                         st.info("No saved reports yet.")
                     else:
-                        _past_opts = {f"{r['report_date']} ÔÇö {r['usd_t1'][:30]} | {r['notes'] or ''}": r for r in _past}
+                        _past_opts = {f"{r['report_date']}  —  {r['usd_t1'][:30]} | {r['notes'] or ''}": r for r in _past}
                         _past_sel_lbl = st.selectbox("Select report", list(_past_opts.keys()), key="sod_past_sel")
                         _past_rec = _past_opts[_past_sel_lbl]
                         _pcol1, _pcol2 = st.columns(2)
                         with _pcol1:
-                            if st.button("­ƒôû Load & Display", key="sod_past_load", type="primary"):
+                            if st.button("ƒôû Load & Display", key="sod_past_load", type="primary"):
                                 _loaded = load_sod_report(_past_rec["id"])
                                 if _loaded:
                                     st.session_state["sod_loaded_report"] = _loaded
                                     st.success(f"Loaded: {_past_sel_lbl}")
                         with _pcol2:
-                            if st.button("­ƒùæ Delete", key="sod_past_del"):
+                            if st.button("ƒùæ Delete", key="sod_past_del"):
                                 if delete_sod_report(_past_rec["id"]):
                                     st.success("Deleted.")
                                     st.rerun()
@@ -11663,7 +11663,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         else:
             st.warning("No overlapping expiry/tenor between AUD snapshot and USD change matrix.")
     else:
-        # No AUD snapshot ÔÇö show USD change only and instructions
+        # No AUD snapshot  —  show USD change only and instructions
         st.info(
             "No AUD vol snapshot selected. "
             "Save an AUD EOD snapshot from the Vol Export tab to see implied AUD open levels."
@@ -11674,7 +11674,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
 
 def vol_export_tab():
     """Vol Export tab - Export and email vol surfaces"""
-    st.subheader("­ƒôñ Vol Surface Export & Distribution")
+    st.subheader("📑 Vol Surface Export & Distribution")
     st.caption("Export vol surfaces to Excel and email to multiple recipients")
 
     user_id = st.session_state.get("username", "default")
@@ -11688,7 +11688,7 @@ def vol_export_tab():
     col_left, col_right = st.columns([1.5, 1])
     
     with col_left:
-        st.markdown("### ­ƒôè Export Settings")
+        st.markdown("### 📈 Export Settings")
         
         # Currency selection - multi-select
         export_currencies = st.multiselect(
@@ -11705,13 +11705,13 @@ def vol_export_tab():
             include_metadata = st.checkbox("Include Metadata Sheet", value=True, key="export_metadata")
         
         # Export buttons
-        st.markdown("#### ­ƒÆ¥ Download Options")
+        st.markdown("#### 🌿 Download Options")
         
         if not export_currencies:
             st.warning("Select at least one currency to export")
         else:
             # Generate all Excel files
-            if st.button("­ƒôÑ Generate Excel Files", key="generate_excel_btn", type="primary"):
+            if st.button("📑 Generate Excel Files", key="generate_excel_btn", type="primary"):
                 for ccy in export_currencies:
                     export_data = export_vol_surface_to_excel(ccy, include_sabr)
                     if export_data:
@@ -11728,7 +11728,7 @@ def vol_export_tab():
         st.markdown("---")
         
         # Email distribution section
-        st.markdown("### ­ƒôº Email Distribution")
+        st.markdown("### 📺 Email Distribution")
         
         # Recipients input
         recipients_text = st.text_area(
@@ -11777,15 +11777,15 @@ RateEdge Options Platform""",
             
             use_tls = st.checkbox("Use TLS", value=True, key="smtp_tls")
             
-            st.caption("­ƒÆí For Office 365/Outlook: smtp.office365.com:587 with TLS")
-            st.caption("­ƒÆí For Gmail: smtp.gmail.com:587 with TLS (requires app password)")
+            st.caption("🌕 For Office 365/Outlook: smtp.office365.com:587 with TLS")
+            st.caption("🌕 For Gmail: smtp.gmail.com:587 with TLS (requires app password)")
             if default_password:
                 st.caption("Ô£à Password loaded from environment variable EMAIL_PASSWORD")
             else:
                 st.caption("ÔÜá´©Å Set EMAIL_PASSWORD environment variable in Streamlit secrets to auto-fill")
         
         # Send button
-        if st.button("­ƒôº Send Email with Attachments", key="send_email_btn", type="primary", use_container_width=True):
+        if st.button("📺 Send Email with Attachments", key="send_email_btn", type="primary", use_container_width=True):
             if not recipients_text.strip():
                 st.error("Please enter at least one email recipient")
             elif not export_currencies:
@@ -11826,7 +11826,7 @@ RateEdge Options Platform""",
                         st.error("ÔØî Failed to send email. Check SMTP settings and try again.")
     
     with col_right:
-        st.markdown("### ­ƒôï Preview")
+        st.markdown("### 📏 Preview")
         
         # Show export summary
         if export_currencies:
@@ -11861,7 +11861,7 @@ RateEdge Options Platform""",
                 """, unsafe_allow_html=True)
         
         # Save EOD Snapshot
-        st.markdown("### ­ƒÆ¥ Save EOD Snapshot")
+        st.markdown("### 🌿 Save EOD Snapshot")
         st.caption("Save current vol surface to database for SOD Report / implied open calculations")
 
         _eod_label = st.text_input(
@@ -11871,9 +11871,9 @@ RateEdge Options Platform""",
         )
         _eod_notes = st.text_input("Notes (optional)", value="", key="eod_snap_notes")
 
-        if st.button("­ƒÆ¥ Save EOD Snapshot", key="save_eod_snap_btn", type="primary", use_container_width=True):
+        if st.button("🌿 Save EOD Snapshot", key="save_eod_snap_btn", type="primary", use_container_width=True):
             if not HAS_POSTGRES:
-                st.error("Database not connected ÔÇö cannot save snapshot.")
+                st.error("Database not connected  —  cannot save snapshot.")
             elif not export_currencies:
                 st.error("Select at least one currency above first.")
             else:
@@ -11887,18 +11887,18 @@ RateEdge Options Platform""",
                 if _saved:
                     st.success(f"Ô£à Saved EOD snapshot for: {', '.join(_saved)}")
                 if _failed:
-                    st.error(f"ÔØî Failed for: {', '.join(_failed)} ÔÇö check vol data is loaded.")
+                    st.error(f"ÔØî Failed for: {', '.join(_failed)}  —  check vol data is loaded.")
 
         # Quick tips
         st.markdown(f"""
         <div style="background:{card_bg};border:1px solid {border_color};border-radius:10px;padding:1rem;margin:1rem 0;">
-            <div style="font-weight:600;margin-bottom:0.5rem;">­ƒÆí Quick Tips</div>
+            <div style="font-weight:600;margin-bottom:0.5rem;">🌕 Quick Tips</div>
             <div style="font-size:0.85rem;">
-                ÔÇó Select multiple currencies to send all in one email<br>
-                ÔÇó Recipients can be comma or newline separated<br>
-                ÔÇó SMTP settings are saved for the session<br>
-                ÔÇó Files are generated fresh on each send<br>
-                ÔÇó Save EOD Snapshot each day for next morning's implied open report
+                • Select multiple currencies to send all in one email<br>
+                • Recipients can be comma or newline separated<br>
+                • SMTP settings are saved for the session<br>
+                • Files are generated fresh on each send<br>
+                • Save EOD Snapshot each day for next morning's implied open report
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -11988,7 +11988,7 @@ def show_login_page():
     col1, col2, col3 = st.columns([1, 1.2, 1])
     
     with col2:
-        # Card with logo+title inside ÔÇö matches IRS style
+        # Card with logo+title inside  —  matches IRS style
         st.markdown("""
         <div style="background:#1e293b;border-radius:16px;padding:2.5rem;border:1px solid #334155;margin-bottom:1rem;">
             <div style="text-align:center;margin-bottom:1.5rem;">
@@ -12047,7 +12047,7 @@ def show_login_page():
                     if otp and len(otp) == 6:
                         status, data = verify_otp(st.session_state.auth_email, otp)
                         if status == 200:
-                            # Single session enforcement ÔÇö store token in DB, invalidate old session
+                            # Single session enforcement  —  store token in DB, invalidate old session
                             import secrets as _sec
                             _sess_token = _sec.token_hex(32)
                             try:
