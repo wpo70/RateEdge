@@ -5805,7 +5805,7 @@ def caps_floors_tab(vol_mode: str):
                 except Exception:
                     pass
                 st.rerun()
-            if br.button("├ö├£├¡ Generate Swaption Premiums", key="gen_swpt_prem", type="primary"):
+            if br.button("🔔 Generate Swaption Premiums", key="gen_swpt_prem", type="primary"):
                 curve     = get_ccy_curve(ccy)
                 atm       = get_working_atm_surface(ccy)
                 ois_curve = get_basis_curve(ccy, "ois")
@@ -5833,92 +5833,6 @@ def caps_floors_tab(vol_mode: str):
                         except:
                             pass
                 st.rerun()
-
-            # ── ATM CFS Straddle Table ──────────────────────────────────
-            st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
-            if "atm_cfs_expanded" not in st.session_state:
-                st.session_state["atm_cfs_expanded"] = True
-            _atm_icon = "▼ Hide ATM CFS Straddles" if st.session_state["atm_cfs_expanded"] else "▶ Show ATM CFS Straddles"
-            if st.button(_atm_icon, key="atm_cfs_toggle"):
-                st.session_state["atm_cfs_expanded"] = not st.session_state["atm_cfs_expanded"]
-                st.rerun()
-
-            if st.session_state["atm_cfs_expanded"]:
-                _CFS_MAP = [
-                    (1, "3m1y"), (2, "1y1y"), (3, "2y1y"), (4, "3y1y"), (5, "4y1y"),
-                    (7, "5y2y"), (10, "7y3y"), (12, "10y2y"), (15, "12y3y"),
-                ]
-                _cfs_tdata = st.session_state.get("cfs_table_data", {})
-                _caplet_vc = st.session_state.get("caplet_vol_curve_aud")
-                _curve_local = get_ccy_curve(ccy)
-                _ois_tmp = get_basis_curve(ccy, "ois")
-                _ois_local = _ois_tmp if (_ois_tmp is not None and not isinstance(_ois_tmp, bool)) else _curve_local
-
-                if _cfs_tdata and _curve_local is not None:
-                    from datetime import date
-                    from dateutil.relativedelta import relativedelta
-                    _today = date.today()
-                    _start_dt = _today + relativedelta(months=3, days=1)
-                    _spot_dt  = _today + relativedelta(days=1)
-                    _fwd_start_y = 0.25
-                    _cum_prem = 0.0
-                    _atm_cfs_rows = []
-                    _atm_cfs_data = {}
-
-                    for _t, _key in _CFS_MAP:
-                        try:
-                            _end_dt = _spot_dt + relativedelta(years=_t)
-                            # ATM fwd rate from fwd_matrix if available, else curve
-                            _fwd_rate = None
-                            _fwd_matrix_local = st.session_state.get("fwd_matrix", {}).get(ccy)
-                            if _fwd_matrix_local is not None:
-                                try: _fwd_rate = _fwd_matrix_local.loc["3m", f"{_t}Y"] / 100.0
-                                except: pass
-                            if _fwd_rate is None:
-                                import numpy as _np
-                                _cx = _curve_local["MaturityY"].to_numpy().astype(float)
-                                _cy = _curve_local["ZeroRatePct"].to_numpy().astype(float) / 100.0
-                                _fwd_rate, _, _ = forward_and_annuity_from_curve(_curve_local, ccy, _fwd_start_y, float(_t), _ois_local)
-                            # Cumulative CFS straddle
-                            _wedge_straddle = _cfs_tdata.get(_key, {}).get("cfs_straddle")
-                            if _wedge_straddle is not None:
-                                _cum_prem += float(_wedge_straddle)
-                            _straddle_prem = round(_cum_prem, 4)
-                            # Flat vol from caplet curve
-                            _flat_vol = None
-                            if _caplet_vc:
-                                _mats = sorted(_caplet_vc.keys())
-                                if float(_t) in _caplet_vc:
-                                    _flat_vol = _caplet_vc[float(_t)]
-                                elif _t <= _mats[0]:
-                                    _flat_vol = _caplet_vc[_mats[0]]
-                                elif _t >= _mats[-1]:
-                                    _flat_vol = _caplet_vc[_mats[-1]]
-                                else:
-                                    for _j in range(len(_mats)-1):
-                                        if _mats[_j] <= _t <= _mats[_j+1]:
-                                            _a = (_t - _mats[_j]) / (_mats[_j+1] - _mats[_j])
-                                            _flat_vol = _caplet_vc[_mats[_j]] + _a * (_caplet_vc[_mats[_j+1]] - _caplet_vc[_mats[_j]])
-                                            break
-                            _atm_cfs_rows.append({
-                                "Tenor": f"{_t}Y",
-                                "Start": _start_dt.strftime("%d %b %y"),
-                                "End":   _end_dt.strftime("%d %b %y"),
-                                "ATM Fwd %": f"{_fwd_rate*100:.3f}" if _fwd_rate else "—",
-                                "Straddle bp": f"{_straddle_prem:.4f}",
-                                "Flat Vol bp": f"{_flat_vol:.1f}" if _flat_vol else "—",
-                            })
-                            _atm_cfs_data[f"cf_straddle_{_t}y"] = {"value": _straddle_prem, "label": f"{_t}Y ATM CFS straddle"}
-                            if _flat_vol: _atm_cfs_data[f"cf_vol_{_t}y"] = {"value": round(float(_flat_vol), 2), "label": f"{_t}Y ATM CFS flat vol"}
-                            if _fwd_rate: _atm_cfs_data[f"cf_strike_{_t}y"] = {"value": round(float(_fwd_rate*100), 4), "label": f"{_t}Y ATM fwd strike"}
-                        except Exception:
-                            _atm_cfs_rows.append({"Tenor": f"{_t}Y", "Start": "—", "End": "—", "ATM Fwd %": "—", "Straddle bp": "—", "Flat Vol bp": "—"})
-
-                    st.session_state["atm_cfs_data"] = _atm_cfs_data
-                    if _atm_cfs_rows:
-                        st.dataframe(pd.DataFrame(_atm_cfs_rows), use_container_width=True, hide_index=True)
-                else:
-                    st.info("Generate swaption premiums first to compute ATM CFS straddles.")
 
             # ── Publish Wedge Mids to Blotter ─────────────────────────
             st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
@@ -5958,6 +5872,93 @@ def caps_floors_tab(vol_mode: str):
                             st.error("No mids published — generate premiums first.")
             with _pub_col2:
                 st.caption("Publishes swaption premiums, CFS straddle mids and wedge spreads to Supabase for the live blotter to consume via 🔄 Load Fresh Mids.")
+
+
+        # ── ATM CFS Straddle Table ──────────────────────────────────
+        st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
+        if "atm_cfs_expanded" not in st.session_state:
+            st.session_state["atm_cfs_expanded"] = True
+        _atm_icon = "▼ Hide ATM CFS Straddles" if st.session_state["atm_cfs_expanded"] else "▶ Show ATM CFS Straddles"
+        if st.button(_atm_icon, key="atm_cfs_toggle"):
+            st.session_state["atm_cfs_expanded"] = not st.session_state["atm_cfs_expanded"]
+            st.rerun()
+
+        if st.session_state["atm_cfs_expanded"]:
+            _CFS_MAP = [
+                (1, "3m1y"), (2, "1y1y"), (3, "2y1y"), (4, "3y1y"), (5, "4y1y"),
+                (7, "5y2y"), (10, "7y3y"), (12, "10y2y"), (15, "12y3y"),
+            ]
+            _cfs_tdata = st.session_state.get("cfs_table_data", {})
+            _caplet_vc = st.session_state.get("caplet_vol_curve_aud")
+            _curve_local = get_ccy_curve(ccy)
+            _ois_tmp = get_basis_curve(ccy, "ois")
+            _ois_local = _ois_tmp if (_ois_tmp is not None and not isinstance(_ois_tmp, bool)) else _curve_local
+
+            if _cfs_tdata and _curve_local is not None:
+                from datetime import date
+                from dateutil.relativedelta import relativedelta
+                _today = date.today()
+                _start_dt = _today + relativedelta(months=3, days=1)
+                _spot_dt  = _today + relativedelta(days=1)
+                _fwd_start_y = 0.25
+                _cum_prem = 0.0
+                _atm_cfs_rows = []
+                _atm_cfs_data = {}
+
+                for _t, _key in _CFS_MAP:
+                    try:
+                        _end_dt = _spot_dt + relativedelta(years=_t)
+                        # ATM fwd rate from fwd_matrix if available, else curve
+                        _fwd_rate = None
+                        _fwd_matrix_local = st.session_state.get("fwd_matrix", {}).get(ccy)
+                        if _fwd_matrix_local is not None:
+                            try: _fwd_rate = _fwd_matrix_local.loc["3m", f"{_t}Y"] / 100.0
+                            except: pass
+                        if _fwd_rate is None:
+                            import numpy as _np
+                            _cx = _curve_local["MaturityY"].to_numpy().astype(float)
+                            _cy = _curve_local["ZeroRatePct"].to_numpy().astype(float) / 100.0
+                            _fwd_rate, _, _ = forward_and_annuity_from_curve(_curve_local, ccy, _fwd_start_y, float(_t), _ois_local)
+                        # Cumulative CFS straddle
+                        _wedge_straddle = _cfs_tdata.get(_key, {}).get("cfs_straddle")
+                        if _wedge_straddle is not None:
+                            _cum_prem += float(_wedge_straddle)
+                        _straddle_prem = round(_cum_prem, 4)
+                        # Flat vol from caplet curve
+                        _flat_vol = None
+                        if _caplet_vc:
+                            _mats = sorted(_caplet_vc.keys())
+                            if float(_t) in _caplet_vc:
+                                _flat_vol = _caplet_vc[float(_t)]
+                            elif _t <= _mats[0]:
+                                _flat_vol = _caplet_vc[_mats[0]]
+                            elif _t >= _mats[-1]:
+                                _flat_vol = _caplet_vc[_mats[-1]]
+                            else:
+                                for _j in range(len(_mats)-1):
+                                    if _mats[_j] <= _t <= _mats[_j+1]:
+                                        _a = (_t - _mats[_j]) / (_mats[_j+1] - _mats[_j])
+                                        _flat_vol = _caplet_vc[_mats[_j]] + _a * (_caplet_vc[_mats[_j+1]] - _caplet_vc[_mats[_j]])
+                                        break
+                        _atm_cfs_rows.append({
+                            "Tenor": f"{_t}Y",
+                            "Start": _start_dt.strftime("%d %b %y"),
+                            "End":   _end_dt.strftime("%d %b %y"),
+                            "ATM Fwd %": f"{_fwd_rate*100:.3f}" if _fwd_rate else "—",
+                            "Straddle bp": f"{_straddle_prem:.4f}",
+                            "Flat Vol bp": f"{_flat_vol:.1f}" if _flat_vol else "—",
+                        })
+                        _atm_cfs_data[f"cf_straddle_{_t}y"] = {"value": _straddle_prem, "label": f"{_t}Y ATM CFS straddle"}
+                        if _flat_vol: _atm_cfs_data[f"cf_vol_{_t}y"] = {"value": round(float(_flat_vol), 2), "label": f"{_t}Y ATM CFS flat vol"}
+                        if _fwd_rate: _atm_cfs_data[f"cf_strike_{_t}y"] = {"value": round(float(_fwd_rate*100), 4), "label": f"{_t}Y ATM fwd strike"}
+                    except Exception:
+                        _atm_cfs_rows.append({"Tenor": f"{_t}Y", "Start": "—", "End": "—", "ATM Fwd %": "—", "Straddle bp": "—", "Flat Vol bp": "—"})
+
+                st.session_state["atm_cfs_data"] = _atm_cfs_data
+                if _atm_cfs_rows:
+                    st.dataframe(pd.DataFrame(_atm_cfs_rows), use_container_width=True, hide_index=True)
+            else:
+                st.info("Generate swaption premiums first to compute ATM CFS straddles.")
 
                 # CALCULATE CFS VALUES BEFORE BUILDING VOL CURVE
         if "cfs_table_data" in st.session_state:
@@ -11473,7 +11474,7 @@ def sod_report_tab():
                         pass
 
             if _big_moves:
-                st.markdown(f"#### ├ö├£├¡ Notable Moves (≥{_thresh}bp implied AUD change)")
+                st.markdown(f"#### 🔔 Notable Moves (≥{_thresh}bp implied AUD change)")
                 _bm_df = pd.DataFrame(_big_moves).sort_values(
                     "Implied AUD >vol",
                     key=lambda x: x.str.replace("bp","").str.replace("+","").astype(float).abs(),
