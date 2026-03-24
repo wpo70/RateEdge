@@ -5838,15 +5838,17 @@ def caps_floors_tab(vol_mode: str):
                     from dateutil.relativedelta import relativedelta
 
                     _today = date.today()
-                    # AFMA: Start = expiry date + 1BD (approx 3m + 1 day)
+                    # AFMA: Start = T + 3M (FOLL) + 1BD
                     _start_dt = _today + relativedelta(months=3, days=1)
+                    # AFMA: End = spot date (T+1BD) + tenor (swap convention)
+                    _spot_dt = _today + relativedelta(days=1)
                     _fwd_start_y = 0.25
                     _cum_prem = 0.0
 
                     for _t, _key in _CFS_MAP:
                         try:
-                            # End date = Start + tenor years (MODFOLL approx)
-                            _end_dt = _start_dt + relativedelta(years=_t)
+                            # End date = spot + tenor years (MODFOLL)
+                            _end_dt = _spot_dt + relativedelta(years=_t)
 
                             # ATM fwd swap rate Q/Q from 3m fwd start
                             _fwd_rate, _, _ = forward_and_annuity_from_curve(
