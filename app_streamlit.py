@@ -3348,9 +3348,9 @@ def curves_tab():
         _cfg_curve = st.session_state.get("config_curves", {}).get(ccy)
         _cfg_basis = st.session_state.get("config_basis", {}).get(ccy, {})
         curve    = _cfg_curve if _cfg_curve is not None else get_ccy_curve(ccy)
-        basis_6v3 = _cfg_basis.get("6v3") or get_basis_curve(ccy, "6v3")
-        basis_3v1 = _cfg_basis.get("3v1") or get_basis_curve(ccy, "3v1")
-        ois_curve = _cfg_basis.get("ois") or get_basis_curve(ccy, "ois")
+        _b6 = _cfg_basis.get("6v3"); basis_6v3 = _b6 if (_b6 is not None and not isinstance(_b6, bool)) else get_basis_curve(ccy, "6v3")
+        _b3 = _cfg_basis.get("3v1"); basis_3v1 = _b3 if (_b3 is not None and not isinstance(_b3, bool)) else get_basis_curve(ccy, "3v1")
+        _bo = _cfg_basis.get("ois");  ois_curve = _bo if (_bo is not None and not isinstance(_bo, bool)) else get_basis_curve(ccy, "ois")
         with _src_info:
             st.caption("📆 Previous Close: using saved/uploaded curve data")
 
