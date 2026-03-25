@@ -2595,11 +2595,22 @@ def init_session():
     _spreads_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cfs_spreads.json")
     if not any(k in st.session_state for k in _spread_defaults):
         _loaded = {}
-        try:
-            with open(_spreads_file, "r") as _f:
-                _loaded = json.load(_f)
-        except Exception:
-            pass
+        # Try DB first
+        if HAS_POSTGRES:
+            try:
+                _user_id = st.session_state.get("username", "default")
+                _db_spreads = load_user_config(_user_id, "cf_spreads", "AUD")
+                if _db_spreads:
+                    _loaded = _db_spreads
+            except Exception:
+                pass
+        # Fallback to file
+        if not _loaded:
+            try:
+                with open(_spreads_file, "r") as _f:
+                    _loaded = json.load(_f)
+            except Exception:
+                pass
         for k, v in _spread_defaults.items():
             st.session_state[k] = float(_loaded.get(k, v))
     # Track if we've auto-loaded from DB this session
@@ -5804,6 +5815,14 @@ def caps_floors_tab(vol_mode: str):
                         json.dump({k: st.session_state[k] for k, *_ in ROW_DATA}, _f)
                 except Exception:
                     pass
+                # Also persist to DB for cloud persistence
+                if HAS_POSTGRES:
+                    try:
+                        _user_id = st.session_state.get("username", "default")
+                        _spread_data = {k: st.session_state[k] for k, *_ in ROW_DATA}
+                        save_user_config(_user_id, "cf_spreads", ccy, _spread_data)
+                    except Exception:
+                        pass
                 st.rerun()
             if br.button("🔔 Generate Swaption Premiums", key="gen_swpt_prem", type="primary"):
                 curve     = get_ccy_curve(ccy)
@@ -11836,7 +11855,7 @@ def vol_export_tab():
         st.markdown("---")
         
         # Email distribution section
-        st.markdown("### ƒô║ Email Distribution")
+        st.markdown("### 📧 Email Distribution")
         
         # Recipients input
         recipients_text = st.text_area(
