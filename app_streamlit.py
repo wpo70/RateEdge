@@ -8576,6 +8576,71 @@ def _load_rv_data():
     except Exception:
         return {"swap_rates": [], "vol_surface": []}
 
+def _load_rv_vols_from_db(ccy: str = "AUD", limit: int = 60) -> pd.DataFrame:
+    """Load vol history from Supabase vol_history table. Returns long-format DataFrame."""
+    if not HAS_POSTGRES:
+        return pd.DataFrame()
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return pd.DataFrame()
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT snapshot_date, label, atm_vols FROM vol_history
+               WHERE user_id = %s AND currency = %s AND atm_vols IS NOT NULL
+               ORDER BY snapshot_date DESC LIMIT %s""",
+            (get_db_url() and "wpo70@icloud.com", ccy, limit)
+        )
+        rows = cur.fetchall()
+        conn.close()
+        if not rows:
+            return pd.DataFrame()
+        records = []
+        for snap_date, label, atm_vols in rows:
+            if not atm_vols or "values" not in atm_vols:
+                continue
+            for row in atm_vols["values"]:
+                exp = row.get("Expiry", "")
+                for tenor, val in row.items():
+                    if tenor == "Expiry":
+                        continue
+                    try:
+                        records.append({
+                            "date": pd.to_datetime(snap_date),
+                            "label": label,
+                            "expiry": exp,
+                            "tenor": tenor,
+                            "vol_bp": float(val)
+                        })
+                    except Exception:
+                        pass
+        if not records:
+            return pd.DataFrame()
+        return pd.DataFrame(records).sort_values("date").reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame()
+
+def _load_rv_vols_snapshots_list(ccy: str = "AUD") -> list:
+    """List available vol snapshots for RV dropdown."""
+    if not HAS_POSTGRES:
+        return []
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return []
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT id, snapshot_date, label FROM vol_history
+               WHERE currency = %s AND atm_vols IS NOT NULL
+               ORDER BY snapshot_date DESC LIMIT 90""",
+            (ccy,)
+        )
+        rows = cur.fetchall()
+        conn.close()
+        return [{"id": r[0], "snapshot_date": str(r[1]), "label": r[2]} for r in rows]
+    except Exception:
+        return []
+
 def _rv_get_rates(data: dict, ccy: str = "AUD") -> pd.DataFrame:
     """Return DataFrame: date, tenor_cols in % pa."""
     rows = [r for r in data["swap_rates"] if r["ccy"] == ccy]
@@ -8603,11 +8668,7 @@ def _rv_get_vols(data: dict, ccy: str = "AUD") -> pd.DataFrame:
 
 def rv_tab():
     st.subheader("📊 Relative Value   —   Swaption & Cap/Floor Trade Ideas")
-    st.caption(
-        "Live vol surface + IRS curve for richness/cheapness signals. "
-        "Historical context from local data (dummy 2022-2025). "
-        "Wires to rateedge.com.au PostgreSQL when licensed."
-    )
+    st.caption("Live vol surface + IRS curve for richness/cheapness signals.")
 
     ccy = "AUD"
     curve     = get_ccy_curve(ccy)
@@ -8615,10 +8676,44 @@ def rv_tab():
     atm       = get_working_atm_surface(ccy)
     _, a_m, b_m, r_m, n_m = get_ccy_vol_data(ccy)
 
+    # ── Historical data source selector ──────────────────────────────────────
+    st.markdown("---")
+    _rv_src_col, _rv_snap_col = st.columns([2, 4])
+    with _rv_src_col:
+        _rv_src = st.radio("Historical Data", ["Saved Database", "LIVE (Realtime Feed)", "Local (Demo)"],
+                           horizontal=False, key="rv_data_src")
+    
+    df_vols_hist = pd.DataFrame()
+    _snap_label_used = None
+
+    if _rv_src == "Saved Database" and HAS_POSTGRES:
+        _rv_snaps = _load_rv_vols_snapshots_list(ccy)
+        if _rv_snaps:
+            with _rv_snap_col:
+                _snap_opts = ["All snapshots (last 60)"] + [f"{s['snapshot_date']} — {s['label']}" for s in _rv_snaps]
+                _rv_snap_sel = st.selectbox("Snapshot", _snap_opts, key="rv_snap_sel")
+            df_vols_hist = _load_rv_vols_from_db(ccy, limit=60)
+            if _rv_snap_sel != "All snapshots (last 60)":
+                _snap_dt = _rv_snap_sel.split(" — ")[0]
+                df_vols_hist = df_vols_hist[df_vols_hist["date"].dt.strftime("%Y-%m-%d") == _snap_dt]
+                _snap_label_used = _rv_snap_sel
+        else:
+            with _rv_snap_col:
+                st.info("No snapshots found. Save EOD snapshots from the Vol Export tab.")
+    elif _rv_src == "LIVE (Realtime Feed)":
+        with _rv_snap_col:
+            st.info("📡 Realtime feed coming soon — will pull intraday vol marks.")
+    else:
+        _rv_data_local = _load_rv_data()
+        df_vols_hist = _rv_get_vols(_rv_data_local, ccy)
+
+    has_hist_vols = len(df_vols_hist) > 0
+
     rv_data   = _load_rv_data()
     df_rates  = _rv_get_rates(rv_data)
-    df_vols   = _rv_get_vols(rv_data)
-    has_hist  = len(df_rates) > 10
+    df_vols   = df_vols_hist if has_hist_vols else _rv_get_vols(rv_data)
+    has_hist  = len(df_rates) > 10 or has_hist_vols
+    st.markdown("---")
 
     rv_tabs = st.tabs([
         "📊 Vol Surface RV",
