@@ -11072,7 +11072,10 @@ def main():
                         st.session_state["user_role"] = _role_row[0] if _role_row else "read_only"
             except Exception:
                 pass
-            loaded = load_all_session_data(user_id)
+            # Read-only users load from admin's saved configs
+            _ADMIN_EMAIL = "wpo70@icloud.com"
+            _load_user = user_id if user_id in {"wpo70@icloud.com", "wpo@rateedge.au"} else _ADMIN_EMAIL
+            loaded = load_all_session_data(_load_user)
             # Load wedge spreads - clear stale defaults first so DB values take effect
             try:
                 _db_spreads = load_user_config(user_id, "cf_spreads", "AUD")
