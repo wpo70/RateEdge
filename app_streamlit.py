@@ -3306,9 +3306,37 @@ def curves_tab():
     # Data source toggle
     _src_col, _src_info = st.columns([2, 3])
     with _src_col:
-        _curve_src = st.radio("Data Source", ["Previous Close (Saved)", "Live (Supabase)"],
+        _curve_src = st.radio("Data Source", ["Saved Database", "LIVE (Realtime Feed)"],
                                horizontal=True, key="curve_src")
-    _use_live = "Live" in _curve_src
+    _use_live = "LIVE" in _curve_src
+
+    # Snapshot selector for Saved Database mode
+    if not _use_live and HAS_POSTGRES:
+        try:
+            _user_id = st.session_state.get("username", "default")
+            _snaps = list_vol_snapshots(_user_id, ccy) if HAS_POSTGRES else []
+            if _snaps:
+                _snap_labels = ["Latest (auto-loaded)"] + [f"{s['snapshot_date']} — {s['label']}" for s in _snaps]
+                _snap_sel = st.selectbox("Load Snapshot", _snap_labels, key="curve_snap_sel", index=0)
+                if _snap_sel != "Latest (auto-loaded)":
+                    _snap_idx = _snap_labels.index(_snap_sel) - 1
+                    _snap = _snaps[_snap_idx]
+                    if st.button("📂 Load Selected Snapshot", key="load_snap_btn"):
+                        # Load atm_vols from this snapshot
+                        if _snap.get("atm_vols"):
+                            _sv = _snap["atm_vols"].get("values", [])
+                            if _sv:
+                                _snap_df = pd.DataFrame(_sv)
+                                if "Expiry" not in _snap_df.columns and len(_snap_df.columns) > 0:
+                                    _snap_df.columns = ["Expiry"] + list(_snap_df.columns[1:])
+                                _vd = st.session_state.get("vol_data", {})
+                                if ccy not in _vd: _vd[ccy] = {}
+                                _vd[ccy]["atm"] = _snap_df
+                                st.session_state["vol_data"] = _vd
+                                st.success(f"✅ Loaded snapshot: {_snap['label']}")
+                                st.rerun()
+        except Exception:
+            pass
 
     if _use_live:
         with st.spinner("Loading latest rates from Supabase..."):
@@ -3363,7 +3391,7 @@ def curves_tab():
         _b3 = _cfg_basis.get("3v1"); basis_3v1 = _b3 if (_b3 is not None and not isinstance(_b3, bool)) else get_basis_curve(ccy, "3v1")
         _bo = _cfg_basis.get("ois");  ois_curve = _bo if (_bo is not None and not isinstance(_bo, bool)) else get_basis_curve(ccy, "ois")
         with _src_info:
-            st.caption("📆 Previous Close: using saved/uploaded curve data")
+            st.caption("💾 Saved Database: using saved/uploaded curve data")
 
     if curve is None:
         st.info("No curve loaded. Upload RateEdge_Config.xlsx in Vol/SABR tab, or switch to Live.")
@@ -3465,9 +3493,7 @@ def curves_tab():
 
         ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns([2, 2, 2, 1])
         with ctrl_col1:
-            show_heatmap = st.checkbox(" Show Heatmap", value=False, key="show_heatmap")
-        with ctrl_col2:
-            if st.button(" Generate Forward Matrix", key="gen_fwd_matrix", type="primary"):
+            if st.button("Generate Forward Matrix", key="gen_fwd_matrix", type="primary"):
                 convention_key = {"Market": "market", "Q/Q": "qq", "S/S": "ss"}.get(leg_convention, "market")
                 with st.spinner("Generating..."):
                     fwd_matrix = generate_forward_matrix_convention(ccy, curve, basis_6v3, convention_key)
@@ -3477,9 +3503,11 @@ def curves_tab():
                         basis_matrix = generate_basis_matrix(ccy, basis_6v3)
                         st.session_state["basis_matrix"][ccy] = basis_matrix
                 st.rerun()
+        with ctrl_col2:
+            show_heatmap = st.checkbox("Show Heatmap", value=False, key="show_heatmap")
         with ctrl_col3:
             if has_fwd:
-                if st.button(" Refresh (Clear Cache)", key="refresh_matrices"):
+                if st.button("Refresh (Clear Cache)", key="refresh_matrices"):
                     clear_matrix_cache()
                     for key in ["fwd_matrix", "basis_matrix"]:
                         if ccy in st.session_state.get(key, {}):
