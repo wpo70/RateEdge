@@ -440,10 +440,10 @@ sp.material.color=col;sp.material.emissive=col;
 updSurf();
 
 // Camera - view from front-left
-let sph={{r:30,p:Math.PI/3.5,t:-Math.PI/4.5}};
+let sph={{r:26,p:Math.PI/2.8,t:-Math.PI/4.5}};
 function updCam(){{
 cam.position.set(sph.r*Math.sin(sph.p)*Math.cos(sph.t),sph.r*Math.cos(sph.p),sph.r*Math.sin(sph.p)*Math.sin(sph.t));
-cam.lookAt(0,0,0);
+cam.lookAt(0,-1.5,0);
 }}
 updCam();
 
