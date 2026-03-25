@@ -331,14 +331,14 @@ const dl=new THREE.DirectionalLight(0xffffff,0.6);dl.position.set(-8,15,8);scene
 const dl2=new THREE.DirectionalLight(0x6080b0,0.3);dl2.position.set(8,8,-8);scene.add(dl2);
 
 // Grid on floor
-const gridH=new THREE.GridHelper(16,16,0x2a3a5a,0x151f30);gridH.position.y=-4;scene.add(gridH);
+const gridH=new THREE.GridHelper(18,16,0x2a3a5a,0x151f30);gridH.position.y=-4.5;scene.add(gridH);
 
 // Data setup
 const vals=JSON.parse(JSON.stringify(D.values)),baseVals=JSON.parse(JSON.stringify(D.baseValues));
 const nE=D.expiries.length,nT=D.tenors.length;
 const xSp=14/Math.max(nT-1,1),zSp=14/Math.max(nE-1,1);
-const ySc=7/(D.zMax-D.zMin),yOf=D.zMin;
-const v2y=v=>(v-yOf)*ySc-3.5;
+const ySc=6.5/(D.zMax-D.zMin),yOf=D.zMin;
+const v2y=v=>(v-yOf)*ySc-3.8;
 
 // Axis labels using sprites
 function makeLabel(text,pos,color){{
@@ -440,7 +440,7 @@ sp.material.color=col;sp.material.emissive=col;
 updSurf();
 
 // Camera - view from front-left
-let sph={{r:28,p:Math.PI/3.2,t:-Math.PI/4.5}};
+let sph={{r:30,p:Math.PI/3.5,t:-Math.PI/4.5}};
 function updCam(){{
 cam.position.set(sph.r*Math.sin(sph.p)*Math.cos(sph.t),sph.r*Math.cos(sph.p),sph.r*Math.sin(sph.p)*Math.sin(sph.t));
 cam.lookAt(0,0,0);
