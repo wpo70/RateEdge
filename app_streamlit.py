@@ -11715,14 +11715,41 @@ def sod_report_tab():
                                 _ve_df.columns = ["Expiry"] + list(_ve_df.columns[1:])
                             # Load into vol_editor working state (not base — so it shows as changes)
                             if "vol_editor" not in st.session_state:
-                                st.session_state["vol_editor"] = {"working": {}, "base": {}, "history": {}, "future": {}}
+                                st.session_state["vol_editor"] = {"working": {}, "base": {}, "history": {}, "future": {}, "redo_stack": {}, "view_mode": {}, "smoothing": {}, "paste_data": {}}
                             ve = st.session_state["vol_editor"]
-                            # Save current surface as base so changes are highlighted
+                            # Get current surface as base
                             _current_atm = get_working_atm_surface("AUD")
                             if _current_atm is not None:
-                                ve["base"]["AUD"] = _current_atm.copy()
-                            ve["working"]["AUD"] = _ve_df.copy()
-                            st.success("✅ Implied open loaded into Vol Editor as working draft. Go to Vol Editor tab to review and confirm.")
+                                # Align implied open to base surface shape
+                                # Fill any missing expiries from current ATM
+                                _base_df = _current_atm.copy()
+                                if "Expiry" not in _base_df.columns:
+                                    _base_df = _base_df.reset_index()
+                                    _base_df.columns = ["Expiry"] + list(_base_df.columns[1:])
+                                # Merge: use implied open values where available, else current ATM
+                                _merged = _base_df.copy()
+                                _ve_exp_set = set(_ve_df["Expiry"].str.lower().tolist()) if "Expiry" in _ve_df.columns else set()
+                                for _ri, _row in _base_df.iterrows():
+                                    _exp_lbl = str(_row["Expiry"]).lower()
+                                    if _exp_lbl in _ve_exp_set:
+                                        _src_row = _ve_df[_ve_df["Expiry"].str.lower()==_exp_lbl]
+                                        if not _src_row.empty:
+                                            for _tc in _base_df.columns[1:]:
+                                                if _tc in _ve_df.columns:
+                                                    try:
+                                                        _merged.at[_ri, _tc] = float(_src_row.iloc[0][_tc])
+                                                    except Exception:
+                                                        pass
+                                ve["base"]["AUD"] = _base_df.copy()
+                                ve["working"]["AUD"] = _merged.copy()
+                                # Ensure other keys exist
+                                for _k in ["history", "redo_stack", "view_mode", "smoothing", "paste_data"]:
+                                    if _k not in ve: ve[_k] = {}
+                                ve["history"]["AUD"] = []
+                                ve["redo_stack"]["AUD"] = []
+                                st.success("✅ Implied open loaded into Vol Editor. Go to Vol Editor tab to review and publish.")
+                            else:
+                                st.warning("Load AUD ATM surface first before loading SOD implied open.")
                         except Exception as _e:
                             st.error(f"Failed to load: {_e}")
                     else:
