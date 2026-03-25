@@ -11072,7 +11072,7 @@ def main():
                 pass
             st.session_state["db_auto_loaded"] = True
             if loaded > 0:
-                st.toast(f" Auto-loaded {loaded} configs from database", icon="")
+                st.toast(f"Auto-loaded {loaded} configs from database")
         else:
             # Not authenticated yet - don't mark as loaded so it retries after login
             pass
