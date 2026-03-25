@@ -8836,14 +8836,33 @@ def rv_tab():
             def _par_rate(t):
                 return float(np.interp(t, xs_c, ys_c))
 
+            # Basis adjustment: AUD curve ≤3Y is Q/Q, ≥4Y is S/S
+            # For spreads crossing the Q/Q-S/S boundary, convert Q/Q rates to S/S
+            # by ADDING the 6v3 basis (Q/Q payer pays more = S/S equivalent is higher)
+            _basis_6v3 = get_basis_curve(ccy, "6v3")
+            def _basis_at(t):
+                """6v3 basis in % at maturity t (only applies to Q/Q tenors <=3Y)"""
+                if _basis_6v3 is None or t > 3.0:
+                    return 0.0
+                bx = _basis_6v3["MaturityY"].to_numpy().astype(float)
+                by = _basis_6v3["BasisBp"].to_numpy().astype(float) / 100.0
+                return float(np.interp(t, bx, by))
+
+            def _par_rate_ss(t):
+                """Par rate converted to S/S equivalent for cross-boundary spreads"""
+                r = _par_rate(t)
+                if t <= 3.0:
+                    r += _basis_at(t)  # add basis to convert Q/Q -> S/S equivalent
+                return r
+
             spreads_live = {
-                "2s10s":  (_par_rate(10) - _par_rate(2)),
-                "3s10s":  (_par_rate(10) - _par_rate(3)),
-                "5s10s":  (_par_rate(10) - _par_rate(5)),
+                "2s10s":  (_par_rate_ss(10) - _par_rate_ss(2)),
+                "3s10s":  (_par_rate_ss(10) - _par_rate_ss(3)),
+                "5s10s":  (_par_rate(10) - _par_rate(5)),  # both S/S, no adjustment
                 "10s30s": (_par_rate(30) - _par_rate(10)) if max(xs_c) >= 25 else None,
-                "3s30s":  (_par_rate(30) - _par_rate(3))  if max(xs_c) >= 25 else None,
-                "2s5s":   (_par_rate(5)  - _par_rate(2)),
-                "2s30s":  (_par_rate(30) - _par_rate(2))  if max(xs_c) >= 25 else None,
+                "3s30s":  (_par_rate(30) - _par_rate_ss(3)) if max(xs_c) >= 25 else None,
+                "2s5s":   (_par_rate(5)  - _par_rate_ss(2)),  # 2Y Q/Q vs 5Y S/S
+                "2s30s":  (_par_rate(30) - _par_rate_ss(2))  if max(xs_c) >= 25 else None,
             }
 
             # ── Historical context from BlueGamma swap data ──────────
@@ -9742,7 +9761,7 @@ def rv_tab():
             trough_fwd = min((p["Fwd 3m BBSW (%)"] for p in fwd_bbsw_pts), default=spot_3m)
 
             # Idea 1: curve shape → cap vs floor preference
-            curve_slope_2s5s = _par_rate(5) - _par_rate(2)
+            curve_slope_2s5s = _par_rate(5) - _par_rate_ss(2)  # 5Y S/S vs 2Y Q/Q adjusted to S/S equivalent
             fwd_peak_t = t_pts[r_pts.index(max(r_pts))] if r_pts else 0
 
             if curve_slope_2s5s > 0.20:  # steep → rates going up
@@ -9839,10 +9858,6 @@ def rv_tab():
             # ── Data source note ─────────────────────────────────────
             st.markdown("---")
             st.caption(
-                "📄 **Data source:** Local dummy data 2022-2025 (AUD). "
-                "To connect live PostgreSQL from rateedge.com.au: replace `_load_rv_data()` "
-                "with a psycopg2 query to `swap_rates` / `benchmark_rates` tables. "
-                "Schema: `(rate_date DATE, currency VARCHAR, tenor VARCHAR, rate_pct FLOAT)`."
             )
 
 
