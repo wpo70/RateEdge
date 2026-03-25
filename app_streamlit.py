@@ -11056,6 +11056,17 @@ def main():
     if HAS_POSTGRES and get_db_url() and not st.session_state.get("db_auto_loaded", False):
         user_id = st.session_state.get("username", "default")
         if user_id and user_id != "default":
+            # Always re-fetch role from DB on auto-load
+            try:
+                _role_conn = get_db_connection()
+                if _role_conn:
+                    _role_cur = _role_conn.cursor()
+                    _role_cur.execute("SELECT role FROM user_roles WHERE email=%s", (user_id,))
+                    _role_row = _role_cur.fetchone()
+                    _role_conn.close()
+                    st.session_state["user_role"] = _role_row[0] if _role_row else "read_only"
+            except Exception:
+                pass
             loaded = load_all_session_data(user_id)
             # Load wedge spreads - clear stale defaults first so DB values take effect
             try:
