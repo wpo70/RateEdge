@@ -287,7 +287,7 @@ def _render_3d_editor(df, ccy, view_mode, smoothing, base_df, height=580):
     _render_ts = int(_time.time() * 1000)
     data = json.dumps({"expiries": expiries, "tenors": tcols, "values": z_values, "baseValues": base_vals, "zMin": z_min, "zMax": z_max, "zLabel": z_label, "viewMode": view_mode, "expiryYears": ey, "ccy": ccy, "smoothing": smoothing, "_ts": _render_ts})
     
-    html = f'''<!DOCTYPE html><html><head><style>
+    html = f'''<!DOCTYPE html><html data-mode="{view_mode}" data-zmin="{z_min}" data-zmax="{z_max}"><head><style>
 *{{margin:0;padding:0;box-sizing:border-box}}body{{background:#0a1628;font-family:system-ui;overflow:hidden}}
 #c{{width:100%;height:{height}px;position:relative}}canvas{{width:100%;height:100%}}
 #info{{position:absolute;top:10px;left:10px;color:#94a3b8;font-size:11px;background:rgba(15,23,42,0.9);padding:8px 12px;border-radius:6px;border:1px solid #334155}}
@@ -302,7 +302,7 @@ def _render_3d_editor(df, ccy, view_mode, smoothing, base_df, height=580):
 .li{{display:flex;align-items:center;gap:5px;margin:2px 0}}.lb{{width:12px;height:12px;border-radius:2px}}
 .lu{{background:#22c55e}}.ld{{background:#dc2626}}.ln{{background:#3b82f6}}
 #title{{position:absolute;top:10px;left:50%;transform:translateX(-50%);color:#fff;font-size:13px;font-weight:600;background:rgba(30,58,95,0.8);padding:5px 14px;border-radius:5px}}
-</style></head><body><div id="c"><canvas id="cv"></canvas>
+</style></head><body><div id="c_{view_mode}_{_render_ts}"><canvas id="cv"></canvas>
 <div id="title">ATM Vol Editor</div>
 <div id="info">🖱️ <b>Left-drag</b> points to edit<br>🔄 <b>Right-drag</b> to rotate<br>🔍 <b>Scroll</b> to zoom</div>
 <div id="legend"><b>Changes</b><div class="li"><div class="lb lu"></div>Up</div><div class="li"><div class="lb ld"></div>Down</div><div class="li"><div class="lb ln"></div>No change</div></div>
@@ -315,7 +315,7 @@ def _render_3d_editor(df, ccy, view_mode, smoothing, base_df, height=580):
 (function(){{
 const D={data};
 
-const cn=document.getElementById('c'),cv=document.getElementById('cv'),tip=document.getElementById('tip'),st=document.getElementById('st'),btn=document.getElementById('btn'),lockBtn=document.getElementById('lockBtn');
+const cn=document.querySelector('div[id^="c_"]'),cv=document.querySelector('canvas'),tip=document.getElementById('tip'),st=document.getElementById('st'),btn=document.getElementById('btn'),lockBtn=document.getElementById('lockBtn');
 let changed=false,rotLocked=false;
 
 const scene=new THREE.Scene();
