@@ -320,7 +320,7 @@ let changed=false,rotLocked=false;
 
 const scene=new THREE.Scene();
 scene.background=new THREE.Color(0x0a1628);
-const cam=new THREE.PerspectiveCamera(36,cn.clientWidth/cn.clientHeight,0.1,1000);
+const cam=new THREE.PerspectiveCamera(45,cn.clientWidth/cn.clientHeight,0.1,1000);
 const ren=new THREE.WebGLRenderer({{canvas:cv,antialias:true}});
 ren.setSize(cn.clientWidth,cn.clientHeight);
 ren.setPixelRatio(Math.min(devicePixelRatio,2));
@@ -505,7 +505,7 @@ ms.y=-((e.clientY-r.top)/r.height)*2+1;
 
 if(rot&&!rotLocked){{
 sph.t-=e.movementX*0.008;
-sph.p=Math.max(0.3,Math.min(Math.PI/2-0.1,sph.p+e.movementY*0.008));
+sph.p=Math.max(0.15,Math.min(Math.PI*0.75,sph.p+e.movementY*0.008));
 updCam();return;
 }}
 
@@ -556,7 +556,7 @@ if(sel){{sel.scale.setScalar(1);sel.material.emissiveIntensity=0.2;}}
 sel=null;drag=false;rot=false;tip.style.display='none';
 }};
 
-cv.onwheel=e=>{{e.preventDefault();sph.r=Math.max(15,Math.min(50,sph.r+e.deltaY*0.02));updCam();}};
+cv.onwheel=e=>{{e.preventDefault();sph.r=Math.max(12,Math.min(60,sph.r+e.deltaY*0.02));updCam();}};
 cv.oncontextmenu=e=>e.preventDefault();
 
 window.apply=function(){{
@@ -699,7 +699,7 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
     
     st.markdown("#### 🎯 ATM Vol Editor")
     st.caption("Drag points • Green=up, Red=down • Click Apply, paste below, CONFIRM")
-    _render_3d_editor(working, ccy, view_mode, smoothing, base)
+    _render_3d_editor(working, ccy, view_mode, smoothing, base, height=700)
     
     # Paste and CONFIRM section
     st.markdown("---")
