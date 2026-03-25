@@ -11041,6 +11041,17 @@ def main():
     if HAS_POSTGRES and get_db_url() and not st.session_state.get("db_auto_loaded", False):
         user_id = st.session_state.get("username", "default")
         loaded = load_all_session_data(user_id)
+        # Also load wedge spreads
+        try:
+            _db_spreads = load_user_config(user_id, "cf_spreads", "AUD")
+            if _db_spreads:
+                _spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
+                                "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y","cf_spr_12y3y"]
+                for k in _spread_keys:
+                    if k in _db_spreads:
+                        st.session_state[k] = float(_db_spreads[k])
+        except Exception:
+            pass
         st.session_state["db_auto_loaded"] = True
         if loaded > 0:
             st.toast(f" Auto-loaded {loaded} configs from database", icon="")
