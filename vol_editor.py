@@ -190,7 +190,11 @@ def _create_plotly_surface(df: pd.DataFrame, ccy: str, view_mode: str, changes=N
     # Auto-scale Z axis to data with padding
     z_min_val, z_max_val = z_vals.min(), z_vals.max()
     z_range = z_max_val - z_min_val
-    z_min = np.floor((z_min_val - z_range * 0.05) / 5) * 5
+    _z_floor_raw2 = np.floor((z_min_val - z_range * 0.05) / 5) * 5
+    if view_mode == "fwd_premium":
+        z_min = max(float(_z_floor_raw2), 10.0)
+    else:
+        z_min = max(float(_z_floor_raw2), -5.0)
     z_max = np.ceil((z_max_val + z_range * 0.05) / 5) * 5
     
     # Don't reverse - keep natural order: X=tenor (1Y to 30Y), Y=expiry (1M to 20Y)
@@ -270,10 +274,18 @@ def _render_3d_editor(df, ccy, view_mode, smoothing, base_df, height=580):
     zf = display_df[tcols].values.flatten()
     z_min_val, z_max_val = float(zf.min()), float(zf.max())
     z_range = z_max_val - z_min_val
-    z_min = float(np.floor((z_min_val - z_range * 0.05) / 10) * 10)
+    _z_floor_raw = float(np.floor((z_min_val - z_range * 0.05) / 10) * 10)
+    if view_mode == "fwd_premium":
+        # Premium is never negative — floor at 10bp
+        z_min = max(_z_floor_raw, 10.0)
+    else:
+        # Vol can have small negative values for display headroom — floor at -5bp
+        z_min = max(_z_floor_raw, -5.0)
     z_max = float(np.ceil((z_max_val + z_range * 0.05) / 10) * 10)
     
-    data = json.dumps({"expiries": expiries, "tenors": tcols, "values": z_values, "baseValues": base_vals, "zMin": z_min, "zMax": z_max, "zLabel": z_label, "viewMode": view_mode, "expiryYears": ey, "ccy": ccy, "smoothing": smoothing})
+    import time as _time
+    _render_ts = int(_time.time() * 1000)
+    data = json.dumps({"expiries": expiries, "tenors": tcols, "values": z_values, "baseValues": base_vals, "zMin": z_min, "zMax": z_max, "zLabel": z_label, "viewMode": view_mode, "expiryYears": ey, "ccy": ccy, "smoothing": smoothing, "_ts": _render_ts})
     
     html = f'''<!DOCTYPE html><html><head><style>
 *{{margin:0;padding:0;box-sizing:border-box}}body{{background:#0a1628;font-family:system-ui;overflow:hidden}}
