@@ -4635,6 +4635,13 @@ def swaptions_tab(vol_mode: str):
                                     _updated += 1
                         _old_atm, _, _b2, _r2, _n2 = get_ccy_vol_data(ccy)
                         set_ccy_vol_data(ccy, _old_atm, _new_alpha, _b2, _r2, _n2)
+                        # Auto-save to DB
+                        if HAS_POSTGRES:
+                            try:
+                                _uid = st.session_state.get("username", "default")
+                                save_all_session_data(_uid)
+                            except Exception:
+                                pass
                         st.success(f"✅ Alpha recalibrated   —   {_updated} cells updated. ~, ρ,ν, × unchanged.")
                         st.rerun()
             with _rc2:
@@ -8028,7 +8035,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
             fname = f"ZCS_{ccy}_{zcs_n:.0f}Y_{zcs_trade_date.strftime('%Y%m%d')}_{client_name.replace(' ','_')[:20]}.xlsx"
 
             st.download_button(
-                label=f"├ö┬╝├º┬┤┬®├à Download: {fname}",
+                label=f"📤 Download: {fname}",
                 data=buf.getvalue(),
                 file_name=fname,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -8207,6 +8214,12 @@ def vol_surface_editor_tab():
                     _old_atm_rc, _, _, _, _ = get_ccy_vol_data(_rc_ccy)
                     set_ccy_vol_data(_rc_ccy, _old_atm_rc, _new_a, _new_b, _new_r, _new_n)
                     _prog.empty()
+                    # Auto-save SABR to DB
+                    if HAS_POSTGRES:
+                        try:
+                            save_all_session_data(st.session_state.get("username", "default"))
+                        except Exception:
+                            pass
                     st.success(f"✅ Full SABR calibration complete. {_n_cells - _errors} cells updated, {_errors} skipped.")
                     if _errors > 0:
                         st.caption("Skipped cells had no ATM vol data or optimiser failed to converge.")
@@ -11010,7 +11023,7 @@ def main():
             )
             _mailto = f"mailto:wpo@rateedge.au?subject={_subj.replace(' ', '%20').replace('  —  ','--')}&body={_body}"
 
-            st.info(f"ƒô║ Email **wpo@rateedge.au** with the details above.\n\nSubject: {_issue_type}   —   {_severity.split('  —  ')[0].strip()}")
+            st.info(f"📧 Email **wpo@rateedge.au** with the details above.\n\nSubject: {_issue_type}   —   {_severity.split('  —  ')[0].strip()}")
 
         st.markdown("---")
         st.markdown(
@@ -11072,7 +11085,7 @@ def main():
             "📑 Vol Export",
             "📍 Multi-CCY",
             "📊 Backtesting",
-            "ƒöù Bond Options",
+            "📜 Bond Options",
         ]
     )
 
@@ -11843,7 +11856,7 @@ def vol_export_tab():
                     export_data = export_vol_surface_to_excel(ccy, include_sabr)
                     if export_data:
                         st.download_button(
-                            label=f"├ö┬╝├º┬┤┬®├à Download {ccy}",
+                            label=f"📤 Download {ccy}",
                             data=export_data,
                             file_name=f"RateEdge_VolSurface_{ccy}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -11912,7 +11925,7 @@ RateEdge Options Platform""",
                 st.caption("⚙️ Set EMAIL_PASSWORD environment variable in Streamlit secrets to auto-fill")
         
         # Send button
-        if st.button("ƒô║ Send Email with Attachments", key="send_email_btn", type="primary", use_container_width=True):
+        if st.button("📧 Send Email with Attachments", key="send_email_btn", type="primary", use_container_width=True):
             if not recipients_text.strip():
                 st.error("Please enter at least one email recipient")
             elif not export_currencies:
@@ -11950,7 +11963,7 @@ RateEdge Options Platform""",
                     if success:
                         st.success(f"✅ Email sent successfully to {len(recipients)} recipient(s)!")
                     else:
-                        st.error("├ö├ÿ├« Failed to send email. Check SMTP settings and try again.")
+                        st.error("❌ Failed to send email. Check SMTP settings and try again.")
     
     with col_right:
         st.markdown("### 📅 Preview")
