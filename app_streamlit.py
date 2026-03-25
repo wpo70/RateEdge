@@ -11064,7 +11064,12 @@ def main():
                     _role_cur.execute("SELECT role FROM user_roles WHERE email=%s", (user_id,))
                     _role_row = _role_cur.fetchone()
                     _role_conn.close()
-                    st.session_state["user_role"] = _role_row[0] if _role_row else "read_only"
+                    # Hardcode owner emails as admin regardless of DB
+                    _ADMIN_EMAILS = {"wpo70@icloud.com", "wpo@rateedge.au"}
+                    if user_id in _ADMIN_EMAILS:
+                        st.session_state["user_role"] = "admin"
+                    else:
+                        st.session_state["user_role"] = _role_row[0] if _role_row else "read_only"
             except Exception:
                 pass
             loaded = load_all_session_data(user_id)
@@ -11692,6 +11697,35 @@ def sod_report_tab():
                     )
                 if _aud_prem_chg.empty:
                     st.info("Load AUD IRS curve in Curves tab to compute premium matrices.")
+
+            # ── Load to Vol Editor button ─────────────────────────────
+            st.markdown("---")
+            _load_col1, _load_col2 = st.columns([2, 4])
+            with _load_col1:
+                if st.button("📋 Load Implied Open → Vol Editor", key="sod_load_vol_editor", type="primary"):
+                    if is_admin():
+                        try:
+                            # Reformat _implied_open to match vol_editor expected format
+                            # Add Expiry column if not present
+                            _ve_df = _implied_open.copy().reset_index()
+                            if _ve_df.columns[0] != "Expiry":
+                                _ve_df.columns = ["Expiry"] + list(_ve_df.columns[1:])
+                            # Load into vol_editor working state (not base — so it shows as changes)
+                            if "vol_editor" not in st.session_state:
+                                st.session_state["vol_editor"] = {"working": {}, "base": {}, "history": {}, "future": {}}
+                            ve = st.session_state["vol_editor"]
+                            # Save current surface as base so changes are highlighted
+                            _current_atm = get_working_atm_surface("AUD")
+                            if _current_atm is not None:
+                                ve["base"]["AUD"] = _current_atm.copy()
+                            ve["working"]["AUD"] = _ve_df.copy()
+                            st.success("✅ Implied open loaded into Vol Editor as working draft. Go to Vol Editor tab to review and confirm.")
+                        except Exception as _e:
+                            st.error(f"Failed to load: {_e}")
+                    else:
+                        st.warning("🔒 Admin only — contact wpo@rateedge.au to request edit access.")
+            with _load_col2:
+                st.caption("Loads the implied AUD open vol surface into the Vol Editor as a working draft. You can review, adjust and smooth before publishing to pricing.")
 
             # ── Notable moves ────────────────────────────────────────
             _thresh = st.slider("Highlight moves larger than (bp)", 1, 10, 3, key="sod_thresh")
@@ -12433,7 +12467,11 @@ def show_login_page():
                                         # Fetch role for this user
                                         _cur.execute("SELECT role FROM user_roles WHERE email=%s", (st.session_state.auth_email,))
                                         _role_row = _cur.fetchone()
-                                        st.session_state["user_role"] = _role_row[0] if _role_row else "read_only"
+                                        _ADMIN_EMAILS = {"wpo70@icloud.com", "wpo@rateedge.au"}
+                                        if st.session_state.auth_email in _ADMIN_EMAILS:
+                                            st.session_state["user_role"] = "admin"
+                                        else:
+                                            st.session_state["user_role"] = _role_row[0] if _role_row else "read_only"
                                         _conn.commit()
                                         _conn.close()
                             except Exception:
