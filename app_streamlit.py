@@ -9855,10 +9855,6 @@ def rv_tab():
                         with c2:
                             st.metric("Score", f"{idea['Score']:.1f}")
 
-            # ── Data source note ─────────────────────────────────────
-            st.markdown("---")
-            st.caption(
-            )
 
 
 
