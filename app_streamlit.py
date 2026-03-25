@@ -11040,21 +11040,27 @@ def main():
     # Auto-load from database on first run (if connected and not already loaded)
     if HAS_POSTGRES and get_db_url() and not st.session_state.get("db_auto_loaded", False):
         user_id = st.session_state.get("username", "default")
-        loaded = load_all_session_data(user_id)
-        # Also load wedge spreads
-        try:
-            _db_spreads = load_user_config(user_id, "cf_spreads", "AUD")
-            if _db_spreads:
-                _spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
-                                "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y","cf_spr_12y3y"]
-                for k in _spread_keys:
-                    if k in _db_spreads:
-                        st.session_state[k] = float(_db_spreads[k])
-        except Exception:
+        if user_id and user_id != "default":
+            loaded = load_all_session_data(user_id)
+            # Load wedge spreads - clear stale defaults first so DB values take effect
+            try:
+                _db_spreads = load_user_config(user_id, "cf_spreads", "AUD")
+                if _db_spreads:
+                    _spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
+                                    "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y","cf_spr_12y3y"]
+                    for k in _spread_keys:
+                        if k in _db_spreads:
+                            st.session_state[k] = float(_db_spreads[k])
+                    if loaded >= 0:
+                        loaded += 1
+            except Exception:
+                pass
+            st.session_state["db_auto_loaded"] = True
+            if loaded > 0:
+                st.toast(f" Auto-loaded {loaded} configs from database", icon="")
+        else:
+            # Not authenticated yet - don't mark as loaded so it retries after login
             pass
-        st.session_state["db_auto_loaded"] = True
-        if loaded > 0:
-            st.toast(f" Auto-loaded {loaded} configs from database", icon="")
 
     # Sidebar for settings
     with st.sidebar:
@@ -12361,6 +12367,8 @@ def show_login_page():
                             st.session_state["user_email"] = st.session_state.auth_email
                             st.session_state["session_token"] = _sess_token
                             st.session_state.auth_step = 'email'
+                            # Reset auto-load flag so spreads + configs reload for this user
+                            st.session_state["db_auto_loaded"] = False
                             st.rerun()
                         else:
                             st.error(data.get("error", "Invalid code"))
