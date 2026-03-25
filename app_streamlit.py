@@ -2553,6 +2553,21 @@ def _load_portfolio() -> list:
     except Exception:
         return []
 
+def is_admin() -> bool:
+    """Check if current user has admin role."""
+    return st.session_state.get("user_role", "read_only") == "admin"
+
+def is_read_only() -> bool:
+    """Check if current user is read-only."""
+    return st.session_state.get("user_role", "read_only") == "read_only"
+
+def require_admin(label="🔒 Admin only"):
+    """Show a lock message if user is not admin. Returns True if admin."""
+    if not is_admin():
+        st.warning(f"{label} — contact wpo@rateedge.au to request edit access.")
+        return False
+    return True
+
 def init_session():
     if "sw_pending_reload" not in st.session_state:
         st.session_state["sw_pending_reload"] = None
@@ -5840,7 +5855,7 @@ def caps_floors_tab(vol_mode: str):
             st.markdown("<hr style='margin:4px 0;border-color:#334155'>", unsafe_allow_html=True)
 
             bl, _, br = st.columns([2, 0.2, 2])
-            if bl.button("✅ Calculate CFS from Spreads", key="apply_spreads", type="primary"):
+            if bl.button("✅ Calculate CFS from Spreads", key="apply_spreads", type="primary") and require_admin("Edit Spreads"):
                 for spr_key, *_ in ROW_DATA:
                     st.session_state[spr_key] = new_spread_values[spr_key]
                 # Persist to disk
@@ -5892,7 +5907,7 @@ def caps_floors_tab(vol_mode: str):
             st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
             _pub_col1, _pub_col2 = st.columns([2, 3])
             with _pub_col1:
-                if st.button("📌 Publish Wedge Mids to Blotter", key="publish_wedge_mids", use_container_width=True):
+                if st.button("📌 Publish Wedge Mids to Blotter", key="publish_wedge_mids", use_container_width=True) and require_admin("Publish Mids"):
                     if not HAS_POSTGRES:
                         st.error("Database not connected.")
                     else:
@@ -11177,6 +11192,38 @@ def main():
             st.info(f"📧 Email **wpo@rateedge.au** with the details above.\n\nSubject: {_issue_type}   —   {_severity.split('  —  ')[0].strip()}")
 
         st.markdown("---")
+        # User Management (admin only)
+        if is_admin():
+            with st.expander("👥 User Access", expanded=False):
+                st.caption("Manage user roles")
+                if HAS_POSTGRES:
+                    try:
+                        _conn = get_db_connection()
+                        if _conn:
+                            _cur = _conn.cursor()
+                            _cur.execute("SELECT email, role FROM user_roles ORDER BY email")
+                            _users = _cur.fetchall()
+                            _conn.close()
+                            for _email, _role in _users:
+                                _c1, _c2 = st.columns([3,2])
+                                _c1.caption(_email)
+                                _new_role = _c2.selectbox("", ["admin","read_only"],
+                                    index=0 if _role=="admin" else 1,
+                                    key=f"role_{_email}", label_visibility="collapsed")
+                                if _new_role != _role:
+                                    try:
+                                        _conn2 = get_db_connection()
+                                        _cur2 = _conn2.cursor()
+                                        _cur2.execute("UPDATE user_roles SET role=%s WHERE email=%s", (_new_role, _email))
+                                        _conn2.commit()
+                                        _conn2.close()
+                                        st.rerun()
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
+                st.caption("New users get read_only by default on first login.")
+
         st.markdown(
             """
             <div style="color:#64748b;font-size:0.7rem;text-align:center;">
@@ -12358,6 +12405,24 @@ def show_login_page():
                                             VALUES (%s, %s, NOW())
                                             ON CONFLICT (email) DO UPDATE SET session_token=EXCLUDED.session_token, created_at=NOW()
                                         """, (st.session_state.auth_email, _sess_token))
+                                        # Ensure user_roles table exists
+                                        _cur.execute("""
+                                            CREATE TABLE IF NOT EXISTS user_roles (
+                                                email TEXT PRIMARY KEY,
+                                                role TEXT NOT NULL DEFAULT 'read_only',
+                                                created_at TIMESTAMPTZ DEFAULT NOW()
+                                            )
+                                        """)
+                                        # Insert user with default read_only role if not exists
+                                        _cur.execute("""
+                                            INSERT INTO user_roles (email, role)
+                                            VALUES (%s, 'read_only')
+                                            ON CONFLICT (email) DO NOTHING
+                                        """, (st.session_state.auth_email,))
+                                        # Fetch role for this user
+                                        _cur.execute("SELECT role FROM user_roles WHERE email=%s", (st.session_state.auth_email,))
+                                        _role_row = _cur.fetchone()
+                                        st.session_state["user_role"] = _role_row[0] if _role_row else "read_only"
                                         _conn.commit()
                                         _conn.close()
                             except Exception:
