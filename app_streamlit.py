@@ -36,7 +36,7 @@ from scipy.interpolate import PchipInterpolator
 # crosses month end in which case use preceding BD).
 # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
 
-def _easter_tuple(year: int):
+def _easter(year: int):
     """Return (Good Friday, Easter Monday) for year   —   Anonymous Gregorian."""
     a = year % 19
     b, c = divmod(year, 100)
@@ -71,7 +71,7 @@ def _au_holidays(year: int) -> set:
     # Australia Day   —   26 Jan
     h.add(_sub_mon(date(year, 1, 26)))
     # Good Friday + Easter Saturday (NSW bank holiday) + Easter Monday
-    gf, em = _easter_tuple(year)
+    gf, em = _easter(year)
     h.add(gf)
     h.add(gf + timedelta(days=1))   # Easter Saturday
     h.add(em)
@@ -1279,12 +1279,11 @@ def df_from_curve(curve: pd.DataFrame, t: float) -> float:
     return math.exp(-z * t)
 
 
-def _next_bd(d: "date", ccy: str = "AUD") -> "date":
-    """Next business day using proper holiday calendar."""
-    from datetime import timedelta as _td
-    hols = _get_holidays(ccy)
-    while d.weekday() >= 5 or d in hols:
-        d += _td(1)
+def _next_bd(d: "date") -> "date":
+    """Next business day (Mon-Fri, no holiday calendar)."""
+    from datetime import date as _date, timedelta as _td
+    while d.weekday() >= 5:
+        d += _td(days=1)
     return d
 
 def _add_months(d: "date", months: int) -> "date":
@@ -1303,207 +1302,19 @@ def _add_years(d: "date", years: int) -> "date":
     except ValueError:
         return _date(d.year + years, d.month, 28)
 
-def _mod_fol_hol(d: "date", holidays: frozenset) -> "date":
-    """Modified following with holiday calendar."""
-    from datetime import timedelta as _td
-    orig_month = d.month
-    nd = d
-    while nd.weekday() >= 5 or nd in holidays:
-        nd += _td(1)
-    if nd.month != orig_month:
-        # Gone to next month - go backwards
-        nd = d
-        while nd.weekday() >= 5 or nd in holidays:
-            nd -= _td(1)
-    return nd
-
 def _mod_fol(d: "date") -> "date":
-    """Modified following (no holiday calendar - used for bootstrapper only)."""
+    """Modified following: if adjusted date falls in next month, go backward."""
     from datetime import timedelta as _td
-    nd = _next_bd(d, "AUD")
+    nd = _next_bd(d)
     if nd.month != d.month:
         pd_ = d
         while pd_.weekday() >= 5:
-            pd_ -= _td(1)
-        return pd_
-    return nd
-
-def _mod_fol_ccy(d: "date", ccy: str) -> "date":
-    """Modified following with proper holiday calendar."""
-    from datetime import timedelta as _td
-    hols = _get_holidays(ccy)
-    nd = d
-    while nd.weekday() >= 5 or nd in hols:
-        nd += _td(1)
-    if nd.month != d.month:
-        pd_ = d
-        while pd_.weekday() >= 5 or pd_ in hols:
-            pd_ -= _td(1)
+            pd_ -= _td(days=1)
         return pd_
     return nd
 
 def _act365(d1: "date", d2: "date") -> float:
     return (d2 - d1).days / 365.0
-
-
-# ── Public holiday calendars ──────────────────────────────────────────────────
-def _easter(year: int) -> "date":
-    from datetime import date as _d
-    a=year%19; b=year//100; c=year%100; d=b//4; e=b%4
-    f=(b+8)//25; g=(b-f+1)//3; h=(19*a+b-d-g+15)%30
-    i=c//4; k=c%4; l=(32+2*e+2*i-h-k)%7; m=(a+11*h+22*l)//451
-    mo=(h+l-7*m+114)//31; dy=((h+l-7*m+114)%31)+1
-    return _d(year, mo, dy)
-
-def _nth_weekday(year: int, month: int, n: int, weekday: int) -> "date":
-    """nth occurrence of weekday (0=Mon) in month (1-indexed)."""
-    from datetime import date as _d, timedelta as _td
-    first = _d(year, month, 1)
-    offset = (weekday - first.weekday()) % 7
-    return first + _td(offset) + _td(7*(n-1))
-
-def _last_weekday(year: int, month: int, weekday: int) -> "date":
-    """Last occurrence of weekday (0=Mon) in month."""
-    import calendar as _cal
-    from datetime import date as _d, timedelta as _td
-    last = _d(year, month, _cal.monthrange(year, month)[1])
-    return last - _td((last.weekday()-weekday) % 7)
-
-def _obs_std(d: "date") -> "date":
-    """Standard observed: Sat->Mon, Sun->Mon."""
-    from datetime import timedelta as _td
-    if d.weekday()==5: return d+_td(2)
-    if d.weekday()==6: return d+_td(1)
-    return d
-
-def _obs_nyse(d: "date") -> "date":
-    """NYSE observed: Sat->Fri, Sun->Mon."""
-    from datetime import timedelta as _td
-    if d.weekday()==5: return d-_td(1)
-    if d.weekday()==6: return d+_td(1)
-    return d
-
-@st.cache_data(ttl=86400, show_spinner=False)
-# ── Holiday calendars ────────────────────────────────────────────────────────
-
-
-def _nth_weekday(year: int, month: int, n: int, weekday: int) -> "date":
-    """nth occurrence (1-based) of weekday (0=Mon) in month."""
-    from datetime import date as _date, timedelta as _td
-    d = _date(year, month, 1)
-    d += _td((weekday - d.weekday()) % 7)
-    return d + _td(7*(n-1))
-
-def _last_weekday(year: int, month: int, weekday: int) -> "date":
-    """Last occurrence of weekday in month."""
-    import calendar as _cal
-    from datetime import date as _date, timedelta as _td
-    last = _date(year, month, _cal.monthrange(year, month)[1])
-    return last - _td((last.weekday() - weekday) % 7)
-
-def _obs_std(d: "date") -> "date":
-    """Sat->Mon, Sun->Mon observation."""
-    from datetime import timedelta as _td
-    if d.weekday()==5: return d+_td(2)
-    if d.weekday()==6: return d+_td(1)
-    return d
-
-def _obs_nyse(d: "date") -> "date":
-    """NYSE: Sat->Fri, Sun->Mon."""
-    from datetime import timedelta as _td
-    if d.weekday()==5: return d-_td(1)
-    if d.weekday()==6: return d+_td(1)
-    return d
-
-def _aud_holidays(year: int) -> set:
-    """AUD Sydney IRS holiday calendar."""
-    from datetime import date as _date, timedelta as _td
-    e = _easter(year)
-    return {
-        _obs_std(_date(year,1,1)),         # New Year
-        _obs_std(_date(year,1,26)),         # Australia Day
-        e-_td(2),                           # Good Friday
-        e,                                  # Easter Saturday (NSW)
-        e+_td(1),                           # Easter Monday
-        _obs_std(_date(year,4,25)),         # ANZAC Day
-        _nth_weekday(year,6,2,0),           # King's Birthday (2nd Mon Jun, NSW)
-        _nth_weekday(year,8,1,0),           # Bank Holiday (1st Mon Aug, NSW)
-        _nth_weekday(year,10,1,0),          # Labour Day (1st Mon Oct, NSW)
-        _obs_std(_date(year,12,25)),        # Christmas Day
-        _obs_std(_date(year,12,26)),        # Boxing Day
-    }
-
-def _usd_holidays(year: int) -> set:
-    """USD New York IRS holiday calendar (NYSE/Fed Funds)."""
-    from datetime import date as _date, timedelta as _td
-    e = _easter(year)
-    return {
-        _obs_nyse(_date(year,1,1)),         # New Year
-        _nth_weekday(year,1,3,0),           # MLK (3rd Mon Jan)
-        _nth_weekday(year,2,3,0),           # Presidents Day (3rd Mon Feb)
-        e-_td(2),                           # Good Friday
-        _last_weekday(year,5,0),            # Memorial Day (last Mon May)
-        _obs_nyse(_date(year,6,19)),        # Juneteenth
-        _obs_nyse(_date(year,7,4)),         # Independence Day
-        _nth_weekday(year,9,1,0),           # Labor Day (1st Mon Sep)
-        _nth_weekday(year,11,4,3),          # Thanksgiving (4th Thu Nov)
-        _obs_nyse(_date(year,12,25)),       # Christmas Day
-    }
-
-# Matariki dates (NZ — legislated individually each year)
-_MATARIKI = {
-    2024: (2024,6,28), 2025: (2025,6,20), 2026: (2026,6,26),
-    2027: (2027,7,16), 2028: (2028,7,7),  2029: (2029,6,28),
-    2030: (2030,7,19), 2031: (2031,7,11), 2032: (2032,7,2),
-    2033: (2033,6,24),
-}
-
-def _nzd_holidays(year: int) -> set:
-    """NZD Wellington IRS holiday calendar."""
-    from datetime import date as _date, timedelta as _td
-    e = _easter(year)
-    hols = {
-        _obs_std(_date(year,1,1)),          # New Year
-        _obs_std(_date(year,1,2)),          # Day after New Year
-        _obs_std(_date(year,2,6)),          # Waitangi Day
-        e-_td(2),                           # Good Friday
-        e+_td(1),                           # Easter Monday
-        _obs_std(_date(year,4,25)),         # ANZAC Day
-        _nth_weekday(year,6,1,0),           # King's Birthday (1st Mon Jun)
-        _last_weekday(year,10,0),           # Labour Day (last Mon Oct)
-        _obs_std(_date(year,12,25)),        # Christmas Day
-        _obs_std(_date(year,12,26)),        # Boxing Day
-    }
-    if year in _MATARIKI:
-        hols.add(_date(*_MATARIKI[year]))
-    # Wellington Anniversary: nearest Monday to Jan 22
-    from datetime import date as _d2
-    jan22 = _d2(year,1,22)
-    mon_after = jan22+_td((0-jan22.weekday())%7)
-    mon_before = mon_after-_td(7)
-    hols.add(mon_before if (jan22-mon_before).days<=(mon_after-jan22).days else mon_after)
-    return hols
-
-# Cache holiday sets (3 years pre-loaded)
-_HOLIDAY_CACHE: dict = {}
-
-def _get_holidays(ccy: str) -> frozenset:
-    """Return union of holidays for ccy across current + next 35 years. Cached."""
-    from datetime import date as _date
-    if ccy not in _HOLIDAY_CACHE:
-        fn = {"AUD": _aud_holidays, "USD": _usd_holidays, "NZD": _nzd_holidays}.get(ccy)
-        if fn is None:
-            _HOLIDAY_CACHE[ccy] = frozenset()
-        else:
-            yr = _date.today().year
-            hols: set = set()
-            for y in range(yr - 1, yr + 36):
-                try:
-                    hols |= fn(y)
-                except Exception:
-                    pass
-            _HOLIDAY_CACHE[ccy] = frozenset(hols)
-    return _HOLIDAY_CACHE[ccy]
 
 def _pricing_date() -> "date":
     """Today's date for schedule generation."""
@@ -1516,35 +1327,35 @@ def _pricing_date() -> "date":
         pass
     return _date.today()
 
-def _spot_date(spot_lag_bd: int, ccy: str = "AUD") -> "date":
-    """Spot date = today + spot_lag business days (holiday-adjusted)."""
+def _spot_date(spot_lag_bd: int) -> "date":
+    """Spot date = today + spot_lag business days."""
     from datetime import timedelta as _td
     d = _pricing_date()
-    hols = _get_holidays(ccy)
     count = 0
     while count < spot_lag_bd:
-        d += _td(1)
-        if d.weekday() < 5 and d not in hols:
+        d += _td(days=1)
+        if d.weekday() < 5:
             count += 1
     return d
 
-def _fwd_start_date(expiry_years: float, spot_lag_bd: int, ccy: str = "AUD") -> "date":
-    """Forward start date: spot + expiry (mod-fol with holiday calendar)."""
+def _fwd_start_date(expiry_years: float, spot_lag_bd: int) -> "date":
+    """Forward start date: spot + expiry (mod-fol). Uses days for <1m, months otherwise."""
     from datetime import timedelta as _td
-    spot = _spot_date(spot_lag_bd, ccy)
+    spot = _spot_date(spot_lag_bd)
     total_days = expiry_years * 365.25
     total_months = int(round(expiry_years * 12))
     if total_days < 27:
+        # Sub-monthly: add whole days then mod-fol
         raw = spot + _td(days=int(round(total_days)))
     else:
         raw = _add_months(spot, total_months)
-    return _mod_fol_ccy(raw, ccy)
+    return _mod_fol(raw)
 
-def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_period: int,
-                         ccy: str = "AUD") -> List[Tuple[float, float]]:
+def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_period: int) -> List[Tuple[float, float]]:
     """
-    Build actual payment schedule using mod-fol date arithmetic with holiday calendar.
+    Build actual payment schedule using mod-fol date arithmetic.
     Returns list of (time_in_years_from_today, act365_accrual).
+    Final cashflow uses total months (not rounded years) to handle 18m, 1.5Y etc correctly.
     """
     today = _pricing_date()
     total_months = int(round(tenor_years * 12))
@@ -1552,8 +1363,9 @@ def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_perio
     schedule = []
     prev = fwd_start
     for i in range(1, n + 1):
+        # Always use months arithmetic - last cashflow uses total_months exactly
         raw = _add_months(fwd_start, i * months_per_period if i < n else total_months)
-        pay = _mod_fol_ccy(raw, ccy)
+        pay = _mod_fol(raw)
         accrual = _act365(prev, pay)
         t_years = _act365(today, pay)
         schedule.append((t_years, accrual))
@@ -1561,17 +1373,17 @@ def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_perio
     return schedule
 
 def build_aud_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]:
-    """AUD: T+1BD spot, mod-fol with Sydney holidays, Act/365. Q/Q ≤3Y, S/S >3Y."""
+    """AUD: T+1BD spot, mod-fol, Act/365. Q/Q (3m) for ≤3Y, S/S (6m) for >3Y."""
     months_per = 3 if tenor <= 3.0 else 6
-    fwd_start = _fwd_start_date(expiry, spot_lag_bd=1, ccy="AUD")
-    return _build_date_schedule(fwd_start, tenor, months_per, ccy="AUD")
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=1)
+    return _build_date_schedule(fwd_start, tenor, months_per)
 
 
-def build_generic_schedule(expiry: float, tenor: float, freq: float = 0.5, spot_lag: float = 1.0, ccy: str = "AUD") -> List[Tuple[float, float]]:
-    """Mod-fol with holiday calendar, Act/365."""
+def build_generic_schedule(expiry: float, tenor: float, freq: float = 0.5, spot_lag: float = 1.0) -> List[Tuple[float, float]]:
+    """T+2BD spot (NZD/USD), mod-fol, Act/365. freq: 0.25=Q/Q, 0.5=S/S."""
     months_per = int(round(freq * 12))
-    fwd_start = _fwd_start_date(expiry, spot_lag_bd=int(round(spot_lag)), ccy=ccy)
-    return _build_date_schedule(fwd_start, tenor, months_per, ccy=ccy)
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=int(round(spot_lag)))
+    return _build_date_schedule(fwd_start, tenor, months_per)
 
 
 def forward_and_annuity_from_curve(curve: pd.DataFrame,
@@ -1587,17 +1399,16 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
     freq_override: 0.25 = Q/Q, 0.5 = S/S, None = market convention
     """
     if freq_override is not None:
-        spot_lag_bd = 2 if ccy in ["NZD", "USD"] else 1
-        sched = build_generic_schedule(expiry, tenor, freq=freq_override, spot_lag=float(spot_lag_bd), ccy=ccy)
+        # T+2 BD for NZD/USD, T+1 BD for AUD (AFMA calendar   —   year frac approx here)
+        spot_lag = 2.0 / 252.0 if ccy in ["NZD", "USD"] else 1.0 / 252.0
+        sched = build_generic_schedule(expiry, tenor, freq=freq_override, spot_lag=spot_lag * 252)
     elif ccy == "AUD":
         sched = build_aud_schedule(expiry, tenor)
     elif ccy == "NZD":
         freq_nzd = 0.25 if tenor <= 2.0 else 0.5
-        fwd_start_nzd = _fwd_start_date(expiry, spot_lag_bd=2, ccy="NZD")
-        sched = _build_date_schedule(fwd_start_nzd, tenor, int(round(freq_nzd*12)), ccy="NZD")
+        sched = build_generic_schedule(expiry, tenor, freq=freq_nzd, spot_lag=2.0)
     elif ccy == "USD":
-        fwd_start_usd = _fwd_start_date(expiry, spot_lag_bd=2, ccy="USD")
-        sched = _build_date_schedule(fwd_start_usd, tenor, 6, ccy="USD")
+        sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=2.0)
     else:
         sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=1.0)
 
@@ -3495,7 +3306,7 @@ def vol_config_tab():
         
         load_type = st.radio(
             "Commit options",
-            ["All", "ATM Vol Only", "IRS Curves Only"],
+            ["All", "ATM Vol Only", "SABR Only", "IRS Curves Only"],
             index=0,
             horizontal=True,
             key="load_type_radio"
@@ -3505,6 +3316,7 @@ def vol_config_tab():
         type_map = {
             "All": "all",
             "ATM Vol Only": "atm",
+            "SABR Only": "sabr",
             "IRS Curves Only": "curves"
         }
         
@@ -4030,21 +3842,13 @@ def curves_tab():
             if st.button("Generate Forward Matrix", key="gen_fwd_matrix", type="primary"):
                 convention_key = {"Market": "market", "Q/Q": "qq", "S/S": "ss"}.get(leg_convention, "market")
                 with st.spinner("Generating..."):
-                    try:
-                        fwd_matrix = generate_forward_matrix_convention(ccy, curve, basis_6v3, convention_key)
-                        if fwd_matrix is None or fwd_matrix.empty:
-                            st.error(f"Matrix returned empty. Curve rows: {len(curve) if curve is not None else 'None'}")
-                        else:
-                            st.session_state["fwd_matrix"][ccy] = fwd_matrix
-                            st.session_state["fwd_convention"] = convention_key
-                            if basis_6v3 is not None:
-                                basis_matrix = generate_basis_matrix(ccy, basis_6v3)
-                                st.session_state["basis_matrix"][ccy] = basis_matrix
-                            st.rerun()
-                    except Exception as _e:
-                        st.error(f"Matrix generation failed: {_e}")
-                        import traceback
-                        st.code(traceback.format_exc())
+                    fwd_matrix = generate_forward_matrix_convention(ccy, curve, basis_6v3, convention_key)
+                    st.session_state["fwd_matrix"][ccy] = fwd_matrix
+                    st.session_state["fwd_convention"] = convention_key
+                    if basis_6v3 is not None:
+                        basis_matrix = generate_basis_matrix(ccy, basis_6v3)
+                        st.session_state["basis_matrix"][ccy] = basis_matrix
+                st.rerun()
         with ctrl_col2:
             show_heatmap = st.checkbox("Show Heatmap", value=False, key="show_heatmap")
         with ctrl_col3:
@@ -4988,31 +4792,31 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
                       ois_x: Optional[np.ndarray] = None, ois_y: Optional[np.ndarray] = None,
                       basis6v3_x: Optional[np.ndarray] = None, basis6v3_y: Optional[np.ndarray] = None) -> float:
     """
-    Forward swap rate using year-fraction schedule (safe for @st.cache_data context).
-    Used by the forward matrix generator. Holiday-adjusted dates used in forward_and_annuity_from_curve.
-    curve_y already in decimal.
+    Forward swap rate using proper date-based schedule (mod-fol, Act/365).
+    AUD T+1BD, NZD/USD T+2BD. curve_y already in decimal.
     """
+    spot_lag_bd = 1 if ccy == "AUD" else 2
+
     if freq_override is not None:
-        freq = freq_override
+        months_per = int(round(freq_override * 12))
     elif ccy == "AUD":
-        freq = 0.25 if tenor <= 3 else 0.5
+        months_per = 3 if tenor <= 3 else 6
     elif ccy == "NZD":
-        freq = 0.25 if tenor <= 2 else 0.5
+        months_per = 3 if tenor <= 2 else 6
     else:
-        freq = 0.5
+        months_per = 6
 
-    SPOT = 1.0 / 252.0
-    t_start = expiry + SPOT
-    t_end = t_start + tenor
+    freq = months_per / 12.0
 
-    times = []
-    t = t_start + freq
-    while t <= t_end + 1e-9:
-        times.append(min(t, t_end))
-        t += freq
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd)
+    sched = _build_date_schedule(fwd_start, tenor, months_per)
 
-    if not times:
+    if not sched:
         return 0.0
+
+    today = _pricing_date()
+    t_start = _act365(today, fwd_start)
+    t_end = sched[-1][0]
 
     def _proj_df(t_val: float) -> float:
         z = float(np.interp(t_val, curve_x, curve_y))
@@ -5028,12 +4832,7 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
     disc_x = ois_x if ois_x is not None else curve_x
     disc_y = ois_y if ois_y is not None else curve_y
 
-    prev = t_start
-    ann = 0.0
-    for ti in times:
-        ann += math.exp(-float(np.interp(ti, disc_x, disc_y)) * ti) * (ti - prev)
-        prev = ti
-
+    ann = sum(math.exp(-float(np.interp(t, disc_x, disc_y)) * t) * acc for t, acc in sched)
     if ann <= 0:
         return 0.0
 
@@ -11569,92 +11368,27 @@ def main():
     )
     init_session()
     
-    # Auto-load: role check + vols/basis/spreads from DB on first login
-    # Curves are NOT loaded from DB — they are always bootstrapped fresh from uploaded config
+    # Auto-load disabled — upload config manually via Vol/Upload tab
+    # Role check only (no curve/vol data loaded from DB automatically)
     if HAS_POSTGRES and get_db_url() and not st.session_state.get("db_auto_loaded", False):
         user_id = st.session_state.get("username", "default")
         if user_id and user_id != "default":
             _ADMIN_EMAILS = {"wpo70@icloud.com", "wpo@rateedge.au"}
-            _ADMIN_EMAIL  = "wpo70@icloud.com"
-            _load_user = user_id if user_id in _ADMIN_EMAILS else _ADMIN_EMAIL
-            with st.spinner("Loading saved configs…"):
-                try:
-                    _role_conn = get_db_connection()
-                    if _role_conn:
-                        _role_cur = _role_conn.cursor()
-                        # Role
-                        _role_cur.execute("SELECT role FROM user_roles WHERE email=%s", (user_id,))
-                        _role_row = _role_cur.fetchone()
-                        st.session_state["user_role"] = "admin" if user_id in _ADMIN_EMAILS else (
-                            _role_row[0] if _role_row else "read_only"
-                        )
-                        # Spreads inline
-                        _role_cur.execute(
-                            "SELECT data FROM user_configs WHERE user_id=%s AND config_type='cf_spreads' AND currency='AUD'",
-                            (user_id,)
-                        )
-                        _spr_row = _role_cur.fetchone()
-                        _role_cur.close()
-                        _role_conn.close()
-                        if _spr_row and _spr_row[0]:
-                            _spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
-                                            "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y","cf_spr_12y3y"]
-                            for k in _spread_keys:
-                                if k in _spr_row[0]:
-                                    st.session_state[k] = float(_spr_row[0][k])
-                except Exception:
-                    if user_id in _ADMIN_EMAILS:
-                        st.session_state["user_role"] = "admin"
-
-                # Load vols, SABR, basis from DB — but NOT curves (always from live config upload)
-                _configs = load_all_user_configs(_load_user)
-                _loaded = 0
-                if _configs:
-                    if "vol_data" not in st.session_state: st.session_state["vol_data"] = {}
-                    if "basis_curves" not in st.session_state: st.session_state["basis_curves"] = {}
-                    if "vol_editor" not in st.session_state:
-                        st.session_state["vol_editor"] = {"working":{},"base":{},"history":{},"future":{},"redo_stack":{}}
-                    for _ccy in ["AUD","NZD","USD"]:
-                        if _ccy not in st.session_state["vol_data"]: st.session_state["vol_data"][_ccy] = {}
-                        if _ccy not in st.session_state["basis_curves"]: st.session_state["basis_curves"][_ccy] = {}
-                        # ATM vols
-                        if "atm_vols" in _configs and _ccy in _configs["atm_vols"]:
-                            try:
-                                _df = pd.DataFrame(_configs["atm_vols"][_ccy]["data"]["values"])
-                                if "Expiry" in _df.columns:
-                                    _df = _df[["Expiry"]+[c for c in _df.columns if c!="Expiry"]]
-                                st.session_state["vol_data"][_ccy]["atm"] = _df
-                                _ve = st.session_state["vol_editor"]
-                                _ve["base"][_ccy]=_df.copy(); _ve["working"][_ccy]=_df.copy()
-                                _ve["history"][_ccy]=[]; _ve["future"][_ccy]=[]; _ve["redo_stack"][_ccy]=[]
-                                _loaded += 1
-                            except Exception: pass
-                        # Basis curves (6v3, 3v1, ois)
-                        for _bt in ["6v3","3v1","ois"]:
-                            _key = f"basis_{_bt}"
-                            if _key in _configs and _ccy in _configs[_key]:
-                                try:
-                                    _bdf = pd.DataFrame(_configs[_key][_ccy]["data"]["values"])
-                                    st.session_state["basis_curves"][_ccy][_bt] = _bdf
-                                    if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
-                                    if _ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][_ccy] = {}
-                                    st.session_state["config_basis"][_ccy][_bt] = _bdf
-                                    _loaded += 1
-                                except Exception: pass
-                        # FWD prefs
-                        if "fwd_analysis_prefs" in _configs and "GLB" in _configs["fwd_analysis_prefs"]:
-                            try:
-                                _p = _configs["fwd_analysis_prefs"]["GLB"]["data"]
-                                for _pk in ["irs_sp_list","irs_fl_list","fvfv_list","b6_list","fv6_list","bsp_list"]:
-                                    if _pk in _p:
-                                        st.session_state[_pk] = [tuple(x) for x in _p[_pk]] if isinstance(_p[_pk][0] if _p[_pk] else [], list) else list(_p[_pk])
-                            except Exception: pass
-
+            try:
+                _role_conn = get_db_connection()
+                if _role_conn:
+                    _role_cur = _role_conn.cursor()
+                    _role_cur.execute("SELECT role FROM user_roles WHERE email=%s", (user_id,))
+                    _role_row = _role_cur.fetchone()
+                    _role_cur.close()
+                    _role_conn.close()
+                    st.session_state["user_role"] = "admin" if user_id in _ADMIN_EMAILS else (
+                        _role_row[0] if _role_row else "read_only"
+                    )
+            except Exception:
+                if user_id in _ADMIN_EMAILS:
+                    st.session_state["user_role"] = "admin"
             st.session_state["db_auto_loaded"] = True
-            if _loaded > 0:
-                st.toast(f"Loaded {_loaded} saved configs (upload config for live curves)")
-        else:
-            pass
 
     # Sidebar for settings
     with st.sidebar:
