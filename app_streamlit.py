@@ -2905,134 +2905,136 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
     """
     Bootstrap AUD zero curve from BBG_Feed par swap rates.
     Q/Q (quarterly) for ≤3Y, S/S (semi-annual) for ≥4Y. AUD T+1 settlement.
-    Uses OIS rates from BBG_Feed to anchor the short end (<6m).
-    Returns DataFrame with columns MaturityY, ZeroRatePct, or None if BBG_Feed not present.
+    Returns DataFrame(MaturityY, ZeroRatePct) with 19 points, or None on failure.
     """
+    import re as _re
     if "BBG_Feed" not in xl.sheet_names:
         return None
     try:
         raw = pd.read_excel(xl, sheet_name="BBG_Feed", header=None)
-        # Extract MID column (col index 4) by scanning rows for known labels
+
+        QQ_MAP = {"6m QQ":0.5,"9m QQ":0.75,"1Y QQ":1.0,"18m QQ":1.5,"2Y QQ":2.0,"3Y QQ":3.0}
+        SS_MAP = {"4Y SS":4.0,"5Y SS":5.0,"6Y SS":6.0,"7Y SS":7.0,"8Y SS":8.0,"9Y SS":9.0,
+                  "10Y SS":10.0,"12Y SS":12.0,"15Y SS":15.0,"20Y SS":20.0,"25Y SS":25.0,"30Y SS":30.0}
+        OIS_MAP = {"OIS 1W":1/52,"OIS 1M":1/12,"OIS 2M":2/12,"OIS 3M":3/12,
+                   "OIS 4M":4/12,"OIS 5M":5/12,"OIS 6M":6/12,"OIS 9M":9/12,
+                   "OIS 1Y":1.0,"OIS 2Y":2.0,"OIS 3Y":3.0}
+
         par_qq: dict = {}
         par_ss: dict = {}
         ois_rates: dict = {}
-        tenor_map_qq = {"6m QQ": 0.50, "9m QQ": 0.75, "1Y QQ": 1.00, "18m QQ": 1.50,
-                        "2Y QQ": 2.00, "3Y QQ": 3.00}
-        tenor_map_ss = {"4Y SS": 4.00, "5Y SS": 5.00, "6Y SS": 6.00, "7Y SS": 7.00,
-                        "8Y SS": 8.00, "9Y SS": 9.00, "10Y SS": 10.00, "12Y SS": 12.00,
-                        "15Y SS": 15.00, "20Y SS": 20.00, "25Y SS": 25.00, "30Y SS": 30.00}
-        ois_map = {"OIS 1W": 1/52, "OIS 1M": 1/12, "OIS 2M": 2/12, "OIS 3M": 3/12,
-                   "OIS 4M": 4/12, "OIS 5M": 5/12, "OIS 6M": 6/12, "OIS 9M": 9/12,
-                   "OIS 1Y": 1.0, "OIS 2Y": 2.0, "OIS 3Y": 3.0}
+        in_usd = False
 
-        # Parse BBG_Feed in sections — stop AUD collection once we hit USD section
-        _in_usd = False
         for _, row in raw.iterrows():
             label = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
-            # Detect USD section header — stop collecting AUD data after this
-            if "USD" in label and ("IRS" in label or "OIS" in label or "SOFR" in label or "Fed" in label):
-                _in_usd = True
-            if _in_usd:
+            # Stop reading at USD section to prevent cross-contamination
+            if "USD" in label and any(x in label for x in ["IRS","OIS","SOFR","Fed Funds"]):
+                in_usd = True
+            if in_usd:
                 continue
-            mid_raw = row.iloc[4] if len(row) > 4 else None
             try:
-                mid = float(mid_raw)
+                mid = float(row.iloc[4])
+                if math.isnan(mid):
+                    continue
             except (TypeError, ValueError):
                 continue
-            # Match IRS par rates — use word-boundary match to avoid "5Y SS" matching "25Y SS"
-            label_l = label.lower()
-            for key, tenor in tenor_map_qq.items():
-                if re.search(r'(?<![0-9])' + re.escape(key.lower()), label_l):
-                    par_qq[tenor] = mid
-            for key, tenor in tenor_map_ss.items():
-                if re.search(r'(?<![0-9])' + re.escape(key.lower()), label_l):
-                    par_ss[tenor] = mid
-            # Match OIS rates
-            for key, tenor in ois_map.items():
-                if re.search(r'(?<![0-9])' + re.escape(key.lower()), label_l):
-                    ois_rates[tenor] = mid
+            ll = label.lower()
+            # Word-boundary regex prevents "5Y SS" matching "25Y SS" etc
+            for k, v in QQ_MAP.items():
+                if _re.search(r"(?<![0-9])" + _re.escape(k.lower()), ll):
+                    par_qq[v] = mid
+            for k, v in SS_MAP.items():
+                if _re.search(r"(?<![0-9])" + _re.escape(k.lower()), ll):
+                    par_ss[v] = mid
+            for k, v in OIS_MAP.items():
+                if _re.search(r"(?<![0-9])" + _re.escape(k.lower()), ll):
+                    ois_rates[v] = mid
 
-        if not par_qq and not par_ss:
+        if len(par_qq) < 3 or len(par_ss) < 6:
             return None
 
-        SPOT_LAG = 1.0 / 252.0
-        known_dfs: dict = {0.0: 1.0}
+        SPOT = 1.0 / 252.0
 
-        # Seed short end with OIS zeros
+        # Seed with OIS discount factors (short-end anchor)
+        dfs: dict = {0.0: 1.0}
         for t, r in sorted(ois_rates.items()):
-            known_dfs[t] = math.exp(-r / 100.0 * t)
+            if not math.isnan(r):
+                dfs[t] = math.exp(-r / 100.0 * t)
 
-        def _log_interp(t: float) -> float:
-            times = sorted(known_dfs.keys())
-            dfs = [known_dfs[tt] for tt in times]
-            if t <= times[0]: return dfs[0]
-            if t >= times[-1]:
-                z_last = -math.log(dfs[-1]) / times[-1]
-                return math.exp(-z_last * t)
-            for i in range(len(times) - 1):
-                if times[i] <= t <= times[i + 1]:
-                    w = (t - times[i]) / (times[i + 1] - times[i])
-                    return math.exp((1 - w) * math.log(dfs[i]) + w * math.log(dfs[i + 1]))
-            return dfs[-1]
+        def _df(t: float) -> float:
+            """Log-linear interpolation of current discount factor curve."""
+            ts = sorted(dfs.keys())
+            dfv = [dfs[x] for x in ts]
+            if t <= ts[0]: return dfv[0]
+            if t >= ts[-1]:
+                z = -math.log(dfv[-1]) / ts[-1]
+                return math.exp(-z * t)
+            for i in range(len(ts) - 1):
+                if ts[i] <= t <= ts[i+1]:
+                    w = (t - ts[i]) / (ts[i+1] - ts[i])
+                    return math.exp((1-w)*math.log(dfv[i]) + w*math.log(dfv[i+1]))
+            return dfv[-1]
 
-        def _bootstrap(par_dict: dict, freq: float):
-            for tenor in sorted(par_dict.keys()):
-                c = par_dict[tenor] / 100.0
-                swap_start = SPOT_LAG
-                swap_end = swap_start + tenor
-                times = []
-                t = swap_start + freq
-                while t <= swap_end + 1e-9:
-                    times.append(round(min(t, swap_end), 8))
-                    t += freq
-                if not times:
-                    continue
-                ann_sum = sum(_log_interp(ti) * freq for ti in times[:-1])
-                df_start = _log_interp(swap_start)
-                df_end = (df_start - c * ann_sum) / (1.0 + c * freq)
-                if df_end > 0:
-                    known_dfs[swap_end] = df_end
+        # Bootstrap: solve for unknown terminal DF given known intermediate DFs
+        bootstrapped: dict = {}  # tenor -> (swap_end_time, df)
 
-        _bootstrap(par_qq, 0.25)
-        _bootstrap(par_ss, 0.50)
+        def _boot(par_rate: float, tenor: float, freq: float) -> bool:
+            c = par_rate / 100.0
+            swap_end = SPOT + tenor
+            times = []
+            t = SPOT + freq
+            while t <= swap_end + 1e-9:
+                times.append(round(min(t, swap_end), 8))
+                t += freq
+            if not times: return False
+            ann = sum(_df(ti) * freq for ti in times[:-1])
+            df_end = (_df(SPOT) - c * ann) / (1.0 + c * freq)
+            if df_end <= 0 or math.isnan(df_end): return False
+            dfs[swap_end] = df_end
+            bootstrapped[tenor] = (swap_end, df_end)
+            return True
 
-        # Build output grid from bootstrapped IRS nodes only (strip OIS short-end nodes)
-        # The bootstrapped nodes are at SPOT_LAG+tenor - interpolate output grid from these
-        irs_keys = sorted(k for k in known_dfs if k >= SPOT_LAG + 0.49)  # IRS starts at ~0.5Y
-        if len(irs_keys) < 5:
+        for tenor in sorted(par_qq.keys()):
+            _boot(par_qq[tenor], tenor, 0.25)
+        for tenor in sorted(par_ss.keys()):
+            _boot(par_ss[tenor], tenor, 0.50)
+
+        if len(bootstrapped) < 10:
             return None
 
-        # Log-linear interpolation using only the bootstrapped IRS curve
-        def _irs_interp(t: float) -> float:
-            dfs_map = {k: known_dfs[k] for k in irs_keys}
-            times2 = sorted(dfs_map.keys())
-            dfs2 = [dfs_map[x] for x in times2]
-            if t <= times2[0]:
-                # Linear extrapolation left from first two points
-                z0 = -math.log(dfs2[0]) / times2[0]
-                z1 = -math.log(dfs2[1]) / times2[1]
-                slope = (z1 - z0) / (times2[1] - times2[0])
-                z = z0 + slope * (t - times2[0])
-                return math.exp(-z * t)
-            if t >= times2[-1]:
-                z_last = -math.log(dfs2[-1]) / times2[-1]
-                return math.exp(-z_last * t)
-            for i in range(len(times2) - 1):
-                if times2[i] <= t <= times2[i + 1]:
-                    w = (t - times2[i]) / (times2[i + 1] - times2[i])
-                    return math.exp((1 - w) * math.log(dfs2[i]) + w * math.log(dfs2[i + 1]))
-            return dfs2[-1]
+        # Build output grid using ONLY bootstrapped IRS nodes
+        irs_times = [bootstrapped[t][0] for t in sorted(bootstrapped)]
+        irs_dfs   = [bootstrapped[t][1] for t in sorted(bootstrapped)]
 
-        maturities = [0.25, 0.50, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0,
+        def _irs_df(t: float) -> float:
+            """Interpolate from bootstrapped IRS nodes only (not OIS seed nodes)."""
+            if not irs_times: return 0.0
+            if t <= irs_times[0]:
+                z0 = -math.log(irs_dfs[0]) / irs_times[0]
+                return math.exp(-z0 * t)
+            if t >= irs_times[-1]:
+                z = -math.log(irs_dfs[-1]) / irs_times[-1]
+                return math.exp(-z * t)
+            for i in range(len(irs_times) - 1):
+                if irs_times[i] <= t <= irs_times[i+1]:
+                    w = (t - irs_times[i]) / (irs_times[i+1] - irs_times[i])
+                    return math.exp((1-w)*math.log(irs_dfs[i]) + w*math.log(irs_dfs[i+1]))
+            return irs_dfs[-1]
+
+        MATURITIES = [0.25, 0.50, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0,
                       7.0, 8.0, 9.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0]
         rows = []
-        for m in maturities:
-            df = _irs_interp(m)
-            if df > 0:
-                z = -math.log(df) / m * 100
+        for m in MATURITIES:
+            d = _irs_df(m)
+            if d > 0 and not math.isnan(d):
+                z = -math.log(d) / m * 100
                 rows.append({"MaturityY": m, "ZeroRatePct": round(z, 6)})
 
-        return pd.DataFrame(rows) if rows else None
+        if len(rows) < 15:
+            return None
+
+        return pd.DataFrame(rows)
+
     except Exception:
         return None
 
@@ -3089,23 +3091,32 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
 
         # Load curves and basis curves
         if load_type in ["curves", "all"]:
-            # For AUD: auto-bootstrap zero curve from BBG_Feed par rates if available
-            # This ensures the zero curve is always consistent with live BBG par rates.
-            # Load curve directly from Curves_{CCY} sheet — always overrides session
-            curve_name = f"Curves_{ccy}"
-            if curve_name in xl.sheet_names:
-                raw_curve = pd.read_excel(xl, sheet_name=curve_name, usecols=[0, 1])
-                try:
-                    curve_df = load_curve_flexible(raw_curve, curve_name)
-                except:
-                    curve_df = load_curve(raw_curve, curve_name)
-                if curve_df is not None and len(curve_df) > 0:
-                    set_ccy_curve(ccy, curve_df)
-                    if "config_curves" not in st.session_state:
-                        st.session_state["config_curves"] = {}
-                    st.session_state["config_curves"][ccy] = curve_df
-                    set_timestamp("curves", ccy)
-                    loaded["curves"] += 1
+            curve_df = None
+
+            # AUD: bootstrap from BBG_Feed par rates (live rates → correct zeros)
+            if ccy == "AUD":
+                bootstrapped = bootstrap_aud_zeros_from_bbg_feed(xl)
+                if bootstrapped is not None and len(bootstrapped) >= 15:
+                    curve_df = bootstrapped
+
+            # Fallback for AUD (if bootstrap fails) and primary for NZD/USD:
+            # always read directly from Curves_{CCY} sheet
+            if curve_df is None:
+                curve_name = f"Curves_{ccy}"
+                if curve_name in xl.sheet_names:
+                    raw_curve = pd.read_excel(xl, sheet_name=curve_name, usecols=[0, 1])
+                    try:
+                        curve_df = load_curve_flexible(raw_curve, curve_name)
+                    except:
+                        curve_df = load_curve(raw_curve, curve_name)
+
+            if curve_df is not None and len(curve_df) > 0:
+                set_ccy_curve(ccy, curve_df)
+                if "config_curves" not in st.session_state:
+                    st.session_state["config_curves"] = {}
+                st.session_state["config_curves"][ccy] = curve_df
+                set_timestamp("curves", ccy)
+                loaded["curves"] += 1
             
             # 6v3 basis curve
             basis_6v3_name = f"Basis_{ccy}_6v3"
