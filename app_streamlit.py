@@ -3182,11 +3182,14 @@ def vol_config_tab():
                     st.error(f"Database connection failed. URL configured: {bool(get_db_url())}")
                 else:
                     conn_test.close()
+                    _vd = st.session_state.get("vol_data", {})
+                    _cv = st.session_state.get("curves", {})
+                    _dbg = " | ".join(f"{c}: atm={'ok' if _vd.get(c,{}).get('atm') is not None else 'MISSING'} curve={'ok' if _cv.get(c) is not None else 'MISSING'}" for c in ["AUD","NZD","USD"])
                     saved = save_all_session_data(user_id)
                     if saved > 0:
-                        st.success(f" Saved {saved} configs to database")
+                        st.success(f"Saved {saved} configs to database")
                     else:
-                        st.warning("Nothing to save - vol_data may be empty")
+                        st.warning(f"Nothing saved. Session: {_dbg}")
         with col_db3:
             if st.button(" Clear Corrupted DB Data", key="clear_db_btn"):
                 user_id = st.session_state.get("username", "default")
@@ -3277,11 +3280,9 @@ def vol_config_tab():
         curve = get_ccy_curve(ccy)
         
         atm_status = "✅" if atm is not None else "Not loaded"
-        sabr_status = "✅" if a is not None else "Not loaded"
         curve_status = "✅" if curve is not None else "Not loaded"
         
         atm_time = get_timestamp_str("atm", ccy)
-        sabr_time = get_timestamp_str("sabr", ccy)
         curve_time = get_timestamp_str("curves", ccy)
         
         st.markdown(
@@ -3295,11 +3296,6 @@ def vol_config_tab():
                         <td style="padding:0.25rem 0;">ATM Surface</td>
                         <td style="padding:0.25rem 0;">{atm_status}</td>
                         <td style="padding:0.25rem 0;color:{muted_color};font-size:0.75rem;">{atm_time}</td>
-                    </tr>
-                    <tr>
-                        <td style="padding:0.25rem 0;">SABR Grids</td>
-                        <td style="padding:0.25rem 0;">{sabr_status}</td>
-                        <td style="padding:0.25rem 0;color:{muted_color};font-size:0.75rem;">{sabr_time}</td>
                     </tr>
                     <tr>
                         <td style="padding:0.25rem 0;">IRS Curve</td>
