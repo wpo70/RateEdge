@@ -503,9 +503,11 @@ def save_all_session_data(user_id: str):
             cur.close()
             saved += 1
 
+        _debug_msgs = []
         for ccy in SUPPORTED_CURRENCIES:
             curve = st.session_state.get("curves", {}).get(ccy)
             if curve is not None:
+                _debug_msgs.append(f"{ccy} curve:{len(curve)}rows")
                 _save("curve", ccy, {"values": curve.to_dict(orient="records")})
 
             vol_data = st.session_state.get("vol_data", {}).get(ccy, {})
@@ -568,10 +570,13 @@ def save_all_session_data(user_id: str):
             _save("fwd_analysis_prefs", "GLB", _fwd_prefs)
 
         conn.commit()
+        try:
+            import streamlit as _st
+            _st.session_state["_save_debug_msgs"] = _debug_msgs
+        except: pass
     except Exception as _e:
         try: conn.rollback()
         except: pass
-        # Store error in session so UI can show it
         try:
             import streamlit as _st
             _st.session_state["_save_last_error"] = str(_e)
@@ -609,12 +614,12 @@ def load_all_session_data(user_id: str) -> int:
         if "curve" in configs and ccy in configs["curve"]:
             try:
                 df = pd.DataFrame(configs["curve"][ccy]["data"]["values"])
-                # Ensure correct column types
                 if "MaturityY" in df.columns:
                     df["MaturityY"] = pd.to_numeric(df["MaturityY"], errors="coerce")
                 if "ZeroRatePct" in df.columns:
                     df["ZeroRatePct"] = pd.to_numeric(df["ZeroRatePct"], errors="coerce")
                 df = df.dropna()
+                st.session_state.setdefault("_load_debug", []).append(f"DB loaded {ccy} curve: {len(df)} rows, cols: {list(df.columns)}, first: {df.iloc[0].to_dict() if len(df) > 0 else 'empty'}")
                 st.session_state["curves"][ccy] = df
                 if "config_curves" not in st.session_state:
                     st.session_state["config_curves"] = {}
@@ -3193,8 +3198,12 @@ def vol_config_tab():
         with col_db1:
             if st.button(" Load from Database", key="load_db_btn_top", type="primary"):
                 user_id = st.session_state.get("username", "default")
+                st.session_state.pop("_load_debug", None)
                 loaded_count = load_all_session_data(user_id)
+                _load_dbg = st.session_state.pop("_load_debug", [])
                 if loaded_count > 0:
+                    for _msg in _load_dbg:
+                        st.info(f"📊 {_msg}")
                     st.success(f" Loaded {loaded_count} configs from database")
                     st.rerun()
                 else:
@@ -3215,8 +3224,9 @@ def vol_config_tab():
                     init_database()
                     saved = save_all_session_data(user_id)
                     _last_err = st.session_state.pop("_save_last_error", None)
+                    _save_debug = st.session_state.pop("_save_debug_msgs", [])
                     if saved > 0:
-                        st.success(f"Saved {saved} configs to database")
+                        st.success(f"Saved {saved} configs: {' | '.join(_save_debug)}")
                     elif _last_err:
                         st.error(f"Save failed: {_last_err}")
                     else:
