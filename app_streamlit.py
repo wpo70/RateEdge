@@ -565,7 +565,7 @@ def save_all_session_data(user_id: str):
             "bsp_list":     [list(x) for x in st.session_state.get("bsp_list", [])],
         }
         if any(_fwd_prefs.values()):
-            _save("fwd_prefs", "AUD", _fwd_prefs)
+            _save("fwd_analysis_prefs", "GLB", _fwd_prefs)
 
         conn.commit()
     except Exception as _e:
@@ -609,31 +609,37 @@ def load_all_session_data(user_id: str) -> int:
         if "curve" in configs and ccy in configs["curve"]:
             try:
                 df = pd.DataFrame(configs["curve"][ccy]["data"]["values"])
+                # Ensure correct column types
+                if "MaturityY" in df.columns:
+                    df["MaturityY"] = pd.to_numeric(df["MaturityY"], errors="coerce")
+                if "ZeroRatePct" in df.columns:
+                    df["ZeroRatePct"] = pd.to_numeric(df["ZeroRatePct"], errors="coerce")
+                df = df.dropna()
                 st.session_state["curves"][ccy] = df
+                if "config_curves" not in st.session_state:
+                    st.session_state["config_curves"] = {}
+                st.session_state["config_curves"][ccy] = df
                 loaded += 1
-            except:
-                pass
+            except Exception as _e:
+                st.session_state.setdefault("_load_errors", []).append(f"curve/{ccy}: {_e}")
         
         # Load ATM vols into vol_data
         if "atm_vols" in configs and ccy in configs["atm_vols"]:
             try:
                 df = pd.DataFrame(configs["atm_vols"][ccy]["data"]["values"])
-                # Reorder columns to ensure Expiry is first if it exists
                 if "Expiry" in df.columns:
                     cols = ["Expiry"] + [c for c in df.columns if c != "Expiry"]
                     df = df[cols]
                 st.session_state["vol_data"][ccy]["atm"] = df
-                # Also update vol_editor
                 ve = st.session_state["vol_editor"]
                 ve["base"][ccy] = df.copy()
                 ve["working"][ccy] = df.copy()
                 ve["history"][ccy] = []
-                if "redo_stack" not in ve:
-                    ve["redo_stack"] = {}
+                ve["future"][ccy] = []
                 ve["redo_stack"][ccy] = []
                 loaded += 1
-            except Exception as e:
-                st.warning(f"Failed to load ATM data for {ccy}: {e}")
+            except Exception as _e:
+                st.session_state.setdefault("_load_errors", []).append(f"atm/{ccy}: {_e}")
         
         # Load SABR params into vol_data
         for param in ["alpha", "beta", "rho", "nu"]:
@@ -660,6 +666,11 @@ def load_all_session_data(user_id: str) -> int:
                 try:
                     df = pd.DataFrame(configs[key][ccy]["data"]["values"])
                     st.session_state["basis_curves"][ccy][basis_type] = df
+                    if "config_basis" not in st.session_state:
+                        st.session_state["config_basis"] = {}
+                    if ccy not in st.session_state["config_basis"]:
+                        st.session_state["config_basis"][ccy] = {}
+                    st.session_state["config_basis"][ccy][basis_type] = df
                     loaded += 1
                 except:
                     pass
@@ -1339,18 +1350,16 @@ def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_perio
     """
     Build actual payment schedule using mod-fol date arithmetic.
     Returns list of (time_in_years_from_today, act365_accrual).
+    Final cashflow uses total months (not rounded years) to handle 18m, 1.5Y etc correctly.
     """
-    from datetime import date as _date
     today = _pricing_date()
+    total_months = int(round(tenor_years * 12))
     n = int(round(tenor_years * (12 / months_per_period)))
-    total_years = int(round(tenor_years))
     schedule = []
     prev = fwd_start
     for i in range(1, n + 1):
-        if i < n:
-            raw = _add_months(fwd_start, i * months_per_period)
-        else:
-            raw = _add_years(fwd_start, total_years)
+        # Always use months arithmetic - last cashflow uses total_months exactly
+        raw = _add_months(fwd_start, i * months_per_period if i < n else total_months)
         pay = _mod_fol(raw)
         accrual = _act365(prev, pay)
         t_years = _act365(today, pay)
@@ -1390,7 +1399,10 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         sched = build_generic_schedule(expiry, tenor, freq=freq_override, spot_lag=spot_lag * 252)
     elif ccy == "AUD":
         sched = build_aud_schedule(expiry, tenor)
-    elif ccy in ["NZD", "USD"]:
+    elif ccy == "NZD":
+        freq_nzd = 0.25 if tenor <= 2.0 else 0.5
+        sched = build_generic_schedule(expiry, tenor, freq=freq_nzd, spot_lag=2.0)
+    elif ccy == "USD":
         sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=2.0)
     else:
         sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=1.0)
@@ -1428,8 +1440,10 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
 
     disc_curve = ois_curve if ois_curve is not None else curve
 
-    # Determine effective frequency from schedule
-    _sched_freq = sched[0][1] if sched else 0.5
+    # Determine effective frequency from schedule (periods per year → years per period)
+    _n_periods = len(sched)
+    _total_time = sched[-1][0] - (sched[0][0] - sched[0][1]) if sched else 0.5
+    _sched_freq = round(_total_time / _n_periods * 4) / 4 if _n_periods > 0 else 0.5  # round to nearest 0.25
 
     ann = 0.0
     for T_i, accrual in sched:
@@ -2700,7 +2714,7 @@ def init_session():
     if "basis_curves" not in st.session_state:
         st.session_state["basis_curves"] = {}  # {ccy: {"6v3": df, "3v1": df}}
     if "vol_editor" not in st.session_state:
-        st.session_state["vol_editor"] = {"working": {}, "base": {}, "history": {}, "future": {}}
+        st.session_state["vol_editor"] = {"working": {}, "base": {}, "history": {}, "future": {}, "redo_stack": {}}
     if "history_configs" not in st.session_state:
         st.session_state["history_configs"] = {}
     if "theme_name" not in st.session_state:
@@ -2729,9 +2743,9 @@ def init_session():
     if not any(k in st.session_state for k in _spread_defaults):
         _loaded = {}
         # Try DB first
-        if HAS_POSTGRES:
+        if HAS_POSTGRES and st.session_state.get("authenticated") and st.session_state.get("username"):
             try:
-                _user_id = st.session_state.get("username", "default")
+                _user_id = st.session_state.get("username")
                 _db_spreads = load_user_config(_user_id, "cf_spreads", "AUD")
                 if _db_spreads:
                     _loaded = _db_spreads
@@ -4728,6 +4742,8 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
         months_per = int(round(freq_override * 12))
     elif ccy == "AUD":
         months_per = 3 if tenor <= 3 else 6
+    elif ccy == "NZD":
+        months_per = 3 if tenor <= 2 else 6
     else:
         months_per = 6
 
@@ -6227,7 +6243,10 @@ def caps_floors_tab(vol_mode: str):
                                 if hasattr(_oc2, "columns") and "MaturityY" in _oc2.columns:
                                     _ox = _oc2["MaturityY"].to_numpy().astype(float)
                                     _oy = _oc2["ZeroRatePct"].to_numpy().astype(float) / 100.0
-                            _fwd_rate = fast_forward_rate(_cx, _cy, _fwd_start_y, _cap_swap_tenor, ccy, freq_override=None, ois_x=_ox, ois_y=_oy, basis6v3_x=basis_x if "basis_x" in dir() else None, basis6v3_y=basis_y if "basis_y" in dir() else None)
+                            _b6v3 = get_basis_curve(ccy, "6v3")
+                            _bx = _b6v3["MaturityY"].to_numpy().astype(float) if _b6v3 is not None else None
+                            _by = _b6v3["BasisBp"].to_numpy().astype(float) if _b6v3 is not None else None
+                            _fwd_rate = fast_forward_rate(_cx, _cy, _fwd_start_y, _cap_swap_tenor, ccy, freq_override=None, ois_x=_ox, ois_y=_oy, basis6v3_x=_bx, basis6v3_y=_by)
                         # Cumulative CFS straddle
                         _wedge_straddle = _cfs_tdata.get(_key, {}).get("cfs_straddle")
                         if _wedge_straddle is not None:
@@ -11394,6 +11413,7 @@ def main():
             if st.button(" Logout", key="logout_btn", use_container_width=True):
                 st.session_state["authenticated"] = False
                 st.session_state["username"] = None
+                st.session_state["db_auto_loaded"] = False
                 st.rerun()
         else:
             st.warning(" Login required")
