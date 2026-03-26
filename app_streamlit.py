@@ -2939,16 +2939,17 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
                 mid = float(mid_raw)
             except (TypeError, ValueError):
                 continue
-            # Match IRS par rates
+            # Match IRS par rates — use word-boundary match to avoid "5Y SS" matching "25Y SS"
+            label_l = label.lower()
             for key, tenor in tenor_map_qq.items():
-                if key.lower() in label.lower():
+                if re.search(r'(?<![0-9])' + re.escape(key.lower()), label_l):
                     par_qq[tenor] = mid
             for key, tenor in tenor_map_ss.items():
-                if key.lower() in label.lower():
+                if re.search(r'(?<![0-9])' + re.escape(key.lower()), label_l):
                     par_ss[tenor] = mid
             # Match OIS rates
             for key, tenor in ois_map.items():
-                if key.lower() in label.lower():
+                if re.search(r'(?<![0-9])' + re.escape(key.lower()), label_l):
                     ois_rates[tenor] = mid
 
         if not par_qq and not par_ss:
@@ -3090,47 +3091,21 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
         if load_type in ["curves", "all"]:
             # For AUD: auto-bootstrap zero curve from BBG_Feed par rates if available
             # This ensures the zero curve is always consistent with live BBG par rates.
-            if ccy == "AUD":
-                bootstrapped = bootstrap_aud_zeros_from_bbg_feed(xl)
-                if bootstrapped is not None and len(bootstrapped) >= 10:
-                    set_ccy_curve(ccy, bootstrapped)
-                    if "config_curves" not in st.session_state:
-                        st.session_state["config_curves"] = {}
-                    st.session_state["config_curves"][ccy] = bootstrapped
-                    set_timestamp("curves", ccy)
-                    loaded["curves"] += 1
-                else:
-                    # Bootstrap failed or returned too few points — always load Curves_AUD
-                    # regardless of what's already in session (could be stale DB data)
-                    curve_name_aud = "Curves_AUD"
-                    if curve_name_aud in xl.sheet_names:
-                        raw_curve_aud = pd.read_excel(xl, sheet_name=curve_name_aud, usecols=[0, 1])
-                        try:
-                            curve_df_aud = load_curve_flexible(raw_curve_aud, curve_name_aud)
-                        except:
-                            curve_df_aud = load_curve(raw_curve_aud, curve_name_aud)
-                        if curve_df_aud is not None and len(curve_df_aud) > 0:
-                            set_ccy_curve(ccy, curve_df_aud)
-                            if "config_curves" not in st.session_state:
-                                st.session_state["config_curves"] = {}
-                            st.session_state["config_curves"][ccy] = curve_df_aud
-                            set_timestamp("curves", ccy)
-                            loaded["curves"] += 1
-
-            # Main IRS curve for non-AUD currencies
+            # Load curve directly from Curves_{CCY} sheet — always overrides session
             curve_name = f"Curves_{ccy}"
-            if ccy != "AUD" and curve_name in xl.sheet_names:
+            if curve_name in xl.sheet_names:
                 raw_curve = pd.read_excel(xl, sheet_name=curve_name, usecols=[0, 1])
                 try:
                     curve_df = load_curve_flexible(raw_curve, curve_name)
                 except:
                     curve_df = load_curve(raw_curve, curve_name)
-                set_ccy_curve(ccy, curve_df)
-                if "config_curves" not in st.session_state:
-                    st.session_state["config_curves"] = {}
-                st.session_state["config_curves"][ccy] = curve_df
-                set_timestamp("curves", ccy)
-                loaded["curves"] += 1
+                if curve_df is not None and len(curve_df) > 0:
+                    set_ccy_curve(ccy, curve_df)
+                    if "config_curves" not in st.session_state:
+                        st.session_state["config_curves"] = {}
+                    st.session_state["config_curves"][ccy] = curve_df
+                    set_timestamp("curves", ccy)
+                    loaded["curves"] += 1
             
             # 6v3 basis curve
             basis_6v3_name = f"Basis_{ccy}_6v3"
