@@ -404,26 +404,31 @@ def init_database():
         return False
 
 
-def save_user_config(user_id: str, config_type: str, currency: str, data: dict):
-    """Save user config to database"""
-    conn = get_db_connection()
+def save_user_config(user_id: str, config_type: str, currency: str, data: dict, _conn=None):
+    """Save user config to database. Pass _conn to reuse an existing connection."""
+    own_conn = _conn is None
+    conn = get_db_connection() if own_conn else _conn
     if not conn:
         return False
-    
     try:
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO user_configs (user_id, config_type, currency, data, updated_at)
             VALUES (%s, %s, %s, %s, NOW())
-            ON CONFLICT (user_id, config_type, currency) 
+            ON CONFLICT (user_id, config_type, currency)
             DO UPDATE SET data = %s, updated_at = NOW()
         """, (user_id, config_type, currency, Json(data), Json(data)))
-        conn.commit()
-        cur.close()
-        conn.close()
+        if own_conn:
+            conn.commit()
+            cur.close()
+            conn.close()
+        else:
+            cur.close()
         return True
     except Exception as e:
-        st.error(f"Save failed: {e}")
+        if own_conn:
+            try: conn.close()
+            except: pass
         return False
 
 
@@ -480,92 +485,95 @@ def load_all_user_configs(user_id: str) -> dict:
 
 
 def save_all_session_data(user_id: str):
-    """Save all current session data to database"""
+    """Save all current session data using a single DB connection."""
+    conn = get_db_connection()
+    if not conn:
+        return 0
     saved = 0
-    
-    for ccy in SUPPORTED_CURRENCIES:
-        # Save curves
-        curve = st.session_state.get("curves", {}).get(ccy)
-        if curve is not None:
-            data = {"values": curve.to_dict(orient="records")}
-            if save_user_config(user_id, "curve", ccy, data):
-                saved += 1
-        
-        # Save ATM vols from vol_data
-        vol_data = st.session_state.get("vol_data", {}).get(ccy, {})
-        atm = vol_data.get("atm")
-        if atm is not None:
-            # Ensure Expiry is a column, not index, before saving
-            atm_save = atm.copy()
-            if atm_save.index.name == "Expiry":
-                atm_save = atm_save.reset_index()
-            elif "Expiry" not in atm_save.columns and atm_save.index.name is None:
-                first_idx = atm_save.index[0] if len(atm_save) > 0 else None
-                if isinstance(first_idx, str) and first_idx.lower().endswith(('w', 'm', 'y')):
-                    atm_save = atm_save.reset_index()
-                    atm_save.columns = ["Expiry"] + list(atm_save.columns[1:])
-            # Force Expiry column first - build records manually to guarantee order
-            records = []
-            for _, row in atm_save.iterrows():
-                record = {"Expiry": row.get("Expiry", "")}
-                for col in atm_save.columns:
-                    if col != "Expiry":
-                        record[col] = row[col]
-                records.append(record)
-            data = {"values": records}
-            if save_user_config(user_id, "atm_vols", ccy, data):
-                saved += 1
-        
-        # Save SABR params from vol_data
-        for param in ["alpha", "beta", "rho", "nu"]:
-            val = vol_data.get(param)
-            if val is not None:
-                # Ensure Expiry column is preserved
-                val_save = val.copy()
-                if val_save.index.name == "Expiry":
-                    val_save = val_save.reset_index()
-                elif "Expiry" not in val_save.columns and val_save.index.name is None:
-                    first_idx = val_save.index[0] if len(val_save) > 0 else None
-                    if isinstance(first_idx, str) and first_idx.lower().endswith(('w', 'm', 'y')):
-                        val_save = val_save.reset_index()
-                        val_save.columns = ["Expiry"] + list(val_save.columns[1:])
-                # Force Expiry column first - build records manually
-                records = []
-                for _, row in val_save.iterrows():
-                    record = {"Expiry": row.get("Expiry", "")}
-                    for col in val_save.columns:
-                        if col != "Expiry":
-                            record[col] = row[col]
-                    records.append(record)
-                data = {"values": records}
-                if save_user_config(user_id, f"sabr_{param}", ccy, data):
-                    saved += 1
-        
-        # Save basis curves
-        basis = st.session_state.get("basis_curves", {}).get(ccy, {})
-        for basis_type in ["6v3", "3v1", "ois"]:
-            bc = basis.get(basis_type)
-            if bc is not None:
-                # Basis curves have Tenor column, not Expiry
-                bc_save = bc.copy()
-                if bc_save.index.name is not None:
-                    bc_save = bc_save.reset_index()
-                data = {"values": bc_save.to_dict(orient="records")}
-                if save_user_config(user_id, f"basis_{basis_type}", ccy, data):
-                    saved += 1
-    
-    # Save FWD Analysis series lists (spreads, butterflies, fwd-fwds etc.)
-    _fwd_prefs = {
-        "irs_sp_list":  [list(x) for x in st.session_state.get("irs_sp_list",  [])],
-        "irs_fl_list":  [list(x) for x in st.session_state.get("irs_fl_list",  [])],
-        "fvfv_list":    [list(x) for x in st.session_state.get("fvfv_list",    [])],
-        "b6_list":      list(st.session_state.get("b6_list", [])),
-        "fv6_list":     [list(x) for x in st.session_state.get("fv6_list",     [])],
-        "bsp_list":     [list(x) for x in st.session_state.get("bsp_list",     [])],
-    }
-    if save_user_config(user_id, "fwd_analysis_prefs", "GLB", _fwd_prefs):
-        saved += 1
+    try:
+        def _save(config_type, currency, data):
+            nonlocal saved
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO user_configs (user_id, config_type, currency, data, updated_at)
+                VALUES (%s, %s, %s, %s, NOW())
+                ON CONFLICT (user_id, config_type, currency)
+                DO UPDATE SET data = %s, updated_at = NOW()
+            """, (user_id, config_type, currency, Json(data), Json(data)))
+            cur.close()
+            saved += 1
 
+        for ccy in SUPPORTED_CURRENCIES:
+            curve = st.session_state.get("curves", {}).get(ccy)
+            if curve is not None:
+                _save("curve", ccy, {"values": curve.to_dict(orient="records")})
+
+            vol_data = st.session_state.get("vol_data", {}).get(ccy, {})
+            atm = vol_data.get("atm")
+            if atm is not None:
+                atm_save = atm.copy()
+                if atm_save.index.name == "Expiry":
+                    atm_save = atm_save.reset_index()
+                elif "Expiry" not in atm_save.columns:
+                    first_idx = atm_save.index[0] if len(atm_save) > 0 else None
+                    if isinstance(first_idx, str) and first_idx.lower().endswith(('w','m','y')):
+                        atm_save = atm_save.reset_index()
+                        atm_save.columns = ["Expiry"] + list(atm_save.columns[1:])
+                records = []
+                for _, row in atm_save.iterrows():
+                    rec = {"Expiry": row.get("Expiry", "")}
+                    for col in atm_save.columns:
+                        if col != "Expiry": rec[col] = row[col]
+                    records.append(rec)
+                _save("atm_vols", ccy, {"values": records})
+
+            for param in ["alpha", "beta", "rho", "nu"]:
+                val = vol_data.get(param)
+                if val is not None:
+                    val_save = val.copy()
+                    if val_save.index.name == "Expiry":
+                        val_save = val_save.reset_index()
+                    elif "Expiry" not in val_save.columns:
+                        first_idx = val_save.index[0] if len(val_save) > 0 else None
+                        if isinstance(first_idx, str) and first_idx.lower().endswith(('w','m','y')):
+                            val_save = val_save.reset_index()
+                            val_save.columns = ["Expiry"] + list(val_save.columns[1:])
+                    records = []
+                    for _, row in val_save.iterrows():
+                        rec = {"Expiry": row.get("Expiry", "")}
+                        for col in val_save.columns:
+                            if col != "Expiry": rec[col] = row[col]
+                        records.append(rec)
+                    _save(f"sabr_{param}", ccy, {"values": records})
+
+            basis = st.session_state.get("basis_curves", {}).get(ccy, {})
+            for basis_type in ["6v3", "3v1", "ois"]:
+                bc = basis.get(basis_type)
+                if bc is not None:
+                    bc_save = bc.copy()
+                    if bc_save.index.name is not None:
+                        bc_save = bc_save.reset_index()
+                    _save(f"basis_{basis_type}", ccy, {"values": bc_save.to_dict(orient="records")})
+
+        # FWD prefs
+        _fwd_prefs = {
+            "irs_sp_list":  [list(x) for x in st.session_state.get("irs_sp_list", [])],
+            "irs_fl_list":  [list(x) for x in st.session_state.get("irs_fl_list", [])],
+            "fvfv_list":    [list(x) for x in st.session_state.get("fvfv_list", [])],
+            "b6_list":      list(st.session_state.get("b6_list", [])),
+            "fv6_list":     [list(x) for x in st.session_state.get("fv6_list", [])],
+            "bsp_list":     [list(x) for x in st.session_state.get("bsp_list", [])],
+        }
+        if any(_fwd_prefs.values()):
+            _save("fwd_prefs", "AUD", _fwd_prefs)
+
+        conn.commit()
+    except Exception as _e:
+        try: conn.rollback()
+        except: pass
+    finally:
+        try: conn.close()
+        except: pass
     return saved
 
 
