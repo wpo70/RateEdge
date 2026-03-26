@@ -1279,11 +1279,120 @@ def df_from_curve(curve: pd.DataFrame, t: float) -> float:
     return math.exp(-z * t)
 
 
-def _next_bd(d: "date") -> "date":
-    """Next business day (Mon-Fri, no holiday calendar)."""
-    from datetime import date as _date, timedelta as _td
-    while d.weekday() >= 5:
-        d += _td(days=1)
+# ── Holiday calendars (module-level, pre-built at import time) ───────────────
+# Keeps date arithmetic out of @st.cache_data functions.
+# Only _next_bd, _mod_fol, _spot_date use these — NOT fast_forward_rate or matrix.
+
+def _easter_sunday(year: int) -> "date":
+    from datetime import date as _d
+    a=year%19;b=year//100;c=year%100;d=b//4;e=b%4
+    f=(b+8)//25;g=(b-f+1)//3;h=(19*a+b-d-g+15)%30
+    i=c//4;k=c%4;l=(32+2*e+2*i-h-k)%7;m=(a+11*h+22*l)//451
+    mo=(h+l-7*m+114)//31;dy=((h+l-7*m+114)%31)+1
+    return _d(year,mo,dy)
+
+def _nth_mon(year: int, month: int, n: int) -> "date":
+    """nth Monday of month (1-based)."""
+    from datetime import date as _d, timedelta as _td
+    day1 = _d(year,month,1)
+    first_mon = day1 + _td((0-day1.weekday())%7)
+    return first_mon + _td(7*(n-1))
+
+def _last_mon(year: int, month: int) -> "date":
+    """Last Monday of month."""
+    import calendar as _cal
+    from datetime import date as _d, timedelta as _td
+    last = _d(year,month,_cal.monthrange(year,month)[1])
+    return last - _td(last.weekday()%7 if last.weekday()!=0 else 0)
+
+def _obs(d: "date", fri_sat: bool = False) -> "date":
+    """Weekend observation. fri_sat=True uses Sat→Fri (NYSE), else Sat→Mon."""
+    from datetime import timedelta as _td
+    if d.weekday()==6: return d+_td(1)          # Sun→Mon always
+    if d.weekday()==5: return d-_td(1) if fri_sat else d+_td(2)
+    return d
+
+def _build_hols(year: int, ccy: str) -> set:
+    from datetime import date as _d, timedelta as _td
+    e = _easter_sunday(year)
+    if ccy == "AUD":
+        return {
+            _obs(_d(year,1,1)),               # New Year
+            _obs(_d(year,1,26)),              # Australia Day
+            e-_td(2),                         # Good Friday
+            e,                               # Easter Saturday (NSW)
+            e+_td(1),                        # Easter Monday
+            _obs(_d(year,4,25)),             # ANZAC Day
+            _nth_mon(year,6,2),              # King's Birthday (2nd Mon Jun, NSW)
+            _nth_mon(year,8,1),              # Bank Holiday (1st Mon Aug, NSW)
+            _nth_mon(year,10,1),             # Labour Day (1st Mon Oct, NSW)
+            _obs(_d(year,12,25)),            # Christmas
+            _obs(_d(year,12,26)),            # Boxing Day
+        }
+    elif ccy == "USD":
+        return {
+            _obs(_d(year,1,1), fri_sat=True),      # New Year
+            _nth_mon(year,1,3),                    # MLK (3rd Mon Jan)
+            _nth_mon(year,2,3),                    # Presidents Day (3rd Mon Feb)
+            e-_td(2),                              # Good Friday
+            _last_mon(year,5),                     # Memorial Day (last Mon May)
+            _obs(_d(year,6,19), fri_sat=True),     # Juneteenth
+            _obs(_d(year,7,4),  fri_sat=True),     # Independence Day
+            _nth_mon(year,9,1),                    # Labor Day (1st Mon Sep)
+            _nth_mon(year,11,4) + _td(3),          # Thanksgiving (4th Thu Nov)
+            _obs(_d(year,12,25), fri_sat=True),    # Christmas
+        }
+    elif ccy == "NZD":
+        _MATARIKI = {2024:_d(2024,6,28),2025:_d(2025,6,20),2026:_d(2026,6,26),
+                     2027:_d(2027,7,16),2028:_d(2028,7,7),2029:_d(2029,6,28),
+                     2030:_d(2030,7,19),2031:_d(2031,7,11),2032:_d(2032,7,2),
+                     2033:_d(2033,6,24)}
+        jan22 = _d(year,1,22)
+        mon_after = jan22+_td((0-jan22.weekday())%7)
+        mon_before = mon_after-_td(7)
+        wgtn_anniv = mon_before if (jan22-mon_before).days<=(mon_after-jan22).days else mon_after
+        hols = {
+            _obs(_d(year,1,1)),              # New Year
+            _obs(_d(year,1,2)),              # Day after New Year
+            wgtn_anniv,                      # Wellington Anniversary
+            _obs(_d(year,2,6)),              # Waitangi Day
+            e-_td(2),                        # Good Friday
+            e+_td(1),                        # Easter Monday
+            _obs(_d(year,4,25)),             # ANZAC Day
+            _nth_mon(year,6,1),              # King's Birthday (1st Mon Jun)
+            _last_mon(year,10),              # Labour Day (last Mon Oct)
+            _obs(_d(year,12,25)),            # Christmas
+            _obs(_d(year,12,26)),            # Boxing Day
+        }
+        if year in _MATARIKI: hols.add(_MATARIKI[year])
+        return hols
+    return set()
+
+# Pre-build 35 years at module load — plain dict, never touches st.cache_data
+_HOL: dict = {}
+def _get_hols(ccy: str) -> frozenset:
+    if ccy not in _HOL:
+        from datetime import date as _d
+        yr = _d.today().year
+        h: set = set()
+        for y in range(yr-1, yr+36):
+            try: h |= _build_hols(y, ccy)
+            except Exception: pass
+        _HOL[ccy] = frozenset(h)
+    return _HOL[ccy]
+
+# Pre-build on module load
+for _c in ("AUD","USD","NZD"):
+    try: _get_hols(_c)
+    except Exception: pass
+
+
+def _next_bd(d: "date", ccy: str = "AUD") -> "date":
+    """Next business day using holiday calendar."""
+    from datetime import timedelta as _td
+    hols = _get_hols(ccy)
+    while d.weekday() >= 5 or d in hols:
+        d += _td(1)
     return d
 
 def _add_months(d: "date", months: int) -> "date":
@@ -1302,14 +1411,17 @@ def _add_years(d: "date", years: int) -> "date":
     except ValueError:
         return _date(d.year + years, d.month, 28)
 
-def _mod_fol(d: "date") -> "date":
-    """Modified following: if adjusted date falls in next month, go backward."""
+def _mod_fol(d: "date", ccy: str = "AUD") -> "date":
+    """Modified following with holiday calendar."""
     from datetime import timedelta as _td
-    nd = _next_bd(d)
+    hols = _get_hols(ccy)
+    nd = d
+    while nd.weekday() >= 5 or nd in hols:
+        nd += _td(1)
     if nd.month != d.month:
         pd_ = d
-        while pd_.weekday() >= 5:
-            pd_ -= _td(days=1)
+        while pd_.weekday() >= 5 or pd_ in hols:
+            pd_ -= _td(1)
         return pd_
     return nd
 
@@ -1327,35 +1439,34 @@ def _pricing_date() -> "date":
         pass
     return _date.today()
 
-def _spot_date(spot_lag_bd: int) -> "date":
-    """Spot date = today + spot_lag business days."""
+def _spot_date(spot_lag_bd: int, ccy: str = "AUD") -> "date":
+    """Spot date = today + spot_lag business days (holiday-adjusted)."""
     from datetime import timedelta as _td
     d = _pricing_date()
+    hols = _get_hols(ccy)
     count = 0
     while count < spot_lag_bd:
-        d += _td(days=1)
-        if d.weekday() < 5:
+        d += _td(1)
+        if d.weekday() < 5 and d not in hols:
             count += 1
     return d
 
-def _fwd_start_date(expiry_years: float, spot_lag_bd: int) -> "date":
-    """Forward start date: spot + expiry (mod-fol). Uses days for <1m, months otherwise."""
+def _fwd_start_date(expiry_years: float, spot_lag_bd: int, ccy: str = "AUD") -> "date":
+    """Forward start date: spot + expiry (mod-fol with holiday calendar)."""
     from datetime import timedelta as _td
-    spot = _spot_date(spot_lag_bd)
+    spot = _spot_date(spot_lag_bd, ccy)
     total_days = expiry_years * 365.25
     total_months = int(round(expiry_years * 12))
     if total_days < 27:
-        # Sub-monthly: add whole days then mod-fol
         raw = spot + _td(days=int(round(total_days)))
     else:
         raw = _add_months(spot, total_months)
-    return _mod_fol(raw)
+    return _mod_fol(raw, ccy)
 
-def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_period: int) -> List[Tuple[float, float]]:
+def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_period: int, ccy: str = "AUD") -> List[Tuple[float, float]]:
     """
-    Build actual payment schedule using mod-fol date arithmetic.
+    Build actual payment schedule using mod-fol date arithmetic with holiday calendar.
     Returns list of (time_in_years_from_today, act365_accrual).
-    Final cashflow uses total months (not rounded years) to handle 18m, 1.5Y etc correctly.
     """
     today = _pricing_date()
     total_months = int(round(tenor_years * 12))
@@ -1363,9 +1474,8 @@ def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_perio
     schedule = []
     prev = fwd_start
     for i in range(1, n + 1):
-        # Always use months arithmetic - last cashflow uses total_months exactly
         raw = _add_months(fwd_start, i * months_per_period if i < n else total_months)
-        pay = _mod_fol(raw)
+        pay = _mod_fol(raw, ccy)
         accrual = _act365(prev, pay)
         t_years = _act365(today, pay)
         schedule.append((t_years, accrual))
@@ -1373,17 +1483,17 @@ def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_perio
     return schedule
 
 def build_aud_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]:
-    """AUD: T+1BD spot, mod-fol, Act/365. Q/Q (3m) for ≤3Y, S/S (6m) for >3Y."""
+    """AUD: T+1BD spot, mod-fol with Sydney holidays, Act/365. Q/Q ≤3Y, S/S >3Y."""
     months_per = 3 if tenor <= 3.0 else 6
-    fwd_start = _fwd_start_date(expiry, spot_lag_bd=1)
-    return _build_date_schedule(fwd_start, tenor, months_per)
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=1, ccy="AUD")
+    return _build_date_schedule(fwd_start, tenor, months_per, ccy="AUD")
 
 
-def build_generic_schedule(expiry: float, tenor: float, freq: float = 0.5, spot_lag: float = 1.0) -> List[Tuple[float, float]]:
-    """T+2BD spot (NZD/USD), mod-fol, Act/365. freq: 0.25=Q/Q, 0.5=S/S."""
+def build_generic_schedule(expiry: float, tenor: float, freq: float = 0.5, spot_lag: float = 1.0, ccy: str = "AUD") -> List[Tuple[float, float]]:
+    """Mod-fol with holiday calendar, Act/365."""
     months_per = int(round(freq * 12))
-    fwd_start = _fwd_start_date(expiry, spot_lag_bd=int(round(spot_lag)))
-    return _build_date_schedule(fwd_start, tenor, months_per)
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=int(round(spot_lag)), ccy=ccy)
+    return _build_date_schedule(fwd_start, tenor, months_per, ccy=ccy)
 
 
 def forward_and_annuity_from_curve(curve: pd.DataFrame,
@@ -1399,18 +1509,17 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
     freq_override: 0.25 = Q/Q, 0.5 = S/S, None = market convention
     """
     if freq_override is not None:
-        # T+2 BD for NZD/USD, T+1 BD for AUD (AFMA calendar   —   year frac approx here)
-        spot_lag = 2.0 / 252.0 if ccy in ["NZD", "USD"] else 1.0 / 252.0
-        sched = build_generic_schedule(expiry, tenor, freq=freq_override, spot_lag=spot_lag * 252)
+        spot_lag_bd = 2 if ccy in ["NZD", "USD"] else 1
+        sched = build_generic_schedule(expiry, tenor, freq=freq_override, spot_lag=float(spot_lag_bd), ccy=ccy)
     elif ccy == "AUD":
         sched = build_aud_schedule(expiry, tenor)
     elif ccy == "NZD":
         freq_nzd = 0.25 if tenor <= 2.0 else 0.5
-        sched = build_generic_schedule(expiry, tenor, freq=freq_nzd, spot_lag=2.0)
+        sched = build_generic_schedule(expiry, tenor, freq=freq_nzd, spot_lag=2.0, ccy="NZD")
     elif ccy == "USD":
-        sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=2.0)
+        sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=2.0, ccy="USD")
     else:
-        sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=1.0)
+        sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=1.0, ccy=ccy)
 
     if not sched:
         return 0.0, 0.0, []
