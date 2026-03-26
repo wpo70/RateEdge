@@ -117,8 +117,11 @@ def _init_state(ccy: str, surface: pd.DataFrame) -> None:
         if k not in ed:
             ed[k] = {}
     
-    # Reset if surface shape changed (new data structure)
-    if ccy in ed["working"]:
+    # Check for SOD-loaded working state - don't overwrite it
+    _sod_loaded = ed.get("sod_loaded", {}).get(ccy, False)
+
+    # Reset if surface shape changed AND no SOD load pending
+    if ccy in ed["working"] and not _sod_loaded:
         if ed["working"][ccy].shape != surface.shape:
             del ed["working"][ccy]
     
@@ -130,6 +133,11 @@ def _init_state(ccy: str, surface: pd.DataFrame) -> None:
         ed["view_mode"][ccy] = "vol"
         ed["smoothing"][ccy] = DEFAULT_SMOOTHING.copy()
         ed["paste_data"][ccy] = ""
+    elif _sod_loaded and ccy in ed.get("base", {}):
+        # SOD was loaded - keep working, just ensure base is set to current surface
+        if "sod_loaded" not in ed:
+            ed["sod_loaded"] = {}
+        ed["sod_loaded"][ccy] = False  # clear flag after first render
 
 
 def _push_history(ccy: str) -> None:

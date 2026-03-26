@@ -11750,6 +11750,10 @@ def sod_report_tab():
                                     if _k not in ve: ve[_k] = {}
                                 ve["history"]["AUD"] = []
                                 ve["redo_stack"]["AUD"] = []
+                                # Set flag so vol_editor doesn't overwrite on init
+                                if "sod_loaded" not in ve:
+                                    ve["sod_loaded"] = {}
+                                ve["sod_loaded"]["AUD"] = True
                                 st.success("✅ Implied open loaded into Vol Editor. Go to Vol Editor tab to review and publish.")
                             else:
                                 st.warning("Load AUD ATM surface first before loading SOD implied open.")
