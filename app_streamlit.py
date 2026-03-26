@@ -3040,6 +3040,17 @@ def vol_config_tab():
             
             if msgs:
                 st.success(f" Loaded: {', '.join(msgs)}")
+                # Auto-save to DB so it persists across sessions
+                if HAS_POSTGRES and is_admin():
+                    try:
+                        _uid = st.session_state.get("username", "default")
+                        _saved = save_all_session_data(_uid)
+                        if _saved > 0:
+                            st.success(f"✅ Auto-saved {_saved} configs to database.")
+                        # Clear load_user_config cache so next load gets fresh data
+                        load_user_config.clear()
+                    except Exception as _e:
+                        st.warning(f"Auto-save failed: {_e}")
             else:
                 st.warning("No matching data found in file for selected option.")
     
