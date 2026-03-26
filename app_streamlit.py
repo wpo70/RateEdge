@@ -2860,7 +2860,7 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
             # Main IRS curve
             curve_name = f"Curves_{ccy}"
             if curve_name in xl.sheet_names:
-                raw_curve = pd.read_excel(xl, sheet_name=curve_name)
+                raw_curve = pd.read_excel(xl, sheet_name=curve_name, usecols=[0, 1])
                 try:
                     curve_df = load_curve_flexible(raw_curve, curve_name)
                 except:
@@ -2876,7 +2876,7 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
             # 6v3 basis curve
             basis_6v3_name = f"Basis_{ccy}_6v3"
             if basis_6v3_name in xl.sheet_names:
-                raw_basis = pd.read_excel(xl, sheet_name=basis_6v3_name)
+                raw_basis = pd.read_excel(xl, sheet_name=basis_6v3_name, usecols=[0, 1])
                 try:
                     basis_df = load_basis_curve_flexible(raw_basis, basis_6v3_name)
                     set_basis_curve(ccy, "6v3", basis_df)
@@ -2890,7 +2890,7 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
             # 3v1 basis curve (if exists)
             basis_3v1_name = f"Basis_{ccy}_3v1"
             if basis_3v1_name in xl.sheet_names:
-                raw_basis = pd.read_excel(xl, sheet_name=basis_3v1_name)
+                raw_basis = pd.read_excel(xl, sheet_name=basis_3v1_name, usecols=[0, 1])
                 try:
                     basis_df = load_basis_curve_flexible(raw_basis, basis_3v1_name)
                     set_basis_curve(ccy, "3v1", basis_df)
@@ -2904,7 +2904,7 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
             # OIS curve (if exists)
             ois_name = f"OIS_{ccy}"
             if ois_name in xl.sheet_names:
-                raw_ois = pd.read_excel(xl, sheet_name=ois_name)
+                raw_ois = pd.read_excel(xl, sheet_name=ois_name, usecols=[0, 1])
                 try:
                     ois_df = load_curve_flexible(raw_ois, ois_name)
                     set_basis_curve(ccy, "ois", ois_df)
@@ -11138,39 +11138,42 @@ def main():
     if HAS_POSTGRES and get_db_url() and not st.session_state.get("db_auto_loaded", False):
         user_id = st.session_state.get("username", "default")
         if user_id and user_id != "default":
-            # Always re-fetch role from DB on auto-load
-            try:
-                _role_conn = get_db_connection()
-                if _role_conn:
-                    _role_cur = _role_conn.cursor()
-                    _role_cur.execute("SELECT role FROM user_roles WHERE email=%s", (user_id,))
-                    _role_row = _role_cur.fetchone()
-                    _role_conn.close()
-                    # Hardcode owner emails as admin regardless of DB
-                    _ADMIN_EMAILS = {"wpo70@icloud.com", "wpo@rateedge.au"}
+            with st.spinner("Loading saved configs…"):
+                # Single connection for role check + spreads, reused across calls
+                _ADMIN_EMAILS = {"wpo70@icloud.com", "wpo@rateedge.au"}
+                try:
+                    _role_conn = get_db_connection()
+                    if _role_conn:
+                        _role_cur = _role_conn.cursor()
+                        # Role
+                        _role_cur.execute("SELECT role FROM user_roles WHERE email=%s", (user_id,))
+                        _role_row = _role_cur.fetchone()
+                        st.session_state["user_role"] = "admin" if user_id in _ADMIN_EMAILS else (
+                            _role_row[0] if _role_row else "read_only"
+                        )
+                        # Spreads — fetch inline while connection is open
+                        _ADMIN_EMAIL = "wpo70@icloud.com"
+                        _load_user = user_id if user_id in _ADMIN_EMAILS else _ADMIN_EMAIL
+                        _spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
+                                        "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y","cf_spr_12y3y"]
+                        _role_cur.execute(
+                            "SELECT data FROM user_configs WHERE user_id=%s AND config_type='cf_spreads' AND currency='AUD'",
+                            (user_id,)
+                        )
+                        _spr_row = _role_cur.fetchone()
+                        _role_cur.close()
+                        _role_conn.close()
+                        if _spr_row and _spr_row[0]:
+                            _db_spreads = _spr_row[0]
+                            for k in _spread_keys:
+                                if k in _db_spreads:
+                                    st.session_state[k] = float(_db_spreads[k])
+                except Exception:
+                    _load_user = user_id if user_id in _ADMIN_EMAILS else "wpo70@icloud.com"
                     if user_id in _ADMIN_EMAILS:
                         st.session_state["user_role"] = "admin"
-                    else:
-                        st.session_state["user_role"] = _role_row[0] if _role_row else "read_only"
-            except Exception:
-                pass
-            # Read-only users load from admin's saved configs
-            _ADMIN_EMAIL = "wpo70@icloud.com"
-            _load_user = user_id if user_id in {"wpo70@icloud.com", "wpo@rateedge.au"} else _ADMIN_EMAIL
-            loaded = load_all_session_data(_load_user)
-            # Load wedge spreads - clear stale defaults first so DB values take effect
-            try:
-                _db_spreads = load_user_config(user_id, "cf_spreads", "AUD")
-                if _db_spreads:
-                    _spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
-                                    "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y","cf_spr_12y3y"]
-                    for k in _spread_keys:
-                        if k in _db_spreads:
-                            st.session_state[k] = float(_db_spreads[k])
-                    if loaded >= 0:
-                        loaded += 1
-            except Exception:
-                pass
+                # Load all session data (single DB connection inside)
+                loaded = load_all_session_data(_load_user)
             st.session_state["db_auto_loaded"] = True
             if loaded > 0:
                 st.toast(f"Auto-loaded {loaded} configs from database")
