@@ -1567,12 +1567,11 @@ def build_aud_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]
     return _build_date_schedule(fwd_start, tenor, months_per, ccy="AUD")
 
 
-def build_generic_schedule(expiry: float, tenor: float, freq: float = 0.5, spot_lag: float = 1.0) -> List[Tuple[float, float]]:
-    """T+2BD spot (NZD/USD), mod-fol with holiday calendar, Act/365."""
+def build_generic_schedule(expiry: float, tenor: float, freq: float = 0.5, spot_lag: float = 1.0, ccy: str = "AUD") -> List[Tuple[float, float]]:
+    """Mod-fol with holiday calendar, Act/365."""
     months_per = int(round(freq * 12))
-    ccy_g = "USD" if abs(spot_lag - 2.0) < 0.1 else "AUD"
-    fwd_start = _fwd_start_date(expiry, spot_lag_bd=int(round(spot_lag)), ccy=ccy_g)
-    return _build_date_schedule(fwd_start, tenor, months_per, ccy=ccy_g)
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=int(round(spot_lag)), ccy=ccy)
+    return _build_date_schedule(fwd_start, tenor, months_per, ccy=ccy)
 
 
 def forward_and_annuity_from_curve(curve: pd.DataFrame,
@@ -1588,9 +1587,8 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
     freq_override: 0.25 = Q/Q, 0.5 = S/S, None = market convention
     """
     if freq_override is not None:
-        # T+2 BD for NZD/USD, T+1 BD for AUD (AFMA calendar   —   year frac approx here)
-        spot_lag = 2.0 / 252.0 if ccy in ["NZD", "USD"] else 1.0 / 252.0
-        sched = build_generic_schedule(expiry, tenor, freq=freq_override, spot_lag=spot_lag * 252)
+        spot_lag_bd = 2 if ccy in ["NZD", "USD"] else 1
+        sched = build_generic_schedule(expiry, tenor, freq=freq_override, spot_lag=float(spot_lag_bd), ccy=ccy)
     elif ccy == "AUD":
         sched = build_aud_schedule(expiry, tenor)
     elif ccy == "NZD":
@@ -4032,13 +4030,21 @@ def curves_tab():
             if st.button("Generate Forward Matrix", key="gen_fwd_matrix", type="primary"):
                 convention_key = {"Market": "market", "Q/Q": "qq", "S/S": "ss"}.get(leg_convention, "market")
                 with st.spinner("Generating..."):
-                    fwd_matrix = generate_forward_matrix_convention(ccy, curve, basis_6v3, convention_key)
-                    st.session_state["fwd_matrix"][ccy] = fwd_matrix
-                    st.session_state["fwd_convention"] = convention_key
-                    if basis_6v3 is not None:
-                        basis_matrix = generate_basis_matrix(ccy, basis_6v3)
-                        st.session_state["basis_matrix"][ccy] = basis_matrix
-                st.rerun()
+                    try:
+                        fwd_matrix = generate_forward_matrix_convention(ccy, curve, basis_6v3, convention_key)
+                        if fwd_matrix is None or fwd_matrix.empty:
+                            st.error(f"Matrix returned empty. Curve rows: {len(curve) if curve is not None else 'None'}")
+                        else:
+                            st.session_state["fwd_matrix"][ccy] = fwd_matrix
+                            st.session_state["fwd_convention"] = convention_key
+                            if basis_6v3 is not None:
+                                basis_matrix = generate_basis_matrix(ccy, basis_6v3)
+                                st.session_state["basis_matrix"][ccy] = basis_matrix
+                            st.rerun()
+                    except Exception as _e:
+                        st.error(f"Matrix generation failed: {_e}")
+                        import traceback
+                        st.code(traceback.format_exc())
         with ctrl_col2:
             show_heatmap = st.checkbox("Show Heatmap", value=False, key="show_heatmap")
         with ctrl_col3:
