@@ -3297,7 +3297,7 @@ def vol_config_tab():
         
         load_type = st.radio(
             "Commit options",
-            ["All", "ATM Vol Only", "SABR Only", "IRS Curves Only"],
+            ["All", "ATM Vol Only", "IRS Curves Only"],
             index=0,
             horizontal=True,
             key="load_type_radio"
@@ -3307,7 +3307,6 @@ def vol_config_tab():
         type_map = {
             "All": "all",
             "ATM Vol Only": "atm",
-            "SABR Only": "sabr",
             "IRS Curves Only": "curves"
         }
         
