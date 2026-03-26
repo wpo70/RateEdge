@@ -1306,7 +1306,28 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         return 0.0, 0.0, []
 
     # IRS for projection, OIS for annuity discounting (dual-curve)
-    def _df(crv: pd.DataFrame, t: float) -> float:
+    # AUD: use 3M BBSW curve for Q/Q, 6M BBSW curve for S/S
+    basis_6v3 = get_basis_curve(ccy, "6v3") if ccy == "AUD" else None
+
+    def _df_proj(crv: pd.DataFrame, t: float, freq: float) -> float:
+        """Projection discount factor with convention-aware basis adjustment for AUD."""
+        xs = crv["MaturityY"].to_numpy().astype(float)
+        ys = crv["ZeroRatePct"].to_numpy().astype(float) / 100.0
+        z = float(np.interp(t, xs, ys))
+        if ccy == "AUD" and basis_6v3 is not None and not basis_6v3.empty:
+            bx = basis_6v3["MaturityY"].to_numpy().astype(float)
+            by = basis_6v3["BasisBp"].to_numpy().astype(float) / 10000.0
+            if freq == 0.25 and t > 3.0:
+                # Q/Q swap, S/S part of curve → adjust down to 3M BBSW
+                b = float(np.interp(t, bx, by))
+                z = z - b
+            elif freq == 0.5 and t <= 3.0:
+                # S/S swap, Q/Q part of curve → adjust up to 6M BBSW
+                b = float(np.interp(t, bx, by))
+                z = z + b
+        return math.exp(-z * t)
+
+    def _df_disc(crv: pd.DataFrame, t: float) -> float:
         xs = crv["MaturityY"].to_numpy().astype(float)
         ys = crv["ZeroRatePct"].to_numpy().astype(float) / 100.0
         z = float(np.interp(t, xs, ys))
@@ -1314,13 +1335,16 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
 
     disc_curve = ois_curve if ois_curve is not None else curve
 
+    # Determine effective frequency from schedule
+    _sched_freq = sched[0][1] if sched else 0.5
+
     ann = 0.0
     for T_i, accrual in sched:
-        ann += _df(disc_curve, T_i) * accrual
+        ann += _df_disc(disc_curve, T_i) * accrual
 
     swap_start = sched[0][0] - sched[0][1]
-    df_start = _df(curve, swap_start)
-    df_end   = _df(curve, sched[-1][0])
+    df_start = _df_proj(curve, swap_start, _sched_freq)
+    df_end   = _df_proj(curve, sched[-1][0], _sched_freq)
     fwd = (df_start - df_end) / ann if ann > 0 else 0.0
     return fwd, ann, sched
 
@@ -4413,7 +4437,7 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
             tenor_y = float(tenor[:-1])
             try:
                 # Always calculate market convention rate first
-                mkt_rate = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy, freq_override=None, ois_x=ois_x, ois_y=ois_y)
+                mkt_rate = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy, freq_override=None, ois_x=ois_x, ois_y=ois_y, basis6v3_x=basis_x, basis6v3_y=basis_y)
                 
                 # Get basis at midpoint
                 basis_bp = 0.0
@@ -4430,7 +4454,7 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
                     # ≤3Y tenors: market is already Q/Q   —   same rate, just recalc with Q/Q frequency
                     # >3Y tenors: market is S/S   —   subtract basis to get Q/Q equivalent
                     if tenor_y <= 3.0:
-                        fwd = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy, freq_override=0.25, ois_x=ois_x, ois_y=ois_y)
+                        fwd = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy, freq_override=0.25, ois_x=ois_x, ois_y=ois_y, basis6v3_x=basis_x, basis6v3_y=basis_y)
                     else:
                         fwd = mkt_rate - basis_bp / 10000.0  # BasisBp in bp, rate in decimal
 
@@ -4441,7 +4465,7 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
                     if tenor_y <= 3.0:
                         fwd = mkt_rate + basis_bp / 10000.0  # BasisBp in bp, rate in decimal
                     else:
-                        fwd = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy, freq_override=0.5, ois_x=ois_x, ois_y=ois_y)
+                        fwd = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy, freq_override=0.5, ois_x=ois_x, ois_y=ois_y, basis6v3_x=basis_x, basis6v3_y=basis_y)
 
                 else:
                     fwd = mkt_rate
@@ -4459,18 +4483,22 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
 
 def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, tenor: float, ccy: str,
                       freq_override: Optional[float] = None,
-                      ois_x: Optional[np.ndarray] = None, ois_y: Optional[np.ndarray] = None) -> float:
+                      ois_x: Optional[np.ndarray] = None, ois_y: Optional[np.ndarray] = None,
+                      basis6v3_x: Optional[np.ndarray] = None, basis6v3_y: Optional[np.ndarray] = None) -> float:
     """
-    Fast forward swap rate: IRS curve for projection (df_start/df_end), OIS for annuity discounting.
-    freq_override: 0.25 = Q/Q, 0.5 = S/S, None = market convention
-    ois_x/ois_y: OIS zero rate arrays. Falls back to IRS curve if not provided.
+    Fast forward swap rate using proper dual-curve framework.
+    AUD: Q/Q (≤3Y) uses 3M BBSW projection curve; S/S (>3Y) uses 6M BBSW projection curve.
+    OIS curve used for annuity discounting (dual-curve).
+    
+    3M BBSW curve: IRS curve as-is for ≤3Y (bootstrapped from Q/Q rates),
+                   IRS curve minus 6v3 basis for >3Y (converts S/S to 3M equivalent).
+    6M BBSW curve: IRS curve as-is for ≥4Y (bootstrapped from S/S rates),
+                   IRS curve plus 6v3 basis for <4Y (converts Q/Q to 6M equivalent).
     """
-    # Spot lag in year fraction (approximate for matrix/pricer year-fraction calcs)
-    # Actual date rolls use AFMA calendar   —   see au_spot_date() / au_end_date()
     if ccy in ["NZD", "USD"]:
-        spot_lag = 2.0 / 252.0   # T+2 BD
+        spot_lag = 2.0 / 252.0
     else:
-        spot_lag = 1.0 / 252.0   # T+1 BD (AUD AFMA)
+        spot_lag = 1.0 / 252.0
 
     swap_start = expiry + spot_lag
     swap_end = swap_start + tenor
@@ -4491,19 +4519,31 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
     if not times:
         return 0.0
 
-    # IRS for projection (df_start / df_end), OIS for annuity discounting
-    z_start = np.interp(swap_start, curve_x, curve_y)
-    df_start = math.exp(-z_start * swap_start)
-    z_end = np.interp(swap_end, curve_x, curve_y)
-    df_end = math.exp(-z_end * swap_end)
+    def _proj_df(t_val: float) -> float:
+        """Projection discount factor using convention-adjusted curve.
+        curve_y is already in decimal (e.g. 0.047 for 4.7%)."""
+        z = float(np.interp(t_val, curve_x, curve_y))  # already decimal
+        if ccy == "AUD" and basis6v3_x is not None and basis6v3_y is not None:
+            if freq == 0.25 and t_val > 3.0:
+                # Q/Q swap, S/S part of blended curve → adjust DOWN by 6v3 basis
+                b = float(np.interp(t_val, basis6v3_x, basis6v3_y)) / 10000.0
+                z = z - b
+            elif freq == 0.5 and t_val <= 3.0:
+                # S/S swap, Q/Q part of blended curve → adjust UP by 6v3 basis
+                b = float(np.interp(t_val, basis6v3_x, basis6v3_y)) / 10000.0
+                z = z + b
+        return math.exp(-z * t_val)
+
+    df_start = _proj_df(swap_start)
+    df_end   = _proj_df(swap_end)
 
     disc_x = ois_x if ois_x is not None else curve_x
-    disc_y = ois_y if ois_y is not None else curve_y
+    disc_y = ois_y if ois_y is not None else curve_y  # already decimal
 
     ann = 0.0
     prev_t = swap_start
     for t in times:
-        z_t = np.interp(t, disc_x, disc_y)
+        z_t = float(np.interp(t, disc_x, disc_y))  # already decimal
         df_t = math.exp(-z_t * t)
         accrual = t - prev_t
         ann += df_t * accrual
@@ -5992,7 +6032,7 @@ def caps_floors_tab(vol_mode: str):
                                 if hasattr(_oc2, "columns") and "MaturityY" in _oc2.columns:
                                     _ox = _oc2["MaturityY"].to_numpy().astype(float)
                                     _oy = _oc2["ZeroRatePct"].to_numpy().astype(float) / 100.0
-                            _fwd_rate = fast_forward_rate(_cx, _cy, _fwd_start_y, _cap_swap_tenor, ccy, freq_override=None, ois_x=_ox, ois_y=_oy)
+                            _fwd_rate = fast_forward_rate(_cx, _cy, _fwd_start_y, _cap_swap_tenor, ccy, freq_override=None, ois_x=_ox, ois_y=_oy, basis6v3_x=basis_x if "basis_x" in dir() else None, basis6v3_y=basis_y if "basis_y" in dir() else None)
                         # Cumulative CFS straddle
                         _wedge_straddle = _cfs_tdata.get(_key, {}).get("cfs_straddle")
                         if _wedge_straddle is not None:
