@@ -1384,69 +1384,6 @@ def _obs_nyse(d: "date") -> "date":
     return d
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def _get_holidays(ccy: str, year: int) -> frozenset:
-    """Return frozenset of holiday dates for currency/year. Cached daily."""
-    from datetime import date as _d, timedelta as _td
-    e = _easter(year)
-    hols: set = set()
-
-    if ccy == "AUD":
-        # Sydney (NSW) IRS calendar
-        hols.add(_obs_std(_d(year,1,1)))           # New Year
-        hols.add(_obs_std(_d(year,1,26)))           # Australia Day
-        hols.add(e - _td(2))                       # Good Friday
-        hols.add(e)                                 # Easter Saturday
-        hols.add(e + _td(1))                       # Easter Monday
-        hols.add(_obs_std(_d(year,4,25)))           # ANZAC Day
-        hols.add(_nth_weekday(year,6,2,0))          # King's Birthday (2nd Mon Jun)
-        hols.add(_nth_weekday(year,8,1,0))          # Bank Holiday (1st Mon Aug)
-        hols.add(_nth_weekday(year,10,1,0))         # Labour Day (1st Mon Oct)
-        hols.add(_obs_std(_d(year,12,25)))          # Christmas
-        hols.add(_obs_std(_d(year,12,26)))          # Boxing Day
-
-    elif ccy == "USD":
-        # NYSE / Fed Funds
-        hols.add(_obs_nyse(_d(year,1,1)))           # New Year
-        hols.add(_nth_weekday(year,1,3,0))          # MLK (3rd Mon Jan)
-        hols.add(_nth_weekday(year,2,3,0))          # Presidents Day (3rd Mon Feb)
-        hols.add(e - _td(2))                       # Good Friday
-        hols.add(_last_weekday(year,5,0))           # Memorial Day (last Mon May)
-        hols.add(_obs_nyse(_d(year,6,19)))          # Juneteenth
-        hols.add(_obs_nyse(_d(year,7,4)))           # Independence Day
-        hols.add(_nth_weekday(year,9,1,0))          # Labor Day (1st Mon Sep)
-        hols.add(_nth_weekday(year,11,4,3))         # Thanksgiving (4th Thu Nov)
-        hols.add(_obs_nyse(_d(year,12,25)))         # Christmas
-
-    elif ccy == "NZD":
-        # Wellington IRS calendar
-        _MATARIKI = {2026:_d(2026,6,26),2027:_d(2027,7,16),2028:_d(2028,7,7),
-                     2029:_d(2029,6,28),2030:_d(2030,7,19)}
-        hols.add(_obs_std(_d(year,1,1)))            # New Year
-        hols.add(_obs_std(_d(year,1,2)))            # Day after New Year
-        hols.add(_obs_std(_d(year,2,6)))            # Waitangi Day
-        # Wellington Anniversary: nearest Mon to Jan 22
-        jan22 = _d(year,1,22)
-        ma = jan22 + _td((0-jan22.weekday())%7)
-        mb = ma - _td(7)
-        hols.add(mb if (jan22-mb).days <= (ma-jan22).days else ma)
-        hols.add(e - _td(2))                       # Good Friday
-        hols.add(e + _td(1))                       # Easter Monday
-        hols.add(_obs_std(_d(year,4,25)))           # ANZAC Day
-        hols.add(_nth_weekday(year,6,1,0))          # King's Birthday (1st Mon Jun)
-        if year in _MATARIKI: hols.add(_MATARIKI[year])
-        hols.add(_last_weekday(year,10,0))          # Labour Day (last Mon Oct)
-        hols.add(_obs_std(_d(year,12,25)))          # Christmas
-        hols.add(_obs_std(_d(year,12,26)))          # Boxing Day
-
-    return frozenset(hols)
-
-def _holidays_for_range(ccy: str, year_start: int, year_end: int) -> frozenset:
-    """Union of holidays across year range."""
-    result: set = set()
-    for y in range(year_start, year_end+1):
-        result |= _get_holidays(ccy, y)
-    return frozenset(result)
-
 # ── Holiday calendars ────────────────────────────────────────────────────────
 
 def _easter(year: int) -> "date":
@@ -1559,10 +1496,22 @@ def _nzd_holidays(year: int) -> set:
 _HOLIDAY_CACHE: dict = {}
 
 def _get_holidays(ccy: str) -> frozenset:
-    """Return union of holidays for ccy across current + next 5 years."""
+    """Return union of holidays for ccy across current + next 35 years. Cached."""
     from datetime import date as _date
-    yr = _date.today().year
-    return _holidays_for_range(ccy, yr - 1, yr + 5)
+    if ccy not in _HOLIDAY_CACHE:
+        fn = {"AUD": _aud_holidays, "USD": _usd_holidays, "NZD": _nzd_holidays}.get(ccy)
+        if fn is None:
+            _HOLIDAY_CACHE[ccy] = frozenset()
+        else:
+            yr = _date.today().year
+            hols: set = set()
+            for y in range(yr - 1, yr + 36):
+                try:
+                    hols |= fn(y)
+                except Exception:
+                    pass
+            _HOLIDAY_CACHE[ccy] = frozenset(hols)
+    return _HOLIDAY_CACHE[ccy]
 
 def _pricing_date() -> "date":
     """Today's date for schedule generation."""
