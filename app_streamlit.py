@@ -1258,41 +1258,106 @@ def df_from_curve(curve: pd.DataFrame, t: float) -> float:
     return math.exp(-z * t)
 
 
-def build_aud_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]:
-    """AUD: swap starts T+1BD. Market convention: tenor <=3Y = Q/Q (0.25), tenor >3Y = S/S (0.5)."""
-    schedule: List[Tuple[float, float]] = []
-    swap_start = expiry + 1.0 / 252.0
-    end = swap_start + tenor
-    freq = 0.25 if tenor <= 3.0 else 0.5  # convention based on TOTAL tenor, not elapsed
-    t = swap_start
-    while t < end - 1e-8:
-        nxt = min(t + freq, end)
-        accrual = nxt - t
-        schedule.append((nxt, accrual))
-        t = nxt
+def _next_bd(d: "date") -> "date":
+    """Next business day (Mon-Fri, no holiday calendar)."""
+    from datetime import date as _date, timedelta as _td
+    while d.weekday() >= 5:
+        d += _td(days=1)
+    return d
+
+def _add_months(d: "date", months: int) -> "date":
+    """Add whole months, clamping to end-of-month."""
+    import calendar as _cal
+    from datetime import date as _date
+    m = d.month - 1 + months
+    y = d.year + m // 12
+    m = m % 12 + 1
+    return _date(y, m, min(d.day, _cal.monthrange(y, m)[1]))
+
+def _add_years(d: "date", years: int) -> "date":
+    from datetime import date as _date
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:
+        return _date(d.year + years, d.month, 28)
+
+def _mod_fol(d: "date") -> "date":
+    """Modified following: if adjusted date falls in next month, go backward."""
+    from datetime import timedelta as _td
+    nd = _next_bd(d)
+    if nd.month != d.month:
+        pd_ = d
+        while pd_.weekday() >= 5:
+            pd_ -= _td(days=1)
+        return pd_
+    return nd
+
+def _act365(d1: "date", d2: "date") -> float:
+    return (d2 - d1).days / 365.0
+
+def _pricing_date() -> "date":
+    """Today's date for schedule generation."""
+    from datetime import date as _date
+    import streamlit as _st
+    try:
+        d = _st.session_state.get("pricing_date")
+        if d: return d
+    except Exception:
+        pass
+    return _date.today()
+
+def _spot_date(spot_lag_bd: int) -> "date":
+    """Spot date = today + spot_lag business days."""
+    from datetime import timedelta as _td
+    d = _pricing_date()
+    count = 0
+    while count < spot_lag_bd:
+        d += _td(days=1)
+        if d.weekday() < 5:
+            count += 1
+    return d
+
+def _fwd_start_date(expiry_years: float, spot_lag_bd: int) -> "date":
+    """Forward start date: spot + expiry months (mod-fol)."""
+    spot = _spot_date(spot_lag_bd)
+    total_months = int(round(expiry_years * 12))
+    return _mod_fol(_add_months(spot, total_months))
+
+def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_period: int) -> List[Tuple[float, float]]:
+    """
+    Build actual payment schedule using mod-fol date arithmetic.
+    Returns list of (time_in_years_from_today, act365_accrual).
+    """
+    from datetime import date as _date
+    today = _pricing_date()
+    n = int(round(tenor_years * (12 / months_per_period)))
+    total_years = int(round(tenor_years))
+    schedule = []
+    prev = fwd_start
+    for i in range(1, n + 1):
+        if i < n:
+            raw = _add_months(fwd_start, i * months_per_period)
+        else:
+            raw = _add_years(fwd_start, total_years)
+        pay = _mod_fol(raw)
+        accrual = _act365(prev, pay)
+        t_years = _act365(today, pay)
+        schedule.append((t_years, accrual))
+        prev = pay
     return schedule
+
+def build_aud_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]:
+    """AUD: T+1BD spot, mod-fol, Act/365. Q/Q (3m) for ≤3Y, S/S (6m) for >3Y."""
+    months_per = 3 if tenor <= 3.0 else 6
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=1)
+    return _build_date_schedule(fwd_start, tenor, months_per)
 
 
 def build_generic_schedule(expiry: float, tenor: float, freq: float = 0.5, spot_lag: float = 1.0) -> List[Tuple[float, float]]:
-    """
-    Build payment schedule for generic swap.
-    
-    Args:
-        expiry: Option expiry in years
-        tenor: Swap tenor in years
-        freq: Payment frequency in years (0.5 = semi-annual)
-        spot_lag: Spot lag in business days (1 = T+1, 2 = T+2)
-    """
-    schedule: List[Tuple[float, float]] = []
-    swap_start = expiry + spot_lag / 252.0
-    end = swap_start + tenor
-    t = swap_start
-    while t < end - 1e-8:
-        nxt = min(t + freq, end)
-        accrual = nxt - t
-        schedule.append((nxt, accrual))
-        t = nxt
-    return schedule
+    """T+2BD spot (NZD/USD), mod-fol, Act/365. freq: 0.25=Q/Q, 0.5=S/S."""
+    months_per = int(round(freq * 12))
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=int(round(spot_lag)))
+    return _build_date_schedule(fwd_start, tenor, months_per)
 
 
 def forward_and_annuity_from_curve(curve: pd.DataFrame,
@@ -2805,6 +2870,108 @@ def set_ccy_curve(ccy: str, curve_df: pd.DataFrame):
     st.session_state["curves"][ccy] = curve_df
 
 
+def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
+    """
+    Bootstrap AUD zero curve from BBG_Feed par swap rates.
+    Q/Q (quarterly) for ≤3Y, S/S (semi-annual) for ≥4Y. AUD T+1 settlement.
+    Uses OIS rates from BBG_Feed to anchor the short end (<6m).
+    Returns DataFrame with columns MaturityY, ZeroRatePct, or None if BBG_Feed not present.
+    """
+    if "BBG_Feed" not in xl.sheet_names:
+        return None
+    try:
+        raw = pd.read_excel(xl, sheet_name="BBG_Feed", header=None)
+        # Extract MID column (col index 4) by scanning rows for known labels
+        par_qq: dict = {}
+        par_ss: dict = {}
+        ois_rates: dict = {}
+        tenor_map_qq = {"6m QQ": 0.50, "9m QQ": 0.75, "1Y QQ": 1.00, "18m QQ": 1.50,
+                        "2Y QQ": 2.00, "3Y QQ": 3.00}
+        tenor_map_ss = {"4Y SS": 4.00, "5Y SS": 5.00, "6Y SS": 6.00, "7Y SS": 7.00,
+                        "8Y SS": 8.00, "9Y SS": 9.00, "10Y SS": 10.00, "12Y SS": 12.00,
+                        "15Y SS": 15.00, "20Y SS": 20.00, "25Y SS": 25.00, "30Y SS": 30.00}
+        ois_map = {"OIS 1W": 1/52, "OIS 1M": 1/12, "OIS 2M": 2/12, "OIS 3M": 3/12,
+                   "OIS 4M": 4/12, "OIS 5M": 5/12, "OIS 6M": 6/12, "OIS 9M": 9/12,
+                   "OIS 1Y": 1.0, "OIS 2Y": 2.0, "OIS 3Y": 3.0}
+
+        for _, row in raw.iterrows():
+            label = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+            mid_raw = row.iloc[4] if len(row) > 4 else None
+            try:
+                mid = float(mid_raw)
+            except (TypeError, ValueError):
+                continue
+            # Match IRS par rates
+            for key, tenor in tenor_map_qq.items():
+                if key.lower() in label.lower():
+                    par_qq[tenor] = mid
+            for key, tenor in tenor_map_ss.items():
+                if key.lower() in label.lower():
+                    par_ss[tenor] = mid
+            # Match OIS rates
+            for key, tenor in ois_map.items():
+                if key.lower() in label.lower():
+                    ois_rates[tenor] = mid
+
+        if not par_qq and not par_ss:
+            return None
+
+        SPOT_LAG = 1.0 / 252.0
+        known_dfs: dict = {0.0: 1.0}
+
+        # Seed short end with OIS zeros
+        for t, r in sorted(ois_rates.items()):
+            known_dfs[t] = math.exp(-r / 100.0 * t)
+
+        def _log_interp(t: float) -> float:
+            times = sorted(known_dfs.keys())
+            dfs = [known_dfs[tt] for tt in times]
+            if t <= times[0]: return dfs[0]
+            if t >= times[-1]:
+                z_last = -math.log(dfs[-1]) / times[-1]
+                return math.exp(-z_last * t)
+            for i in range(len(times) - 1):
+                if times[i] <= t <= times[i + 1]:
+                    w = (t - times[i]) / (times[i + 1] - times[i])
+                    return math.exp((1 - w) * math.log(dfs[i]) + w * math.log(dfs[i + 1]))
+            return dfs[-1]
+
+        def _bootstrap(par_dict: dict, freq: float):
+            for tenor in sorted(par_dict.keys()):
+                c = par_dict[tenor] / 100.0
+                swap_start = SPOT_LAG
+                swap_end = swap_start + tenor
+                times = []
+                t = swap_start + freq
+                while t <= swap_end + 1e-9:
+                    times.append(round(min(t, swap_end), 8))
+                    t += freq
+                if not times:
+                    continue
+                ann_sum = sum(_log_interp(ti) * freq for ti in times[:-1])
+                df_start = _log_interp(swap_start)
+                df_end = (df_start - c * ann_sum) / (1.0 + c * freq)
+                if df_end > 0:
+                    known_dfs[swap_end] = df_end
+
+        _bootstrap(par_qq, 0.25)
+        _bootstrap(par_ss, 0.50)
+
+        # Interpolate onto clean round-maturity grid
+        maturities = [0.25, 0.50, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0,
+                      7.0, 8.0, 9.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0]
+        rows = []
+        for m in maturities:
+            df = _log_interp(m)
+            if df > 0:
+                z = -math.log(df) / m * 100
+                rows.append({"MaturityY": m, "ZeroRatePct": round(z, 6)})
+
+        return pd.DataFrame(rows) if rows else None
+    except Exception:
+        return None
+
+
 def load_config_excel(upload, load_type: str = "all") -> dict:
     """
     Load config from Excel with selective loading.
@@ -2857,7 +3024,19 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
 
         # Load curves and basis curves
         if load_type in ["curves", "all"]:
-            # Main IRS curve
+            # For AUD: auto-bootstrap zero curve from BBG_Feed par rates if available
+            # This ensures the zero curve is always consistent with live BBG par rates.
+            if ccy == "AUD":
+                bootstrapped = bootstrap_aud_zeros_from_bbg_feed(xl)
+                if bootstrapped is not None:
+                    set_ccy_curve(ccy, bootstrapped)
+                    if "config_curves" not in st.session_state:
+                        st.session_state["config_curves"] = {}
+                    st.session_state["config_curves"][ccy] = bootstrapped
+                    set_timestamp("curves", ccy)
+                    loaded["curves"] += 1
+
+            # Main IRS curve (used for all CCYs; for AUD only if bootstrap failed)
             curve_name = f"Curves_{ccy}"
             if curve_name in xl.sheet_names:
                 raw_curve = pd.read_excel(xl, sheet_name=curve_name, usecols=[0, 1])
@@ -2865,13 +3044,15 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                     curve_df = load_curve_flexible(raw_curve, curve_name)
                 except:
                     curve_df = load_curve(raw_curve, curve_name)
-                set_ccy_curve(ccy, curve_df)
-                # Backup to config_curves so curves_tab can restore on switch from live → saved
-                if "config_curves" not in st.session_state:
-                    st.session_state["config_curves"] = {}
-                st.session_state["config_curves"][ccy] = curve_df
-                set_timestamp("curves", ccy)
-                loaded["curves"] += 1
+                # Only override bootstrapped AUD curve if bootstrap failed
+                if ccy != "AUD" or get_ccy_curve("AUD") is None:
+                    set_ccy_curve(ccy, curve_df)
+                    if "config_curves" not in st.session_state:
+                        st.session_state["config_curves"] = {}
+                    st.session_state["config_curves"][ccy] = curve_df
+                    set_timestamp("curves", ccy)
+                    if ccy != "AUD":
+                        loaded["curves"] += 1
             
             # 6v3 basis curve
             basis_6v3_name = f"Basis_{ccy}_6v3"
@@ -4525,73 +4706,51 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
                       ois_x: Optional[np.ndarray] = None, ois_y: Optional[np.ndarray] = None,
                       basis6v3_x: Optional[np.ndarray] = None, basis6v3_y: Optional[np.ndarray] = None) -> float:
     """
-    Fast forward swap rate using proper dual-curve framework.
-    AUD: Q/Q (≤3Y) uses 3M BBSW projection curve; S/S (>3Y) uses 6M BBSW projection curve.
-    OIS curve used for annuity discounting (dual-curve).
-    
-    3M BBSW curve: IRS curve as-is for ≤3Y (bootstrapped from Q/Q rates),
-                   IRS curve minus 6v3 basis for >3Y (converts S/S to 3M equivalent).
-    6M BBSW curve: IRS curve as-is for ≥4Y (bootstrapped from S/S rates),
-                   IRS curve plus 6v3 basis for <4Y (converts Q/Q to 6M equivalent).
+    Forward swap rate using proper date-based schedule (mod-fol, Act/365).
+    AUD T+1BD, NZD/USD T+2BD. curve_y already in decimal.
     """
-    if ccy in ["NZD", "USD"]:
-        spot_lag = 2.0 / 252.0
-    else:
-        spot_lag = 1.0 / 252.0
-
-    swap_start = expiry + spot_lag
-    swap_end = swap_start + tenor
+    spot_lag_bd = 1 if ccy == "AUD" else 2
 
     if freq_override is not None:
-        freq = freq_override
+        months_per = int(round(freq_override * 12))
     elif ccy == "AUD":
-        freq = 0.25 if tenor <= 3 else 0.5
+        months_per = 3 if tenor <= 3 else 6
     else:
-        freq = 0.5
+        months_per = 6
 
-    times = []
-    t = swap_start + freq
-    while t <= swap_end + 1e-8:
-        times.append(min(t, swap_end))
-        t += freq
+    freq = months_per / 12.0
 
-    if not times:
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd)
+    sched = _build_date_schedule(fwd_start, tenor, months_per)
+
+    if not sched:
         return 0.0
 
+    today = _pricing_date()
+    t_start = _act365(today, fwd_start)
+    t_end = sched[-1][0]
+
     def _proj_df(t_val: float) -> float:
-        """Projection discount factor using convention-adjusted curve.
-        curve_y is already in decimal (e.g. 0.047 for 4.7%)."""
-        z = float(np.interp(t_val, curve_x, curve_y))  # already decimal
+        z = float(np.interp(t_val, curve_x, curve_y))
         if ccy == "AUD" and basis6v3_x is not None and basis6v3_y is not None:
             if freq == 0.25 and t_val > 3.0:
-                # Q/Q swap, S/S part of blended curve → adjust DOWN by 6v3 basis
                 b = float(np.interp(t_val, basis6v3_x, basis6v3_y)) / 10000.0
                 z = z - b
             elif freq == 0.5 and t_val <= 3.0:
-                # S/S swap, Q/Q part of blended curve → adjust UP by 6v3 basis
                 b = float(np.interp(t_val, basis6v3_x, basis6v3_y)) / 10000.0
                 z = z + b
         return math.exp(-z * t_val)
 
-    df_start = _proj_df(swap_start)
-    df_end   = _proj_df(swap_end)
-
     disc_x = ois_x if ois_x is not None else curve_x
-    disc_y = ois_y if ois_y is not None else curve_y  # already decimal
+    disc_y = ois_y if ois_y is not None else curve_y
 
-    ann = 0.0
-    prev_t = swap_start
-    for t in times:
-        z_t = float(np.interp(t, disc_x, disc_y))  # already decimal
-        df_t = math.exp(-z_t * t)
-        accrual = t - prev_t
-        ann += df_t * accrual
-        prev_t = t
-
+    ann = sum(math.exp(-float(np.interp(t, disc_x, disc_y)) * t) * acc for t, acc in sched)
     if ann <= 0:
         return 0.0
 
-    return (df_start - df_end) / ann
+    df_s = _proj_df(t_start)
+    df_e = _proj_df(t_end)
+    return (df_s - df_e) / ann
 
 
 def interpolate_basis(basis_df: pd.DataFrame, t: float) -> float:
