@@ -36,7 +36,7 @@ from scipy.interpolate import PchipInterpolator
 # crosses month end in which case use preceding BD).
 # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
 
-def _easter(year: int):
+def _easter_tuple(year: int):
     """Return (Good Friday, Easter Monday) for year   —   Anonymous Gregorian."""
     a = year % 19
     b, c = divmod(year, 100)
@@ -71,7 +71,7 @@ def _au_holidays(year: int) -> set:
     # Australia Day   —   26 Jan
     h.add(_sub_mon(date(year, 1, 26)))
     # Good Friday + Easter Saturday (NSW bank holiday) + Easter Monday
-    gf, em = _easter(year)
+    gf, em = _easter_tuple(year)
     h.add(gf)
     h.add(gf + timedelta(days=1))   # Easter Saturday
     h.add(em)
@@ -1386,14 +1386,6 @@ def _obs_nyse(d: "date") -> "date":
 @st.cache_data(ttl=86400, show_spinner=False)
 # ── Holiday calendars ────────────────────────────────────────────────────────
 
-def _easter(year: int) -> "date":
-    """Gregorian Easter Sunday."""
-    from datetime import date as _date
-    a=year%19; b=year//100; c=year%100; d=b//4; e=b%4
-    f=(b+8)//25; g=(b-f+1)//3; h=(19*a+b-d-g+15)%30
-    i=c//4; k=c%4; l=(32+2*e+2*i-h-k)%7; m=(a+11*h+22*l)//451
-    mo=(h+l-7*m+114)//31; dy=((h+l-7*m+114)%31)+1
-    return _date(year, mo, dy)
 
 def _nth_weekday(year: int, month: int, n: int, weekday: int) -> "date":
     """nth occurrence (1-based) of weekday (0=Mon) in month."""
