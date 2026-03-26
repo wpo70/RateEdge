@@ -1279,11 +1279,12 @@ def df_from_curve(curve: pd.DataFrame, t: float) -> float:
     return math.exp(-z * t)
 
 
-def _next_bd(d: "date") -> "date":
-    """Next business day (Mon-Fri, no holiday calendar)."""
-    from datetime import date as _date, timedelta as _td
-    while d.weekday() >= 5:
-        d += _td(days=1)
+def _next_bd(d: "date", ccy: str = "AUD") -> "date":
+    """Next business day using proper holiday calendar."""
+    from datetime import timedelta as _td
+    hols = _get_holidays(ccy)
+    while d.weekday() >= 5 or d in hols:
+        d += _td(1)
     return d
 
 def _add_months(d: "date", months: int) -> "date":
@@ -1302,19 +1303,266 @@ def _add_years(d: "date", years: int) -> "date":
     except ValueError:
         return _date(d.year + years, d.month, 28)
 
-def _mod_fol(d: "date") -> "date":
-    """Modified following: if adjusted date falls in next month, go backward."""
+def _mod_fol_hol(d: "date", holidays: frozenset) -> "date":
+    """Modified following with holiday calendar."""
     from datetime import timedelta as _td
-    nd = _next_bd(d)
+    orig_month = d.month
+    nd = d
+    while nd.weekday() >= 5 or nd in holidays:
+        nd += _td(1)
+    if nd.month != orig_month:
+        # Gone to next month - go backwards
+        nd = d
+        while nd.weekday() >= 5 or nd in holidays:
+            nd -= _td(1)
+    return nd
+
+def _mod_fol(d: "date") -> "date":
+    """Modified following (no holiday calendar - used for bootstrapper only)."""
+    from datetime import timedelta as _td
+    nd = _next_bd(d, "AUD")
     if nd.month != d.month:
         pd_ = d
         while pd_.weekday() >= 5:
-            pd_ -= _td(days=1)
+            pd_ -= _td(1)
+        return pd_
+    return nd
+
+def _mod_fol_ccy(d: "date", ccy: str) -> "date":
+    """Modified following with proper holiday calendar."""
+    from datetime import timedelta as _td
+    hols = _get_holidays(ccy)
+    nd = d
+    while nd.weekday() >= 5 or nd in hols:
+        nd += _td(1)
+    if nd.month != d.month:
+        pd_ = d
+        while pd_.weekday() >= 5 or pd_ in hols:
+            pd_ -= _td(1)
         return pd_
     return nd
 
 def _act365(d1: "date", d2: "date") -> float:
     return (d2 - d1).days / 365.0
+
+
+# ── Public holiday calendars ──────────────────────────────────────────────────
+def _easter(year: int) -> "date":
+    from datetime import date as _d
+    a=year%19; b=year//100; c=year%100; d=b//4; e=b%4
+    f=(b+8)//25; g=(b-f+1)//3; h=(19*a+b-d-g+15)%30
+    i=c//4; k=c%4; l=(32+2*e+2*i-h-k)%7; m=(a+11*h+22*l)//451
+    mo=(h+l-7*m+114)//31; dy=((h+l-7*m+114)%31)+1
+    return _d(year, mo, dy)
+
+def _nth_weekday(year: int, month: int, n: int, weekday: int) -> "date":
+    """nth occurrence of weekday (0=Mon) in month (1-indexed)."""
+    from datetime import date as _d, timedelta as _td
+    first = _d(year, month, 1)
+    offset = (weekday - first.weekday()) % 7
+    return first + _td(offset) + _td(7*(n-1))
+
+def _last_weekday(year: int, month: int, weekday: int) -> "date":
+    """Last occurrence of weekday (0=Mon) in month."""
+    import calendar as _cal
+    from datetime import date as _d, timedelta as _td
+    last = _d(year, month, _cal.monthrange(year, month)[1])
+    return last - _td((last.weekday()-weekday) % 7)
+
+def _obs_std(d: "date") -> "date":
+    """Standard observed: Sat->Mon, Sun->Mon."""
+    from datetime import timedelta as _td
+    if d.weekday()==5: return d+_td(2)
+    if d.weekday()==6: return d+_td(1)
+    return d
+
+def _obs_nyse(d: "date") -> "date":
+    """NYSE observed: Sat->Fri, Sun->Mon."""
+    from datetime import timedelta as _td
+    if d.weekday()==5: return d-_td(1)
+    if d.weekday()==6: return d+_td(1)
+    return d
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _get_holidays(ccy: str, year: int) -> frozenset:
+    """Return frozenset of holiday dates for currency/year. Cached daily."""
+    from datetime import date as _d, timedelta as _td
+    e = _easter(year)
+    hols: set = set()
+
+    if ccy == "AUD":
+        # Sydney (NSW) IRS calendar
+        hols.add(_obs_std(_d(year,1,1)))           # New Year
+        hols.add(_obs_std(_d(year,1,26)))           # Australia Day
+        hols.add(e - _td(2))                       # Good Friday
+        hols.add(e)                                 # Easter Saturday
+        hols.add(e + _td(1))                       # Easter Monday
+        hols.add(_obs_std(_d(year,4,25)))           # ANZAC Day
+        hols.add(_nth_weekday(year,6,2,0))          # King's Birthday (2nd Mon Jun)
+        hols.add(_nth_weekday(year,8,1,0))          # Bank Holiday (1st Mon Aug)
+        hols.add(_nth_weekday(year,10,1,0))         # Labour Day (1st Mon Oct)
+        hols.add(_obs_std(_d(year,12,25)))          # Christmas
+        hols.add(_obs_std(_d(year,12,26)))          # Boxing Day
+
+    elif ccy == "USD":
+        # NYSE / Fed Funds
+        hols.add(_obs_nyse(_d(year,1,1)))           # New Year
+        hols.add(_nth_weekday(year,1,3,0))          # MLK (3rd Mon Jan)
+        hols.add(_nth_weekday(year,2,3,0))          # Presidents Day (3rd Mon Feb)
+        hols.add(e - _td(2))                       # Good Friday
+        hols.add(_last_weekday(year,5,0))           # Memorial Day (last Mon May)
+        hols.add(_obs_nyse(_d(year,6,19)))          # Juneteenth
+        hols.add(_obs_nyse(_d(year,7,4)))           # Independence Day
+        hols.add(_nth_weekday(year,9,1,0))          # Labor Day (1st Mon Sep)
+        hols.add(_nth_weekday(year,11,4,3))         # Thanksgiving (4th Thu Nov)
+        hols.add(_obs_nyse(_d(year,12,25)))         # Christmas
+
+    elif ccy == "NZD":
+        # Wellington IRS calendar
+        _MATARIKI = {2026:_d(2026,6,26),2027:_d(2027,7,16),2028:_d(2028,7,7),
+                     2029:_d(2029,6,28),2030:_d(2030,7,19)}
+        hols.add(_obs_std(_d(year,1,1)))            # New Year
+        hols.add(_obs_std(_d(year,1,2)))            # Day after New Year
+        hols.add(_obs_std(_d(year,2,6)))            # Waitangi Day
+        # Wellington Anniversary: nearest Mon to Jan 22
+        jan22 = _d(year,1,22)
+        ma = jan22 + _td((0-jan22.weekday())%7)
+        mb = ma - _td(7)
+        hols.add(mb if (jan22-mb).days <= (ma-jan22).days else ma)
+        hols.add(e - _td(2))                       # Good Friday
+        hols.add(e + _td(1))                       # Easter Monday
+        hols.add(_obs_std(_d(year,4,25)))           # ANZAC Day
+        hols.add(_nth_weekday(year,6,1,0))          # King's Birthday (1st Mon Jun)
+        if year in _MATARIKI: hols.add(_MATARIKI[year])
+        hols.add(_last_weekday(year,10,0))          # Labour Day (last Mon Oct)
+        hols.add(_obs_std(_d(year,12,25)))          # Christmas
+        hols.add(_obs_std(_d(year,12,26)))          # Boxing Day
+
+    return frozenset(hols)
+
+def _holidays_for_range(ccy: str, year_start: int, year_end: int) -> frozenset:
+    """Union of holidays across year range."""
+    result: set = set()
+    for y in range(year_start, year_end+1):
+        result |= _get_holidays(ccy, y)
+    return frozenset(result)
+
+# ── Holiday calendars ────────────────────────────────────────────────────────
+
+def _easter(year: int) -> "date":
+    """Gregorian Easter Sunday."""
+    from datetime import date as _date
+    a=year%19; b=year//100; c=year%100; d=b//4; e=b%4
+    f=(b+8)//25; g=(b-f+1)//3; h=(19*a+b-d-g+15)%30
+    i=c//4; k=c%4; l=(32+2*e+2*i-h-k)%7; m=(a+11*h+22*l)//451
+    mo=(h+l-7*m+114)//31; dy=((h+l-7*m+114)%31)+1
+    return _date(year, mo, dy)
+
+def _nth_weekday(year: int, month: int, n: int, weekday: int) -> "date":
+    """nth occurrence (1-based) of weekday (0=Mon) in month."""
+    from datetime import date as _date, timedelta as _td
+    d = _date(year, month, 1)
+    d += _td((weekday - d.weekday()) % 7)
+    return d + _td(7*(n-1))
+
+def _last_weekday(year: int, month: int, weekday: int) -> "date":
+    """Last occurrence of weekday in month."""
+    import calendar as _cal
+    from datetime import date as _date, timedelta as _td
+    last = _date(year, month, _cal.monthrange(year, month)[1])
+    return last - _td((last.weekday() - weekday) % 7)
+
+def _obs_std(d: "date") -> "date":
+    """Sat->Mon, Sun->Mon observation."""
+    from datetime import timedelta as _td
+    if d.weekday()==5: return d+_td(2)
+    if d.weekday()==6: return d+_td(1)
+    return d
+
+def _obs_nyse(d: "date") -> "date":
+    """NYSE: Sat->Fri, Sun->Mon."""
+    from datetime import timedelta as _td
+    if d.weekday()==5: return d-_td(1)
+    if d.weekday()==6: return d+_td(1)
+    return d
+
+def _aud_holidays(year: int) -> set:
+    """AUD Sydney IRS holiday calendar."""
+    from datetime import date as _date, timedelta as _td
+    e = _easter(year)
+    return {
+        _obs_std(_date(year,1,1)),         # New Year
+        _obs_std(_date(year,1,26)),         # Australia Day
+        e-_td(2),                           # Good Friday
+        e,                                  # Easter Saturday (NSW)
+        e+_td(1),                           # Easter Monday
+        _obs_std(_date(year,4,25)),         # ANZAC Day
+        _nth_weekday(year,6,2,0),           # King's Birthday (2nd Mon Jun, NSW)
+        _nth_weekday(year,8,1,0),           # Bank Holiday (1st Mon Aug, NSW)
+        _nth_weekday(year,10,1,0),          # Labour Day (1st Mon Oct, NSW)
+        _obs_std(_date(year,12,25)),        # Christmas Day
+        _obs_std(_date(year,12,26)),        # Boxing Day
+    }
+
+def _usd_holidays(year: int) -> set:
+    """USD New York IRS holiday calendar (NYSE/Fed Funds)."""
+    from datetime import date as _date, timedelta as _td
+    e = _easter(year)
+    return {
+        _obs_nyse(_date(year,1,1)),         # New Year
+        _nth_weekday(year,1,3,0),           # MLK (3rd Mon Jan)
+        _nth_weekday(year,2,3,0),           # Presidents Day (3rd Mon Feb)
+        e-_td(2),                           # Good Friday
+        _last_weekday(year,5,0),            # Memorial Day (last Mon May)
+        _obs_nyse(_date(year,6,19)),        # Juneteenth
+        _obs_nyse(_date(year,7,4)),         # Independence Day
+        _nth_weekday(year,9,1,0),           # Labor Day (1st Mon Sep)
+        _nth_weekday(year,11,4,3),          # Thanksgiving (4th Thu Nov)
+        _obs_nyse(_date(year,12,25)),       # Christmas Day
+    }
+
+# Matariki dates (NZ — legislated individually each year)
+_MATARIKI = {
+    2024: (2024,6,28), 2025: (2025,6,20), 2026: (2026,6,26),
+    2027: (2027,7,16), 2028: (2028,7,7),  2029: (2029,6,28),
+    2030: (2030,7,19), 2031: (2031,7,11), 2032: (2032,7,2),
+    2033: (2033,6,24),
+}
+
+def _nzd_holidays(year: int) -> set:
+    """NZD Wellington IRS holiday calendar."""
+    from datetime import date as _date, timedelta as _td
+    e = _easter(year)
+    hols = {
+        _obs_std(_date(year,1,1)),          # New Year
+        _obs_std(_date(year,1,2)),          # Day after New Year
+        _obs_std(_date(year,2,6)),          # Waitangi Day
+        e-_td(2),                           # Good Friday
+        e+_td(1),                           # Easter Monday
+        _obs_std(_date(year,4,25)),         # ANZAC Day
+        _nth_weekday(year,6,1,0),           # King's Birthday (1st Mon Jun)
+        _last_weekday(year,10,0),           # Labour Day (last Mon Oct)
+        _obs_std(_date(year,12,25)),        # Christmas Day
+        _obs_std(_date(year,12,26)),        # Boxing Day
+    }
+    if year in _MATARIKI:
+        hols.add(_date(*_MATARIKI[year]))
+    # Wellington Anniversary: nearest Monday to Jan 22
+    from datetime import date as _d2
+    jan22 = _d2(year,1,22)
+    mon_after = jan22+_td((0-jan22.weekday())%7)
+    mon_before = mon_after-_td(7)
+    hols.add(mon_before if (jan22-mon_before).days<=(mon_after-jan22).days else mon_after)
+    return hols
+
+# Cache holiday sets (3 years pre-loaded)
+_HOLIDAY_CACHE: dict = {}
+
+def _get_holidays(ccy: str) -> frozenset:
+    """Return union of holidays for ccy across current + next 5 years."""
+    from datetime import date as _date
+    yr = _date.today().year
+    return _holidays_for_range(ccy, yr - 1, yr + 5)
 
 def _pricing_date() -> "date":
     """Today's date for schedule generation."""
@@ -1327,35 +1575,35 @@ def _pricing_date() -> "date":
         pass
     return _date.today()
 
-def _spot_date(spot_lag_bd: int) -> "date":
-    """Spot date = today + spot_lag business days."""
+def _spot_date(spot_lag_bd: int, ccy: str = "AUD") -> "date":
+    """Spot date = today + spot_lag business days (holiday-adjusted)."""
     from datetime import timedelta as _td
     d = _pricing_date()
+    hols = _get_holidays(ccy)
     count = 0
     while count < spot_lag_bd:
-        d += _td(days=1)
-        if d.weekday() < 5:
+        d += _td(1)
+        if d.weekday() < 5 and d not in hols:
             count += 1
     return d
 
-def _fwd_start_date(expiry_years: float, spot_lag_bd: int) -> "date":
-    """Forward start date: spot + expiry (mod-fol). Uses days for <1m, months otherwise."""
+def _fwd_start_date(expiry_years: float, spot_lag_bd: int, ccy: str = "AUD") -> "date":
+    """Forward start date: spot + expiry (mod-fol with holiday calendar)."""
     from datetime import timedelta as _td
-    spot = _spot_date(spot_lag_bd)
+    spot = _spot_date(spot_lag_bd, ccy)
     total_days = expiry_years * 365.25
     total_months = int(round(expiry_years * 12))
     if total_days < 27:
-        # Sub-monthly: add whole days then mod-fol
         raw = spot + _td(days=int(round(total_days)))
     else:
         raw = _add_months(spot, total_months)
-    return _mod_fol(raw)
+    return _mod_fol_ccy(raw, ccy)
 
-def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_period: int) -> List[Tuple[float, float]]:
+def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_period: int,
+                         ccy: str = "AUD") -> List[Tuple[float, float]]:
     """
-    Build actual payment schedule using mod-fol date arithmetic.
+    Build actual payment schedule using mod-fol date arithmetic with holiday calendar.
     Returns list of (time_in_years_from_today, act365_accrual).
-    Final cashflow uses total months (not rounded years) to handle 18m, 1.5Y etc correctly.
     """
     today = _pricing_date()
     total_months = int(round(tenor_years * 12))
@@ -1363,9 +1611,8 @@ def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_perio
     schedule = []
     prev = fwd_start
     for i in range(1, n + 1):
-        # Always use months arithmetic - last cashflow uses total_months exactly
         raw = _add_months(fwd_start, i * months_per_period if i < n else total_months)
-        pay = _mod_fol(raw)
+        pay = _mod_fol_ccy(raw, ccy)
         accrual = _act365(prev, pay)
         t_years = _act365(today, pay)
         schedule.append((t_years, accrual))
@@ -1373,17 +1620,18 @@ def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_perio
     return schedule
 
 def build_aud_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]:
-    """AUD: T+1BD spot, mod-fol, Act/365. Q/Q (3m) for ≤3Y, S/S (6m) for >3Y."""
+    """AUD: T+1BD spot, mod-fol with Sydney holidays, Act/365. Q/Q ≤3Y, S/S >3Y."""
     months_per = 3 if tenor <= 3.0 else 6
-    fwd_start = _fwd_start_date(expiry, spot_lag_bd=1)
-    return _build_date_schedule(fwd_start, tenor, months_per)
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=1, ccy="AUD")
+    return _build_date_schedule(fwd_start, tenor, months_per, ccy="AUD")
 
 
 def build_generic_schedule(expiry: float, tenor: float, freq: float = 0.5, spot_lag: float = 1.0) -> List[Tuple[float, float]]:
-    """T+2BD spot (NZD/USD), mod-fol, Act/365. freq: 0.25=Q/Q, 0.5=S/S."""
+    """T+2BD spot (NZD/USD), mod-fol with holiday calendar, Act/365."""
     months_per = int(round(freq * 12))
-    fwd_start = _fwd_start_date(expiry, spot_lag_bd=int(round(spot_lag)))
-    return _build_date_schedule(fwd_start, tenor, months_per)
+    ccy_g = "USD" if abs(spot_lag - 2.0) < 0.1 else "AUD"
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=int(round(spot_lag)), ccy=ccy_g)
+    return _build_date_schedule(fwd_start, tenor, months_per, ccy=ccy_g)
 
 
 def forward_and_annuity_from_curve(curve: pd.DataFrame,
@@ -1406,9 +1654,11 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         sched = build_aud_schedule(expiry, tenor)
     elif ccy == "NZD":
         freq_nzd = 0.25 if tenor <= 2.0 else 0.5
-        sched = build_generic_schedule(expiry, tenor, freq=freq_nzd, spot_lag=2.0)
+        fwd_start_nzd = _fwd_start_date(expiry, spot_lag_bd=2, ccy="NZD")
+        sched = _build_date_schedule(fwd_start_nzd, tenor, int(round(freq_nzd*12)), ccy="NZD")
     elif ccy == "USD":
-        sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=2.0)
+        fwd_start_usd = _fwd_start_date(expiry, spot_lag_bd=2, ccy="USD")
+        sched = _build_date_schedule(fwd_start_usd, tenor, 6, ccy="USD")
     else:
         sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=1.0)
 
@@ -2899,6 +3149,15 @@ def get_ccy_curve(ccy: str) -> Optional[pd.DataFrame]:
 
 def set_ccy_curve(ccy: str, curve_df: pd.DataFrame):
     st.session_state["curves"][ccy] = curve_df
+    # Invalidate forward matrix cache whenever curve changes
+    # This ensures live API rate updates and manual uploads both take effect immediately
+    try:
+        _generate_forward_matrix_cached.clear()
+        _generate_basis_matrix_cached.clear()
+        st.session_state.get("fwd_matrix", {}).pop(ccy, None)
+        st.session_state.get("basis_matrix", {}).pop(ccy, None)
+    except Exception:
+        pass
 
 
 def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
@@ -3297,7 +3556,7 @@ def vol_config_tab():
         
         load_type = st.radio(
             "Commit options",
-            ["All", "ATM Vol Only", "SABR Only", "IRS Curves Only"],
+            ["All", "ATM Vol Only", "IRS Curves Only"],
             index=0,
             horizontal=True,
             key="load_type_radio"
@@ -3307,7 +3566,6 @@ def vol_config_tab():
         type_map = {
             "All": "all",
             "ATM Vol Only": "atm",
-            "SABR Only": "sabr",
             "IRS Curves Only": "curves"
         }
         
@@ -3326,6 +3584,13 @@ def vol_config_tab():
             
             if msgs:
                 st.success(f" Loaded: {', '.join(msgs)}")
+                # Clear forward matrix cache so new curve takes effect immediately
+                try:
+                    clear_matrix_cache()
+                    st.session_state["fwd_matrix"] = {}
+                    st.session_state["basis_matrix"] = {}
+                except Exception:
+                    pass
                 # Auto-save to DB so it persists across sessions
                 if HAS_POSTGRES and is_admin():
                     try:
@@ -4792,8 +5057,8 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
 
     freq = months_per / 12.0
 
-    fwd_start = _fwd_start_date(expiry, spot_lag_bd)
-    sched = _build_date_schedule(fwd_start, tenor, months_per)
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd, ccy=ccy)
+    sched = _build_date_schedule(fwd_start, tenor, months_per, ccy=ccy)
 
     if not sched:
         return 0.0
@@ -11352,27 +11617,92 @@ def main():
     )
     init_session()
     
-    # Auto-load disabled — upload config manually via Vol/Upload tab
-    # Role check only (no curve/vol data loaded from DB automatically)
+    # Auto-load: role check + vols/basis/spreads from DB on first login
+    # Curves are NOT loaded from DB — they are always bootstrapped fresh from uploaded config
     if HAS_POSTGRES and get_db_url() and not st.session_state.get("db_auto_loaded", False):
         user_id = st.session_state.get("username", "default")
         if user_id and user_id != "default":
             _ADMIN_EMAILS = {"wpo70@icloud.com", "wpo@rateedge.au"}
-            try:
-                _role_conn = get_db_connection()
-                if _role_conn:
-                    _role_cur = _role_conn.cursor()
-                    _role_cur.execute("SELECT role FROM user_roles WHERE email=%s", (user_id,))
-                    _role_row = _role_cur.fetchone()
-                    _role_cur.close()
-                    _role_conn.close()
-                    st.session_state["user_role"] = "admin" if user_id in _ADMIN_EMAILS else (
-                        _role_row[0] if _role_row else "read_only"
-                    )
-            except Exception:
-                if user_id in _ADMIN_EMAILS:
-                    st.session_state["user_role"] = "admin"
+            _ADMIN_EMAIL  = "wpo70@icloud.com"
+            _load_user = user_id if user_id in _ADMIN_EMAILS else _ADMIN_EMAIL
+            with st.spinner("Loading saved configs…"):
+                try:
+                    _role_conn = get_db_connection()
+                    if _role_conn:
+                        _role_cur = _role_conn.cursor()
+                        # Role
+                        _role_cur.execute("SELECT role FROM user_roles WHERE email=%s", (user_id,))
+                        _role_row = _role_cur.fetchone()
+                        st.session_state["user_role"] = "admin" if user_id in _ADMIN_EMAILS else (
+                            _role_row[0] if _role_row else "read_only"
+                        )
+                        # Spreads inline
+                        _role_cur.execute(
+                            "SELECT data FROM user_configs WHERE user_id=%s AND config_type='cf_spreads' AND currency='AUD'",
+                            (user_id,)
+                        )
+                        _spr_row = _role_cur.fetchone()
+                        _role_cur.close()
+                        _role_conn.close()
+                        if _spr_row and _spr_row[0]:
+                            _spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
+                                            "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y","cf_spr_12y3y"]
+                            for k in _spread_keys:
+                                if k in _spr_row[0]:
+                                    st.session_state[k] = float(_spr_row[0][k])
+                except Exception:
+                    if user_id in _ADMIN_EMAILS:
+                        st.session_state["user_role"] = "admin"
+
+                # Load vols, SABR, basis from DB — but NOT curves (always from live config upload)
+                _configs = load_all_user_configs(_load_user)
+                _loaded = 0
+                if _configs:
+                    if "vol_data" not in st.session_state: st.session_state["vol_data"] = {}
+                    if "basis_curves" not in st.session_state: st.session_state["basis_curves"] = {}
+                    if "vol_editor" not in st.session_state:
+                        st.session_state["vol_editor"] = {"working":{},"base":{},"history":{},"future":{},"redo_stack":{}}
+                    for _ccy in ["AUD","NZD","USD"]:
+                        if _ccy not in st.session_state["vol_data"]: st.session_state["vol_data"][_ccy] = {}
+                        if _ccy not in st.session_state["basis_curves"]: st.session_state["basis_curves"][_ccy] = {}
+                        # ATM vols
+                        if "atm_vols" in _configs and _ccy in _configs["atm_vols"]:
+                            try:
+                                _df = pd.DataFrame(_configs["atm_vols"][_ccy]["data"]["values"])
+                                if "Expiry" in _df.columns:
+                                    _df = _df[["Expiry"]+[c for c in _df.columns if c!="Expiry"]]
+                                st.session_state["vol_data"][_ccy]["atm"] = _df
+                                _ve = st.session_state["vol_editor"]
+                                _ve["base"][_ccy]=_df.copy(); _ve["working"][_ccy]=_df.copy()
+                                _ve["history"][_ccy]=[]; _ve["future"][_ccy]=[]; _ve["redo_stack"][_ccy]=[]
+                                _loaded += 1
+                            except Exception: pass
+                        # Basis curves (6v3, 3v1, ois)
+                        for _bt in ["6v3","3v1","ois"]:
+                            _key = f"basis_{_bt}"
+                            if _key in _configs and _ccy in _configs[_key]:
+                                try:
+                                    _bdf = pd.DataFrame(_configs[_key][_ccy]["data"]["values"])
+                                    st.session_state["basis_curves"][_ccy][_bt] = _bdf
+                                    if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
+                                    if _ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][_ccy] = {}
+                                    st.session_state["config_basis"][_ccy][_bt] = _bdf
+                                    _loaded += 1
+                                except Exception: pass
+                        # FWD prefs
+                        if "fwd_analysis_prefs" in _configs and "GLB" in _configs["fwd_analysis_prefs"]:
+                            try:
+                                _p = _configs["fwd_analysis_prefs"]["GLB"]["data"]
+                                for _pk in ["irs_sp_list","irs_fl_list","fvfv_list","b6_list","fv6_list","bsp_list"]:
+                                    if _pk in _p:
+                                        st.session_state[_pk] = [tuple(x) for x in _p[_pk]] if isinstance(_p[_pk][0] if _p[_pk] else [], list) else list(_p[_pk])
+                            except Exception: pass
+
             st.session_state["db_auto_loaded"] = True
+            if _loaded > 0:
+                st.toast(f"Loaded {_loaded} saved configs (upload config for live curves)")
+        else:
+            pass
 
     # Sidebar for settings
     with st.sidebar:
