@@ -419,6 +419,7 @@ def save_user_config(user_id: str, config_type: str, currency: str, data: dict):
         return False
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def load_user_config(user_id: str, config_type: str, currency: str) -> Optional[dict]:
     """Load user config from database"""
     conn = get_db_connection()
@@ -8591,6 +8592,7 @@ def _load_rv_data():
     except Exception:
         return {"swap_rates": [], "vol_surface": []}
 
+@st.cache_data(ttl=300, show_spinner=False)
 def _load_rv_vols_from_db(ccy: str = "AUD", limit: int = 60) -> pd.DataFrame:
     """Load vol history from Supabase vol_history table. Returns long-format DataFrame."""
     if not HAS_POSTGRES:
@@ -8635,6 +8637,7 @@ def _load_rv_vols_from_db(ccy: str = "AUD", limit: int = 60) -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
+@st.cache_data(ttl=300, show_spinner=False)
 def _load_rv_vols_snapshots_list(ccy: str = "AUD") -> list:
     """List available vol snapshots for RV dropdown."""
     if not HAS_POSTGRES:
