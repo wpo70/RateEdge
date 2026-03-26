@@ -2988,12 +2988,38 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
         _bootstrap(par_qq, 0.25)
         _bootstrap(par_ss, 0.50)
 
-        # Interpolate onto clean round-maturity grid
+        # Build output grid from bootstrapped IRS nodes only (strip OIS short-end nodes)
+        # The bootstrapped nodes are at SPOT_LAG+tenor - interpolate output grid from these
+        irs_keys = sorted(k for k in known_dfs if k >= SPOT_LAG + 0.49)  # IRS starts at ~0.5Y
+        if len(irs_keys) < 5:
+            return None
+
+        # Log-linear interpolation using only the bootstrapped IRS curve
+        def _irs_interp(t: float) -> float:
+            dfs_map = {k: known_dfs[k] for k in irs_keys}
+            times2 = sorted(dfs_map.keys())
+            dfs2 = [dfs_map[x] for x in times2]
+            if t <= times2[0]:
+                # Linear extrapolation left from first two points
+                z0 = -math.log(dfs2[0]) / times2[0]
+                z1 = -math.log(dfs2[1]) / times2[1]
+                slope = (z1 - z0) / (times2[1] - times2[0])
+                z = z0 + slope * (t - times2[0])
+                return math.exp(-z * t)
+            if t >= times2[-1]:
+                z_last = -math.log(dfs2[-1]) / times2[-1]
+                return math.exp(-z_last * t)
+            for i in range(len(times2) - 1):
+                if times2[i] <= t <= times2[i + 1]:
+                    w = (t - times2[i]) / (times2[i + 1] - times2[i])
+                    return math.exp((1 - w) * math.log(dfs2[i]) + w * math.log(dfs2[i + 1]))
+            return dfs2[-1]
+
         maturities = [0.25, 0.50, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0,
                       7.0, 8.0, 9.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0]
         rows = []
         for m in maturities:
-            df = _log_interp(m)
+            df = _irs_interp(m)
             if df > 0:
                 z = -math.log(df) / m * 100
                 rows.append({"MaturityY": m, "ZeroRatePct": round(z, 6)})
