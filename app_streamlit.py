@@ -571,6 +571,11 @@ def save_all_session_data(user_id: str):
     except Exception as _e:
         try: conn.rollback()
         except: pass
+        # Store error in session so UI can show it
+        try:
+            import streamlit as _st
+            _st.session_state["_save_last_error"] = str(_e)
+        except: pass
     finally:
         try: conn.close()
         except: pass
@@ -3185,9 +3190,14 @@ def vol_config_tab():
                     _vd = st.session_state.get("vol_data", {})
                     _cv = st.session_state.get("curves", {})
                     _dbg = " | ".join(f"{c}: atm={'ok' if _vd.get(c,{}).get('atm') is not None else 'MISSING'} curve={'ok' if _cv.get(c) is not None else 'MISSING'}" for c in ["AUD","NZD","USD"])
+                    # Ensure tables exist before saving
+                    init_database()
                     saved = save_all_session_data(user_id)
+                    _last_err = st.session_state.pop("_save_last_error", None)
                     if saved > 0:
                         st.success(f"Saved {saved} configs to database")
+                    elif _last_err:
+                        st.error(f"Save failed: {_last_err}")
                     else:
                         st.warning(f"Nothing saved. Session: {_dbg}")
         with col_db3:
