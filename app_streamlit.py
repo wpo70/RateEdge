@@ -2925,8 +2925,15 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
                    "OIS 4M": 4/12, "OIS 5M": 5/12, "OIS 6M": 6/12, "OIS 9M": 9/12,
                    "OIS 1Y": 1.0, "OIS 2Y": 2.0, "OIS 3Y": 3.0}
 
+        # Parse BBG_Feed in sections — stop AUD collection once we hit USD section
+        _in_usd = False
         for _, row in raw.iterrows():
             label = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
+            # Detect USD section header — stop collecting AUD data after this
+            if "USD" in label and ("IRS" in label or "OIS" in label or "SOFR" in label or "Fed" in label):
+                _in_usd = True
+            if _in_usd:
+                continue
             mid_raw = row.iloc[4] if len(row) > 4 else None
             try:
                 mid = float(mid_raw)
