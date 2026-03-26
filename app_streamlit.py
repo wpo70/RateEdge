@@ -2899,15 +2899,6 @@ def get_ccy_curve(ccy: str) -> Optional[pd.DataFrame]:
 
 def set_ccy_curve(ccy: str, curve_df: pd.DataFrame):
     st.session_state["curves"][ccy] = curve_df
-    # Invalidate forward matrix cache whenever curve changes
-    # This ensures live API rate updates and manual uploads both take effect immediately
-    try:
-        _generate_forward_matrix_cached.clear()
-        _generate_basis_matrix_cached.clear()
-        st.session_state.get("fwd_matrix", {}).pop(ccy, None)
-        st.session_state.get("basis_matrix", {}).pop(ccy, None)
-    except Exception:
-        pass
 
 
 def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
@@ -3335,13 +3326,6 @@ def vol_config_tab():
             
             if msgs:
                 st.success(f" Loaded: {', '.join(msgs)}")
-                # Clear forward matrix cache so new curve takes effect immediately
-                try:
-                    clear_matrix_cache()
-                    st.session_state["fwd_matrix"] = {}
-                    st.session_state["basis_matrix"] = {}
-                except Exception:
-                    pass
                 # Auto-save to DB so it persists across sessions
                 if HAS_POSTGRES and is_admin():
                     try:
@@ -11369,52 +11353,26 @@ def main():
     init_session()
     
     # Auto-load disabled — upload config manually via Vol/Upload tab
-    # Auto-load from database on first run (if connected and not already loaded)
+    # Role check only (no curve/vol data loaded from DB automatically)
     if HAS_POSTGRES and get_db_url() and not st.session_state.get("db_auto_loaded", False):
         user_id = st.session_state.get("username", "default")
         if user_id and user_id != "default":
-            with st.spinner("Loading saved configs…"):
-                # Single connection for role check + spreads, reused across calls
-                _ADMIN_EMAILS = {"wpo70@icloud.com", "wpo@rateedge.au"}
-                try:
-                    _role_conn = get_db_connection()
-                    if _role_conn:
-                        _role_cur = _role_conn.cursor()
-                        # Role
-                        _role_cur.execute("SELECT role FROM user_roles WHERE email=%s", (user_id,))
-                        _role_row = _role_cur.fetchone()
-                        st.session_state["user_role"] = "admin" if user_id in _ADMIN_EMAILS else (
-                            _role_row[0] if _role_row else "read_only"
-                        )
-                        # Spreads — fetch inline while connection is open
-                        _ADMIN_EMAIL = "wpo70@icloud.com"
-                        _load_user = user_id if user_id in _ADMIN_EMAILS else _ADMIN_EMAIL
-                        _spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
-                                        "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y","cf_spr_12y3y"]
-                        _role_cur.execute(
-                            "SELECT data FROM user_configs WHERE user_id=%s AND config_type='cf_spreads' AND currency='AUD'",
-                            (user_id,)
-                        )
-                        _spr_row = _role_cur.fetchone()
-                        _role_cur.close()
-                        _role_conn.close()
-                        if _spr_row and _spr_row[0]:
-                            _db_spreads = _spr_row[0]
-                            for k in _spread_keys:
-                                if k in _db_spreads:
-                                    st.session_state[k] = float(_db_spreads[k])
-                except Exception:
-                    _load_user = user_id if user_id in _ADMIN_EMAILS else "wpo70@icloud.com"
-                    if user_id in _ADMIN_EMAILS:
-                        st.session_state["user_role"] = "admin"
-                # Load all session data (single DB connection inside)
-                loaded = load_all_session_data(_load_user)
+            _ADMIN_EMAILS = {"wpo70@icloud.com", "wpo@rateedge.au"}
+            try:
+                _role_conn = get_db_connection()
+                if _role_conn:
+                    _role_cur = _role_conn.cursor()
+                    _role_cur.execute("SELECT role FROM user_roles WHERE email=%s", (user_id,))
+                    _role_row = _role_cur.fetchone()
+                    _role_cur.close()
+                    _role_conn.close()
+                    st.session_state["user_role"] = "admin" if user_id in _ADMIN_EMAILS else (
+                        _role_row[0] if _role_row else "read_only"
+                    )
+            except Exception:
+                if user_id in _ADMIN_EMAILS:
+                    st.session_state["user_role"] = "admin"
             st.session_state["db_auto_loaded"] = True
-            if loaded > 0:
-                st.toast(f"Auto-loaded {loaded} configs from database")
-        else:
-            # Not authenticated yet - don't mark as loaded so it retries after login
-            pass
 
     # Sidebar for settings
     with st.sidebar:
