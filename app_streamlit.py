@@ -4818,24 +4818,8 @@ def swaptions_tab(vol_mode: str):
         leg_conv = st.radio("Leg Convention", ["Market", "Q/Q", "S/S"], horizontal=True, key="sw_leg_conv")
         freq_override = None if leg_conv == "Market" else (0.25 if leg_conv == "Q/Q" else 0.5)
 
-    # Forward: use matrix value when available (Market convention)   —   guarantees match with Rate/Vol Matrix.
-    # For Q/Q or S/S overrides, or when matrix not loaded, compute from curve.
-    fwd_from_matrix = None
-    if leg_conv == "Market" and fwd_matrix is not None:
-        try:
-            fwd_from_matrix = fwd_matrix.loc[expiry, swap_tenor]
-        except Exception:
-            pass
-
-    if fwd_from_matrix is not None:
-        fwd = fwd_from_matrix / 100.0
-        # Annuity still needed for pricing   —   compute from curve with OIS discounting
-        if curve is not None:
-            _, ann, _ = forward_and_annuity_from_curve(curve, ccy, expiry_y, tenor_y, ois_curve, freq_override=None)
-        else:
-            ann = tenor_y
-        fwd_source = "matrix"
-    elif curve is not None:
+    # Forward: always compute from curve for accuracy — never pull from potentially stale matrix cache.
+    if curve is not None:
         fwd, ann, _ = forward_and_annuity_from_curve(curve, ccy, expiry_y, tenor_y, ois_curve, freq_override=freq_override)
         if basis_6v3 is not None and ccy == "AUD":
             basis_bp = interpolate_basis(basis_6v3, expiry_y + tenor_y / 2)
