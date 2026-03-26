@@ -1427,12 +1427,12 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         if ccy == "AUD" and basis_6v3 is not None and not basis_6v3.empty:
             bx = basis_6v3["MaturityY"].to_numpy().astype(float)
             by = basis_6v3["BasisBp"].to_numpy().astype(float) / 10000.0
-            if freq == 0.25 and t > 3.0:
-                # Q/Q swap, S/S part of curve → adjust down to 3M BBSW
+            if freq == 0.25 and tenor > 3.0 and t > 3.0:
+                # Q/Q swap spanning into S/S zone: adjust down to 3M BBSW
                 b = float(np.interp(t, bx, by))
                 z = z - b
-            elif freq == 0.5 and t <= 3.0:
-                # S/S swap, Q/Q part of curve → adjust up to 6M BBSW
+            elif freq == 0.5 and tenor <= 3.0 and t <= 3.0:
+                # S/S swap in Q/Q zone: adjust up to 6M BBSW
                 b = float(np.interp(t, bx, by))
                 z = z + b
         return math.exp(-z * t)
@@ -3002,24 +3002,24 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
         if len(bootstrapped) < 10:
             return None
 
-        # Build output grid using ONLY bootstrapped IRS nodes
-        irs_times = [bootstrapped[t][0] for t in sorted(bootstrapped)]
-        irs_dfs   = [bootstrapped[t][1] for t in sorted(bootstrapped)]
+        # Build output grid: use full dfs (OIS+IRS) for interpolation
+        # This gives correct short-end zeros (0.25Y, 0.5Y) from OIS rates
+        # rather than wrong backward extrapolation from 0.5Y IRS node
 
         def _irs_df(t: float) -> float:
-            """Interpolate from bootstrapped IRS nodes only (not OIS seed nodes)."""
-            if not irs_times: return 0.0
-            if t <= irs_times[0]:
-                z0 = -math.log(irs_dfs[0]) / irs_times[0]
-                return math.exp(-z0 * t)
-            if t >= irs_times[-1]:
-                z = -math.log(irs_dfs[-1]) / irs_times[-1]
+            """Interpolate from full dfs dict (OIS seed + bootstrapped IRS nodes)."""
+            ts = sorted(known_dfs.keys())
+            dfv = [known_dfs[x] for x in ts]
+            if not ts: return 0.0
+            if t <= ts[0]: return dfv[0]
+            if t >= ts[-1]:
+                z = -math.log(dfv[-1]) / ts[-1]
                 return math.exp(-z * t)
-            for i in range(len(irs_times) - 1):
-                if irs_times[i] <= t <= irs_times[i+1]:
-                    w = (t - irs_times[i]) / (irs_times[i+1] - irs_times[i])
-                    return math.exp((1-w)*math.log(irs_dfs[i]) + w*math.log(irs_dfs[i+1]))
-            return irs_dfs[-1]
+            for i in range(len(ts) - 1):
+                if ts[i] <= t <= ts[i+1]:
+                    w = (t - ts[i]) / (ts[i+1] - ts[i])
+                    return math.exp((1-w)*math.log(dfv[i]) + w*math.log(dfv[i+1]))
+            return dfv[-1]
 
         MATURITIES = [0.25, 0.50, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0,
                       7.0, 8.0, 9.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0]
@@ -4805,10 +4805,13 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
     def _proj_df(t_val: float) -> float:
         z = float(np.interp(t_val, curve_x, curve_y))
         if ccy == "AUD" and basis6v3_x is not None and basis6v3_y is not None:
-            if freq == 0.25 and t_val > 3.0:
+            # Basis adjustment only when swap TENOR crosses the Q/Q->S/S boundary
+            # Q/Q swap with tenor>3Y: cashflows in S/S zone need basis subtracted
+            # S/S swap with tenor<=3Y: cashflows in Q/Q zone need basis added
+            if freq == 0.25 and tenor > 3.0 and t_val > 3.0:
                 b = float(np.interp(t_val, basis6v3_x, basis6v3_y)) / 10000.0
                 z = z - b
-            elif freq == 0.5 and t_val <= 3.0:
+            elif freq == 0.5 and tenor <= 3.0 and t_val <= 3.0:
                 b = float(np.interp(t_val, basis6v3_x, basis6v3_y)) / 10000.0
                 z = z + b
         return math.exp(-z * t_val)
