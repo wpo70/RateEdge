@@ -1323,10 +1323,17 @@ def _spot_date(spot_lag_bd: int) -> "date":
     return d
 
 def _fwd_start_date(expiry_years: float, spot_lag_bd: int) -> "date":
-    """Forward start date: spot + expiry months (mod-fol)."""
+    """Forward start date: spot + expiry (mod-fol). Uses days for <1m, months otherwise."""
+    from datetime import timedelta as _td
     spot = _spot_date(spot_lag_bd)
+    total_days = expiry_years * 365.25
     total_months = int(round(expiry_years * 12))
-    return _mod_fol(_add_months(spot, total_months))
+    if total_days < 27:
+        # Sub-monthly: add whole days then mod-fol
+        raw = spot + _td(days=int(round(total_days)))
+    else:
+        raw = _add_months(spot, total_months)
+    return _mod_fol(raw)
 
 def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_period: int) -> List[Tuple[float, float]]:
     """
