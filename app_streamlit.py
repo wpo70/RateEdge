@@ -286,35 +286,43 @@ def get_db_url():
     url = os.environ.get("RATEEDGE_DB_URL", "")
     return url if url else None
 
-def get_db_connection():
-    """
-    Get Supabase PostgreSQL connection via shared pooler URL.
-    Uses urllib to parse URL and pass components to psycopg2 explicitly.
-    """
-    if not HAS_POSTGRES:
-        return None
+@st.cache_resource(show_spinner=False)
+def _get_db_params():
+    """Parse and cache DB connection params once."""
     db_url = get_db_url()
     if not db_url:
         return None
     try:
         from urllib.parse import urlparse, parse_qs
         r = urlparse(db_url)
-        # Extract components
-        host = r.hostname
-        port = r.port or 5432
-        dbname = r.path.lstrip('/')
-        user = r.username
-        password = r.password
-        # Parse sslmode from query string if present
         qs = parse_qs(r.query)
-        sslmode = qs.get('sslmode', ['require'])[0]
+        return {
+            "host": r.hostname, "port": r.port or 5432,
+            "dbname": r.path.lstrip('/'), "user": r.username,
+            "password": r.password,
+            "sslmode": qs.get('sslmode', ['require'])[0]
+        }
+    except:
+        return None
+
+def get_db_connection():
+    """
+    Get Supabase PostgreSQL connection via shared pooler URL.
+    """
+    if not HAS_POSTGRES:
+        return None
+    params = _get_db_params()
+    if not params:
+        return None
+    try:
         conn = psycopg2.connect(
-            host=host, port=port, dbname=dbname,
-            user=user, password=password,
-            sslmode=sslmode, connect_timeout=10
+            host=params["host"], port=params["port"],
+            dbname=params["dbname"], user=params["user"],
+            password=params["password"], sslmode=params["sslmode"],
+            connect_timeout=3
         )
         return conn
-    except Exception as e:
+    except Exception:
         return None
 
 
@@ -2732,23 +2740,35 @@ def parse_tenor_to_years(tenor_str: str) -> float:
 
 
 def load_curve_flexible(df: pd.DataFrame, name: str) -> pd.DataFrame:
-    """Load curve with flexible tenor parsing"""
+    """Load curve with flexible tenor parsing - handles both numeric years and tenor strings."""
     if {"Maturity (Years)", "Zero Rate (%)"}.issubset(df.columns):
         out = df[["Maturity (Years)", "Zero Rate (%)"]].copy()
-        out.rename(columns={"Maturity (Years)": "Tenor", "Zero Rate (%)": "ZeroRatePct"}, inplace=True)
-        # Parse tenor to years
-        out["MaturityY"] = out["Tenor"].apply(parse_tenor_to_years)
+        out.rename(columns={"Maturity (Years)": "MaturityY", "Zero Rate (%)": "ZeroRatePct"}, inplace=True)
+        # MaturityY column may be numeric (0.25, 1.0) or string tenor ('1Y', '3M')
+        def _to_years(v):
+            try:
+                f = float(v)
+                return f if f > 0 else 0.0
+            except (ValueError, TypeError):
+                return parse_tenor_to_years(str(v))
+        out["MaturityY"] = out["MaturityY"].apply(_to_years)
         out = out[out["MaturityY"] > 0].sort_values("MaturityY").reset_index(drop=True)
         return out
     raise ValueError(f"{name}: expected columns 'Maturity (Years)', 'Zero Rate (%)'")
 
 
 def load_basis_curve_flexible(df: pd.DataFrame, name: str) -> pd.DataFrame:
-    """Load basis curve with flexible tenor parsing"""
+    """Load basis curve with flexible tenor parsing - handles both numeric years and tenor strings."""
     if {"Tenor (Years)", "Basis (bp)"}.issubset(df.columns):
         out = df[["Tenor (Years)", "Basis (bp)"]].copy()
-        out.rename(columns={"Tenor (Years)": "Tenor", "Basis (bp)": "BasisBp"}, inplace=True)
-        out["MaturityY"] = out["Tenor"].apply(parse_tenor_to_years)
+        out.rename(columns={"Tenor (Years)": "MaturityY", "Basis (bp)": "BasisBp"}, inplace=True)
+        def _to_years(v):
+            try:
+                f = float(v)
+                return f if f > 0 else 0.0
+            except (ValueError, TypeError):
+                return parse_tenor_to_years(str(v))
+        out["MaturityY"] = out["MaturityY"].apply(_to_years)
         out = out[out["MaturityY"] > 0].sort_values("MaturityY").reset_index(drop=True)
         return out
     raise ValueError(f"{name}: expected columns 'Tenor (Years)', 'Basis (bp)'")
@@ -11269,7 +11289,9 @@ def main():
         if is_admin():
             with st.expander("👥 User Access", expanded=False):
                 st.caption("Manage user roles")
-                if HAS_POSTGRES:
+                if st.button("🔄 Load Users", key="load_users_btn"):
+                    st.session_state["_user_list_loaded"] = True
+                if HAS_POSTGRES and st.session_state.get("_user_list_loaded", False):
                     try:
                         _conn = get_db_connection()
                         if _conn:
