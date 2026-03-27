@@ -2936,6 +2936,19 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
 
         SPOT = 1.0 / 252.0
 
+        # Override OIS 3M with Curves_AUD 0.25Y (user-maintained 3M BBSW rate)
+        try:
+            if "Curves_AUD" in xl.sheet_names:
+                _caud = pd.read_excel(xl, sheet_name="Curves_AUD", usecols=[0, 1], header=0)
+                _caud.columns = ["MaturityY", "ZeroRatePct"]
+                _caud["MaturityY"] = pd.to_numeric(_caud["MaturityY"], errors="coerce")
+                _caud["ZeroRatePct"] = pd.to_numeric(_caud["ZeroRatePct"], errors="coerce")
+                _row = _caud[(_caud["MaturityY"] - 0.25).abs() < 0.01]
+                if len(_row) > 0:
+                    ois_rates[3/12] = float(_row.iloc[0]["ZeroRatePct"])
+        except Exception:
+            pass
+
         # Seed with OIS discount factors (short-end anchor)
         dfs: dict = {0.0: 1.0}
         for t, r in sorted(ois_rates.items()):
@@ -3745,6 +3758,31 @@ def curves_tab():
             st.dataframe(_adf.style.format(_afmt), use_container_width=True, height=800)
     else:
         st.info("Click **▶ Generate ATM Matrix**")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_swap_rates_from_db(floating_rate: str) -> pd.DataFrame:
+    """Load swap rates from Supabase, return wide-format DataFrame indexed by date."""
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return pd.DataFrame()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT date, tenor, rate FROM swap_rates WHERE currency=%s AND floating_rate=%s ORDER BY date",
+            ("AUD", floating_rate)
+        )
+        rows = cur.fetchall()
+        conn.close()
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows, columns=["date", "tenor", "rate"])
+        df["date"] = pd.to_datetime(df["date"])
+        df["rate"] = df["rate"].astype(float)
+        wide = df.pivot_table(index="date", columns="tenor", values="rate", aggfunc="last")
+        return wide.sort_index()
+    except Exception:
+        return pd.DataFrame()
 
 
 def fwd_analysis_tab():
