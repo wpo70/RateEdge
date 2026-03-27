@@ -1711,7 +1711,8 @@ def price_caplets_with_vol_curve(ccy, tenor_y, caplet_vol_dict, notional_mm=1.0,
     The first fixing at expiry_y is known (forward rate) and skipped.
     Returns premium in bp per leg (not straddle).
     """
-    curve = st.session_state.get("config_curves", {}).get(ccy) or get_ccy_curve(ccy)
+    _cc = st.session_state.get("config_curves", {}).get(ccy)
+    curve = _cc if _cc is not None else get_ccy_curve(ccy)
     ois_curve = get_basis_curve(ccy, "ois")
     if ois_curve is None:
         ois_curve = curve
@@ -1782,7 +1783,8 @@ def build_caplet_vol_curve_from_surface(ccy: str, atm_surface):
     if atm_surface is None or atm_surface.empty:
         return None
 
-    curve = st.session_state.get("config_curves", {}).get(ccy) or get_ccy_curve(ccy)
+    _cc = st.session_state.get("config_curves", {}).get(ccy)
+    curve = _cc if _cc is not None else get_ccy_curve(ccy)
     ois_curve = get_basis_curve(ccy, "ois")
     if curve is None:
         return None
@@ -1918,7 +1920,8 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         """Get swaption PREMIUM - calculate directly from vol surface"""
         try:
             # Get curve and vol
-            curve = st.session_state.get("config_curves", {}).get(ccy) or get_ccy_curve(ccy)
+            _cc = st.session_state.get("config_curves", {}).get(ccy)
+            curve = _cc if _cc is not None else get_ccy_curve(ccy)
             ois_curve = get_basis_curve(ccy, "ois")
             if atm_surface is None or curve is None:
                 return None
@@ -1992,7 +1995,8 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         Price ONLY the caplets from gap_start_y to gap_end_y using flat vol.
         Returns premium in bp contributed by this gap.
         """
-        curve = st.session_state.get("config_curves", {}).get(ccy) or get_ccy_curve(ccy)
+        _cc = st.session_state.get("config_curves", {}).get(ccy)
+        curve = _cc if _cc is not None else get_ccy_curve(ccy)
         ois_curve = get_basis_curve(ccy, "ois")
         if ois_curve is None:
             ois_curve = curve
@@ -3338,7 +3342,8 @@ def vol_config_tab():
     
     for ccy in SUPPORTED_CURRENCIES:
         atm, a, b, r, n = get_ccy_vol_data(ccy)
-        curve = st.session_state.get("config_curves", {}).get(ccy) or get_ccy_curve(ccy)
+        _cc = st.session_state.get("config_curves", {}).get(ccy)
+        curve = _cc if _cc is not None else get_ccy_curve(ccy)
         
         atm_status = "✅" if atm is not None else "Not loaded"
         curve_status = "✅" if curve is not None else "Not loaded"
@@ -4664,9 +4669,12 @@ def swaptions_tab(vol_mode: str):
     
     # Get curves and data
     fwd_matrix = st.session_state.get("fwd_matrix", {}).get(ccy)
-    basis_6v3 = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3") or get_basis_curve(ccy, "6v3")
-    ois_curve  = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")  or get_basis_curve(ccy, "ois")
-    curve      = st.session_state.get("config_curves", {}).get(ccy) or get_ccy_curve(ccy)
+    _cb6 = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
+    basis_6v3 = _cb6 if _cb6 is not None else get_basis_curve(ccy, "6v3")
+    _cbo = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+    ois_curve = _cbo if _cbo is not None else get_basis_curve(ccy, "ois")
+    _cc = st.session_state.get("config_curves", {}).get(ccy)
+    curve = _cc if _cc is not None else get_ccy_curve(ccy)
 
     # ── SABR Smile Mode & Alpha Monitor ──────────────────────────────
     _sabr_visible = st.session_state.get("sabr_panel_visible", True)
@@ -5585,7 +5593,8 @@ def caps_floors_tab(vol_mode: str):
         )
         tenor_y = float(tenor[:-1])  # Final maturity from today
 
-    curve = st.session_state.get("config_curves", {}).get(ccy) or get_ccy_curve(ccy)
+    _cc = st.session_state.get("config_curves", {}).get(ccy)
+    curve = _cc if _cc is not None else get_ccy_curve(ccy)
     ois_curve = get_basis_curve(ccy, "ois")
     if curve is not None:
         # Calculate forward for swap from first_fixing to final_maturity
@@ -8214,7 +8223,8 @@ def vol_surface_editor_tab():
         atm = pd.DataFrame({"Expiry": ["1Y"], "1Y": [50.0]})
     
     # Get curve for annuity calculations
-    curve = st.session_state.get("config_curves", {}).get(ccy) or get_ccy_curve(ccy)
+    _cc = st.session_state.get("config_curves", {}).get(ccy)
+    curve = _cc if _cc is not None else get_ccy_curve(ccy)
     ois_curve = get_basis_curve(ccy, "ois")
     
     st.markdown("---")
@@ -8552,7 +8562,8 @@ def multi_ccy_tab(vol_mode: str):
     disc = st.number_input("Flat discount rate (%)", 0.0, 20.0, 4.0, step=0.1, key="mc_disc") / 100.0
 
     def price_leg(ccy: str) -> Optional[dict]:
-        curve = st.session_state.get("config_curves", {}).get(ccy) or get_ccy_curve(ccy)
+        _cc = st.session_state.get("config_curves", {}).get(ccy)
+        curve = _cc if _cc is not None else get_ccy_curve(ccy)
         ois_curve = get_basis_curve(ccy, "ois")
         atm = get_working_atm_surface(ccy)
         _, a, b, r, n = get_ccy_vol_data(ccy)
