@@ -4760,31 +4760,30 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
                       ois_x: Optional[np.ndarray] = None, ois_y: Optional[np.ndarray] = None,
                       basis6v3_x: Optional[np.ndarray] = None, basis6v3_y: Optional[np.ndarray] = None) -> float:
     """
-    Forward swap rate using proper date-based schedule (mod-fol, Act/365).
-    AUD T+1BD, NZD/USD T+2BD. curve_y already in decimal.
+    Forward swap rate using year-fraction schedule.
+    Simple and reliable for matrix computation. curve_y already in decimal.
     """
-    spot_lag_bd = 1 if ccy == "AUD" else 2
-
     if freq_override is not None:
-        months_per = int(round(freq_override * 12))
+        freq = freq_override
     elif ccy == "AUD":
-        months_per = 3 if tenor <= 3 else 6
+        freq = 0.25 if tenor <= 3 else 0.5
     elif ccy == "NZD":
-        months_per = 3 if tenor <= 2 else 6
+        freq = 0.25 if tenor <= 2 else 0.5
     else:
-        months_per = 6
+        freq = 0.5
 
-    freq = months_per / 12.0
+    SPOT = 1.0 / 252.0
+    t_start = expiry + SPOT
+    t_end = t_start + tenor
 
-    fwd_start = _fwd_start_date(expiry, spot_lag_bd)
-    sched = _build_date_schedule(fwd_start, tenor, months_per)
+    times = []
+    t = t_start + freq
+    while t <= t_end + 1e-9:
+        times.append(min(t, t_end))
+        t += freq
 
-    if not sched:
+    if not times:
         return 0.0
-
-    today = _pricing_date()
-    t_start = _act365(today, fwd_start)
-    t_end = sched[-1][0]
 
     def _proj_df(t_val: float) -> float:
         z = float(np.interp(t_val, curve_x, curve_y))
@@ -4800,7 +4799,12 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
     disc_x = ois_x if ois_x is not None else curve_x
     disc_y = ois_y if ois_y is not None else curve_y
 
-    ann = sum(math.exp(-float(np.interp(t, disc_x, disc_y)) * t) * acc for t, acc in sched)
+    prev = t_start
+    ann = 0.0
+    for ti in times:
+        ann += math.exp(-float(np.interp(ti, disc_x, disc_y)) * ti) * (ti - prev)
+        prev = ti
+
     if ann <= 0:
         return 0.0
 
