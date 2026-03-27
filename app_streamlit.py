@@ -3281,7 +3281,7 @@ def vol_config_tab():
         
         load_type = st.radio(
             "Commit options",
-            ["All", "ATM Vol Only", "SABR Only", "IRS Curves Only"],
+            ["All", "ATM Vol Only", "IRS Curves Only"],
             index=0,
             horizontal=True,
             key="load_type_radio"
@@ -3291,7 +3291,6 @@ def vol_config_tab():
         type_map = {
             "All": "all",
             "ATM Vol Only": "atm",
-            "SABR Only": "sabr",
             "IRS Curves Only": "curves"
         }
         
@@ -3700,7 +3699,9 @@ def curves_tab():
     else:
         _cfg_curve = st.session_state.get("config_curves", {}).get(ccy)
         _cfg_basis = st.session_state.get("config_basis", {}).get(ccy, {})
-        curve    = _cfg_curve if _cfg_curve is not None else get_ccy_curve(ccy)
+        # ONLY use config_curves - never fall back to session curves from DB
+        # config_curves is set exclusively by uploading RateEdge_Config.xlsx
+        curve    = _cfg_curve
         _b6 = _cfg_basis.get("6v3"); basis_6v3 = _b6 if (_b6 is not None and not isinstance(_b6, bool)) else get_basis_curve(ccy, "6v3")
         _b3 = _cfg_basis.get("3v1"); basis_3v1 = _b3 if (_b3 is not None and not isinstance(_b3, bool)) else get_basis_curve(ccy, "3v1")
         _bo = _cfg_basis.get("ois");  ois_curve = _bo if (_bo is not None and not isinstance(_bo, bool)) else get_basis_curve(ccy, "ois")
