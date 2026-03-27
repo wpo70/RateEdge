@@ -8728,15 +8728,551 @@ def credit_xva_tab():
         st.line_chart(chart_df.set_index("t"))
 
 
-def backtesting_tab():
-    st.subheader("Backtesting / Historical replay (placeholder)")
 
-    st.markdown(
-        "In production this wires to Postgres (RATEEDGE_ADMIN_DATA). "
-        "Here we provide knobs and explanations only."
+# ── Historical Vol Analysis helpers ──────────────────────────────────────────
+
+_EXPIRY_YEARS_MAP = {
+    "1w": 1/52, "1m": 1/12, "2m": 2/12, "3m": 3/12, "6m": 0.5, "9m": 0.75,
+    "1y": 1.0, "18m": 1.5, "2y": 2.0, "3y": 3.0, "4y": 4.0, "5y": 5.0,
+    "6y": 6.0, "7y": 7.0, "8y": 8.0, "9y": 9.0, "10y": 10.0, "12y": 12.0,
+    "15y": 15.0, "20y": 20.0, "25y": 25.0, "30y": 30.0,
+}
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _load_vol_snapshots_for_viz(ccy: str, start_date: str, end_date: str) -> list:
+    """Load vol snapshots from vol_history within date range. Returns list of dicts."""
+    if not HAS_POSTGRES:
+        return []
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return []
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT id, snapshot_date, label, atm_vols
+               FROM vol_history
+               WHERE currency = %s AND atm_vols IS NOT NULL
+                 AND snapshot_date::date BETWEEN %s AND %s
+               ORDER BY snapshot_date ASC
+               LIMIT 60""",
+            (ccy, start_date, end_date)
+        )
+        rows = cur.fetchall()
+        conn.close()
+        results = []
+        for row_id, snap_date, label, atm_vols in rows:
+            if not atm_vols or "values" not in atm_vols:
+                continue
+            try:
+                df = pd.DataFrame(atm_vols["values"])
+                if "Expiry" in df.columns:
+                    df = df.set_index("Expiry")
+                # Normalise index to lowercase
+                df.index = df.index.str.lower().str.strip()
+                df = df.apply(pd.to_numeric, errors="coerce")
+                results.append({
+                    "id": row_id,
+                    "date": pd.to_datetime(snap_date),
+                    "label": label or str(snap_date)[:10],
+                    "df": df,
+                })
+            except Exception:
+                pass
+        return results
+    except Exception:
+        return []
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _load_fwd_rates_for_viz(ccy: str, start_date: str, end_date: str,
+                             floating_rate: str = "6M BBSW") -> pd.DataFrame:
+    """Load par swap rates from swap_rates table, return wide DataFrame: date×tenor."""
+    if not HAS_POSTGRES:
+        return pd.DataFrame()
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return pd.DataFrame()
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT date, tenor, rate FROM swap_rates
+               WHERE currency = %s AND floating_rate = %s
+                 AND date BETWEEN %s AND %s
+               ORDER BY date ASC, tenor ASC""",
+            (ccy, floating_rate, start_date, end_date)
+        )
+        rows = cur.fetchall()
+        conn.close()
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows, columns=["date", "tenor", "rate"])
+        df["date"] = pd.to_datetime(df["date"])
+        pivot = df.pivot_table(index="date", columns="tenor", values="rate", aggfunc="mean")
+        # Sort columns by tenor years
+        def _tenor_years(t):
+            try:
+                return float(t.replace("Y","").replace("y",""))
+            except Exception:
+                return 999
+        pivot = pivot[sorted(pivot.columns, key=_tenor_years)]
+        return pivot
+    except Exception:
+        return pd.DataFrame()
+
+def _build_vol_surface_arrays(snap: dict):
+    """Convert snapshot dict to (X tenors, Y expiry_years, Z vol matrix) arrays."""
+    df = snap["df"]
+    tenor_cols = [c for c in df.columns]
+    tenor_x = []
+    for t in tenor_cols:
+        try:
+            tenor_x.append(float(str(t).replace("Y","").replace("y","")))
+        except Exception:
+            tenor_x.append(0)
+    expiry_y = [_EXPIRY_YEARS_MAP.get(str(e).lower().strip(), 0) for e in df.index]
+    # Filter rows with valid expiry mapping
+    valid = [i for i, v in enumerate(expiry_y) if v > 0]
+    expiry_y = [expiry_y[i] for i in valid]
+    expiry_labels = [list(df.index)[i] for i in valid]
+    z = df.values[valid, :]  # shape: (n_expiry, n_tenor)
+    return tenor_x, expiry_y, expiry_labels, tenor_cols, z
+
+def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)"):
+    """Build animated Plotly 3D surface figure from list of snapshots."""
+    import plotly.graph_objects as go
+
+    if not snapshots:
+        return None
+
+    # Build frames
+    frames = []
+    dates = []
+    for snap in snapshots:
+        tenor_x, expiry_y, exp_labels, tenor_labels, z = _build_vol_surface_arrays(snap)
+        if z.size == 0:
+            continue
+        lbl = snap["label"] if snap["label"] else snap["date"].strftime("%Y-%m-%d")
+        dates.append(lbl)
+        frames.append(go.Frame(
+            data=[go.Surface(
+                x=tenor_x, y=expiry_y, z=z.tolist(),
+                colorscale="RdYlGn_r",
+                cmin=50, cmax=130,
+                showscale=True,
+                colorbar=dict(title="bp", thickness=12, len=0.6),
+            )],
+            name=lbl,
+        ))
+
+    if not frames:
+        return None
+
+    # Initial surface = first frame
+    first = frames[0].data[0]
+    fig = go.Figure(
+        data=[first],
+        frames=frames,
+        layout=go.Layout(
+            title=dict(text=title, font=dict(size=14)),
+            height=520,
+            scene=dict(
+                xaxis=dict(title="Swap Tenor (Y)", tickmode="array",
+                           tickvals=[1,2,3,5,7,10,15,20,30]),
+                yaxis=dict(title="Option Expiry (Y)", tickmode="array",
+                           tickvals=[0.08,0.25,0.5,1,2,3,5,7,10],
+                           ticktext=["1m","3m","6m","1y","2y","3y","5y","7y","10y"]),
+                zaxis=dict(title="Vol (bp)"),
+                camera=dict(eye=dict(x=1.5, y=-1.8, z=0.9)),
+            ),
+            margin=dict(l=0, r=0, b=40, t=50),
+            updatemenus=[dict(
+                type="buttons", showactive=False, y=0.02, x=0.12,
+                xanchor="right", yanchor="bottom",
+                buttons=[
+                    dict(label="▶ Play", method="animate",
+                         args=[None, dict(frame=dict(duration=600, redraw=True),
+                                          fromcurrent=True, mode="immediate")]),
+                    dict(label="⏸ Pause", method="animate",
+                         args=[[None], dict(frame=dict(duration=0, redraw=False),
+                                             mode="immediate")]),
+                ]
+            )],
+            sliders=[dict(
+                currentvalue=dict(prefix="Date: ", visible=True, xanchor="center"),
+                steps=[dict(method="animate", args=[[d], dict(mode="immediate",
+                            frame=dict(duration=0, redraw=True))],
+                            label=d) for d in dates],
+                len=0.85, x=0.1, y=0.0,
+            )],
+        )
+    )
+    return fig
+
+def _make_fwd_matrix_surface_fig(pivot: pd.DataFrame, date_range_dates: list,
+                                  title: str = "AUD Par Swap Rates (%)"):
+    """Build animated Plotly 3D surface from par rate pivot (date × tenor)."""
+    import plotly.graph_objects as go
+
+    if pivot.empty:
+        return None
+
+    def _tenor_years(t):
+        try:
+            return float(str(t).replace("Y","").replace("y",""))
+        except Exception:
+            return 0
+
+    tenor_x = [_tenor_years(c) for c in pivot.columns]
+    dates = [d.strftime("%Y-%m-%d") for d in pivot.index]
+
+    frames = []
+    for i, (dt, row) in enumerate(pivot.iterrows()):
+        z_row = row.values.tolist()
+        frames.append(go.Frame(
+            data=[go.Surface(
+                x=tenor_x,
+                y=[0],  # single date slice = flat surface showing curve shape
+                z=[z_row],
+                colorscale="Blues",
+                cmin=float(pivot.min().min()) * 0.98,
+                cmax=float(pivot.max().max()) * 1.02,
+                showscale=True,
+                colorbar=dict(title="%", thickness=12, len=0.6),
+            )],
+            name=dates[i],
+        ))
+
+    # For a proper 2D surface over time, use date index as Y axis
+    date_nums = list(range(len(pivot)))
+    z_full = pivot.values.tolist()
+
+    fig = go.Figure(
+        data=[go.Surface(
+            x=tenor_x,
+            y=date_nums,
+            z=z_full,
+            colorscale="Blues",
+            showscale=True,
+            colorbar=dict(title="%", thickness=12, len=0.6),
+        )],
+        layout=go.Layout(
+            title=dict(text=title, font=dict(size=14)),
+            height=520,
+            scene=dict(
+                xaxis=dict(title="Tenor (Y)"),
+                yaxis=dict(title="Date",
+                           tickmode="array",
+                           tickvals=list(range(0, len(dates), max(1, len(dates)//8))),
+                           ticktext=[dates[i] for i in range(0, len(dates), max(1, len(dates)//8))]),
+                zaxis=dict(title="Rate (%)"),
+                camera=dict(eye=dict(x=1.5, y=-1.8, z=0.9)),
+            ),
+            margin=dict(l=0, r=0, b=40, t=50),
+        )
+    )
+    return fig
+
+def _make_overlay_fig(snap_a: dict, snap_b: dict):
+    """Three-panel: surface A, surface B, delta B-A."""
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    def _to_arrays(snap):
+        tx, ey, _, _, z = _build_vol_surface_arrays(snap)
+        return tx, ey, z
+
+    tx_a, ey_a, z_a = _to_arrays(snap_a)
+    tx_b, ey_b, z_b = _to_arrays(snap_b)
+
+    # Align shapes
+    if z_a.shape != z_b.shape:
+        return None
+
+    import numpy as np
+    z_delta = np.array(z_b) - np.array(z_a)
+
+    lbl_a = snap_a["date"].strftime("%Y-%m-%d")
+    lbl_b = snap_b["date"].strftime("%Y-%m-%d")
+
+    fig = make_subplots(
+        rows=1, cols=3,
+        specs=[[{"type": "surface"}, {"type": "surface"}, {"type": "surface"}]],
+        subplot_titles=[f"Date A: {lbl_a}", f"Date B: {lbl_b}", f"Δ  B − A"],
+        horizontal_spacing=0.02,
     )
 
-    st.markdown("#### Simple what-if scenarios")
+    cam = dict(eye=dict(x=1.4, y=-1.6, z=0.85))
+    shared_scene = dict(
+        xaxis=dict(title="Tenor"),
+        yaxis=dict(title="Expiry"),
+        zaxis=dict(title="Vol (bp)"),
+        camera=cam,
+    )
+
+    vmin = min(z_a.min(), z_b.min())
+    vmax = max(z_a.max(), z_b.max())
+
+    fig.add_trace(go.Surface(x=tx_a, y=ey_a, z=z_a.tolist(),
+                             colorscale="RdYlGn_r", cmin=vmin, cmax=vmax,
+                             showscale=False), row=1, col=1)
+    fig.add_trace(go.Surface(x=tx_b, y=ey_b, z=z_b.tolist(),
+                             colorscale="RdYlGn_r", cmin=vmin, cmax=vmax,
+                             showscale=False), row=1, col=2)
+    fig.add_trace(go.Surface(x=tx_a, y=ey_a, z=z_delta.tolist(),
+                             colorscale="RdBu_r", cmid=0,
+                             showscale=True,
+                             colorbar=dict(title="Δbp", thickness=10, len=0.6)), row=1, col=3)
+
+    fig.update_layout(
+        height=480,
+        margin=dict(l=0, r=0, b=20, t=50),
+        scene=shared_scene,
+        scene2=shared_scene,
+        scene3=dict(
+            xaxis=dict(title="Tenor"),
+            yaxis=dict(title="Expiry"),
+            zaxis=dict(title="Δ bp"),
+            camera=cam,
+        ),
+    )
+    return fig
+
+
+def backtesting_tab():
+    st.subheader("📊 Historical Vol Analysis")
+
+    ccy = st.session_state.get("selected_ccy", "AUD")
+
+    # ── Section 1: Vol Surface History ───────────────────────────────────────
+    st.markdown("### 🌊 Vol Surface History")
+
+    if not HAS_POSTGRES:
+        st.warning("Database not connected — vol history unavailable.")
+    else:
+        c1, c2, c3 = st.columns([2, 2, 2])
+        with c1:
+            _vs_start = st.date_input("From", value=pd.Timestamp.now() - pd.Timedelta(days=90),
+                                       key="hviz_vol_start")
+        with c2:
+            _vs_end = st.date_input("To", value=pd.Timestamp.now(), key="hviz_vol_end")
+        with c3:
+            _vs_mode = st.selectbox("View", ["Animated Timeline", "Single Date", "Overlay A vs B"],
+                                     key="hviz_vol_mode")
+
+        if st.button("🔄 Load Vol Snapshots", key="hviz_load_vol"):
+            _load_vol_snapshots_for_viz.clear()
+            st.session_state["hviz_snaps_loaded"] = True
+
+        snaps = _load_vol_snapshots_for_viz(ccy, str(_vs_start), str(_vs_end))
+
+        if not snaps:
+            st.info("No vol snapshots in this date range. Save EOD snapshots from the Vol Export tab.")
+
+            # ── 5-day AUD seed (mirrors USD SOD seed) ────────────────────────
+            with st.expander("🌱 Seed AUD Vol History (backfill from current surface)", expanded=True):
+                st.caption("Creates snapshots for the last N business days using the current "
+                           "AUD vol surface with small random daily moves. Useful for seeding "
+                           "the DB before live EOD saving is established.")
+                _sc1, _sc2 = st.columns(2)
+                with _sc1:
+                    _seed_n = st.number_input("Days to backfill", 2, 30, 5, key="hviz_seed_days")
+                with _sc2:
+                    _seed_sigma = st.number_input("Daily move σ (bp)", 0.5, 10.0, 1.5,
+                                                   step=0.5, key="hviz_seed_sigma")
+                if st.button("🌱 Seed AUD Snapshots", key="hviz_seed_btn", type="primary"):
+                    _aud_atm = st.session_state.get("vol_data", {}).get("AUD", {}).get("atm")
+                    if _aud_atm is None:
+                        st.error("No AUD ATM vol surface loaded. Upload config in Vol/SABR tab first.")
+                    else:
+                        import random as _rnd
+                        from datetime import datetime as _dt2, timedelta as _td2
+                        _atm_base = _aud_atm.copy()
+                        if "Expiry" in _atm_base.columns:
+                            _atm_base = _atm_base.set_index("Expiry")
+                        _atm_base = _atm_base.apply(pd.to_numeric, errors="coerce")
+                        _exp_rows = list(_atm_base.index)
+                        _t_cols = list(_atm_base.columns)
+                        _conn = get_db_connection()
+                        if not _conn:
+                            st.error("Cannot connect to database.")
+                        else:
+                            _cur = _conn.cursor()
+                            _rnd.seed(None)
+                            _running = _atm_base.copy().astype(float)
+                            _day = _dt2.now().replace(hour=17, minute=0, second=0, microsecond=0)
+                            _seeded = 0
+                            for _d in range(int(_seed_n)):
+                                _day -= _td2(days=1)
+                                while _day.weekday() >= 5:
+                                    _day -= _td2(days=1)
+                                for _e in _exp_rows:
+                                    for _t in _t_cols:
+                                        try:
+                                            _mv = _rnd.gauss(0, _seed_sigma)
+                                            _running.loc[_e, _t] = max(
+                                                float(_running.loc[_e, _t]) + _mv, 1.0)
+                                        except Exception:
+                                            pass
+                                _recs = (_running.reset_index()
+                                         .rename(columns={"index": "Expiry"})
+                                         .to_dict(orient="records"))
+                                _lbl = f"AUD EOD {_day.strftime('%Y-%m-%d')} [SEEDED]"
+                                _uid = st.session_state.get("username", "default")
+                                try:
+                                    _cur.execute(
+                                        """INSERT INTO vol_history
+                                           (user_id, currency, snapshot_date, label, atm_vols, notes)
+                                           VALUES (%s,%s,%s,%s,%s,%s)
+                                           ON CONFLICT DO NOTHING""",
+                                        (_uid, "AUD", _day, _lbl,
+                                         Json({"values": _recs}),
+                                         "Seeded backfill for historical viz"))
+                                    _seeded += 1
+                                except Exception:
+                                    pass
+                            _conn.commit()
+                            _cur.close()
+                            _conn.close()
+                            st.success(f"✅ Seeded {_seeded} AUD snapshots. Reload to view.")
+                            _load_vol_snapshots_for_viz.clear()
+                            st.rerun()
+        else:
+            st.caption(f"Found **{len(snaps)}** snapshots  ·  "
+                       f"{snaps[0]['date'].strftime('%Y-%m-%d')} → {snaps[-1]['date'].strftime('%Y-%m-%d')}")
+
+            if _vs_mode == "Animated Timeline":
+                _fig = _make_vol_surface_fig(snaps, f"{ccy} ATM Vol Surface — bp (animated)")
+                if _fig:
+                    st.plotly_chart(_fig, use_container_width=True)
+                else:
+                    st.warning("Could not build surface — check snapshot data format.")
+
+            elif _vs_mode == "Single Date":
+                _snap_labels = [f"{s['date'].strftime('%Y-%m-%d')}  {s['label']}" for s in snaps]
+                _sel_idx = st.selectbox("Select snapshot", range(len(_snap_labels)),
+                                         format_func=lambda i: _snap_labels[i],
+                                         key="hviz_single_sel")
+                _fig = _make_vol_surface_fig([snaps[_sel_idx]],
+                                              f"{ccy} ATM Vol — {snaps[_sel_idx]['date'].strftime('%Y-%m-%d')}")
+                if _fig:
+                    st.plotly_chart(_fig, use_container_width=True)
+
+            elif _vs_mode == "Overlay A vs B":
+                _snap_labels = [f"{s['date'].strftime('%Y-%m-%d')}  {s['label']}" for s in snaps]
+                _oa, _ob = st.columns(2)
+                with _oa:
+                    _idx_a = st.selectbox("Date A", range(len(_snap_labels)),
+                                           format_func=lambda i: _snap_labels[i],
+                                           index=0, key="hviz_ov_a")
+                with _ob:
+                    _idx_b = st.selectbox("Date B", range(len(_snap_labels)),
+                                           format_func=lambda i: _snap_labels[i],
+                                           index=min(len(snaps)-1, len(snaps)-1),
+                                           key="hviz_ov_b")
+                if _idx_a != _idx_b:
+                    _fig = _make_overlay_fig(snaps[_idx_a], snaps[_idx_b])
+                    if _fig:
+                        st.plotly_chart(_fig, use_container_width=True)
+                    else:
+                        st.warning("Snapshot grids don't match — select two snapshots with identical expiry/tenor structure.")
+                else:
+                    st.info("Select two different dates to compare.")
+
+    # ── Section 2: Forward Swap Rate Matrix History ───────────────────────────
+    st.markdown("---")
+    st.markdown("### 📈 Par Swap Rate History")
+
+    if not HAS_POSTGRES:
+        st.warning("Database not connected.")
+    else:
+        _fr1, _fr2, _fr3 = st.columns([2, 2, 2])
+        with _fr1:
+            _fr_start = st.date_input("From", value=pd.Timestamp.now() - pd.Timedelta(days=90),
+                                       key="hviz_fwd_start")
+        with _fr2:
+            _fr_end = st.date_input("To", value=pd.Timestamp.now(), key="hviz_fwd_end")
+        with _fr3:
+            _fr_type = st.selectbox("Floating Rate", ["6M BBSW", "3M BBSW", "OIS"],
+                                     key="hviz_fwd_type")
+
+        if st.button("🔄 Load Rate History", key="hviz_load_fwd"):
+            _load_fwd_rates_for_viz.clear()
+
+        _pivot = _load_fwd_rates_for_viz(ccy, str(_fr_start), str(_fr_end), _fr_type)
+
+        if _pivot.empty:
+            st.info(f"No {_fr_type} data in this date range. Load data into swap_rates table first.")
+        else:
+            st.caption(f"Loaded **{len(_pivot)}** daily curves  ·  "
+                       f"Tenors: {', '.join(list(_pivot.columns)[:6])}{'...' if len(_pivot.columns) > 6 else ''}")
+
+            _fwd_mode = st.radio("View", ["3D Surface (time × tenor)", "Single Date Curve",
+                                           "Overlay A vs B"],
+                                  horizontal=True, key="hviz_fwd_mode")
+
+            if _fwd_mode == "3D Surface (time × tenor)":
+                _fig2 = _make_fwd_matrix_surface_fig(
+                    _pivot, list(_pivot.index),
+                    f"{ccy} {_fr_type} Par Rates — {str(_fr_start)} to {str(_fr_end)}")
+                if _fig2:
+                    st.plotly_chart(_fig2, use_container_width=True)
+
+            elif _fwd_mode == "Single Date Curve":
+                import plotly.graph_objects as go
+                _avail_dates = [d.strftime("%Y-%m-%d") for d in _pivot.index]
+                _sel_date = st.selectbox("Date", _avail_dates,
+                                          index=len(_avail_dates)-1, key="hviz_fwd_single")
+                _row = _pivot.loc[_pivot.index.strftime("%Y-%m-%d") == _sel_date]
+                if not _row.empty:
+                    _tx = [float(str(c).replace("Y","")) for c in _row.columns]
+                    _ry = _row.values[0].tolist()
+                    _fig3 = go.Figure(go.Scatter(x=_tx, y=_ry, mode="lines+markers",
+                                                  line=dict(color="#00B4C8", width=2),
+                                                  marker=dict(size=6)))
+                    _fig3.update_layout(
+                        title=f"{ccy} {_fr_type}  {_sel_date}",
+                        xaxis_title="Tenor (Y)", yaxis_title="Rate (%)",
+                        height=350, margin=dict(l=40, r=20, t=50, b=40))
+                    st.plotly_chart(_fig3, use_container_width=True)
+
+            elif _fwd_mode == "Overlay A vs B":
+                import plotly.graph_objects as go
+                _avail_dates = [d.strftime("%Y-%m-%d") for d in _pivot.index]
+                _fo1, _fo2 = st.columns(2)
+                with _fo1:
+                    _fd_a = st.selectbox("Date A", _avail_dates, index=0, key="hviz_fo_a")
+                with _fo2:
+                    _fd_b = st.selectbox("Date B", _avail_dates,
+                                          index=len(_avail_dates)-1, key="hviz_fo_b")
+                _row_a = _pivot.loc[_pivot.index.strftime("%Y-%m-%d") == _fd_a]
+                _row_b = _pivot.loc[_pivot.index.strftime("%Y-%m-%d") == _fd_b]
+                if not _row_a.empty and not _row_b.empty:
+                    import numpy as np
+                    _tx = [float(str(c).replace("Y","")) for c in _pivot.columns]
+                    _ra = _row_a.values[0]
+                    _rb = _row_b.values[0]
+                    _delta = _rb - _ra
+                    _fig4 = go.Figure()
+                    _fig4.add_trace(go.Scatter(x=_tx, y=_ra.tolist(), name=f"A: {_fd_a}",
+                                               mode="lines+markers", line=dict(color="#00B4C8", width=2)))
+                    _fig4.add_trace(go.Scatter(x=_tx, y=_rb.tolist(), name=f"B: {_fd_b}",
+                                               mode="lines+markers", line=dict(color="#F0A500", width=2)))
+                    _fig4.add_trace(go.Bar(x=_tx, y=(_delta * 100).tolist(),
+                                           name="Δ B−A (bp)", yaxis="y2",
+                                           marker_color=["#18A96A" if v >= 0 else "#DC3545"
+                                                         for v in _delta],
+                                           opacity=0.5))
+                    _fig4.update_layout(
+                        title=f"{ccy} {_fr_type}  Overlay: {_fd_a} vs {_fd_b}",
+                        xaxis_title="Tenor (Y)", yaxis_title="Rate (%)",
+                        yaxis2=dict(title="Δ bp", overlaying="y", side="right"),
+                        legend=dict(orientation="h", y=-0.2),
+                        height=380, margin=dict(l=40, r=60, t=50, b=60))
+                    st.plotly_chart(_fig4, use_container_width=True)
+
+    # ── Section 3: What-if Scenarios (retained) ───────────────────────────────
+    st.markdown("---")
+    st.markdown("### 🎛️ What-if Scenarios")
+    st.caption("Placeholder — will clone surfaces, apply shocks, and reprice portfolio with RV breakdowns.")
     col1, col2 = st.columns(2)
     with col1:
         st.slider("Parallel curve shift (bp)", -200, 200, 0, key="bt_curve_shift")
@@ -8744,11 +9280,6 @@ def backtesting_tab():
     with col2:
         st.slider("Wing vol shift (bp)", -50, 50, 0, key="bt_wing_shift")
         st.slider("Vega flatten (%)", -20, 20, 0, key="bt_vega_flat")
-
-    st.info(
-        "Once hooked to RATEEDGE_ADMIN_DATA, this will: clone surfaces, apply shocks, "
-        "and reprice your portfolio with RV breakdowns."
-    )
 
 
 # ─── RV Historical Data ──────────────────────────────────────────────────────
@@ -11463,7 +11994,7 @@ def main():
             "✅ Vol Editor",
             "📑 Vol Export",
             "📍 Multi-CCY",
-            "📊 Backtesting",
+            "📊 Historical Analysis",
             "📜 Bond Options",
         ]
     )
