@@ -3316,7 +3316,16 @@ def vol_config_tab():
                 msgs.append(f"Curves: {loaded['curves']} currencies")
             
             if msgs:
-                st.success(f" Loaded: {', '.join(msgs)}")
+                _cdebug = []
+                for _c in SUPPORTED_CURRENCIES:
+                    _cv = st.session_state.get("config_curves", {}).get(_c)
+                    if _cv is not None and len(_cv) > 0:
+                        _z025 = _cv[_cv["MaturityY"].sub(0.25).abs() < 0.01]["ZeroRatePct"]
+                        _z1 = _cv[_cv["MaturityY"].sub(1.0).abs() < 0.01]["ZeroRatePct"]
+                        z025 = float(_z025.iloc[0]) if len(_z025) else 0
+                        z1 = float(_z1.iloc[0]) if len(_z1) else 0
+                        _cdebug.append(f"{_c}:{len(_cv)}rows 0.25Y={z025:.4f}% 1Y={z1:.4f}%")
+                st.success(f" Loaded: {', '.join(msgs)}" + (f" | {' | '.join(_cdebug)}" if _cdebug else " | NO CURVES"))
                 # Auto-save to DB so it persists across sessions
                 if HAS_POSTGRES and is_admin():
                     try:
