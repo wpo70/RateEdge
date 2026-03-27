@@ -3805,13 +3805,19 @@ def curves_tab():
             if st.button("Generate Forward Matrix", key="gen_fwd_matrix", type="primary"):
                 convention_key = {"Market": "market", "Q/Q": "qq", "S/S": "ss"}.get(leg_convention, "market")
                 with st.spinner("Generating..."):
-                    fwd_matrix = generate_forward_matrix_convention(ccy, curve, basis_6v3, convention_key)
-                    st.session_state["fwd_matrix"][ccy] = fwd_matrix
-                    st.session_state["fwd_convention"] = convention_key
-                    if basis_6v3 is not None:
-                        basis_matrix = generate_basis_matrix(ccy, basis_6v3)
-                        st.session_state["basis_matrix"][ccy] = basis_matrix
-                st.rerun()
+                    # Always use config_curves (set by bootstrap on upload) — never session/DB curve
+                    _matrix_curve = st.session_state.get("config_curves", {}).get(ccy)
+                    if _matrix_curve is None:
+                        st.warning("Upload RateEdge_Config.xlsx first (Vol/Upload tab → Commit All)")
+                    else:
+                        _matrix_basis = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
+                        fwd_matrix = generate_forward_matrix_convention(ccy, _matrix_curve, _matrix_basis, convention_key)
+                        st.session_state["fwd_matrix"][ccy] = fwd_matrix
+                        st.session_state["fwd_convention"] = convention_key
+                        if _matrix_basis is not None:
+                            basis_matrix = generate_basis_matrix(ccy, _matrix_basis)
+                            st.session_state["basis_matrix"][ccy] = basis_matrix
+                        st.rerun()
         with ctrl_col2:
             show_heatmap = st.checkbox("Show Heatmap", value=False, key="show_heatmap")
         with ctrl_col3:
