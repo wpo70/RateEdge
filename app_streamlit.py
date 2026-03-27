@@ -1713,7 +1713,7 @@ def price_caplets_with_vol_curve(ccy, tenor_y, caplet_vol_dict, notional_mm=1.0,
     """
     _cc = st.session_state.get("config_curves", {}).get(ccy)
     curve = _cc if _cc is not None else get_ccy_curve(ccy)
-    ois_curve = get_basis_curve(ccy, "ois")
+    ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
     if ois_curve is None:
         ois_curve = curve
     
@@ -1785,7 +1785,7 @@ def build_caplet_vol_curve_from_surface(ccy: str, atm_surface):
 
     _cc = st.session_state.get("config_curves", {}).get(ccy)
     curve = _cc if _cc is not None else get_ccy_curve(ccy)
-    ois_curve = get_basis_curve(ccy, "ois")
+    ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
     if curve is None:
         return None
     if ois_curve is None:
@@ -1922,7 +1922,7 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
             # Get curve and vol
             _cc = st.session_state.get("config_curves", {}).get(ccy)
             curve = _cc if _cc is not None else get_ccy_curve(ccy)
-            ois_curve = get_basis_curve(ccy, "ois")
+            ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
             if atm_surface is None or curve is None:
                 return None
             
@@ -1997,7 +1997,7 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         """
         _cc = st.session_state.get("config_curves", {}).get(ccy)
         curve = _cc if _cc is not None else get_ccy_curve(ccy)
-        ois_curve = get_basis_curve(ccy, "ois")
+        ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
         if ois_curve is None:
             ois_curve = curve
         
@@ -3578,10 +3578,11 @@ def generate_forward_matrix(ccy: str, curve: pd.DataFrame, basis_6v3: Optional[p
             tuple(basis_6v3["MaturityY"].to_numpy().astype(float).tolist()),
             tuple(basis_6v3["BasisBp"].to_numpy().astype(float).tolist()),
         )
+    import streamlit as _st
     ois_tuple = None
-    ois_curve = get_basis_curve(ccy, "ois")
-    if ois_curve is not None and not ois_curve.empty:
-        _oc = ois_curve.drop(columns=["_source_date"], errors="ignore")
+    _ois = _st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+    if _ois is not None and not _ois.empty:
+        _oc = _ois.drop(columns=["_source_date"], errors="ignore")
         if "MaturityY" in _oc.columns and "ZeroRatePct" in _oc.columns:
             ois_tuple = (
                 tuple(_oc["MaturityY"].to_numpy().astype(float).tolist()),
@@ -3605,10 +3606,12 @@ def generate_forward_matrix_convention(ccy: str, curve: pd.DataFrame, basis_6v3:
             tuple(basis_6v3["MaturityY"].to_numpy().astype(float).tolist()),
             tuple(basis_6v3["BasisBp"].to_numpy().astype(float).tolist()),
         )
+    # Use OIS from config_basis (set on upload) for annuity discounting
+    import streamlit as _st
     ois_tuple = None
-    ois_curve = get_basis_curve(ccy, "ois")
-    if ois_curve is not None and not ois_curve.empty:
-        _oc = ois_curve.drop(columns=["_source_date"], errors="ignore")
+    _ois = _st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+    if _ois is not None and not _ois.empty:
+        _oc = _ois.drop(columns=["_source_date"], errors="ignore")
         if "MaturityY" in _oc.columns and "ZeroRatePct" in _oc.columns:
             ois_tuple = (
                 tuple(_oc["MaturityY"].to_numpy().astype(float).tolist()),
@@ -4681,7 +4684,7 @@ def swaptions_tab(vol_mode: str):
     _cb6 = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
     basis_6v3 = _cb6 if _cb6 is not None else get_basis_curve(ccy, "6v3")
     _cbo = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
-    ois_curve = _cbo if _cbo is not None else get_basis_curve(ccy, "ois")
+    ois_curve = _cbo if _cbo is not None else (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
     _cc = st.session_state.get("config_curves", {}).get(ccy)
     curve = _cc if _cc is not None else get_ccy_curve(ccy)
 
@@ -5604,7 +5607,7 @@ def caps_floors_tab(vol_mode: str):
 
     _cc = st.session_state.get("config_curves", {}).get(ccy)
     curve = _cc if _cc is not None else get_ccy_curve(ccy)
-    ois_curve = get_basis_curve(ccy, "ois")
+    ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
     if curve is not None:
         # Calculate forward for swap from first_fixing to final_maturity
         swap_tenor = tenor_y - first_fixing_y
@@ -5980,7 +5983,7 @@ def caps_floors_tab(vol_mode: str):
             if br.button("🔔 Generate Swaption Premiums", key="gen_swpt_prem", type="primary"):
                 curve     = get_ccy_curve(ccy)
                 atm       = get_working_atm_surface(ccy)
-                ois_curve = get_basis_curve(ccy, "ois")
+                ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
                 if curve is not None and atm is not None:
                     for lbl, exp, tenor, cfs_lbl in [
                         ("3m1y","3m",1.0,"1Y CFS"),("1y1y","1y",1.0,"2Y CFS"),
@@ -6063,7 +6066,7 @@ def caps_floors_tab(vol_mode: str):
             _cfs_tdata = st.session_state.get("cfs_table_data", {})
             _caplet_vc = st.session_state.get("caplet_vol_curve_aud")
             _curve_local = get_ccy_curve(ccy)
-            _ois_tmp = get_basis_curve(ccy, "ois")
+            _ois_tmp = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
             _ois_local = _ois_tmp if (_ois_tmp is not None and not isinstance(_ois_tmp, bool)) else _curve_local
 
             if _cfs_tdata and _curve_local is not None:
@@ -6539,7 +6542,7 @@ def exotics_tab(vol_mode: str):
         return
 
     curve     = get_ccy_curve(ccy)
-    ois_curve = get_basis_curve(ccy, "ois")
+    ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
     basis_6v3 = get_basis_curve(ccy, "6v3")
     atm       = get_working_atm_surface(ccy)
     _, a_m, b_m, r_m, n_m = get_ccy_vol_data(ccy)
@@ -8234,7 +8237,7 @@ def vol_surface_editor_tab():
     # Get curve for annuity calculations
     _cc = st.session_state.get("config_curves", {}).get(ccy)
     curve = _cc if _cc is not None else get_ccy_curve(ccy)
-    ois_curve = get_basis_curve(ccy, "ois")
+    ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
     
     st.markdown("---")
     
@@ -8573,7 +8576,7 @@ def multi_ccy_tab(vol_mode: str):
     def price_leg(ccy: str) -> Optional[dict]:
         _cc = st.session_state.get("config_curves", {}).get(ccy)
         curve = _cc if _cc is not None else get_ccy_curve(ccy)
-        ois_curve = get_basis_curve(ccy, "ois")
+        ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
         atm = get_working_atm_surface(ccy)
         _, a, b, r, n = get_ccy_vol_data(ccy)
         if curve is None or atm is None:
@@ -8797,7 +8800,7 @@ def rv_tab():
 
     ccy = "AUD"
     curve     = get_ccy_curve(ccy)
-    ois_curve = get_basis_curve(ccy, "ois")
+    ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
     atm       = get_working_atm_surface(ccy)
     _, a_m, b_m, r_m, n_m = get_ccy_vol_data(ccy)
 
@@ -11067,7 +11070,7 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
     expiries = atm_vols["Expiry"].tolist()
     tenors = [c for c in atm_vols.columns if c != "Expiry"]
 
-    ois_curve = get_basis_curve(ccy, "ois")
+    ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
 
     prem_rows = []
     vega_rows = []
