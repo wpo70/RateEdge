@@ -3578,17 +3578,7 @@ def generate_forward_matrix(ccy: str, curve: pd.DataFrame, basis_6v3: Optional[p
             tuple(basis_6v3["MaturityY"].to_numpy().astype(float).tolist()),
             tuple(basis_6v3["BasisBp"].to_numpy().astype(float).tolist()),
         )
-    import streamlit as _st
-    ois_tuple = None
-    _ois = _st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
-    if _ois is not None and not _ois.empty:
-        _oc = _ois.drop(columns=["_source_date"], errors="ignore")
-        if "MaturityY" in _oc.columns and "ZeroRatePct" in _oc.columns:
-            ois_tuple = (
-                tuple(_oc["MaturityY"].to_numpy().astype(float).tolist()),
-                tuple(_oc["ZeroRatePct"].to_numpy().astype(float).tolist()),
-            )
-    return _generate_forward_matrix_cached(ccy, curve_tuple, basis_tuple, convention="market", ois_tuple=ois_tuple)
+    return _generate_forward_matrix_cached(ccy, curve_tuple, basis_tuple, convention="market", ois_tuple=None)
 
 
 def generate_forward_matrix_convention(ccy: str, curve: pd.DataFrame, basis_6v3: Optional[pd.DataFrame] = None,
@@ -3606,18 +3596,7 @@ def generate_forward_matrix_convention(ccy: str, curve: pd.DataFrame, basis_6v3:
             tuple(basis_6v3["MaturityY"].to_numpy().astype(float).tolist()),
             tuple(basis_6v3["BasisBp"].to_numpy().astype(float).tolist()),
         )
-    # Use OIS from config_basis (set on upload) for annuity discounting
-    import streamlit as _st
-    ois_tuple = None
-    _ois = _st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
-    if _ois is not None and not _ois.empty:
-        _oc = _ois.drop(columns=["_source_date"], errors="ignore")
-        if "MaturityY" in _oc.columns and "ZeroRatePct" in _oc.columns:
-            ois_tuple = (
-                tuple(_oc["MaturityY"].to_numpy().astype(float).tolist()),
-                tuple(_oc["ZeroRatePct"].to_numpy().astype(float).tolist()),
-            )
-    return _generate_forward_matrix_cached(ccy, curve_tuple, basis_tuple, convention=convention, ois_tuple=ois_tuple)
+    return _generate_forward_matrix_cached(ccy, curve_tuple, basis_tuple, convention=convention, ois_tuple=None)
 
 
 def curves_tab():
