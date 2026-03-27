@@ -11071,15 +11071,20 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
                 sigma_n = vol_bp / 10000.0
                 sqrt_t = math.sqrt(max(exp_y, 0.001))
 
-                # ATM straddle forward premium (bp of notional)
-                fwd_prem_bp = 2 * 0.3989 * sigma_n * sqrt_t * ann * 10000
+                # ATM straddle FORWARD premium (bp of notional)
+                # spot_prem = 2*N'(0)*sigma*sqrt(T)*annuity
+                # fwd_prem  = spot_prem / df(expiry)  [market convention: OIS discounted]
+                xs_c = curve["MaturityY"].to_numpy().astype(float)
+                ys_c = curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
+                df_expiry = math.exp(-float(np.interp(exp_y, xs_c, ys_c)) * exp_y)
+                spot_prem_bp = 2 * 0.3989 * sigma_n * sqrt_t * ann * 10000
+                fwd_prem_bp = spot_prem_bp / df_expiry if df_expiry > 0 else spot_prem_bp
                 prow[tenor] = round(fwd_prem_bp, 2)
 
-                # Vega: d(premium $) / d(vol in bp), scaled to 100mm notional
-                # d(fwd_prem_bp)/d(vol_bp) = 2 * 0.3989 * sqrt_t * ann
-                # $ vega per 1bp on 100mm = (d_prem_bp / 10000) * 100e6
-                d_prem_bp_per_bp_vol = 2 * 0.3989 * sqrt_t * ann
-                vega_dollars = (d_prem_bp_per_bp_vol / 10000.0) * 100e6
+                # Vega: d(fwd_prem $) / d(vol in bp), scaled to 100mm notional
+                d_spot_prem_per_bp = 2 * 0.3989 * sqrt_t * ann
+                d_fwd_prem_per_bp = d_spot_prem_per_bp / df_expiry if df_expiry > 0 else d_spot_prem_per_bp
+                vega_dollars = (d_fwd_prem_per_bp / 10000.0) * 100e6
                 vrow[tenor] = round(vega_dollars, 0)
 
             except:
