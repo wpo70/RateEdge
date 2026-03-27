@@ -3004,6 +3004,18 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
         if len(bootstrapped) < 10:
             return None
 
+        # Store par rates for display in curves tab
+        try:
+            import streamlit as _st
+            _par_rows = []
+            for _t, _r in sorted(par_qq.items()): _par_rows.append({"Tenor": f"{_t}Y", "Par Rate (%)": _r, "Conv": "Q/Q"})
+            for _t, _r in sorted(par_ss.items()): _par_rows.append({"Tenor": f"{_t}Y", "Par Rate (%)": _r, "Conv": "S/S"})
+            if "config_basis" not in _st.session_state: _st.session_state["config_basis"] = {}
+            if "_irs_par_rates" not in _st.session_state: _st.session_state["_irs_par_rates"] = {}
+            _st.session_state["_irs_par_rates"]["AUD"] = pd.DataFrame(_par_rows)
+        except Exception:
+            pass
+
         # Build output grid using full dfs (OIS seed + IRS nodes) — correct short-end zeros
         def _irs_df(t: float) -> float:
             ts = sorted(dfs.keys()); dfv = [dfs[x] for x in ts]
@@ -3625,15 +3637,24 @@ def curves_tab():
     b6c     = _clean(basis_6v3)
     oisc    = _clean(ois_curve)
 
-    # Chart
+    # ── Chart with toggle buttons ─────────────────────────────────────────────
+    _col_ck = st.columns(3)
+    with _col_ck[0]:
+        _show_irs = st.checkbox("IRS Zero", value=True, key="chart_irs")
+    with _col_ck[1]:
+        _show_ois = st.checkbox("OIS", value=True, key="chart_ois") if oisc is not None else False
+    with _col_ck[2]:
+        _show_b6 = st.checkbox("6v3 Basis", value=True, key="chart_b6") if b6c is not None else False
+
     try:
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=curve_c["MaturityY"], y=curve_c["ZeroRatePct"],
-            mode="lines+markers", name="IRS Zero", line=dict(color="#3b82f6", width=2)))
-        if oisc is not None and not oisc.empty:
+        if _show_irs:
+            fig.add_trace(go.Scatter(x=curve_c["MaturityY"], y=curve_c["ZeroRatePct"],
+                mode="lines+markers", name="IRS Zero", line=dict(color="#3b82f6", width=2)))
+        if _show_ois and oisc is not None and not oisc.empty:
             fig.add_trace(go.Scatter(x=oisc["MaturityY"], y=oisc["ZeroRatePct"],
                 mode="lines+markers", name="OIS", line=dict(color="#f59e0b", width=2)))
-        if b6c is not None and not b6c.empty:
+        if _show_b6 and b6c is not None and not b6c.empty:
             fig.add_trace(go.Scatter(x=b6c["MaturityY"], y=b6c["BasisBp"],
                 mode="lines+markers", name="6v3 Basis (bp)",
                 yaxis="y2", line=dict(color="#ef4444", width=2, dash="dot")))
@@ -3647,19 +3668,30 @@ def curves_tab():
     except Exception as _e:
         st.warning(f"Chart: {_e}")
 
-    with st.expander("Zero Curve Data", expanded=False):
-        _tc1, _tc2 = st.columns(2)
+    # ── IRS Par Rates table ────────────────────────────────────────────────────
+    with st.expander("IRS Par Rates & Zero Curve", expanded=False):
+        _tc1, _tc2, _tc3 = st.columns(3)
         with _tc1:
-            st.caption("IRS Zero Curve")
-            st.dataframe(curve_c, use_container_width=True, hide_index=True)
+            # Show IRS par rates from BBG_Feed if available in session
+            _par = st.session_state.get("_irs_par_rates", {}).get(ccy)
+            if _par is not None:
+                st.caption("IRS Par Rates (%)")
+                st.dataframe(_par, use_container_width=True, hide_index=True)
+            else:
+                st.caption("IRS Zero Curve (%)")
+                st.dataframe(curve_c, use_container_width=True, hide_index=True)
         with _tc2:
+            if oisc is not None and not oisc.empty:
+                st.caption("OIS Zero Curve (%)")
+                st.dataframe(oisc, use_container_width=True, hide_index=True)
+        with _tc3:
             if b6c is not None and not b6c.empty:
-                st.caption("6v3 Basis")
+                st.caption("6v3 Basis (bp)")
                 st.dataframe(b6c, use_container_width=True, hide_index=True)
 
     st.markdown("---")
 
-    # ── IRS Forward Matrix (hide/show) ─────────────────────────────────────────
+    # ── IRS Forward Matrix ─────────────────────────────────────────────────────
     if "fwd_matrix"   not in st.session_state: st.session_state["fwd_matrix"]   = {}
     if "basis_matrix" not in st.session_state: st.session_state["basis_matrix"] = {}
     if "fwd_section_open" not in st.session_state: st.session_state["fwd_section_open"] = True
@@ -3673,7 +3705,7 @@ def curves_tab():
         st.rerun()
 
     if st.session_state["fwd_section_open"]:
-        _r1, _r2, _r3, _r4 = st.columns([3, 2, 3, 2])
+        _r1, _r2, _r3, _r4 = st.columns([3, 1, 3, 3])
         with _r1:
             leg_conv = st.radio("Leg Convention", ["Market","Q/Q","S/S"],
                                 horizontal=True, key="fwd_leg_convention")
@@ -3723,7 +3755,7 @@ def curves_tab():
 
     st.markdown("---")
 
-    # ── ATM Vol / Forward Premium / Vega (hide/show) ──────────────────────────
+    # ── ATM Vol / Forward Premium / Vega ──────────────────────────────────────
     if "atm_prem_matrix" not in st.session_state: st.session_state["atm_prem_matrix"] = {}
     if "atm_section_open" not in st.session_state: st.session_state["atm_section_open"] = False
 
@@ -3738,13 +3770,13 @@ def curves_tab():
             st.info("No ATM vols — upload config first")
         else:
             has_atm = ccy in st.session_state.get("atm_prem_matrix", {})
+            _av = "ATM Vol (bp)"
 
-            _aa1, _aa2, _aa3, _aa4 = st.columns([2, 2, 3, 2])
+            _aa1, _aa2, _aa3, _aa4 = st.columns([2, 3, 3, 3])
             with _aa1:
                 show_atm_hm = st.checkbox("Heatmap", value=False, key="show_atm_heatmap")
             with _aa2:
                 if has_atm:
-                    _ad = st.session_state["atm_prem_matrix"][ccy]
                     _av = st.radio("View", ["ATM Vol (bp)", "Forward Premium (bp)", "Vega ($/1bp 100mm)"],
                                    horizontal=False, key="atm_view_toggle")
             with _aa3:
@@ -3752,6 +3784,7 @@ def curves_tab():
                                     type="primary", use_container_width=True)
             with _aa4:
                 if has_atm:
+                    _ad = st.session_state["atm_prem_matrix"][ccy]
                     _adf0 = {"ATM Vol (bp)": _ad["vol"],
                              "Forward Premium (bp)": _ad["prem"],
                              "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
@@ -3771,6 +3804,7 @@ def curves_tab():
                     st.rerun()
 
             if has_atm:
+                _ad = st.session_state["atm_prem_matrix"][ccy]
                 _adf = {"ATM Vol (bp)": _ad["vol"],
                         "Forward Premium (bp)": _ad["prem"],
                         "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
