@@ -1713,7 +1713,8 @@ def price_caplets_with_vol_curve(ccy, tenor_y, caplet_vol_dict, notional_mm=1.0,
     """
     _cc = st.session_state.get("config_curves", {}).get(ccy)
     curve = _cc if _cc is not None else get_ccy_curve(ccy)
-    ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
+    _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+    ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
     if ois_curve is None:
         ois_curve = curve
     
@@ -1785,7 +1786,8 @@ def build_caplet_vol_curve_from_surface(ccy: str, atm_surface):
 
     _cc = st.session_state.get("config_curves", {}).get(ccy)
     curve = _cc if _cc is not None else get_ccy_curve(ccy)
-    ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
+    _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+    ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
     if curve is None:
         return None
     if ois_curve is None:
@@ -1922,7 +1924,8 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
             # Get curve and vol
             _cc = st.session_state.get("config_curves", {}).get(ccy)
             curve = _cc if _cc is not None else get_ccy_curve(ccy)
-            ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
+            _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+            ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
             if atm_surface is None or curve is None:
                 return None
             
@@ -1997,7 +2000,8 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         """
         _cc = st.session_state.get("config_curves", {}).get(ccy)
         curve = _cc if _cc is not None else get_ccy_curve(ccy)
-        ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
+        _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+        ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
         if ois_curve is None:
             ois_curve = curve
         
@@ -3601,11 +3605,10 @@ def generate_forward_matrix_convention(ccy: str, curve: pd.DataFrame, basis_6v3:
 
 def curves_tab():
     import plotly.graph_objects as go
-    st.subheader("📏 Curves & Forward Matrix")
+    st.subheader("📐 IRS Curves & Forward Matrix")
 
     ccy = st.selectbox("Currency", SUPPORTED_CURRENCIES, key="curve_ccy")
 
-    # ONLY source: config_curves set by bootstrap on config upload
     curve     = st.session_state.get("config_curves", {}).get(ccy)
     basis_6v3 = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
     ois_curve = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
@@ -3615,7 +3618,8 @@ def curves_tab():
         return
 
     def _clean(df):
-        return df.drop(columns=["_source_date"], errors="ignore") if df is not None else None
+        if df is None: return None
+        return df.drop(columns=["_source_date"], errors="ignore")
 
     curve_c = _clean(curve)
     b6c     = _clean(basis_6v3)
@@ -3636,124 +3640,150 @@ def curves_tab():
         fig.update_layout(height=380, template="plotly_dark",
             xaxis=dict(title="Maturity (Years)"),
             yaxis=dict(title="Rate (%)"),
-            yaxis2=dict(title="Basis (bp)", side="right", overlaying="y", showgrid=False),
+            yaxis2=dict(title="Basis (bp)", overlaying="y", side="right", showgrid=False),
             legend=dict(orientation="h", y=1.1),
             margin=dict(l=40, r=40, t=20, b=40))
         st.plotly_chart(fig, use_container_width=True)
     except Exception as _e:
         st.warning(f"Chart: {_e}")
 
-    with st.expander("IRS Zero Curve & Basis", expanded=False):
-        _c1, _c2 = st.columns(2)
-        with _c1:
-            st.dataframe(curve_c, use_container_width=True)
-        with _c2:
+    with st.expander("Zero Curve Data", expanded=False):
+        _tc1, _tc2 = st.columns(2)
+        with _tc1:
+            st.caption("IRS Zero Curve")
+            st.dataframe(curve_c, use_container_width=True, hide_index=True)
+        with _tc2:
             if b6c is not None and not b6c.empty:
-                st.dataframe(b6c, use_container_width=True)
+                st.caption("6v3 Basis")
+                st.dataframe(b6c, use_container_width=True, hide_index=True)
 
     st.markdown("---")
 
-    # Forward Matrix
+    # ── IRS Forward Matrix (hide/show) ─────────────────────────────────────────
     if "fwd_matrix"   not in st.session_state: st.session_state["fwd_matrix"]   = {}
     if "basis_matrix" not in st.session_state: st.session_state["basis_matrix"] = {}
+    if "fwd_section_open" not in st.session_state: st.session_state["fwd_section_open"] = True
 
-    _r1c1, _r1c2, _r1c3 = st.columns([3, 2, 3])
-    with _r1c1:
-        leg_conv = st.radio("Leg Convention", ["Market","Q/Q","S/S"],
-                            horizontal=True, key="fwd_leg_convention")
-    with _r1c2:
-        show_hm = st.checkbox("Heatmap", value=False, key="show_heatmap")
-    with _r1c3:
-        gen_fwd = st.button("▶ Generate Forward Matrix", key="gen_fwd_matrix", type="primary")
+    has_fwd = ccy in st.session_state.get("fwd_matrix", {}) and \
+              not st.session_state["fwd_matrix"][ccy].empty
 
-    if gen_fwd:
-        _mc = st.session_state.get("config_curves", {}).get(ccy)
-        _mb = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
-        if _mc is None:
-            st.error("No curve — upload config first")
-        else:
-            conv = {"Market":"market","Q/Q":"qq","S/S":"ss"}.get(leg_conv,"market")
-            with st.spinner("Calculating..."):
-                fm = generate_forward_matrix_convention(ccy, _mc, _mb, conv)
-                st.session_state["fwd_matrix"][ccy] = fm
-                st.session_state["fwd_convention"] = conv
-                if _mb is not None:
-                    st.session_state["basis_matrix"][ccy] = generate_basis_matrix(ccy, _mb)
-            st.rerun()
+    _fl = "▼ Hide Forward Swap Rates" if st.session_state["fwd_section_open"] else "▶ Show Forward Swap Rates"
+    if st.button(_fl, key="fwd_toggle"):
+        st.session_state["fwd_section_open"] = not st.session_state["fwd_section_open"]
+        st.rerun()
 
-    has_fwd = ccy in st.session_state.get("fwd_matrix", {}) and               not st.session_state["fwd_matrix"][ccy].empty
+    if st.session_state["fwd_section_open"]:
+        _r1, _r2, _r3, _r4 = st.columns([3, 2, 3, 2])
+        with _r1:
+            leg_conv = st.radio("Leg Convention", ["Market","Q/Q","S/S"],
+                                horizontal=True, key="fwd_leg_convention")
+        with _r2:
+            show_hm = st.checkbox("Heatmap", value=False, key="show_heatmap")
+        with _r3:
+            gen_fwd = st.button("▶ Generate Forward Matrix", key="gen_fwd_matrix",
+                                type="primary", use_container_width=True)
+        with _r4:
+            if has_fwd:
+                st.download_button("⬇ Download", st.session_state["fwd_matrix"][ccy].to_csv(),
+                                   f"{ccy}_fwd_matrix.csv", key="dl_fwd",
+                                   use_container_width=True, type="primary")
 
-    if has_fwd:
-        has_basis = ccy in st.session_state.get("basis_matrix", {})
-        _vo = ["IRS Fwd"] + (["6v3 Basis"] if has_basis else [])
-        _vc, _dc = st.columns([5, 1])
-        with _vc:
-            _rv = st.radio("View", _vo, horizontal=True, key="rate_view_toggle")
-        _disp = st.session_state["fwd_matrix"][ccy] if _rv == "IRS Fwd"                 else st.session_state["basis_matrix"].get(ccy)
-        with _dc:
-            if _disp is not None:
-                st.download_button("⬇", _disp.to_csv(),
-                                   f"{ccy}_fwd_matrix.csv", key="dl_fwd")
-        if _disp is not None:
-            _nc  = [c for c in _disp.columns if c != "Expiry"]
-            _fmt = {c: "{:.4f}" for c in _nc}
-            if show_hm:
-                _cm = "RdYlGn_r" if _rv == "IRS Fwd" else "RdYlGn"
-                st.dataframe(_disp.style.format(_fmt).background_gradient(_cm, axis=None, subset=_nc),
-                             use_container_width=True, height=800)
+        if gen_fwd:
+            _mc = st.session_state.get("config_curves", {}).get(ccy)
+            _mb = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
+            if _mc is None:
+                st.error("No curve — upload config first")
             else:
-                st.dataframe(_disp.style.format(_fmt), use_container_width=True, height=800)
-    else:
-        st.info("Click **▶ Generate Forward Matrix**")
+                conv = {"Market":"market","Q/Q":"qq","S/S":"ss"}.get(leg_conv,"market")
+                with st.spinner("Calculating..."):
+                    fm = generate_forward_matrix_convention(ccy, _mc, _mb, conv)
+                    st.session_state["fwd_matrix"][ccy]   = fm
+                    st.session_state["fwd_convention"]    = conv
+                    if _mb is not None:
+                        st.session_state["basis_matrix"][ccy] = generate_basis_matrix(ccy, _mb)
+                st.rerun()
+
+        if has_fwd:
+            has_basis = ccy in st.session_state.get("basis_matrix", {})
+            _vo = ["IRS Fwd"] + (["6v3 Basis"] if has_basis else [])
+            _rv = st.radio("View", _vo, horizontal=True, key="rate_view_toggle")
+            _disp = st.session_state["fwd_matrix"][ccy] if _rv == "IRS Fwd" \
+                    else st.session_state["basis_matrix"].get(ccy)
+            if _disp is not None:
+                _nc  = [c for c in _disp.columns if c != "Expiry"]
+                _fmt = {c: "{:.4f}" for c in _nc}
+                if show_hm:
+                    _cm = "RdYlGn_r" if _rv == "IRS Fwd" else "RdYlGn"
+                    st.dataframe(_disp.style.format(_fmt).background_gradient(_cm, axis=None, subset=_nc),
+                                 use_container_width=True, height=820)
+                else:
+                    st.dataframe(_disp.style.format(_fmt), use_container_width=True, height=820)
+        else:
+            st.info("Click **▶ Generate Forward Matrix**")
 
     st.markdown("---")
-    st.markdown("#### ATM Vol / Forward Premium / Vega")
 
+    # ── ATM Vol / Forward Premium / Vega (hide/show) ──────────────────────────
     if "atm_prem_matrix" not in st.session_state: st.session_state["atm_prem_matrix"] = {}
+    if "atm_section_open" not in st.session_state: st.session_state["atm_section_open"] = False
 
-    atm_vols, _, _, _, _ = get_ccy_vol_data(ccy)
-    if atm_vols is None:
-        st.info("No ATM vols — upload config first")
-        return
+    _al = "▼ Hide ATM Vol / Premium / Vega" if st.session_state["atm_section_open"] else "▶ Show ATM Vol / Premium / Vega"
+    if st.button(_al, key="atm_toggle"):
+        st.session_state["atm_section_open"] = not st.session_state["atm_section_open"]
+        st.rerun()
 
-    _a1, _a2 = st.columns([2, 4])
-    with _a1:
-        show_atm_hm = st.checkbox("Heatmap", value=False, key="show_atm_heatmap")
-    with _a2:
-        gen_atm = st.button("▶ Generate ATM Matrix", key="gen_atm_matrix", type="primary")
-
-    if gen_atm:
-        _mc = st.session_state.get("config_curves", {}).get(ccy)
-        _mb = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
-        if _mc is None:
-            st.error("No curve — upload config first")
+    if st.session_state["atm_section_open"]:
+        atm_vols, _, _, _, _ = get_ccy_vol_data(ccy)
+        if atm_vols is None:
+            st.info("No ATM vols — upload config first")
         else:
-            with st.spinner("Calculating..."):
-                pm, vm = calculate_atm_premium_matrix(ccy, _mc, atm_vols, _mb)
-                st.session_state["atm_prem_matrix"][ccy] = {"vol": atm_vols, "prem": pm, "vega": vm}
-            st.rerun()
+            has_atm = ccy in st.session_state.get("atm_prem_matrix", {})
 
-    has_atm = ccy in st.session_state.get("atm_prem_matrix", {})
-    if has_atm:
-        _ad = st.session_state["atm_prem_matrix"][ccy]
-        _avc, _adc = st.columns([5, 1])
-        with _avc:
-            _av = st.radio("View", ["ATM Vol (bp)", "Forward Premium (bp)", "Vega ($/1bp 100mm)"],
-                           horizontal=True, key="atm_view_toggle")
-        _adf = {"ATM Vol (bp)": _ad["vol"],
-                "Forward Premium (bp)": _ad["prem"],
-                "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
-        with _adc:
-            st.download_button("⬇", _adf.to_csv(), f"{ccy}_atm_matrix.csv", key="dl_atm")
-        _anc  = [c for c in _adf.columns if c != "Expiry"]
-        _afmt = {c: "{:.2f}" for c in _anc}
-        if show_atm_hm:
-            st.dataframe(_adf.style.format(_afmt).background_gradient("RdYlGn_r", axis=None, subset=_anc),
-                         use_container_width=True, height=800)
-        else:
-            st.dataframe(_adf.style.format(_afmt), use_container_width=True, height=800)
-    else:
-        st.info("Click **▶ Generate ATM Matrix**")
+            _aa1, _aa2, _aa3, _aa4 = st.columns([2, 2, 3, 2])
+            with _aa1:
+                show_atm_hm = st.checkbox("Heatmap", value=False, key="show_atm_heatmap")
+            with _aa2:
+                if has_atm:
+                    _ad = st.session_state["atm_prem_matrix"][ccy]
+                    _av = st.radio("View", ["ATM Vol (bp)", "Forward Premium (bp)", "Vega ($/1bp 100mm)"],
+                                   horizontal=False, key="atm_view_toggle")
+            with _aa3:
+                gen_atm = st.button("▶ Generate ATM Matrix", key="gen_atm_matrix",
+                                    type="primary", use_container_width=True)
+            with _aa4:
+                if has_atm:
+                    _adf0 = {"ATM Vol (bp)": _ad["vol"],
+                             "Forward Premium (bp)": _ad["prem"],
+                             "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
+                    st.download_button("⬇ Download", _adf0.to_csv(),
+                                       f"{ccy}_atm_matrix.csv", key="dl_atm",
+                                       use_container_width=True, type="primary")
+
+            if gen_atm:
+                _mc = st.session_state.get("config_curves", {}).get(ccy)
+                _mb = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
+                if _mc is None:
+                    st.error("No curve — upload config first")
+                else:
+                    with st.spinner("Calculating..."):
+                        pm, vm = calculate_atm_premium_matrix(ccy, _mc, atm_vols, _mb)
+                        st.session_state["atm_prem_matrix"][ccy] = {"vol": atm_vols, "prem": pm, "vega": vm}
+                    st.rerun()
+
+            if has_atm:
+                _adf = {"ATM Vol (bp)": _ad["vol"],
+                        "Forward Premium (bp)": _ad["prem"],
+                        "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
+                _anc  = [c for c in _adf.columns if c != "Expiry"]
+                _afmt = {c: "{:.2f}" for c in _anc}
+                if show_atm_hm:
+                    st.dataframe(_adf.style.format(_afmt).background_gradient("RdYlGn_r", axis=None, subset=_anc),
+                                 use_container_width=True, height=820)
+                else:
+                    st.dataframe(_adf.style.format(_afmt), use_container_width=True, height=820)
+            else:
+                st.info("Click **▶ Generate ATM Matrix**")
+
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -4663,7 +4693,7 @@ def swaptions_tab(vol_mode: str):
     _cb6 = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
     basis_6v3 = _cb6 if _cb6 is not None else get_basis_curve(ccy, "6v3")
     _cbo = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
-    ois_curve = _cbo if _cbo is not None else (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
+    ois_curve = _cbo if _cbo is not None else get_basis_curve(ccy, "ois")
     _cc = st.session_state.get("config_curves", {}).get(ccy)
     curve = _cc if _cc is not None else get_ccy_curve(ccy)
 
@@ -5586,7 +5616,8 @@ def caps_floors_tab(vol_mode: str):
 
     _cc = st.session_state.get("config_curves", {}).get(ccy)
     curve = _cc if _cc is not None else get_ccy_curve(ccy)
-    ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
+    _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+    ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
     if curve is not None:
         # Calculate forward for swap from first_fixing to final_maturity
         swap_tenor = tenor_y - first_fixing_y
@@ -5962,7 +5993,8 @@ def caps_floors_tab(vol_mode: str):
             if br.button("🔔 Generate Swaption Premiums", key="gen_swpt_prem", type="primary"):
                 curve     = get_ccy_curve(ccy)
                 atm       = get_working_atm_surface(ccy)
-                ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
+                _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+                ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
                 if curve is not None and atm is not None:
                     for lbl, exp, tenor, cfs_lbl in [
                         ("3m1y","3m",1.0,"1Y CFS"),("1y1y","1y",1.0,"2Y CFS"),
@@ -6045,7 +6077,8 @@ def caps_floors_tab(vol_mode: str):
             _cfs_tdata = st.session_state.get("cfs_table_data", {})
             _caplet_vc = st.session_state.get("caplet_vol_curve_aud")
             _curve_local = get_ccy_curve(ccy)
-            _ois_tmp = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
+            _ois_tmp_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+            _ois_tmp = _ois_tmp_cb if _ois_tmp_cb is not None else get_basis_curve(ccy, "ois")
             _ois_local = _ois_tmp if (_ois_tmp is not None and not isinstance(_ois_tmp, bool)) else _curve_local
 
             if _cfs_tdata and _curve_local is not None:
@@ -6521,7 +6554,8 @@ def exotics_tab(vol_mode: str):
         return
 
     curve     = get_ccy_curve(ccy)
-    ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
+    _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+    ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
     basis_6v3 = get_basis_curve(ccy, "6v3")
     atm       = get_working_atm_surface(ccy)
     _, a_m, b_m, r_m, n_m = get_ccy_vol_data(ccy)
@@ -8216,7 +8250,8 @@ def vol_surface_editor_tab():
     # Get curve for annuity calculations
     _cc = st.session_state.get("config_curves", {}).get(ccy)
     curve = _cc if _cc is not None else get_ccy_curve(ccy)
-    ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
+    _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+    ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
     
     st.markdown("---")
     
@@ -8555,7 +8590,8 @@ def multi_ccy_tab(vol_mode: str):
     def price_leg(ccy: str) -> Optional[dict]:
         _cc = st.session_state.get("config_curves", {}).get(ccy)
         curve = _cc if _cc is not None else get_ccy_curve(ccy)
-        ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
+        _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+        ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
         atm = get_working_atm_surface(ccy)
         _, a, b, r, n = get_ccy_vol_data(ccy)
         if curve is None or atm is None:
@@ -8779,7 +8815,8 @@ def rv_tab():
 
     ccy = "AUD"
     curve     = get_ccy_curve(ccy)
-    ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
+    _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+    ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
     atm       = get_working_atm_surface(ccy)
     _, a_m, b_m, r_m, n_m = get_ccy_vol_data(ccy)
 
@@ -11049,7 +11086,8 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
     expiries = atm_vols["Expiry"].tolist()
     tenors = [c for c in atm_vols.columns if c != "Expiry"]
 
-    ois_curve = (st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois"))
+    _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+    ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
 
     prem_rows = []
     vega_rows = []
