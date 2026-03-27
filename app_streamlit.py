@@ -4785,20 +4785,10 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
     if not times:
         return 0.0
 
-    def _proj_df(t_val: float) -> float:
-        z = float(np.interp(t_val, curve_x, curve_y))
-        if ccy == "AUD" and basis6v3_x is not None and basis6v3_y is not None:
-            if freq == 0.25 and t_val > 3.0:
-                b = float(np.interp(t_val, basis6v3_x, basis6v3_y)) / 10000.0
-                z = z - b
-            elif freq == 0.5 and t_val <= 3.0:
-                b = float(np.interp(t_val, basis6v3_x, basis6v3_y)) / 10000.0
-                z = z + b
-        return math.exp(-z * t_val)
-
     disc_x = ois_x if ois_x is not None else curve_x
     disc_y = ois_y if ois_y is not None else curve_y
 
+    # Annuity: OIS discounting, no basis adjustment
     prev = t_start
     ann = 0.0
     for ti in times:
@@ -4808,8 +4798,11 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
     if ann <= 0:
         return 0.0
 
-    df_s = _proj_df(t_start)
-    df_e = _proj_df(t_end)
+    # Projection DFs at swap start and end — use plain zero curve, no basis
+    # Basis adjustment only affects floating rate projection within the annuity
+    # not the endpoints used to compute the par rate numerator
+    df_s = math.exp(-float(np.interp(t_start, curve_x, curve_y)) * t_start)
+    df_e = math.exp(-float(np.interp(t_end, curve_x, curve_y)) * t_end)
     return (df_s - df_e) / ann
 
 
