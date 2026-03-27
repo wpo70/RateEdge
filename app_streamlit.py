@@ -3623,7 +3623,9 @@ def curves_tab():
 
     curve     = st.session_state.get("config_curves", {}).get(ccy)
     basis_6v3 = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
+    basis_3v1 = st.session_state.get("config_basis", {}).get(ccy, {}).get("3v1")
     ois_curve = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+    par_rates = st.session_state.get("_irs_par_rates", {}).get(ccy)
 
     if curve is None:
         st.warning("⬆️ Upload RateEdge_Config.xlsx in Vol/Upload tab → Commit All")
@@ -3635,19 +3637,24 @@ def curves_tab():
 
     curve_c = _clean(curve)
     b6c     = _clean(basis_6v3)
+    b3c     = _clean(basis_3v1)
     oisc    = _clean(ois_curve)
 
-    # ── Chart with toggle buttons ─────────────────────────────────────────────
-    _col_ck = st.columns(3)
-    with _col_ck[0]:
-        _show_irs = st.checkbox("IRS Zero", value=True, key="chart_irs")
-    with _col_ck[1]:
-        _show_ois = st.checkbox("OIS", value=True, key="chart_ois") if oisc is not None else False
-    with _col_ck[2]:
-        _show_b6 = st.checkbox("6v3 Basis", value=True, key="chart_b6") if b6c is not None else False
+    # ── Chart toggles ─────────────────────────────────────────────────────────
+    _ck = st.columns(5)
+    with _ck[0]: _show_par = st.checkbox("IRS Par", value=True, key="chart_par")
+    with _ck[1]: _show_irs = st.checkbox("IRS Zero", value=False, key="chart_irs")
+    with _ck[2]: _show_ois = st.checkbox("OIS", value=True, key="chart_ois")
+    with _ck[3]: _show_b6  = st.checkbox("6v3 Basis", value=True, key="chart_b6")
+    with _ck[4]: _show_b3  = st.checkbox("3v1 Basis", value=False, key="chart_b3")
 
     try:
         fig = go.Figure()
+        if _show_par and par_rates is not None:
+            fig.add_trace(go.Scatter(
+                x=par_rates["Tenor"].apply(lambda x: float(x[:-1])),
+                y=par_rates["Par Rate (%)"],
+                mode="lines+markers", name="IRS Par", line=dict(color="#22c55e", width=2)))
         if _show_irs:
             fig.add_trace(go.Scatter(x=curve_c["MaturityY"], y=curve_c["ZeroRatePct"],
                 mode="lines+markers", name="IRS Zero", line=dict(color="#3b82f6", width=2)))
@@ -3658,6 +3665,10 @@ def curves_tab():
             fig.add_trace(go.Scatter(x=b6c["MaturityY"], y=b6c["BasisBp"],
                 mode="lines+markers", name="6v3 Basis (bp)",
                 yaxis="y2", line=dict(color="#ef4444", width=2, dash="dot")))
+        if _show_b3 and b3c is not None and not b3c.empty:
+            fig.add_trace(go.Scatter(x=b3c["MaturityY"], y=b3c["BasisBp"],
+                mode="lines+markers", name="3v1 Basis (bp)",
+                yaxis="y2", line=dict(color="#a855f7", width=2, dash="dot")))
         fig.update_layout(height=380, template="plotly_dark",
             xaxis=dict(title="Maturity (Years)"),
             yaxis=dict(title="Rate (%)"),
@@ -3668,15 +3679,12 @@ def curves_tab():
     except Exception as _e:
         st.warning(f"Chart: {_e}")
 
-    # ── IRS Par Rates table ────────────────────────────────────────────────────
-    with st.expander("IRS Par Rates & Zero Curve", expanded=False):
+    with st.expander("IRS Par Rates & Curve Data", expanded=False):
         _tc1, _tc2, _tc3 = st.columns(3)
         with _tc1:
-            # Show IRS par rates from BBG_Feed if available in session
-            _par = st.session_state.get("_irs_par_rates", {}).get(ccy)
-            if _par is not None:
+            if par_rates is not None:
                 st.caption("IRS Par Rates (%)")
-                st.dataframe(_par, use_container_width=True, hide_index=True)
+                st.dataframe(par_rates, use_container_width=True, hide_index=True)
             else:
                 st.caption("IRS Zero Curve (%)")
                 st.dataframe(curve_c, use_container_width=True, hide_index=True)
@@ -3715,10 +3723,11 @@ def curves_tab():
             gen_fwd = st.button("▶ Generate Forward Matrix", key="gen_fwd_matrix",
                                 type="primary", use_container_width=True)
         with _r4:
-            if has_fwd:
-                st.download_button("⬇ Download", st.session_state["fwd_matrix"][ccy].to_csv(),
-                                   f"{ccy}_fwd_matrix.csv", key="dl_fwd",
-                                   use_container_width=True, type="primary")
+            st.download_button("⬇ Download",
+                               st.session_state["fwd_matrix"][ccy].to_csv() if has_fwd else "",
+                               f"{ccy}_fwd_matrix.csv", key="dl_fwd",
+                               use_container_width=True, type="primary",
+                               disabled=not has_fwd)
 
         if gen_fwd:
             _mc = st.session_state.get("config_curves", {}).get(ccy)
@@ -3772,13 +3781,14 @@ def curves_tab():
             has_atm = ccy in st.session_state.get("atm_prem_matrix", {})
             _av = "ATM Vol (bp)"
 
-            _aa1, _aa2, _aa3, _aa4 = st.columns([2, 3, 3, 3])
+            # View radio | Heatmap | Generate | Download  (same layout as FWD matrix)
+            _aa1, _aa2, _aa3, _aa4 = st.columns([3, 1, 3, 3])
             with _aa1:
-                show_atm_hm = st.checkbox("Heatmap", value=False, key="show_atm_heatmap")
-            with _aa2:
                 if has_atm:
                     _av = st.radio("View", ["ATM Vol (bp)", "Forward Premium (bp)", "Vega ($/1bp 100mm)"],
                                    horizontal=False, key="atm_view_toggle")
+            with _aa2:
+                show_atm_hm = st.checkbox("Heatmap", value=False, key="show_atm_heatmap")
             with _aa3:
                 gen_atm = st.button("▶ Generate ATM Matrix", key="gen_atm_matrix",
                                     type="primary", use_container_width=True)
@@ -3788,9 +3798,11 @@ def curves_tab():
                     _adf0 = {"ATM Vol (bp)": _ad["vol"],
                              "Forward Premium (bp)": _ad["prem"],
                              "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
-                    st.download_button("⬇ Download", _adf0.to_csv(),
-                                       f"{ccy}_atm_matrix.csv", key="dl_atm",
-                                       use_container_width=True, type="primary")
+                st.download_button("⬇ Download",
+                                   _adf0.to_csv() if has_atm else "",
+                                   f"{ccy}_atm_matrix.csv", key="dl_atm",
+                                   use_container_width=True, type="primary",
+                                   disabled=not has_atm)
 
             if gen_atm:
                 _mc = st.session_state.get("config_curves", {}).get(ccy)
