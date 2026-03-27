@@ -3008,8 +3008,8 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
 
         def _irs_df(t: float) -> float:
             """Interpolate from full dfs dict (OIS seed + bootstrapped IRS nodes)."""
-            ts = sorted(known_dfs.keys())
-            dfv = [known_dfs[x] for x in ts]
+            ts = sorted(dfs.keys())
+            dfv = [dfs[x] for x in ts]
             if not ts: return 0.0
             if t <= ts[0]: return dfv[0]
             if t >= ts[-1]:
