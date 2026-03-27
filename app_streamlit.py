@@ -505,10 +505,7 @@ def save_all_session_data(user_id: str):
 
         _debug_msgs = []
         for ccy in SUPPORTED_CURRENCIES:
-            curve = st.session_state.get("curves", {}).get(ccy)
-            if curve is not None:
-                _debug_msgs.append(f"{ccy} curve:{len(curve)}rows")
-                _save("curve", ccy, {"values": curve.to_dict(orient="records")})
+            # Curves NOT saved to DB - always bootstrapped fresh from config upload
 
             vol_data = st.session_state.get("vol_data", {}).get(ccy, {})
             atm = vol_data.get("atm")
@@ -610,24 +607,8 @@ def load_all_session_data(user_id: str) -> int:
         if ccy not in st.session_state["vol_data"]:
             st.session_state["vol_data"][ccy] = {}
         
-        # Load curves
-        if "curve" in configs and ccy in configs["curve"]:
-            try:
-                df = pd.DataFrame(configs["curve"][ccy]["data"]["values"])
-                if "MaturityY" in df.columns:
-                    df["MaturityY"] = pd.to_numeric(df["MaturityY"], errors="coerce")
-                if "ZeroRatePct" in df.columns:
-                    df["ZeroRatePct"] = pd.to_numeric(df["ZeroRatePct"], errors="coerce")
-                df = df.dropna()
-                st.session_state.setdefault("_load_debug", []).append(f"DB loaded {ccy} curve: {len(df)} rows, cols: {list(df.columns)}, first: {df.iloc[0].to_dict() if len(df) > 0 else 'empty'}")
-                st.session_state["curves"][ccy] = df
-                if "config_curves" not in st.session_state:
-                    st.session_state["config_curves"] = {}
-                st.session_state["config_curves"][ccy] = df
-                loaded += 1
-            except Exception as _e:
-                st.session_state.setdefault("_load_errors", []).append(f"curve/{ccy}: {_e}")
-        
+        # Curves NOT loaded from DB - always bootstrapped fresh from config upload
+
         # Load ATM vols into vol_data
         if "atm_vols" in configs and ccy in configs["atm_vols"]:
             try:
@@ -3002,18 +2983,13 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
         if len(bootstrapped) < 10:
             return None
 
-        # Build output grid using FULL dfs dict (OIS seed + IRS bootstrapped nodes)
-        # This gives correct short-end zeros from OIS (0.25Y != 0.5Y)
-
+        # Build output grid using full dfs (OIS seed + IRS nodes) — correct short-end zeros
         def _irs_df(t: float) -> float:
-            """Interpolate from full dfs dict: OIS seed + bootstrapped IRS nodes."""
-            ts = sorted(dfs.keys())
-            dfv = [dfs[x] for x in ts]
+            ts = sorted(dfs.keys()); dfv = [dfs[x] for x in ts]
             if not ts: return 0.0
             if t <= ts[0]: return dfv[0]
             if t >= ts[-1]:
-                z = -math.log(dfv[-1]) / ts[-1]
-                return math.exp(-z * t)
+                z = -math.log(dfv[-1]) / ts[-1]; return math.exp(-z * t)
             for i in range(len(ts) - 1):
                 if ts[i] <= t <= ts[i+1]:
                     w = (t - ts[i]) / (ts[i+1] - ts[i])
@@ -3620,96 +3596,97 @@ def curves_tab():
 
     ccy = st.selectbox("Currency", SUPPORTED_CURRENCIES, key="curve_ccy")
 
-    # Only source: config_curves set by bootstrap on upload
+    # ONLY source: config_curves set by bootstrap on config upload
     curve     = st.session_state.get("config_curves", {}).get(ccy)
     basis_6v3 = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
     ois_curve = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
 
     if curve is None:
-        st.warning("⬆️ Upload RateEdge_Config.xlsx in the Vol/Upload tab → Commit All")
+        st.warning("⬆️ Upload RateEdge_Config.xlsx in Vol/Upload tab → Commit All")
         return
 
     def _clean(df):
         return df.drop(columns=["_source_date"], errors="ignore") if df is not None else None
 
-    curve_c     = _clean(curve)
-    basis_6v3_c = _clean(basis_6v3)
-    ois_c       = _clean(ois_curve)
+    curve_c = _clean(curve)
+    b6c     = _clean(basis_6v3)
+    oisc    = _clean(ois_curve)
 
-    # ── Chart ────────────────────────────────────────────────────────────────
+    # Chart
     try:
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=curve_c["MaturityY"], y=curve_c["ZeroRatePct"],
             mode="lines+markers", name="IRS Zero", line=dict(color="#3b82f6", width=2)))
-        if ois_c is not None and not ois_c.empty:
-            fig.add_trace(go.Scatter(x=ois_c["MaturityY"], y=ois_c["ZeroRatePct"],
+        if oisc is not None and not oisc.empty:
+            fig.add_trace(go.Scatter(x=oisc["MaturityY"], y=oisc["ZeroRatePct"],
                 mode="lines+markers", name="OIS", line=dict(color="#f59e0b", width=2)))
-        if basis_6v3_c is not None and not basis_6v3_c.empty:
-            fig.add_trace(go.Scatter(x=basis_6v3_c["MaturityY"], y=basis_6v3_c["BasisBp"],
+        if b6c is not None and not b6c.empty:
+            fig.add_trace(go.Scatter(x=b6c["MaturityY"], y=b6c["BasisBp"],
                 mode="lines+markers", name="6v3 Basis (bp)",
                 yaxis="y2", line=dict(color="#ef4444", width=2, dash="dot")))
-        fig.update_layout(height=400, template="plotly_dark",
+        fig.update_layout(height=380, template="plotly_dark",
             xaxis=dict(title="Maturity (Years)"),
-            yaxis=dict(title="Rate (%)", side="left"),
+            yaxis=dict(title="Rate (%)"),
             yaxis2=dict(title="Basis (bp)", side="right", overlaying="y", showgrid=False),
             legend=dict(orientation="h", y=1.1),
             margin=dict(l=40, r=40, t=20, b=40))
         st.plotly_chart(fig, use_container_width=True)
-    except Exception as _ce:
-        st.warning(f"Chart error: {_ce}")
+    except Exception as _e:
+        st.warning(f"Chart: {_e}")
 
-    # ── Zero curve table ─────────────────────────────────────────────────────
     with st.expander("IRS Zero Curve & Basis", expanded=False):
-        _tc1, _tc2 = st.columns(2)
-        with _tc1:
+        _c1, _c2 = st.columns(2)
+        with _c1:
             st.dataframe(curve_c, use_container_width=True)
-        with _tc2:
-            if basis_6v3_c is not None and not basis_6v3_c.empty:
-                st.dataframe(basis_6v3_c, use_container_width=True)
+        with _c2:
+            if b6c is not None and not b6c.empty:
+                st.dataframe(b6c, use_container_width=True)
 
     st.markdown("---")
 
-    # ── Forward Rate Matrix ───────────────────────────────────────────────────
+    # Forward Matrix
     if "fwd_matrix"   not in st.session_state: st.session_state["fwd_matrix"]   = {}
     if "basis_matrix" not in st.session_state: st.session_state["basis_matrix"] = {}
 
-    _lc, _hc, _gc = st.columns([3, 2, 3])
-    with _lc:
+    _r1c1, _r1c2, _r1c3 = st.columns([3, 2, 3])
+    with _r1c1:
         leg_conv = st.radio("Leg Convention", ["Market","Q/Q","S/S"],
                             horizontal=True, key="fwd_leg_convention")
-    with _hc:
+    with _r1c2:
         show_hm = st.checkbox("Heatmap", value=False, key="show_heatmap")
-    with _gc:
-        if st.button("Generate Forward Matrix", key="gen_fwd_matrix", type="primary"):
-            _mc = st.session_state.get("config_curves", {}).get(ccy)
-            _mb = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
-            if _mc is None:
-                st.error("No curve — upload config first")
-            else:
-                conv = {"Market":"market","Q/Q":"qq","S/S":"ss"}.get(leg_conv,"market")
-                with st.spinner("Generating..."):
-                    fm = generate_forward_matrix_convention(ccy, _mc, _mb, conv)
-                    st.session_state["fwd_matrix"][ccy] = fm
-                    st.session_state["fwd_convention"] = conv
-                    if _mb is not None:
-                        st.session_state["basis_matrix"][ccy] = generate_basis_matrix(ccy, _mb)
-                st.rerun()
+    with _r1c3:
+        gen_fwd = st.button("▶ Generate Forward Matrix", key="gen_fwd_matrix", type="primary")
+
+    if gen_fwd:
+        _mc = st.session_state.get("config_curves", {}).get(ccy)
+        _mb = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
+        if _mc is None:
+            st.error("No curve — upload config first")
+        else:
+            conv = {"Market":"market","Q/Q":"qq","S/S":"ss"}.get(leg_conv,"market")
+            with st.spinner("Calculating..."):
+                fm = generate_forward_matrix_convention(ccy, _mc, _mb, conv)
+                st.session_state["fwd_matrix"][ccy] = fm
+                st.session_state["fwd_convention"] = conv
+                if _mb is not None:
+                    st.session_state["basis_matrix"][ccy] = generate_basis_matrix(ccy, _mb)
+            st.rerun()
 
     has_fwd = ccy in st.session_state.get("fwd_matrix", {}) and               not st.session_state["fwd_matrix"][ccy].empty
 
     if has_fwd:
         has_basis = ccy in st.session_state.get("basis_matrix", {})
         _vo = ["IRS Fwd"] + (["6v3 Basis"] if has_basis else [])
-        _vc, _dc = st.columns([4, 2])
+        _vc, _dc = st.columns([5, 1])
         with _vc:
             _rv = st.radio("View", _vo, horizontal=True, key="rate_view_toggle")
         _disp = st.session_state["fwd_matrix"][ccy] if _rv == "IRS Fwd"                 else st.session_state["basis_matrix"].get(ccy)
         with _dc:
             if _disp is not None:
-                st.download_button("⬇ Download", _disp.to_csv(),
+                st.download_button("⬇", _disp.to_csv(),
                                    f"{ccy}_fwd_matrix.csv", key="dl_fwd")
         if _disp is not None:
-            _nc = [c for c in _disp.columns if c != "Expiry"]
+            _nc  = [c for c in _disp.columns if c != "Expiry"]
             _fmt = {c: "{:.4f}" for c in _nc}
             if show_hm:
                 _cm = "RdYlGn_r" if _rv == "IRS Fwd" else "RdYlGn"
@@ -3718,9 +3695,8 @@ def curves_tab():
             else:
                 st.dataframe(_disp.style.format(_fmt), use_container_width=True, height=800)
     else:
-        st.info("Click **Generate Forward Matrix**")
+        st.info("Click **▶ Generate Forward Matrix**")
 
-    # ── ATM Vol / Forward Premium / Vega ──────────────────────────────────────
     st.markdown("---")
     st.markdown("#### ATM Vol / Forward Premium / Vega")
 
@@ -3728,28 +3704,30 @@ def curves_tab():
 
     atm_vols, _, _, _, _ = get_ccy_vol_data(ccy)
     if atm_vols is None:
-        st.info("No ATM vols loaded — upload config first")
+        st.info("No ATM vols — upload config first")
         return
 
-    _ahc, _agc = st.columns([2, 4])
-    with _ahc:
+    _a1, _a2 = st.columns([2, 4])
+    with _a1:
         show_atm_hm = st.checkbox("Heatmap", value=False, key="show_atm_heatmap")
-    with _agc:
-        if st.button("Generate ATM Matrix", key="gen_atm_matrix", type="primary"):
-            _mc = st.session_state.get("config_curves", {}).get(ccy)
-            _mb = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
-            if _mc is None:
-                st.error("No curve — upload config first")
-            else:
-                with st.spinner("Generating..."):
-                    pm, vm = calculate_atm_premium_matrix(ccy, _mc, atm_vols, _mb)
-                    st.session_state["atm_prem_matrix"][ccy] = {"vol": atm_vols, "prem": pm, "vega": vm}
-                st.rerun()
+    with _a2:
+        gen_atm = st.button("▶ Generate ATM Matrix", key="gen_atm_matrix", type="primary")
+
+    if gen_atm:
+        _mc = st.session_state.get("config_curves", {}).get(ccy)
+        _mb = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
+        if _mc is None:
+            st.error("No curve — upload config first")
+        else:
+            with st.spinner("Calculating..."):
+                pm, vm = calculate_atm_premium_matrix(ccy, _mc, atm_vols, _mb)
+                st.session_state["atm_prem_matrix"][ccy] = {"vol": atm_vols, "prem": pm, "vega": vm}
+            st.rerun()
 
     has_atm = ccy in st.session_state.get("atm_prem_matrix", {})
     if has_atm:
         _ad = st.session_state["atm_prem_matrix"][ccy]
-        _avc, _adc = st.columns([4, 2])
+        _avc, _adc = st.columns([5, 1])
         with _avc:
             _av = st.radio("View", ["ATM Vol (bp)", "Forward Premium (bp)", "Vega ($/1bp 100mm)"],
                            horizontal=True, key="atm_view_toggle")
@@ -3757,8 +3735,8 @@ def curves_tab():
                 "Forward Premium (bp)": _ad["prem"],
                 "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
         with _adc:
-            st.download_button("⬇ Download", _adf.to_csv(), f"{ccy}_atm_matrix.csv", key="dl_atm")
-        _anc = [c for c in _adf.columns if c != "Expiry"]
+            st.download_button("⬇", _adf.to_csv(), f"{ccy}_atm_matrix.csv", key="dl_atm")
+        _anc  = [c for c in _adf.columns if c != "Expiry"]
         _afmt = {c: "{:.2f}" for c in _anc}
         if show_atm_hm:
             st.dataframe(_adf.style.format(_afmt).background_gradient("RdYlGn_r", axis=None, subset=_anc),
@@ -3766,33 +3744,7 @@ def curves_tab():
         else:
             st.dataframe(_adf.style.format(_afmt), use_container_width=True, height=800)
     else:
-        st.info("Click **Generate ATM Matrix**")
-
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def _load_swap_rates_from_db(floating_rate: str) -> pd.DataFrame:
-    """Load swap rates from Supabase, return wide-format DataFrame indexed by date."""
-    try:
-        conn = get_db_connection()
-        if conn is None:
-            return pd.DataFrame()
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT date, tenor, rate FROM swap_rates WHERE currency=%s AND floating_rate=%s ORDER BY date",
-            ("AUD", floating_rate)
-        )
-        rows = cur.fetchall()
-        conn.close()
-        if not rows:
-            return pd.DataFrame()
-        df = pd.DataFrame(rows, columns=["date", "tenor", "rate"])
-        df["date"] = pd.to_datetime(df["date"])
-        df["rate"] = df["rate"].astype(float)
-        wide = df.pivot_table(index="date", columns="tenor", values="rate", aggfunc="last")
-        return wide.sort_index()
-    except Exception:
-        return pd.DataFrame()
+        st.info("Click **▶ Generate ATM Matrix**")
 
 
 def fwd_analysis_tab():
@@ -4513,11 +4465,10 @@ def fwd_analysis_tab():
             st.plotly_chart(_fig_b6bfly, use_container_width=True)
             _chart_tools(_fig_b6bfly, _b6bfly_active, "b6bfly", "bp")
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: Optional[tuple] = None,
                                      freq_override: Optional[float] = None, convention: str = "market",
                                      ois_tuple: Optional[tuple] = None) -> pd.DataFrame:
-    """Generate forward swap rate matrix - CACHED version. IRS=projection, OIS=discounting."""
+    """Generate forward swap rate matrix. IRS=projection, OIS=discounting."""
 
     expiries = ["1w", "1m", "2m", "3m", "6m", "9m", "1y", "18m", "2y", "3y", "4y", "5y", "6y", "7y", "8y", "9y", "10y", "12y", "15y", "20y", "25y", "30y"]
     tenors = ["1Y", "2Y", "3Y", "4Y", "5Y", "7Y", "10Y", "12Y", "15Y", "20Y", "25Y", "30Y"]
@@ -4593,53 +4544,40 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
                       freq_override: Optional[float] = None,
                       ois_x: Optional[np.ndarray] = None, ois_y: Optional[np.ndarray] = None,
                       basis6v3_x: Optional[np.ndarray] = None, basis6v3_y: Optional[np.ndarray] = None) -> float:
-    """
-    Forward swap rate using proper date-based schedule (mod-fol, Act/365).
-    AUD T+1BD, NZD/USD T+2BD. curve_y already in decimal.
-    """
-    spot_lag_bd = 1 if ccy == "AUD" else 2
-
+    """Year-fraction forward swap rate. curve_y in decimal."""
+    SPOT = 1.0 / 252.0
     if freq_override is not None:
-        months_per = int(round(freq_override * 12))
+        freq = freq_override
     elif ccy == "AUD":
-        months_per = 3 if tenor <= 3 else 6
+        freq = 0.25 if tenor <= 3 else 0.5
     elif ccy == "NZD":
-        months_per = 3 if tenor <= 2 else 6
+        freq = 0.25 if tenor <= 2 else 0.5
     else:
-        months_per = 6
+        freq = 0.5
 
-    freq = months_per / 12.0
-
-    fwd_start = _fwd_start_date(expiry, spot_lag_bd)
-    sched = _build_date_schedule(fwd_start, tenor, months_per)
-
-    if not sched:
+    t_start = expiry + SPOT
+    t_end   = t_start + tenor
+    times = []
+    t = t_start + freq
+    while t <= t_end + 1e-9:
+        times.append(min(t, t_end))
+        t += freq
+    if not times:
         return 0.0
-
-    today = _pricing_date()
-    t_start = _act365(today, fwd_start)
-    t_end = sched[-1][0]
-
-    def _proj_df(t_val: float) -> float:
-        z = float(np.interp(t_val, curve_x, curve_y))
-        if ccy == "AUD" and basis6v3_x is not None and basis6v3_y is not None:
-            if freq == 0.25 and t_val > 3.0:
-                b = float(np.interp(t_val, basis6v3_x, basis6v3_y)) / 10000.0
-                z = z - b
-            elif freq == 0.5 and t_val <= 3.0:
-                b = float(np.interp(t_val, basis6v3_x, basis6v3_y)) / 10000.0
-                z = z + b
-        return math.exp(-z * t_val)
 
     disc_x = ois_x if ois_x is not None else curve_x
     disc_y = ois_y if ois_y is not None else curve_y
 
-    ann = sum(math.exp(-float(np.interp(t, disc_x, disc_y)) * t) * acc for t, acc in sched)
+    prev = t_start; ann = 0.0
+    for ti in times:
+        ann += math.exp(-float(np.interp(ti, disc_x, disc_y)) * ti) * (ti - prev)
+        prev = ti
     if ann <= 0:
         return 0.0
 
-    df_s = _proj_df(t_start)
-    df_e = _proj_df(t_end)
+    # Plain zero curve for start/end DFs — no basis on endpoints
+    df_s = math.exp(-float(np.interp(t_start, curve_x, curve_y)) * t_start)
+    df_e = math.exp(-float(np.interp(t_end,   curve_x, curve_y)) * t_end)
     return (df_s - df_e) / ann
 
 
