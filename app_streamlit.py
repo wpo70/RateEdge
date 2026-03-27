@@ -505,10 +505,8 @@ def save_all_session_data(user_id: str):
 
         _debug_msgs = []
         for ccy in SUPPORTED_CURRENCIES:
-            curve = st.session_state.get("curves", {}).get(ccy)
-            if curve is not None:
-                _debug_msgs.append(f"{ccy} curve:{len(curve)}rows")
-                _save("curve", ccy, {"values": curve.to_dict(orient="records")})
+            # NOTE: Curves are NOT saved to DB - always bootstrapped fresh from config upload
+            # This prevents stale curves from ever contaminating future sessions
 
             vol_data = st.session_state.get("vol_data", {}).get(ccy, {})
             atm = vol_data.get("atm")
@@ -610,24 +608,10 @@ def load_all_session_data(user_id: str) -> int:
         if ccy not in st.session_state["vol_data"]:
             st.session_state["vol_data"][ccy] = {}
         
-        # Load curves
-        if "curve" in configs and ccy in configs["curve"]:
-            try:
-                df = pd.DataFrame(configs["curve"][ccy]["data"]["values"])
-                if "MaturityY" in df.columns:
-                    df["MaturityY"] = pd.to_numeric(df["MaturityY"], errors="coerce")
-                if "ZeroRatePct" in df.columns:
-                    df["ZeroRatePct"] = pd.to_numeric(df["ZeroRatePct"], errors="coerce")
-                df = df.dropna()
-                st.session_state.setdefault("_load_debug", []).append(f"DB loaded {ccy} curve: {len(df)} rows, cols: {list(df.columns)}, first: {df.iloc[0].to_dict() if len(df) > 0 else 'empty'}")
-                st.session_state["curves"][ccy] = df
-                if "config_curves" not in st.session_state:
-                    st.session_state["config_curves"] = {}
-                st.session_state["config_curves"][ccy] = df
-                loaded += 1
-            except Exception as _e:
-                st.session_state.setdefault("_load_errors", []).append(f"curve/{ccy}: {_e}")
-        
+        # NOTE: Curves are NOT loaded from DB on auto-load.
+        # Curves are always bootstrapped fresh from uploaded config (BBG_Feed par rates).
+        # This prevents stale DB curves from contaminating the matrix.
+
         # Load ATM vols into vol_data
         if "atm_vols" in configs and ccy in configs["atm_vols"]:
             try:
