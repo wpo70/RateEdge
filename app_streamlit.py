@@ -505,8 +505,7 @@ def save_all_session_data(user_id: str):
 
         _debug_msgs = []
         for ccy in SUPPORTED_CURRENCIES:
-            # NOTE: Curves are NOT saved to DB - always bootstrapped fresh from config upload
-            # This prevents stale curves from ever contaminating future sessions
+            # Curves NOT saved to DB - always bootstrapped fresh from config upload
 
             vol_data = st.session_state.get("vol_data", {}).get(ccy, {})
             atm = vol_data.get("atm")
@@ -608,9 +607,7 @@ def load_all_session_data(user_id: str) -> int:
         if ccy not in st.session_state["vol_data"]:
             st.session_state["vol_data"][ccy] = {}
         
-        # NOTE: Curves are NOT loaded from DB on auto-load.
-        # Curves are always bootstrapped fresh from uploaded config (BBG_Feed par rates).
-        # This prevents stale DB curves from contaminating the matrix.
+        # Curves not loaded from DB - always bootstrapped from config upload
 
         # Load ATM vols into vol_data
         if "atm_vols" in configs and ccy in configs["atm_vols"]:
@@ -1411,12 +1408,12 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         if ccy == "AUD" and basis_6v3 is not None and not basis_6v3.empty:
             bx = basis_6v3["MaturityY"].to_numpy().astype(float)
             by = basis_6v3["BasisBp"].to_numpy().astype(float) / 10000.0
-            if freq == 0.25 and tenor > 3.0 and t > 3.0:
-                # Q/Q swap spanning into S/S zone: adjust down to 3M BBSW
+            if freq == 0.25 and t > 3.0:
+                # Q/Q swap, S/S part of curve → adjust down to 3M BBSW
                 b = float(np.interp(t, bx, by))
                 z = z - b
-            elif freq == 0.5 and tenor <= 3.0 and t <= 3.0:
-                # S/S swap in Q/Q zone: adjust up to 6M BBSW
+            elif freq == 0.5 and t <= 3.0:
+                # S/S swap, Q/Q part of curve → adjust up to 6M BBSW
                 b = float(np.interp(t, bx, by))
                 z = z + b
         return math.exp(-z * t)
@@ -2986,24 +2983,24 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
         if len(bootstrapped) < 10:
             return None
 
-        # Build output grid: use full dfs (OIS+IRS) for interpolation
-        # This gives correct short-end zeros (0.25Y, 0.5Y) from OIS rates
-        # rather than wrong backward extrapolation from 0.5Y IRS node
+        # Build output grid using ONLY bootstrapped IRS nodes
+        irs_times = [bootstrapped[t][0] for t in sorted(bootstrapped)]
+        irs_dfs   = [bootstrapped[t][1] for t in sorted(bootstrapped)]
 
         def _irs_df(t: float) -> float:
-            """Interpolate from full dfs dict (OIS seed + bootstrapped IRS nodes)."""
-            ts = sorted(dfs.keys())
-            dfv = [dfs[x] for x in ts]
-            if not ts: return 0.0
-            if t <= ts[0]: return dfv[0]
-            if t >= ts[-1]:
-                z = -math.log(dfv[-1]) / ts[-1]
+            """Interpolate from bootstrapped IRS nodes only (not OIS seed nodes)."""
+            if not irs_times: return 0.0
+            if t <= irs_times[0]:
+                z0 = -math.log(irs_dfs[0]) / irs_times[0]
+                return math.exp(-z0 * t)
+            if t >= irs_times[-1]:
+                z = -math.log(irs_dfs[-1]) / irs_times[-1]
                 return math.exp(-z * t)
-            for i in range(len(ts) - 1):
-                if ts[i] <= t <= ts[i+1]:
-                    w = (t - ts[i]) / (ts[i+1] - ts[i])
-                    return math.exp((1-w)*math.log(dfv[i]) + w*math.log(dfv[i+1]))
-            return dfv[-1]
+            for i in range(len(irs_times) - 1):
+                if irs_times[i] <= t <= irs_times[i+1]:
+                    w = (t - irs_times[i]) / (irs_times[i+1] - irs_times[i])
+                    return math.exp((1-w)*math.log(irs_dfs[i]) + w*math.log(irs_dfs[i+1]))
+            return irs_dfs[-1]
 
         MATURITIES = [0.25, 0.50, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0,
                       7.0, 8.0, 9.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0]
@@ -3699,9 +3696,7 @@ def curves_tab():
     else:
         _cfg_curve = st.session_state.get("config_curves", {}).get(ccy)
         _cfg_basis = st.session_state.get("config_basis", {}).get(ccy, {})
-        # ONLY use config_curves - never fall back to session curves from DB
-        # config_curves is set exclusively by uploading RateEdge_Config.xlsx
-        curve    = _cfg_curve
+        curve    = _cfg_curve  # ONLY from config upload, never from DB
         _b6 = _cfg_basis.get("6v3"); basis_6v3 = _b6 if (_b6 is not None and not isinstance(_b6, bool)) else get_basis_curve(ccy, "6v3")
         _b3 = _cfg_basis.get("3v1"); basis_3v1 = _b3 if (_b3 is not None and not isinstance(_b3, bool)) else get_basis_curve(ccy, "3v1")
         _bo = _cfg_basis.get("ois");  ois_curve = _bo if (_bo is not None and not isinstance(_bo, bool)) else get_basis_curve(ccy, "ois")
@@ -4680,12 +4675,10 @@ def fwd_analysis_tab():
             st.plotly_chart(_fig_b6bfly, use_container_width=True)
             _chart_tools(_fig_b6bfly, _b6bfly_active, "b6bfly", "bp")
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: Optional[tuple] = None,
                                      freq_override: Optional[float] = None, convention: str = "market",
-                                     ois_tuple: Optional[tuple] = None,
-                                     _cache_ver: str = "v2703o") -> pd.DataFrame:
-    """Generate forward swap rate matrix - CACHED version. IRS=projection, OIS=discounting."""
+                                     ois_tuple: Optional[tuple] = None) -> pd.DataFrame:
+    """Generate forward swap rate matrix. IRS=projection, OIS=discounting."""
 
     expiries = ["1w", "1m", "2m", "3m", "6m", "9m", "1y", "18m", "2y", "3y", "4y", "5y", "6y", "7y", "8y", "9y", "10y", "12y", "15y", "20y", "25y", "30y"]
     tenors = ["1Y", "2Y", "3Y", "4Y", "5Y", "7Y", "10Y", "12Y", "15Y", "20Y", "25Y", "30Y"]
@@ -4791,13 +4784,10 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
     def _proj_df(t_val: float) -> float:
         z = float(np.interp(t_val, curve_x, curve_y))
         if ccy == "AUD" and basis6v3_x is not None and basis6v3_y is not None:
-            # Basis adjustment only when swap TENOR crosses the Q/Q->S/S boundary
-            # Q/Q swap with tenor>3Y: cashflows in S/S zone need basis subtracted
-            # S/S swap with tenor<=3Y: cashflows in Q/Q zone need basis added
-            if freq == 0.25 and tenor > 3.0 and t_val > 3.0:
+            if freq == 0.25 and t_val > 3.0:
                 b = float(np.interp(t_val, basis6v3_x, basis6v3_y)) / 10000.0
                 z = z - b
-            elif freq == 0.5 and tenor <= 3.0 and t_val <= 3.0:
+            elif freq == 0.5 and t_val <= 3.0:
                 b = float(np.interp(t_val, basis6v3_x, basis6v3_y)) / 10000.0
                 z = z + b
         return math.exp(-z * t_val)
@@ -11208,7 +11198,6 @@ def generate_basis_matrix(ccy: str, basis_6v3: pd.DataFrame) -> pd.DataFrame:
     return _generate_basis_matrix_cached(ccy, basis_tuple)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def _generate_basis_matrix_cached(ccy: str, basis_tuple: tuple) -> pd.DataFrame:
     """Generate basis matrix interpolated across expiry/tenor grid - CACHED"""
     expiries = ["1w", "1m", "2m", "3m", "6m", "9m", "1y", "18m", "2y", "3y", "4y", "5y", "6y", "7y", "8y", "9y", "10y", "12y", "15y", "20y", "25y", "30y"]
