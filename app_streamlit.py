@@ -4683,7 +4683,8 @@ def fwd_analysis_tab():
 @st.cache_data(ttl=3600, show_spinner=False)
 def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: Optional[tuple] = None,
                                      freq_override: Optional[float] = None, convention: str = "market",
-                                     ois_tuple: Optional[tuple] = None) -> pd.DataFrame:
+                                     ois_tuple: Optional[tuple] = None,
+                                     _cache_ver: str = "v2703o") -> pd.DataFrame:
     """Generate forward swap rate matrix - CACHED version. IRS=projection, OIS=discounting."""
 
     expiries = ["1w", "1m", "2m", "3m", "6m", "9m", "1y", "18m", "2y", "3y", "4y", "5y", "6y", "7y", "8y", "9y", "10y", "12y", "15y", "20y", "25y", "30y"]
