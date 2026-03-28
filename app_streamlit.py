@@ -3490,22 +3490,54 @@ def vol_config_tab():
         st.caption(" Database: Connected")
     else:
         st.caption(" Database: Not configured")
-    
+
+    # Pull latest vol snapshot label per currency from vol_history
+    _latest_snaps = {}
+    if HAS_POSTGRES and get_db_url():
+        try:
+            _sc = get_db_connection()
+            if _sc:
+                _scur = _sc.cursor()
+                _scur.execute("""
+                    SELECT DISTINCT ON (currency) currency, snapshot_date, label
+                    FROM vol_history
+                    ORDER BY currency, snapshot_date DESC
+                """)
+                for _row in _scur.fetchall():
+                    _latest_snaps[_row[0]] = {"date": str(_row[1])[:16], "label": _row[2]}
+                _scur.close()
+                _sc.close()
+        except Exception:
+            pass
+
     for ccy in SUPPORTED_CURRENCIES:
         atm, a, b, r, n = get_ccy_vol_data(ccy)
         _cc = st.session_state.get("config_curves", {}).get(ccy)
         curve = _cc if _cc is not None else get_ccy_curve(ccy)
-        
-        atm_status = "✅" if atm is not None else "Not loaded"
+
+        # ATM status — show latest snapshot label if available
+        _snap = _latest_snaps.get(ccy, {})
+        if atm is not None:
+            _atm_rows = atm.shape[0] if hasattr(atm, 'shape') else "?"
+            _atm_cols = atm.shape[1] if hasattr(atm, 'shape') else "?"
+            atm_status = f"✅ {_atm_rows}×{_atm_cols}"
+            if _snap:
+                atm_time = f"{_snap.get('label','')}  |  {_snap.get('date','')}"
+            else:
+                atm_time = get_timestamp_str("atm", ccy)
+        else:
+            atm_status = "Not loaded"
+            atm_time = ""
+
+        # Curve status — source date from DB load
         if curve is not None and len(curve) > 0:
             _src_date = curve["_source_date"].iloc[0] if "_source_date" in curve.columns else ""
-            curve_status = f"✅ {len(curve)} pts" + (f" — {_src_date}" if _src_date else "")
+            curve_status = f"✅ {len(curve)} pts"
+            curve_time = f"Supabase  |  {_src_date}" if _src_date else get_timestamp_str("curves", ccy)
         else:
             curve_status = "Not loaded"
-        
-        atm_time = get_timestamp_str("atm", ccy)
-        curve_time = get_timestamp_str("curves", ccy)
-        
+            curve_time = ""
+
         st.markdown(
             f"""
             <div style="background:{card_bg};border:1px solid {border_color};border-radius:10px;padding:1rem;margin:0.5rem 0;">
@@ -3514,7 +3546,7 @@ def vol_config_tab():
                 </div>
                 <table style="width:100%;color:{text_color};font-size:0.9rem;">
                     <tr>
-                        <td style="padding:0.25rem 0;">ATM Surface</td>
+                        <td style="padding:0.25rem 0;width:120px;">ATM Surface</td>
                         <td style="padding:0.25rem 0;">{atm_status}</td>
                         <td style="padding:0.25rem 0;color:{muted_color};font-size:0.75rem;">{atm_time}</td>
                     </tr>
