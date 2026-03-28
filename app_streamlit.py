@@ -505,8 +505,7 @@ def save_all_session_data(user_id: str):
 
         _debug_msgs = []
         for ccy in SUPPORTED_CURRENCIES:
-            # Curves NOT saved to DB - always bootstrapped fresh from config upload
-
+            # Curves saved to swap_rates on upload (see vol_config_tab commit block)
             vol_data = st.session_state.get("vol_data", {}).get(ccy, {})
             atm = vol_data.get("atm")
             if atm is not None:
@@ -607,7 +606,82 @@ def load_all_session_data(user_id: str) -> int:
         if ccy not in st.session_state["vol_data"]:
             st.session_state["vol_data"][ccy] = {}
         
-        # Curves NOT loaded from DB - always bootstrapped fresh from config upload
+        # Auto-load curves from swap_rates (most recent date available per currency)
+        try:
+            if ccy == "AUD":
+                # AUD is dual-curve: 3M BBSW for <=3Y (Q/Q), 6M BBSW for >=4Y (S/S)
+                _df_3m = _load_curve_from_db_latest("3M BBSW", "AUD")
+                _df_6m = _load_curve_from_db_latest("6M BBSW", "AUD")
+                _aud_parts = []
+                if _df_3m is not None and len(_df_3m) > 0:
+                    _short = _df_3m[_df_3m["MaturityY"] <= 3.0].copy()
+                    if len(_short) > 0:
+                        _aud_parts.append(_short)
+                if _df_6m is not None and len(_df_6m) > 0:
+                    _long = _df_6m[_df_6m["MaturityY"] >= 4.0].copy()
+                    if len(_long) > 0:
+                        _aud_parts.append(_long)
+                if _aud_parts:
+                    import pandas as _pd2
+                    _aud_curve = _pd2.concat(_aud_parts).sort_values("MaturityY").reset_index(drop=True)
+                    set_ccy_curve("AUD", _aud_curve)
+                    if "config_curves" not in st.session_state:
+                        st.session_state["config_curves"] = {}
+                    st.session_state["config_curves"]["AUD"] = _aud_curve
+                    _src3 = _df_3m["_source_date"].iloc[0] if _df_3m is not None and "_source_date" in _df_3m.columns else "?"
+                    st.session_state.setdefault("_load_debug", []).append(
+                        f"AUD curve: 3M BBSW ≤3Y + 6M BBSW ≥4Y ({len(_aud_curve)} pts, {_src3})"
+                    )
+                    loaded += 1
+                # AUD OIS (AONIA)
+                _df_ois = _load_curve_from_db_latest("AONIA", "AUD")
+                if _df_ois is not None and len(_df_ois) > 0:
+                    if "AUD" not in st.session_state["basis_curves"]:
+                        st.session_state["basis_curves"]["AUD"] = {}
+                    st.session_state["basis_curves"]["AUD"]["ois"] = _df_ois
+                    if "config_basis" not in st.session_state:
+                        st.session_state["config_basis"] = {}
+                    if "AUD" not in st.session_state["config_basis"]:
+                        st.session_state["config_basis"]["AUD"] = {}
+                    st.session_state["config_basis"]["AUD"]["ois"] = _df_ois
+
+            elif ccy == "NZD":
+                _df_bkbm = _load_curve_from_db_latest("3M BKBM", "NZD")
+                if _df_bkbm is not None and len(_df_bkbm) >= 3:
+                    set_ccy_curve("NZD", _df_bkbm)
+                    if "config_curves" not in st.session_state:
+                        st.session_state["config_curves"] = {}
+                    st.session_state["config_curves"]["NZD"] = _df_bkbm
+                    _src = _df_bkbm["_source_date"].iloc[0] if "_source_date" in _df_bkbm.columns else "?"
+                    st.session_state.setdefault("_load_debug", []).append(
+                        f"NZD curve: 3M BKBM ({len(_df_bkbm)} pts, {_src})"
+                    )
+                    loaded += 1
+                _df_nzonia = _load_curve_from_db_latest("NZONIA", "NZD")
+                if _df_nzonia is not None and len(_df_nzonia) > 0:
+                    if "NZD" not in st.session_state["basis_curves"]:
+                        st.session_state["basis_curves"]["NZD"] = {}
+                    st.session_state["basis_curves"]["NZD"]["ois"] = _df_nzonia
+                    if "config_basis" not in st.session_state:
+                        st.session_state["config_basis"] = {}
+                    if "NZD" not in st.session_state["config_basis"]:
+                        st.session_state["config_basis"]["NZD"] = {}
+                    st.session_state["config_basis"]["NZD"]["ois"] = _df_nzonia
+
+            elif ccy == "USD":
+                _df_sofr = _load_curve_from_db_latest("SOFR", "USD")
+                if _df_sofr is not None and len(_df_sofr) >= 3:
+                    set_ccy_curve("USD", _df_sofr)
+                    if "config_curves" not in st.session_state:
+                        st.session_state["config_curves"] = {}
+                    st.session_state["config_curves"]["USD"] = _df_sofr
+                    _src = _df_sofr["_source_date"].iloc[0] if "_source_date" in _df_sofr.columns else "?"
+                    st.session_state.setdefault("_load_debug", []).append(
+                        f"USD curve: SOFR ({len(_df_sofr)} pts, {_src})"
+                    )
+                    loaded += 1
+        except Exception:
+            pass
 
         # Load ATM vols into vol_data
         if "atm_vols" in configs and ccy in configs["atm_vols"]:
@@ -3353,6 +3427,53 @@ def vol_config_tab():
                         load_user_config.clear()
                     except Exception as _e:
                         st.warning(f"Auto-save failed: {_e}")
+
+                # Save uploaded curves to swap_rates (AUD 6M BBSW/3M BBSW/AONIA, NZD 3M BKBM/NZONIA, USD SOFR)
+                if HAS_POSTGRES and is_admin():
+                    try:
+                        import datetime as _dt
+                        _today = str(_dt.date.today())
+                        _conn = get_db_connection()
+                        if _conn:
+                            _cur = _conn.cursor()
+                            _swap_rows_saved = 0
+                            _curve_saves = [
+                                ("AUD", "6M BBSW", None),
+                                ("AUD", "3M BBSW", None),
+                                ("AUD", "AONIA",   "ois"),
+                                ("NZD", "3M BKBM", None),
+                                ("NZD", "NZONIA",  "ois"),
+                                ("USD", "SOFR",    None),
+                            ]
+                            for _ccy, _fr, _basis_type in _curve_saves:
+                                if _basis_type:
+                                    _cdf = st.session_state.get("config_basis", {}).get(_ccy, {}).get(_basis_type)
+                                else:
+                                    _cdf = st.session_state.get("config_curves", {}).get(_ccy)
+                                if _cdf is None or len(_cdf) == 0:
+                                    continue
+                                for _, _row in _cdf.iterrows():
+                                    _mat = float(_row.get("MaturityY", 0))
+                                    _rate = float(_row.get("ZeroRatePct", 0))
+                                    _months = round(_mat * 12)
+                                    if _mat < 1.0:
+                                        _tenor = f"{_months}M"
+                                    else:
+                                        _tenor = f"{int(round(_mat))}Y"
+                                    _cur.execute("""
+                                        INSERT INTO swap_rates (date, currency, tenor, floating_rate, rate)
+                                        VALUES (%s, %s, %s, %s, %s)
+                                        ON CONFLICT (date, currency, tenor, floating_rate) DO NOTHING
+                                    """, (_today, _ccy, _tenor, _fr, _rate))
+                                    _swap_rows_saved += 1
+                            _conn.commit()
+                            _cur.close()
+                            _conn.close()
+                            _load_curve_from_db_latest.clear()
+                            if _swap_rows_saved > 0:
+                                st.success(f"✅ Saved {_swap_rows_saved} curve points to swap_rates ({_today})")
+                    except Exception as _se:
+                        st.warning(f"Curve save to swap_rates failed: {_se}")
             else:
                 st.warning("No matching data found in file for selected option.")
     
@@ -11794,7 +11915,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v28</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v2803a</div>
             </div>
             """,
             unsafe_allow_html=True,
