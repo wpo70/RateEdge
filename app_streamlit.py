@@ -3480,6 +3480,11 @@ def vol_config_tab():
     st.markdown("---")
     st.markdown("#### Currently Loaded Status")
     
+    # Show auto-load result if present
+    _auto_msg = st.session_state.pop("_auto_load_msg", None)
+    if _auto_msg:
+        st.info(_auto_msg)
+
     # Show database status
     if HAS_POSTGRES and get_db_url():
         st.caption(" Database: Connected")
@@ -3492,7 +3497,11 @@ def vol_config_tab():
         curve = _cc if _cc is not None else get_ccy_curve(ccy)
         
         atm_status = "✅" if atm is not None else "Not loaded"
-        curve_status = "✅" if curve is not None else "Not loaded"
+        if curve is not None and len(curve) > 0:
+            _src_date = curve["_source_date"].iloc[0] if "_source_date" in curve.columns else ""
+            curve_status = f"✅ {len(curve)} pts" + (f" — {_src_date}" if _src_date else "")
+        else:
+            curve_status = "Not loaded"
         
         atm_time = get_timestamp_str("atm", ccy)
         curve_time = get_timestamp_str("curves", ccy)
@@ -11885,8 +11894,7 @@ def main():
     )
     init_session()
     
-    # Auto-load disabled — upload config manually via Vol/Upload tab
-    # Role check only (no curve/vol data loaded from DB automatically)
+    # Auto-load curves + vols from DB on first load after login
     if HAS_POSTGRES and get_db_url() and not st.session_state.get("db_auto_loaded", False):
         user_id = st.session_state.get("username", "default")
         if user_id and user_id != "default":
@@ -11905,6 +11913,13 @@ def main():
             except Exception:
                 if user_id in _ADMIN_EMAILS:
                     st.session_state["user_role"] = "admin"
+            # Auto-load all session data (curves + vols + SABR + basis) from Supabase
+            try:
+                _auto_loaded = load_all_session_data(user_id)
+                if _auto_loaded > 0:
+                    st.session_state["_auto_load_msg"] = f"✅ Auto-loaded {_auto_loaded} configs from database"
+            except Exception as _ale:
+                st.session_state["_auto_load_msg"] = f"⚠️ Auto-load failed: {_ale}"
             st.session_state["db_auto_loaded"] = True
 
     # Sidebar for settings
@@ -11915,7 +11930,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v2803a</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v2803b</div>
             </div>
             """,
             unsafe_allow_html=True,
