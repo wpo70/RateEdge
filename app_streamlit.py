@@ -3010,8 +3010,9 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
                 if _re.search(r"(?<![0-9])" + _re.escape(k.lower()), ll):
                     par_ss[v] = mid
             for k, v in OIS_MAP.items():
-                if _re.search(r"(?<![0-9])" + _re.escape(k.lower()), ll):
-                    ois_rates[v] = mid
+                if v not in ois_rates:  # take FIRST occurrence only — prevents USD OIS rows overwriting AUD AONIA
+                    if _re.search(r"(?<![0-9])" + _re.escape(k.lower()), ll):
+                        ois_rates[v] = mid
 
         if len(par_qq) < 3 or len(par_ss) < 6:
             return None
@@ -3087,6 +3088,86 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
             if "config_basis" not in _st.session_state: _st.session_state["config_basis"] = {}
             if "_irs_par_rates" not in _st.session_state: _st.session_state["_irs_par_rates"] = {}
             _st.session_state["_irs_par_rates"]["AUD"] = pd.DataFrame(_par_rows)
+            # Store raw QQ/SS dicts
+            _st.session_state["_aud_par_qq"] = par_qq
+            _st.session_state["_aud_par_ss"] = par_ss
+
+            # Build and store PURE QQ and SS zero curves for matrix generation.
+            # Pure QQ: <=3Y direct 3M BBSW, >=4Y = (SS par - basis) bootstrapped at Q/Q freq.
+            # Pure SS: >=4Y direct 6M BBSW, <=3Y = (QQ par + basis) bootstrapped at S/S freq.
+            # Using separate curves avoids the blended-curve basis error on 4y+ Q/Q forwards.
+            try:
+                _basis_6v3 = _st.session_state.get("config_basis", {}).get("AUD", {}).get("6v3")
+                _bx = _by = None
+                if _basis_6v3 is not None and not _basis_6v3.empty:
+                    _bx = _basis_6v3["MaturityY"].to_numpy().astype(float)
+                    _by = _basis_6v3["BasisBp"].to_numpy().astype(float)
+                def _basis_at(t):
+                    if _bx is None: return 0.0
+                    return float(np.interp(t, _bx, _by))
+
+                def _build_pure_zero(par_inputs, all_qq):
+                    """Bootstrap a zero curve from par_inputs {tenor: rate_pct}, all at same freq."""
+                    _dfs = {0.0: 1.0}
+                    for _t, _r in sorted(ois_rates.items()):
+                        _dfs[_t] = math.exp(-_r / 100.0 * _t)
+                    def _dfi(t):
+                        _ts = sorted(_dfs.keys()); _dfv = [_dfs[x] for x in _ts]
+                        if t <= _ts[0]: return _dfv[0]
+                        if t >= _ts[-1]:
+                            _z = -math.log(_dfv[-1]) / _ts[-1]; return math.exp(-_z * t)
+                        for _i in range(len(_ts) - 1):
+                            if _ts[_i] <= t <= _ts[_i+1]:
+                                _w = (t - _ts[_i]) / (_ts[_i+1] - _ts[_i])
+                                return math.exp((1-_w)*math.log(_dfv[_i]) + _w*math.log(_dfv[_i+1]))
+                        return _dfv[-1]
+                    _freq = 0.25 if all_qq else 0.50
+                    for _tenor in sorted(par_inputs.keys()):
+                        _c = par_inputs[_tenor] / 100.0
+                        _swap_end = SPOT + _tenor
+                        _times = []; _t = SPOT + _freq
+                        while _t <= _swap_end + 1e-9:
+                            _times.append(round(min(_t, _swap_end), 8)); _t += _freq
+                        if not _times: continue
+                        _ann = sum(_dfi(_ti) * _freq for _ti in _times[:-1])
+                        _df_end = (_dfi(SPOT) - _c * _ann) / (1.0 + _c * _freq)
+                        if _df_end > 0 and not math.isnan(_df_end):
+                            _dfs[_swap_end] = _df_end
+                    _MATS = [0.25,0.5,0.75,1.0,1.5,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,12.0,15.0,20.0,25.0,30.0]
+                    _zc = {}
+                    for _m in _MATS:
+                        _d = _dfi(_m)
+                        if _d > 0 and not math.isnan(_d):
+                            _zc[_m] = -math.log(_d) / _m * 100
+                    return _zc
+
+                # Pure QQ par inputs: <=3Y direct, >=4Y = SS - basis
+                _par_qq_full = dict(par_qq)
+                for _t, _r in par_ss.items(): _par_qq_full[_t] = _r - _basis_at(_t) / 100.0
+                # Pure SS par inputs: >=4Y direct, <=3Y = QQ + basis
+                _par_ss_full = dict(par_ss)
+                for _t, _r in par_qq.items(): _par_ss_full[_t] = _r + _basis_at(_t) / 100.0
+
+                _st.session_state["_aud_zc_qq"] = _build_pure_zero(_par_qq_full, all_qq=True)
+                _st.session_state["_aud_zc_ss"] = _build_pure_zero(_par_ss_full, all_qq=False)
+            except Exception as _zce:
+                pass
+            # Bootstrap sanity check: flag any par rate >100bp from its neighbour.
+            # Catches BBG_Feed column-read errors before they corrupt the zero curve.
+            _all_par = sorted(list(par_qq.items()) + list(par_ss.items()))
+            _boot_warnings = []
+            for _i in range(1, len(_all_par)):
+                _t0, _r0 = _all_par[_i-1]
+                _t1, _r1 = _all_par[_i]
+                if abs(_r1 - _r0) > 1.0:  # >100bp jump between adjacent par rates
+                    _boot_warnings.append(
+                        f"Par rate spike: {_t0}Y={_r0:.4f}% -> {_t1}Y={_r1:.4f}% "
+                        f"(delta={abs(_r1-_r0)*100:.1f}bp) — check column E in BBG_Feed"
+                    )
+            if _boot_warnings:
+                _st.session_state["_bootstrap_warnings"] = _boot_warnings
+            else:
+                _st.session_state.pop("_bootstrap_warnings", None)
         except Exception:
             pass
 
@@ -3360,7 +3441,6 @@ def vol_config_tab():
                         st.success(" Cleared all database configs. Now upload Excel and Save.")
                     except Exception as e:
                         st.error(f"Clear failed: {e}")
-        with col_db3:
             st.caption(" Database connected")
     
     st.markdown("---")
@@ -3416,6 +3496,15 @@ def vol_config_tab():
                         z1 = float(_z1.iloc[0]) if len(_z1) else 0
                         _cdebug.append(f"{_c}:{len(_cv)}rows 0.25Y={z025:.4f}% 1Y={z1:.4f}%")
                 st.success(f" Loaded: {', '.join(msgs)}" + (f" | {' | '.join(_cdebug)}" if _cdebug else " | NO CURVES"))
+                # Show bootstrap warnings immediately after commit
+                _bwarn = st.session_state.get("_bootstrap_warnings", [])
+                for _bw in _bwarn:
+                    st.error(f"🔴 BOOTSTRAP ERROR — {_bw}")
+                # Show AUD par rates parsed from BBG_Feed for visual confirmation
+                _aud_par = st.session_state.get("_irs_par_rates", {}).get("AUD")
+                if _aud_par is not None and not _aud_par.empty:
+                    st.caption("AUD par rates read from BBG_Feed (verify these are correct before using the forward matrix):")
+                    st.dataframe(_aud_par.set_index("Tenor").T, use_container_width=True)
                 # Auto-save to DB so it persists across sessions
                 if HAS_POSTGRES and is_admin():
                     try:
@@ -3445,6 +3534,7 @@ def vol_config_tab():
                                 ("NZD", "NZONIA",  "ois"),
                                 ("USD", "SOFR",    None),
                             ]
+                            _commit_sanity_warns = []
                             for _ccy, _fr, _basis_type in _curve_saves:
                                 if _basis_type:
                                     _cdf = st.session_state.get("config_basis", {}).get(_ccy, {}).get(_basis_type)
@@ -3452,6 +3542,8 @@ def vol_config_tab():
                                     _cdf = st.session_state.get("config_curves", {}).get(_ccy)
                                 if _cdf is None or len(_cdf) == 0:
                                     continue
+                                # Build rate dict for sanity check before INSERT
+                                _pre_check = {}
                                 for _, _row in _cdf.iterrows():
                                     _mat = float(_row.get("MaturityY", 0))
                                     _rate = float(_row.get("ZeroRatePct", 0))
@@ -3460,12 +3552,20 @@ def vol_config_tab():
                                         _tenor = f"{_months}M"
                                     else:
                                         _tenor = f"{int(round(_mat))}Y"
+                                    _pre_check[_tenor] = _rate
+                                _sw = check_swap_rates_sanity(_pre_check, _fr, _ccy)
+                                _commit_sanity_warns.extend(_sw)
+                                # INSERT to DB
+                                for _tenor, _rate in _pre_check.items():
                                     _cur.execute("""
                                         INSERT INTO swap_rates (date, currency, tenor, floating_rate, rate)
                                         VALUES (%s, %s, %s, %s, %s)
                                         ON CONFLICT (date, currency, tenor, floating_rate) DO NOTHING
                                     """, (_today, _ccy, _tenor, _fr, _rate))
                                     _swap_rows_saved += 1
+                            # Show commit sanity warnings BEFORE success message
+                            for _csw in _commit_sanity_warns:
+                                st.error(f"🔴 COMMIT SANITY — {_csw}")
                             _conn.commit()
                             _cur.close()
                             _conn.close()
@@ -3936,6 +4036,43 @@ def curves_tab():
 
     st.markdown("---")
 
+    # ── Swap Rates Validator ───────────────────────────────────────────────────
+    if st.session_state.get("_swap_load_warnings"):
+        for _slw in st.session_state["_swap_load_warnings"]:
+            st.error(_slw)
+        if st.button("Clear swap rate warnings", key="clear_swap_warns"):
+            st.session_state.pop("_swap_load_warnings", None)
+            st.rerun()
+
+    if st.button("▶ Show Swap Rate Validator", key="swap_validator_toggle") or st.session_state.get("_swap_validator_open"):
+        st.session_state["_swap_validator_open"] = True
+        from datetime import date as _svdate
+        _sv_col1, _sv_col2, _sv_col3 = st.columns([2, 2, 2])
+        with _sv_col1:
+            _sv_date = st.date_input("Date to check", value=_svdate.today(), key="swap_val_date")
+        with _sv_col2:
+            _sv_fr = st.selectbox("Floating Rate", ["3M BBSW", "6M BBSW", "AONIA", "3M BKBM", "NZONIA", "SOFR"], key="swap_val_fr")
+        with _sv_col3:
+            if st.button("▶ Run Check", key="run_swap_check", type="primary"):
+                _load_swap_rates_from_db.clear()
+                _sv_df = _load_swap_rates_from_db(_sv_fr, str(_sv_date))
+                if _sv_df.empty:
+                    st.warning(f"No data found for {_sv_fr} on {_sv_date} (or nearby dates)")
+                else:
+                    _sv_dict = _sv_df["rate"].to_dict() if "rate" in _sv_df.columns else _sv_df.iloc[:,0].to_dict()
+                    _sv_warns = check_swap_rates_sanity(_sv_dict, _sv_fr, ccy)
+                    if _sv_warns:
+                        for _svw in _sv_warns:
+                            st.error(_svw)
+                    else:
+                        st.success(f"✅ {_sv_fr} clean on {_sv_date}")
+                    st.dataframe(_sv_df, use_container_width=True)
+        if st.button("✕ Close Validator", key="close_swap_val"):
+            st.session_state["_swap_validator_open"] = False
+            st.rerun()
+
+    st.markdown("---")
+
     # ── ATM Vol / Forward Premium / Vega ──────────────────────────────────────
     if "atm_prem_matrix" not in st.session_state: st.session_state["atm_prem_matrix"] = {}
     if "atm_section_open" not in st.session_state: st.session_state["atm_section_open"] = False
@@ -4004,23 +4141,73 @@ def curves_tab():
 
 
 
+
+def check_swap_rates_sanity(rates_dict: dict, floating_rate: str, ccy: str) -> list:
+    """
+    Sanity check a swap rate curve (tenor→rate dict) for anomalies.
+    Flags any adjacent tenor jump > 100bp.
+    Returns list of warning strings (empty list = clean).
+    """
+    warns = []
+    if not rates_dict:
+        return warns
+    try:
+        # Sort by numeric maturity
+        def _t2y(t):
+            t = str(t).strip().upper()
+            if t.endswith('M'): return float(t[:-1]) / 12.0
+            if t.endswith('Y'): return float(t[:-1])
+            try: return float(t)
+            except: return 0.0
+        sorted_items = sorted(rates_dict.items(), key=lambda x: _t2y(x[0]))
+        for i in range(len(sorted_items) - 1):
+            t0, r0 = sorted_items[i]
+            t1, r1 = sorted_items[i+1]
+            delta_bp = abs(float(r1) - float(r0)) * 100.0  # rates in %, delta in bp
+            if delta_bp > 100.0:
+                warns.append(
+                    f"🔴 {ccy} {floating_rate}: {t0}→{t1} jump = {delta_bp:.0f}bp "
+                    f"({float(r0):.4f}% → {float(r1):.4f}%)"
+                )
+    except Exception as e:
+        warns.append(f"⚠️ {ccy} {floating_rate} sanity check error: {str(e)}")
+    return warns
+
 @st.cache_data(ttl=3600, show_spinner=False)
-def _load_swap_rates_from_db(floating_rate: str) -> pd.DataFrame:
-    """Load swap rates from Supabase swap_rates table."""
+def _load_swap_rates_from_db(floating_rate: str, load_date: str = None) -> pd.DataFrame:
+    """Load swap rates from Supabase swap_rates table for a given date (default: today)."""
     try:
         conn = get_db_connection()
         if conn is None: return pd.DataFrame()
         cur = conn.cursor()
+        import datetime as _dt
+        if load_date is None:
+            load_date = str(_dt.date.today())
+        else:
+            load_date = str(load_date)
+        # Try exact date first; fall back to most recent available date
         cur.execute(
-            "SELECT date, tenor, rate FROM swap_rates WHERE currency=%s AND floating_rate=%s ORDER BY date",
-            ("AUD", floating_rate))
+            "SELECT tenor, rate FROM swap_rates WHERE currency=%s AND floating_rate=%s AND date=%s ORDER BY tenor",
+            ("AUD", floating_rate, load_date))
         rows = cur.fetchall()
+        if not rows:
+            # Fallback: most recent date
+            cur.execute(
+                "SELECT tenor, rate FROM swap_rates WHERE currency=%s AND floating_rate=%s ORDER BY date DESC, tenor LIMIT 30",
+                ("AUD", floating_rate))
+            rows = cur.fetchall()
         conn.close()
         if not rows: return pd.DataFrame()
-        df = pd.DataFrame(rows, columns=["date","tenor","rate"])
-        df["date"] = pd.to_datetime(df["date"])
+        df = pd.DataFrame(rows, columns=["tenor","rate"])
         df["rate"] = df["rate"].astype(float)
-        return df.pivot_table(index="date", columns="tenor", values="rate", aggfunc="last").sort_index()
+        # Run sanity check and store any warnings
+        import streamlit as _st
+        _rd = dict(zip(df["tenor"], df["rate"]))
+        _sw = check_swap_rates_sanity(_rd, floating_rate, "AUD")
+        if _sw:
+            existing = _st.session_state.get("_swap_load_warnings", [])
+            _st.session_state["_swap_load_warnings"] = existing + _sw
+        return df.set_index("tenor")
     except Exception:
         return pd.DataFrame()
 
@@ -4743,16 +4930,66 @@ def fwd_analysis_tab():
             st.plotly_chart(_fig_b6bfly, use_container_width=True)
             _chart_tools(_fig_b6bfly, _b6bfly_active, "b6bfly", "bp")
 
+def _build_aud_par_splines():
+    """
+    Build AUD blended QQ and SS par-rate cubic splines from session state.
+    QQ curve: <=3Y direct from 3M BBSW, >3Y = SS par - 6v3 basis
+    SS curve: >=4Y direct from 6M BBSW, <4Y = QQ par + 6v3 basis
+    Returns (cs_qq, cs_ss) or (None, None) if data unavailable.
+    """
+    from scipy.interpolate import CubicSpline as _CS
+    par_qq = st.session_state.get("_aud_par_qq", {})
+    par_ss = st.session_state.get("_aud_par_ss", {})
+    basis_6v3 = st.session_state.get("config_basis", {}).get("AUD", {}).get("6v3")
+    if not par_qq or not par_ss:
+        return None, None
+    bx = by = None
+    if basis_6v3 is not None and not basis_6v3.empty:
+        bx = basis_6v3["MaturityY"].to_numpy().astype(float)
+        by = basis_6v3["BasisBp"].to_numpy().astype(float)
+    def _b(t):
+        if bx is None: return 0.0
+        return float(np.interp(t, bx, by))
+    # QQ full: <=3Y direct, >3Y = SS - basis
+    qq = dict(par_qq)
+    for t, r in par_ss.items():
+        qq[t] = r - _b(t) / 100.0
+    # SS full: >=4Y direct, <4Y = QQ + basis
+    ss = dict(par_ss)
+    for t, r in par_qq.items():
+        ss[t] = r + _b(t) / 100.0
+    qx = np.array(sorted(qq)); qy = np.array([qq[k] for k in qx])
+    sx = np.array(sorted(ss)); sy = np.array([ss[k] for k in sx])
+    return _CS(qx, qy), _CS(sx, sy)
+
+
+def _par_fwd(cs, exp_y: float, tenor_y: float) -> float:
+    """
+    Forward par rate from cubic spline of par rates.
+    fwd(exp, tenor) = (par(exp+tenor)*(exp+tenor) - par(exp)*exp) / tenor
+    For exp=0 (spot), uses par(tenor) directly.
+    """
+    t1 = exp_y
+    t2 = exp_y + tenor_y
+    p2 = float(cs(t2)) * t2
+    p1 = float(cs(t1)) * t1 if t1 > 0 else 0.0
+    return (p2 - p1) / tenor_y
+
+
 def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: Optional[tuple] = None,
                                      freq_override: Optional[float] = None, convention: str = "market",
                                      ois_tuple: Optional[tuple] = None) -> pd.DataFrame:
-    """Generate forward swap rate matrix. IRS=projection, OIS=discounting."""
+    """Generate forward swap rate matrix.
+    AUD: uses par formula directly (fwd = (par(t2)*t2 - par(t1)*t1)/tenor)
+         on blended QQ/SS cubic spline — never uses zero/bootstrapped rates.
+    NZD/USD: zero curve with IRS-only discounting.
+    """
 
     expiries = ["1w", "1m", "2m", "3m", "6m", "9m", "1y", "18m", "2y", "3y", "4y", "5y", "6y", "7y", "8y", "9y", "10y", "12y", "15y", "20y", "25y", "30y"]
     tenors = ["1Y", "2Y", "3Y", "4Y", "5Y", "7Y", "10Y", "12Y", "15Y", "20Y", "25Y", "30Y"]
 
     curve_x = np.array(curve_tuple[0])
-    curve_y = np.array(curve_tuple[1]) / 100.0  # ZeroRatePct stored as % (e.g. 4.5), convert to decimal
+    curve_y = np.array(curve_tuple[1]) / 100.0
 
     basis_x = basis_y = None
     if basis_tuple is not None:
@@ -4762,57 +4999,85 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
     ois_x = ois_y = None
     if ois_tuple is not None:
         ois_x = np.array(ois_tuple[0])
-        ois_y = np.array(ois_tuple[1]) / 100.0  # ZeroRatePct stored as % (e.g. 4.5), convert to decimal
-    
+        ois_y = np.array(ois_tuple[1]) / 100.0
+
+    # AUD: load pure QQ and SS zero curves built during bootstrap
+    aud_zc_qq = aud_zc_ss = None
+    if ccy == "AUD":
+        aud_zc_qq = st.session_state.get("_aud_zc_qq")
+        aud_zc_ss = st.session_state.get("_aud_zc_ss")
+
+    SPOT_M = 1.0 / 252.0
+
+    def _fwd_from_zc(zc, exp, tenor, freq):
+        """Forward swap rate from a zero curve dict {maturity: zero_rate_pct}."""
+        xs = np.array(sorted(zc.keys()))
+        ys = np.array([zc[k] / 100.0 for k in xs])
+        t_s = exp + SPOT_M; t_e = t_s + tenor
+        times = []; t = t_s + freq
+        while t <= t_e + 1e-9:
+            times.append(min(t, t_e)); t += freq
+        if not times: return 0.0
+        prev = t_s; ann = 0.0
+        for ti in times:
+            z = float(np.interp(ti, xs, ys))
+            ann += math.exp(-z * ti) * (ti - prev); prev = ti
+        if ann <= 0: return 0.0
+        zs = float(np.interp(t_s, xs, ys)); ze = float(np.interp(t_e, xs, ys))
+        df_s = math.exp(-zs * t_s); df_e = math.exp(-ze * t_e)
+        return (df_s - df_e) / ann * 100.0
+
     matrix = []
-    
+
     for exp in expiries:
         exp_y = label_to_years(exp)
         row = {"Expiry": exp}
-        
+
         for tenor in tenors:
             tenor_y = float(tenor[:-1])
             try:
-                # Always calculate market convention rate first
-                mkt_rate = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy, freq_override=None, ois_x=ois_x, ois_y=ois_y, basis6v3_x=basis_x, basis6v3_y=basis_y)
-                
-                # Get basis at midpoint
-                basis_bp = 0.0
-                if basis_x is not None and ccy == "AUD":
-                    mid_t = exp_y + tenor_y / 2
-                    basis_bp = float(np.interp(mid_t, basis_x, basis_y))
-                
-                if convention == "market":
-                    # Market: ≤3Y is Q/Q, >3Y is S/S   —   no adjustment needed, curve reflects this
-                    fwd = mkt_rate
-
-                elif convention == "qq":
-                    # Q/Q forced:
-                    # ≤3Y tenors: market is already Q/Q   —   same rate, just recalc with Q/Q frequency
-                    # >3Y tenors: market is S/S   —   subtract basis to get Q/Q equivalent
-                    if tenor_y <= 3.0:
-                        fwd = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy, freq_override=0.25, ois_x=ois_x, ois_y=ois_y, basis6v3_x=basis_x, basis6v3_y=basis_y)
+                if ccy == "AUD" and aud_zc_qq is not None and aud_zc_ss is not None:
+                    # ── AUD: pure separate zero curves, no post-hoc basis adjustment ──
+                    # Market: tenor <=3Y → QQ zero curve @ Q/Q freq
+                    #         tenor  >3Y → SS zero curve @ S/S freq
+                    if convention == "market":
+                        if tenor_y <= 3.0:
+                            fwd = _fwd_from_zc(aud_zc_qq, exp_y, tenor_y, 0.25)
+                        else:
+                            fwd = _fwd_from_zc(aud_zc_ss, exp_y, tenor_y, 0.50)
+                    elif convention == "qq":
+                        fwd = _fwd_from_zc(aud_zc_qq, exp_y, tenor_y, 0.25)
+                    elif convention == "ss":
+                        fwd = _fwd_from_zc(aud_zc_ss, exp_y, tenor_y, 0.50)
                     else:
-                        fwd = mkt_rate - basis_bp / 10000.0  # BasisBp in bp, rate in decimal
-
-                elif convention == "ss":
-                    # S/S forced:
-                    # ≤3Y tenors: market is Q/Q   —   add basis to get S/S equivalent
-                    # >3Y tenors: market is already S/S   —   same rate, just recalc with S/S frequency
-                    if tenor_y <= 3.0:
-                        fwd = mkt_rate + basis_bp / 10000.0  # BasisBp in bp, rate in decimal
-                    else:
-                        fwd = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy, freq_override=0.5, ois_x=ois_x, ois_y=ois_y, basis6v3_x=basis_x, basis6v3_y=basis_y)
-
+                        if tenor_y <= 3.0:
+                            fwd = _fwd_from_zc(aud_zc_qq, exp_y, tenor_y, 0.25)
+                        else:
+                            fwd = _fwd_from_zc(aud_zc_ss, exp_y, tenor_y, 0.50)
+                    row[tenor] = fwd
                 else:
-                    fwd = mkt_rate
+                    # ── NZD/USD: zero curve IRS-only discounting ──────────────
+                    mkt_rate = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy,
+                                                 freq_override=None,
+                                                 ois_x=ois_x, ois_y=ois_y,
+                                                 basis6v3_x=basis_x, basis6v3_y=basis_y)
+                    basis_bp = 0.0
+                    if basis_x is not None:
+                        mid_t = exp_y + tenor_y / 2
+                        basis_bp = float(np.interp(mid_t, basis_x, basis_y))
+                    if convention == "qq" and tenor_y > 3.0:
+                        fwd = mkt_rate - basis_bp / 10000.0
+                    elif convention == "ss" and tenor_y <= 3.0:
+                        fwd = mkt_rate + basis_bp / 10000.0
+                    else:
+                        fwd = mkt_rate
+                    row[tenor] = fwd * 100
 
-                row[tenor] = fwd * 100
             except:
                 row[tenor] = None
-        
+
         matrix.append(row)
-    
+
     df = pd.DataFrame(matrix)
     df = df.set_index("Expiry")
     return df
