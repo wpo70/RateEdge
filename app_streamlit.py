@@ -3780,10 +3780,8 @@ def curves_tab():
 
     try:
         fig = go.Figure()
-        if _show_par and par_rates is not None:
-            fig.add_trace(go.Scatter(
-                x=par_rates["Tenor"].apply(lambda x: float(x[:-1])),
-                y=par_rates["Par Rate (%)"],
+        if _show_par:
+            fig.add_trace(go.Scatter(x=curve_c["MaturityY"], y=curve_c["ZeroRatePct"],
                 mode="lines+markers", name="IRS Par", line=dict(color="#22c55e", width=2)))
         if _show_irs:
             fig.add_trace(go.Scatter(x=curve_c["MaturityY"], y=curve_c["ZeroRatePct"],
@@ -3810,22 +3808,24 @@ def curves_tab():
         st.warning(f"Chart: {_e}")
 
     with st.expander("IRS Par Rates & Curve Data", expanded=False):
-        _tc1, _tc2, _tc3 = st.columns(3)
-        with _tc1:
-            if par_rates is not None:
-                st.caption("IRS Par Rates (%)")
-                st.dataframe(par_rates, use_container_width=True, hide_index=True)
-            else:
-                st.caption("IRS Zero Curve (%)")
-                st.dataframe(curve_c, use_container_width=True, hide_index=True)
-        with _tc2:
-            if oisc is not None and not oisc.empty:
-                st.caption("OIS Zero Curve (%)")
-                st.dataframe(oisc, use_container_width=True, hide_index=True)
-        with _tc3:
-            if b6c is not None and not b6c.empty:
-                st.caption("6v3 Basis (bp)")
-                st.dataframe(b6c, use_container_width=True, hide_index=True)
+        _cols_to_show = []
+        if _show_par:
+            _cols_to_show.append(("IRS Par Rates (%)", curve_c))
+        if _show_irs:
+            _cols_to_show.append(("IRS Zero Curve (%)", curve_c))
+        if _show_ois and oisc is not None and not oisc.empty:
+            _cols_to_show.append(("OIS Curve (%)", oisc))
+        if _show_b6 and b6c is not None and not b6c.empty:
+            _cols_to_show.append(("6v3 Basis (bp)", b6c))
+        if _show_b3 and b3c is not None and not b3c.empty:
+            _cols_to_show.append(("3v1 Basis (bp)", b3c))
+        if not _cols_to_show:
+            _cols_to_show.append(("IRS Par Rates (%)", curve_c))
+        _tcols = st.columns(len(_cols_to_show))
+        for _i, (_label, _df) in enumerate(_cols_to_show):
+            with _tcols[_i]:
+                st.caption(_label)
+                st.dataframe(_df, use_container_width=True, hide_index=True)
 
     st.markdown("---")
 
@@ -11930,7 +11930,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v2803b</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v2803a</div>
             </div>
             """,
             unsafe_allow_html=True,
