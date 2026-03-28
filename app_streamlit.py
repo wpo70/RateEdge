@@ -3781,7 +3781,15 @@ def curves_tab():
     try:
         fig = go.Figure()
         if _show_par:
-            fig.add_trace(go.Scatter(x=curve_c["MaturityY"], y=curve_c["ZeroRatePct"],
+            if par_rates is not None and not par_rates.empty:
+                # AUD: real par rates from BBG bootstrap (different from zero curve)
+                _par_x = par_rates["Tenor"].apply(lambda x: float(x[:-1]) if x.endswith("Y") else float(x[:-1])/12)
+                _par_y = par_rates["Par Rate (%)"]
+            else:
+                # NZD/USD: config_curves IS the par curve
+                _par_x = curve_c["MaturityY"]
+                _par_y = curve_c["ZeroRatePct"]
+            fig.add_trace(go.Scatter(x=_par_x, y=_par_y,
                 mode="lines+markers", name="IRS Par", line=dict(color="#22c55e", width=2)))
         if _show_irs:
             fig.add_trace(go.Scatter(x=curve_c["MaturityY"], y=curve_c["ZeroRatePct"],
@@ -3810,7 +3818,8 @@ def curves_tab():
     with st.expander("IRS Par Rates & Curve Data", expanded=False):
         _cols_to_show = []
         if _show_par:
-            _cols_to_show.append(("IRS Par Rates (%)", curve_c))
+            _par_table = par_rates if (par_rates is not None and not par_rates.empty) else curve_c
+            _cols_to_show.append(("IRS Par Rates (%)", _par_table))
         if _show_irs:
             _cols_to_show.append(("IRS Zero Curve (%)", curve_c))
         if _show_ois and oisc is not None and not oisc.empty:
@@ -3820,7 +3829,8 @@ def curves_tab():
         if _show_b3 and b3c is not None and not b3c.empty:
             _cols_to_show.append(("3v1 Basis (bp)", b3c))
         if not _cols_to_show:
-            _cols_to_show.append(("IRS Par Rates (%)", curve_c))
+            _par_table = par_rates if (par_rates is not None and not par_rates.empty) else curve_c
+            _cols_to_show.append(("IRS Par Rates (%)", _par_table))
         _tcols = st.columns(len(_cols_to_show))
         for _i, (_label, _df) in enumerate(_cols_to_show):
             with _tcols[_i]:
