@@ -11561,6 +11561,8 @@ def rv_tab():
             spot_3m = _par_rate(0.25)
             peak_fwd = max((p["Fwd 3m BBSW (%)"] for p in fwd_bbsw_pts), default=spot_3m)
             trough_fwd = min((p["Fwd 3m BBSW (%)"] for p in fwd_bbsw_pts), default=spot_3m)
+            t_pts = [p["Start (y)"] for p in fwd_bbsw_pts] if fwd_bbsw_pts else []
+            r_pts = [p["Fwd 3m BBSW (%)"] for p in fwd_bbsw_pts] if fwd_bbsw_pts else []
 
             # Idea 1: curve shape → cap vs floor preference
             curve_slope_2s5s = _par_rate(5) - _par_rate_ss(2)  # 5Y S/S vs 2Y Q/Q adjusted to S/S equivalent
