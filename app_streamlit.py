@@ -12725,7 +12725,16 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
     vega_rows = []
 
     for i, exp in enumerate(expiries):
+        # Skip numeric index rows (0, 1, 2...) — not valid expiry labels
+        try:
+            _f = float(str(exp))
+            if _f == int(_f) and 0 <= _f <= 50 and not str(exp).endswith(('w','m','y','Y')):
+                continue  # pure integer — skip
+        except (ValueError, TypeError):
+            pass
         exp_y = label_to_years(exp)
+        if exp_y <= 0:
+            continue
         prow = {"Expiry": exp}
         vrow = {"Expiry": exp}
 
