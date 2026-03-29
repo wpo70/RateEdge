@@ -3630,8 +3630,11 @@ def vol_config_tab():
                         _z1 = _cv[_cv["MaturityY"].sub(1.0).abs() < 0.01]["ZeroRatePct"]
                         z025 = float(_z025.iloc[0]) if len(_z025) else 0
                         z1 = float(_z1.iloc[0]) if len(_z1) else 0
-                        _cdebug.append(f"{_c}:{len(_cv)}rows 0.25Y={z025:.4f}% 1Y={z1:.4f}%")
-                st.success(f" Loaded: {', '.join(msgs)}" + (f" | {' | '.join(_cdebug)}" if _cdebug else " | NO CURVES"))
+                        _cdebug.append(f"{_c}: {len(_cv)} pts | 0.25Y={z025:.4f}% | 1Y={z1:.4f}%")
+                st.success(f" Loaded: {', '.join(msgs)}")
+                if _cdebug:
+                    for _cd in _cdebug:
+                        st.caption(f"📊 {_cd}")
                 # Show bootstrap warnings immediately after commit
                 _bwarn = st.session_state.get("_bootstrap_warnings", [])
                 for _bw in _bwarn:
@@ -3640,7 +3643,9 @@ def vol_config_tab():
                 _aud_par = st.session_state.get("_irs_par_rates", {}).get("AUD")
                 if _aud_par is not None and not _aud_par.empty:
                     st.caption("AUD par rates read from BBG_Feed (verify these are correct before using the forward matrix):")
-                    st.dataframe(_aud_par.set_index("Tenor").T, use_container_width=True)
+                    _par_disp = _aud_par.copy()
+                    _par_disp["Par Rate (%)"] = _par_disp["Par Rate (%)"].apply(lambda x: round(float(x), 4))
+                    st.dataframe(_par_disp.set_index("Tenor").T.style.format("{:.4f}", subset=pd.IndexSlice["Par Rate (%)", :]), use_container_width=True)
                 # Auto-save to DB so it persists across sessions
                 if HAS_POSTGRES and is_admin():
                     try:
@@ -4162,7 +4167,8 @@ def curves_tab():
             show_hm = st.checkbox("Heatmap", value=False, key="show_heatmap")
         with _r3:
             gen_fwd = st.button("▶ Generate Forward Matrix", key="gen_fwd_matrix",
-                                type="primary", use_container_width=True)
+                                type="primary", use_container_width=True,
+                                help="Force regenerate. Convention changes auto-update below.")
         with _r4:
             st.download_button("⬇ Download",
                                st.session_state["fwd_matrix"][ccy].to_csv() if has_fwd else "",
@@ -4170,20 +4176,26 @@ def curves_tab():
                                use_container_width=True, type="primary",
                                disabled=not has_fwd)
 
-        if gen_fwd:
-            _mc = st.session_state.get("config_curves", {}).get(ccy)
-            _mb = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
-            if _mc is None:
-                st.error("No curve — upload config first")
-            else:
-                conv = {"Market":"market","Q/Q":"qq","S/S":"ss"}.get(leg_conv,"market")
-                with st.spinner("Calculating..."):
-                    fm = generate_forward_matrix_convention(ccy, _mc, _mb, conv)
-                    st.session_state["fwd_matrix"][ccy]   = fm
-                    st.session_state["fwd_convention"]    = conv
-                    if _mb is not None:
-                        st.session_state["basis_matrix"][ccy] = generate_basis_matrix(ccy, _mb)
-                st.rerun()
+        _mc = st.session_state.get("config_curves", {}).get(ccy)
+        _mb = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
+        _conv_now = {"Market":"market","Q/Q":"qq","S/S":"ss"}.get(leg_conv,"market")
+        _prev_conv = st.session_state.get("fwd_convention", "market")
+        _prev_ccy  = st.session_state.get("fwd_ccy", ccy)
+
+        # Auto-regen: convention changed, or currency changed, or explicit button press
+        _need_regen = gen_fwd or _conv_now != _prev_conv or _prev_ccy != ccy
+
+        if _need_regen and _mc is not None:
+            with st.spinner("Calculating..."):
+                fm = generate_forward_matrix_convention(ccy, _mc, _mb, _conv_now)
+                st.session_state["fwd_matrix"][ccy] = fm
+                st.session_state["fwd_convention"]  = _conv_now
+                st.session_state["fwd_ccy"]         = ccy
+                if _mb is not None:
+                    st.session_state["basis_matrix"][ccy] = generate_basis_matrix(ccy, _mb)
+            has_fwd = True
+        elif _need_regen and _mc is None:
+            st.error("No curve — upload config first")
 
         if has_fwd:
             has_basis = ccy in st.session_state.get("basis_matrix", {})
@@ -4383,7 +4395,7 @@ def _load_swap_rates_from_db(floating_rate: str, load_date: str = None) -> pd.Da
 
 def fwd_analysis_tab():
     """FWD Swap & Basis Historical Analysis tab"""
-    st.subheader("📈 FWD Swap & Basis Historical Analysis")
+    st.subheader("📈 FWD IRS Analysis")
     st.caption("IRS spreads, butterflies, fwd-fwd rates and 6v3 basis from Supabase (BlueGamma data 2018-today).")
 
     with st.spinner("Loading swap rate history..."):
@@ -12596,7 +12608,8 @@ def main():
             "🏡 Home",
             "📋 Vol / Upload",
             "📏 Curves",
-            "📈 FWD Analysis",
+            "📈 FWD IRS Analysis",
+            "📊 Historical VOL Analysis",
             "📊 Swaptions",
             "🔔 Caps & Floors",
             "💼 Portfolio",
@@ -12606,7 +12619,6 @@ def main():
             "✅ Vol Editor",
             "📑 Vol Export",
             "📍 Multi-CCY",
-            "📊 Historical Analysis",
             "📜 Bond Options",
         ]
     )
@@ -12620,25 +12632,25 @@ def main():
     with tabs[3]:
         fwd_analysis_tab()
     with tabs[4]:
-        swaptions_tab(vol_mode)
-    with tabs[5]:
-        caps_floors_tab(vol_mode)
-    with tabs[6]:
-        portfolio_tab()
-    with tabs[7]:
-        rv_tab()
-    with tabs[8]:
-        exotics_tab(vol_mode)
-    with tabs[9]:
-        sod_report_tab()
-    with tabs[10]:
-        vol_surface_editor_tab()
-    with tabs[11]:
-        vol_export_tab()
-    with tabs[12]:
-        multi_ccy_tab(vol_mode)
-    with tabs[13]:
         backtesting_tab()
+    with tabs[5]:
+        swaptions_tab(vol_mode)
+    with tabs[6]:
+        caps_floors_tab(vol_mode)
+    with tabs[7]:
+        portfolio_tab()
+    with tabs[8]:
+        rv_tab()
+    with tabs[9]:
+        exotics_tab(vol_mode)
+    with tabs[10]:
+        sod_report_tab()
+    with tabs[11]:
+        vol_surface_editor_tab()
+    with tabs[12]:
+        vol_export_tab()
+    with tabs[13]:
+        multi_ccy_tab(vol_mode)
     with tabs[14]:
         bond_option_tab()
 
