@@ -319,7 +319,9 @@ def get_db_connection():
             host=params["host"], port=params["port"],
             dbname=params["dbname"], user=params["user"],
             password=params["password"], sslmode=params["sslmode"],
-            connect_timeout=3
+            connect_timeout=10,
+            keepalives=1, keepalives_idle=30,
+            keepalives_interval=10, keepalives_count=3
         )
         return conn
     except Exception:
@@ -605,6 +607,13 @@ def save_all_session_data(user_id: str):
 def load_all_session_data(user_id: str, load_date: str = None) -> int:
     """Load all saved data into session state. load_date: specific date string (YYYY-MM-DD) or None for latest."""
     configs = load_all_user_configs(user_id)
+    # If nothing found, try the other admin email as fallback
+    # (desktop may have saved as wpo@rateedge.au, phone logs in as wpo70@icloud.com or vice versa)
+    if not configs:
+        _ADMIN_ALIASES = {"wpo@rateedge.au": "wpo70@icloud.com", "wpo70@icloud.com": "wpo@rateedge.au"}
+        _alt = _ADMIN_ALIASES.get(user_id)
+        if _alt:
+            configs = load_all_user_configs(_alt)
     if not configs:
         return 0
     
@@ -3576,7 +3585,27 @@ def vol_config_tab():
                     st.session_state["_post_load_date"] = str(_load_date)
                     st.rerun()
                 else:
-                    st.warning("No saved data found in database")
+                    _conn_test = get_db_connection()
+                    if not _conn_test:
+                        st.error("❌ Database connection failed — check network.")
+                    else:
+                        _conn_test.close()
+                        # Check if swap_rates has any data (curves load separately)
+                        _curve_loaded = any([
+                            st.session_state.get("config_curves", {}).get(c) is not None
+                            for c in ["AUD","NZD","USD"]
+                        ])
+                        if _curve_loaded:
+                            st.warning(
+                                f"⚠️ Curves loaded from DB but no saved configs found for **{user_id}**. "
+                                "Upload your RateEdge_Config.xlsx and click Commit to save vols and curves, "
+                                "then Save to Database."
+                            )
+                        else:
+                            st.warning(
+                                f"⚠️ No saved data found for **{user_id}**. "
+                                "You need to upload RateEdge_Config.xlsx and Save to Database from a desktop session first."
+                            )
         with col_db2:
             if st.button(" Save to Database", key="save_db_btn_top", type="secondary"):
                 user_id = st.session_state.get("username", "default")
