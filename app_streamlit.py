@@ -3196,16 +3196,23 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
 
         SPOT = 1.0 / 252.0
 
-        # Override OIS 3M with Curves_AUD 0.25Y (user-maintained 3M BBSW rate)
+        # Read Curves_AUD: col 0 = maturity, col 1 = par rate (mislabeled "Zero Rate")
         try:
             if "Curves_AUD" in xl.sheet_names:
                 _ca = pd.read_excel(xl, sheet_name="Curves_AUD", usecols=[0,1], header=0)
-                _ca.columns = ["MaturityY","ZeroRatePct"]
+                _ca.columns = ["MaturityY","ParRate"]
                 _ca["MaturityY"] = pd.to_numeric(_ca["MaturityY"], errors="coerce")
-                _ca["ZeroRatePct"] = pd.to_numeric(_ca["ZeroRatePct"], errors="coerce")
-                _r = _ca[(_ca["MaturityY"] - 0.25).abs() < 0.01]
-                if len(_r) > 0:
-                    ois_rates[3/12] = float(_r.iloc[0]["ZeroRatePct"])
+                _ca["ParRate"] = pd.to_numeric(_ca["ParRate"], errors="coerce")
+                # Override OIS 3M with 0.25Y entry
+                _r025 = _ca[(_ca["MaturityY"] - 0.25).abs() < 0.01]
+                if len(_r025) > 0:
+                    ois_rates[3/12] = float(_r025.iloc[0]["ParRate"])
+                # Add 40Y/50Y SS par if not already in BBG_Feed
+                for _ext_t in [40.0, 50.0]:
+                    if _ext_t not in par_ss:
+                        _re = _ca[(_ca["MaturityY"] - _ext_t).abs() < 0.1]
+                        if len(_re) > 0:
+                            par_ss[_ext_t] = float(_re.iloc[0]["ParRate"])
         except Exception:
             pass
 
@@ -4190,19 +4197,21 @@ def curves_tab():
         fig = go.Figure()
         if _show_par:
             if par_rates is not None and not par_rates.empty:
-                # AUD: real par rates from BBG/DB restore
                 try:
-                    _par_x = par_rates["Tenor"].apply(lambda x: float(x[:-1]) if str(x).endswith("Y") else float(str(x)[:-1])/12)
-                    _par_y = par_rates["Par Rate (%)"]
-                    # Supplement with 40Y/50Y from _aud_par_ss if available
+                    _par_x = list(par_rates["Tenor"].apply(
+                        lambda x: float(x[:-1]) if str(x).endswith("Y") else float(str(x)[:-1])/12))
+                    _par_y = list(par_rates["Par Rate (%)"])
+                    # Supplement with 40Y/50Y from _aud_par_ss (uploaded SS par rates)
                     _par_ss_ext = st.session_state.get("_aud_par_ss", {})
-                    _ext_x = list(_par_x)
-                    _ext_y = list(_par_y)
                     for _et in [40.0, 50.0]:
-                        if _et in _par_ss_ext and _et not in list(_par_x):
-                            _ext_x.append(_et)
-                            _ext_y.append(_par_ss_ext[_et])
-                    _ext_pairs = sorted(zip(_ext_x, _ext_y))
+                        if _et in _par_ss_ext and _et not in _par_x:
+                            _par_x.append(_et); _par_y.append(_par_ss_ext[_et])
+                    # Also check curve_c for 40Y/50Y par (col "ZeroRatePct" = par on Curves_AUD)
+                    for _, _cr in curve_c.iterrows():
+                        _m = float(_cr["MaturityY"])
+                        if _m in [40.0, 50.0] and _m not in _par_x:
+                            _par_x.append(_m); _par_y.append(float(_cr["ZeroRatePct"]))
+                    _ext_pairs = sorted(zip(_par_x, _par_y))
                     fig.add_trace(go.Scatter(
                         x=[p[0] for p in _ext_pairs],
                         y=[p[1] for p in _ext_pairs],
@@ -4210,20 +4219,21 @@ def curves_tab():
                 except Exception:
                     pass
             else:
-                # NZD/USD: config_curves IS the par curve
                 fig.add_trace(go.Scatter(x=curve_c["MaturityY"], y=curve_c["ZeroRatePct"],
                     mode="lines+markers", name="IRS Par", line=dict(color="#22c55e", width=2)))
         if _show_irs:
-            # Use _aud_zc_ss for AUD (includes 40Y/50Y); fallback to blended curve
-            _zc_ss = st.session_state.get("_aud_zc_ss") if ccy == "AUD" else None
-            if _zc_ss and len(_zc_ss) > 0:
-                _zx = sorted(_zc_ss.keys())
-                _zy = [_zc_ss[k] for k in _zx]
-                fig.add_trace(go.Scatter(x=_zx, y=_zy,
-                    mode="lines+markers", name="IRS Zero", line=dict(color="#3b82f6", width=2)))
-            else:
-                fig.add_trace(go.Scatter(x=curve_c["MaturityY"], y=curve_c["ZeroRatePct"],
-                    mode="lines+markers", name="IRS Zero", line=dict(color="#3b82f6", width=2)))
+            # Use blended curve (correct QQ/SS zero rates), extend to 40Y/50Y from _aud_zc_ss
+            _zx = list(curve_c["MaturityY"].astype(float))
+            _zy = list(curve_c["ZeroRatePct"].astype(float))
+            if ccy == "AUD":
+                _zc_ss = st.session_state.get("_aud_zc_ss") or {}
+                for _et in [40.0, 50.0]:
+                    if _et in _zc_ss and _et not in _zx:
+                        _zx.append(_et); _zy.append(_zc_ss[_et])
+            _pairs = sorted(zip(_zx, _zy))
+            fig.add_trace(go.Scatter(
+                x=[p[0] for p in _pairs], y=[p[1] for p in _pairs],
+                mode="lines+markers", name="IRS Zero", line=dict(color="#3b82f6", width=2)))
         if _show_ois and oisc is not None and not oisc.empty:
             fig.add_trace(go.Scatter(x=oisc["MaturityY"], y=oisc["ZeroRatePct"],
                 mode="lines+markers", name="OIS", line=dict(color="#f59e0b", width=2)))
