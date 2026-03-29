@@ -639,6 +639,39 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                         f"AUD curve: 3M BBSW ≤3Y + 6M BBSW ≥4Y ({len(_aud_curve)} pts, {_src3})"
                     )
                     loaded += 1
+
+                    # Build par_qq/par_ss dicts from DB swap rates.
+                    # Supabase swap_rates stores par rates directly as ZeroRatePct.
+                    # These drive the matrix and IRS Par chart — no BBG Excel needed.
+                    try:
+                        _par_qq_db = {}
+                        _par_ss_db = {}
+                        if _df_3m is not None:
+                            for _, _r3 in _df_3m.iterrows():
+                                _mat = float(_r3["MaturityY"])
+                                if _mat <= 3.0 and float(_r3.get("ZeroRatePct", 0)) > 0:
+                                    _par_qq_db[_mat] = float(_r3["ZeroRatePct"])
+                        if _df_6m is not None:
+                            for _, _r6 in _df_6m.iterrows():
+                                _mat = float(_r6["MaturityY"])
+                                if _mat >= 4.0 and float(_r6.get("ZeroRatePct", 0)) > 0:
+                                    _par_ss_db[_mat] = float(_r6["ZeroRatePct"])
+                        if _par_qq_db and _par_ss_db:
+                            st.session_state["_aud_par_qq"] = _par_qq_db
+                            st.session_state["_aud_par_ss"] = _par_ss_db
+                            # Rebuild _irs_par_rates["AUD"] so IRS Par chart shows real par rates
+                            _pr_rows = []
+                            for _pt, _pr in sorted(_par_qq_db.items()):
+                                _pr_rows.append({"Tenor": f"{_pt}Y", "Par Rate (%)": _pr, "Conv": "Q/Q"})
+                            for _pt, _pr in sorted(_par_ss_db.items()):
+                                _pr_rows.append({"Tenor": f"{_pt}Y", "Par Rate (%)": _pr, "Conv": "S/S"})
+                            if "_irs_par_rates" not in st.session_state:
+                                st.session_state["_irs_par_rates"] = {}
+                            st.session_state["_irs_par_rates"]["AUD"] = pd.DataFrame(_pr_rows)
+                            # Flag for deferred zero curve rebuild (needs basis, loaded later)
+                            st.session_state["_aud_needs_zc_rebuild"] = True
+                    except Exception:
+                        pass
                 # AUD OIS (AONIA)
                 _df_ois = _load_curve_from_db_latest("AONIA", "AUD", load_date)
                 if _df_ois is not None and len(_df_ois) > 0:
@@ -741,9 +774,70 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                 except:
                     pass
 
-    # AUD: restore par rates and rebuild pure QQ/SS zero curves
-    # These are not rebuilt on DB load (bootstrap only runs on Excel commit),
-    # so we must restore and rebuild from stored par rates.
+    # AUD: rebuild pure QQ/SS zero curves now that basis is loaded.
+    # _aud_needs_zc_rebuild is set when par_qq/par_ss were built from DB swap rates above.
+    if st.session_state.pop("_aud_needs_zc_rebuild", False):
+        try:
+            _par_qq_r = st.session_state.get("_aud_par_qq", {})
+            _par_ss_r = st.session_state.get("_aud_par_ss", {})
+            _basis_r = st.session_state.get("config_basis", {}).get("AUD", {}).get("6v3")
+            _ois_r = st.session_state.get("config_basis", {}).get("AUD", {}).get("ois")
+            if _par_qq_r and _par_ss_r:
+                _bxr = _byr = None
+                if _basis_r is not None and not _basis_r.empty:
+                    _bxr = _basis_r["MaturityY"].to_numpy().astype(float)
+                    _byr = _basis_r["BasisBp"].to_numpy().astype(float)
+                def _br(t):
+                    if _bxr is None: return 0.0
+                    return float(np.interp(t, _bxr, _byr))
+                _ois_map_r = {}
+                if _ois_r is not None and not _ois_r.empty:
+                    for _, _ro in _ois_r.iterrows():
+                        _ois_map_r[float(_ro["MaturityY"])] = float(_ro["ZeroRatePct"])
+                _SPOT_R = 1.0 / 252.0
+                def _rebuild_zc(par_inputs, all_qq):
+                    _dfs_r = {0.0: 1.0}
+                    for _tr, _rr in sorted(_ois_map_r.items()):
+                        _dfs_r[_tr] = math.exp(-_rr / 100.0 * _tr)
+                    def _dfi_r(t):
+                        _tsr = sorted(_dfs_r.keys()); _dfvr = [_dfs_r[x] for x in _tsr]
+                        if t <= _tsr[0]: return _dfvr[0]
+                        if t >= _tsr[-1]:
+                            _zr = -math.log(_dfvr[-1]) / _tsr[-1]; return math.exp(-_zr * t)
+                        for _ir in range(len(_tsr) - 1):
+                            if _tsr[_ir] <= t <= _tsr[_ir+1]:
+                                _wr = (t - _tsr[_ir]) / (_tsr[_ir+1] - _tsr[_ir])
+                                return math.exp((1-_wr)*math.log(_dfvr[_ir]) + _wr*math.log(_dfvr[_ir+1]))
+                        return _dfvr[-1]
+                    _freqr = 0.25 if all_qq else 0.50
+                    for _tenr in sorted(par_inputs.keys()):
+                        _cr = par_inputs[_tenr] / 100.0
+                        _ser = _SPOT_R + _tenr
+                        _timesr = []; _ttr = _SPOT_R + _freqr
+                        while _ttr <= _ser + 1e-9:
+                            _timesr.append(round(min(_ttr, _ser), 8)); _ttr += _freqr
+                        if not _timesr: continue
+                        _annr = sum(_dfi_r(_tir) * _freqr for _tir in _timesr[:-1])
+                        _dfendr = (_dfi_r(_SPOT_R) - _cr * _annr) / (1.0 + _cr * _freqr)
+                        if _dfendr > 0 and not math.isnan(_dfendr):
+                            _dfs_r[_ser] = _dfendr
+                    _MATSR = [0.25,0.5,0.75,1.0,1.5,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,12.0,15.0,20.0,25.0,30.0]
+                    _zcr = {}
+                    for _mr in _MATSR:
+                        _dr = _dfi_r(_mr)
+                        if _dr > 0 and not math.isnan(_dr):
+                            _zcr[_mr] = -math.log(_dr) / _mr * 100
+                    return _zcr
+                _pqf = dict(_par_qq_r)
+                for _tr, _rr in _par_ss_r.items(): _pqf[_tr] = _rr - _br(_tr) / 100.0
+                _psf = dict(_par_ss_r)
+                for _tr, _rr in _par_qq_r.items(): _psf[_tr] = _rr + _br(_tr) / 100.0
+                st.session_state["_aud_zc_qq"] = _rebuild_zc(_pqf, all_qq=True)
+                st.session_state["_aud_zc_ss"] = _rebuild_zc(_psf, all_qq=False)
+        except Exception:
+            pass
+
+    # AUD: also restore from stored aud_par_rates in user_configs (legacy path)
     if "aud_par_rates" in configs and "AUD" in configs["aud_par_rates"]:
         try:
             _pdata = configs["aud_par_rates"]["AUD"]["data"]
@@ -3723,7 +3817,21 @@ def vol_config_tab():
                     ORDER BY currency, snapshot_date DESC
                 """)
                 for _row in _scur.fetchall():
-                    _latest_snaps[_row[0]] = {"date": str(_row[1])[:16], "label": _row[2]}
+                    try:
+                        from datetime import timezone as _tz
+                        _snap_dt = _row[1]
+                        if hasattr(_snap_dt, 'tzinfo'):
+                            if _snap_dt.tzinfo is None:
+                                _snap_dt = _snap_dt.replace(tzinfo=_tz.utc)
+                            _snap_dt = _snap_dt.astimezone(SYDNEY_TZ)
+                            _off_h = _snap_dt.utcoffset().total_seconds() / 3600
+                            _tz_lbl = "AEDT" if _off_h == 11 else "AEST"
+                            _snap_date_str = _snap_dt.strftime(f"%d-%b-%Y %H:%M {_tz_lbl}")
+                        else:
+                            _snap_date_str = str(_row[1])[:16]
+                    except Exception:
+                        _snap_date_str = str(_row[1])[:16]
+                    _latest_snaps[_row[0]] = {"date": _snap_date_str, "label": _row[2]}
                 _scur.close()
                 _sc.close()
         except Exception:
@@ -13639,6 +13747,10 @@ def show_login_page():
     #MainMenu {visibility: hidden;}
     header {visibility: hidden;}
     footer {visibility: hidden;}
+    [data-testid="manage-app-button"] {display: none !important;}
+    button[kind="managedApp"] {display: none !important;}
+    .stAppDeployButton {display: none !important;}
+    [title="Manage app"] {display: none !important;}
     [data-testid="stSidebar"] {display: none;}
     [data-testid="collapsedControl"] {display: none;}
     .stApp {background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);}
