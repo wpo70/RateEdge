@@ -6777,39 +6777,10 @@ def caps_floors_tab(vol_mode: str):
                         save_user_config(_user_id, "cf_spreads", ccy, _spread_data)
                     except Exception:
                         pass
-                # Auto-regenerate swaption premiums so straddle bp updates immediately
-                _curve_cs = get_ccy_curve(ccy)
-                _atm_cs   = get_working_atm_surface(ccy)
-                _ois_cs   = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois")
-                if _curve_cs is not None and _atm_cs is not None:
-                    if "cfs_table_data" not in st.session_state:
-                        st.session_state["cfs_table_data"] = {}
-                    for _lbl, _exp, _ten, _cfs_lbl in [
-                        ("3m1y","3m",1.0,"1Y CFS"),("1y1y","1y",1.0,"2Y CFS"),
-                        ("2y1y","2y",1.0,"3Y CFS"),("3y1y","3y",1.0,"4Y CFS"),
-                        ("4y1y","4y",1.0,"5Y CFS"),("5y2y","5y",2.0,"7Y CFS"),
-                        ("7y3y","7y",3.0,"10Y CFS"),("10y2y","10y",2.0,"12Y CFS"),
-                        ("12y3y","12y",3.0,"15Y CFS"),
-                    ]:
-                        try:
-                            _vbp = get_matrix_value(_atm_cs, _exp, _ten)
-                            if _vbp is None: continue
-                            _ey = label_to_years(_exp)
-                            _, _ann, _ = forward_and_annuity_from_curve(_curve_cs, ccy, _ey, _ten, _ois_cs)
-                            _prem = 2 * 0.3989 * (_vbp/10000.0) * math.sqrt(max(_ey,0.001)) * _ann * 10000
-                            # cfs_straddle = swaption premium + wedge spread
-                            _spd = st.session_state.get(f"cf_spr_{_lbl}", 0)
-                            st.session_state["cfs_table_data"][_lbl] = {
-                                "swaption": round(_prem, 4),
-                                "cfs_label": _cfs_lbl,
-                                "cfs_straddle": round(_prem + _spd, 4)
-                            }
-                        except Exception:
-                            pass
-                # Invalidate ATM CFS cache so table re-renders with new values
+                # Bust caplet and CFS cache so curve re-builds with new spreads
+                st.session_state.pop("_caplet_curve_key", None)
                 st.session_state.pop("_atm_cfs_cache_key", None)
                 st.session_state.pop("_atm_cfs_rows_cache", None)
-                st.session_state.pop("_caplet_curve_key", None)
                 st.rerun()
             if br.button("🔔 Generate Swaption Premiums", key="gen_swpt_prem", type="primary"):
                 curve     = get_ccy_curve(ccy)
@@ -10561,17 +10532,37 @@ def rv_tab():
                 return (f" Historically {h['pct']:.0f}th percentile "
                         f"(range {h['p10']*100:.0f}-{h['p90']*100:.0f}bp, mean {h['mean']*100:.0f}bp, 2018-2025).")
 
-            # Fwd rates
+            # Fwd rates — use same pure QQ/SS zero curves as the forward matrix
+            # This ensures RV signals use identical rates to what's quoted in the matrix
+            _rv_zc_qq = st.session_state.get("_aud_zc_qq")
+            _rv_zc_ss = st.session_state.get("_aud_zc_ss")
+
             def _fwd_rate(t1, t2):
+                """Forward swap rate using pure QQ/SS zero curves (matches forward matrix)."""
                 if t2 > max(xs_c):
                     return None
+                tenor = t2 - t1
+                if tenor <= 0:
+                    return None
+                # Use QQ for tenors <=3Y, SS for tenors >3Y (market convention)
+                if tenor <= 3.0 and _rv_zc_qq:
+                    try:
+                        return _fwd_from_zc(_rv_zc_qq, float(t1), float(tenor), 0.25)
+                    except Exception:
+                        pass
+                elif tenor > 3.0 and _rv_zc_ss:
+                    try:
+                        return _fwd_from_zc(_rv_zc_ss, float(t1), float(tenor), 0.50)
+                    except Exception:
+                        pass
+                # Fallback to zero-curve approximation if QQ/SS not available
                 r1 = _par_rate(t1) / 100
                 r2 = _par_rate(t2) / 100
                 df1 = math.exp(-r1 * t1)
                 df2 = math.exp(-r2 * t2)
                 if df2 <= 0:
                     return None
-                return ((df1/df2) - 1) / (t2-t1) * 100 if t2 > t1 else None
+                return ((df1/df2) - 1) / tenor * 100
 
             fwds_live = {
                 "1y1y":  _fwd_rate(1, 2),
