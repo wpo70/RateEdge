@@ -3156,9 +3156,13 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
         SS_MAP = {"4Y SS":4.0,"5Y SS":5.0,"6Y SS":6.0,"7Y SS":7.0,"8Y SS":8.0,"9Y SS":9.0,
                   "10Y SS":10.0,"12Y SS":12.0,"15Y SS":15.0,"20Y SS":20.0,"25Y SS":25.0,"30Y SS":30.0,
                   "40Y SS":40.0,"50Y SS":50.0}
+        # 40Y/50Y labeled as spread rows in BBG_Feed (absolute par rate in col E)
+        SPREAD_40_50 = {"aud 30y v 40y spread": 40.0, "aud 30y v 50y spread": 50.0,
+                        "30y v 40y": 40.0, "30y v 50y": 50.0}
         OIS_MAP = {"OIS 1W":1/52,"OIS 1M":1/12,"OIS 2M":2/12,"OIS 3M":3/12,
                    "OIS 4M":4/12,"OIS 5M":5/12,"OIS 6M":6/12,"OIS 9M":9/12,
-                   "OIS 1Y":1.0,"OIS 2Y":2.0,"OIS 3Y":3.0}
+                   "OIS 1Y":1.0,"OIS 2Y":2.0,"OIS 3Y":3.0,
+                   "OIS 40Y":40.0,"OIS 50Y":50.0}
 
         par_qq: dict = {}
         par_ss: dict = {}
@@ -3186,6 +3190,10 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
             for k, v in SS_MAP.items():
                 if _re.search(r"(?<![0-9])" + _re.escape(k.lower()), ll):
                     par_ss[v] = mid
+            for k, v in SPREAD_40_50.items():
+                if v not in par_ss:
+                    if k in ll:
+                        par_ss[v] = mid
             for k, v in OIS_MAP.items():
                 if v not in ois_rates:  # take FIRST occurrence only — prevents USD OIS rows overwriting AUD AONIA
                     if _re.search(r"(?<![0-9])" + _re.escape(k.lower()), ll):
@@ -4258,7 +4266,21 @@ def curves_tab():
     with st.expander("IRS Par Rates & Curve Data", expanded=False):
         _cols_to_show = []
         if _show_par:
-            _par_table = par_rates if (par_rates is not None and not par_rates.empty) else curve_c
+            if par_rates is not None and not par_rates.empty:
+                # Add 40Y/50Y to par table if available
+                _par_table = par_rates.copy()
+                _par_ss_full = st.session_state.get("_aud_par_ss", {})
+                _existing_tenors = set(_par_table["Tenor"].astype(str).str.upper())
+                _extra_rows = []
+                for _et in [40.0, 50.0]:
+                    _tk = f"{int(_et)}Y"
+                    if _tk not in _existing_tenors and _et in _par_ss_full:
+                        _extra_rows.append({"Tenor": _tk, "Par Rate (%)": round(_par_ss_full[_et], 4), "Conv": "S/S"})
+                if _extra_rows:
+                    import pandas as _pd2
+                    _par_table = _pd2.concat([_par_table, _pd2.DataFrame(_extra_rows)], ignore_index=True)
+            else:
+                _par_table = curve_c
             _cols_to_show.append(("IRS Par Rates (%)", _par_table))
         if _show_irs:
             _cols_to_show.append(("IRS Zero Curve (%)", curve_c))
