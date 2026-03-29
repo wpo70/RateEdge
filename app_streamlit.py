@@ -357,6 +357,7 @@ def init_database():
                 snapshot_date TIMESTAMP NOT NULL,
                 label VARCHAR(100) NOT NULL,
                 atm_vols JSONB NOT NULL,
+                atm_prems JSONB,
                 sabr_alpha JSONB,
                 sabr_beta JSONB,
                 sabr_rho JSONB,
@@ -370,6 +371,8 @@ def init_database():
             
             CREATE INDEX IF NOT EXISTS idx_vol_history_date 
             ON vol_history(snapshot_date DESC);
+            
+            ALTER TABLE vol_history ADD COLUMN IF NOT EXISTS atm_prems JSONB;
 
             CREATE TABLE IF NOT EXISTS sod_reports (
                 id SERIAL PRIMARY KEY,
@@ -1306,6 +1309,13 @@ class SwaptionTicket:
 
 def label_to_years(lbl: str) -> float:
     from datetime import date as _date, datetime as _dt
+    # Guard: if it's already a number, return it directly
+    try:
+        _f = float(lbl)
+        if _f >= 0:
+            return _f
+    except (TypeError, ValueError):
+        pass
     x = str(lbl).strip()
     # Handle DD/MM/YYYY or YYYY-MM-DD date strings
     for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
@@ -13188,13 +13198,21 @@ def sod_report_tab():
 
     # ── USD Premium change ────────────────────────────────────────
     _usd_curve = get_ccy_curve("USD")
+    def _ensure_expiry_col(df):
+        """Return DataFrame with Expiry as a plain column, not index."""
+        d = df.copy()
+        if d.index.name == "Expiry":
+            return d.reset_index()
+        if "Expiry" in d.columns:
+            return d
+        # numeric index — try to restore from index name or just label it
+        return d.reset_index().rename(columns={"index": "Expiry"})
+
     _usd_prem_t1, _ = calculate_atm_premium_matrix(
-        "USD", _usd_curve,
-        _atm1.reset_index().rename(columns={"index": "Expiry"}) if "Expiry" not in _atm1.columns else _atm1.reset_index(),
+        "USD", _usd_curve, _ensure_expiry_col(_atm1),
     ) if _usd_curve is not None and not _usd_curve.empty else (pd.DataFrame(), pd.DataFrame())
     _usd_prem_t2, _ = calculate_atm_premium_matrix(
-        "USD", _usd_curve,
-        _atm2.reset_index().rename(columns={"index": "Expiry"}) if "Expiry" not in _atm2.columns else _atm2.reset_index(),
+        "USD", _usd_curve, _ensure_expiry_col(_atm2),
     ) if _usd_curve is not None and not _usd_curve.empty else (pd.DataFrame(), pd.DataFrame())
 
     _usd_prem_chg = pd.DataFrame()
