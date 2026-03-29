@@ -4445,16 +4445,18 @@ def _load_swap_rates_from_db(floating_rate: str, load_date: str = None) -> pd.Da
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _load_swap_rates_history(floating_rate: str) -> pd.DataFrame:
-    """Load full historical swap rates as wide DataFrame (date index, tenor columns).
-    Used by FWD IRS Analysis tab for time-series charts."""
+def _load_swap_rates_history(floating_rate: str, years_back: int = 5) -> pd.DataFrame:
+    """Load historical swap rates (date × tenor). Default last 5 years to avoid hang."""
     try:
         conn = get_db_connection()
         if conn is None: return pd.DataFrame()
         cur = conn.cursor()
         cur.execute(
-            "SELECT date, tenor, rate FROM swap_rates WHERE currency=%s AND floating_rate=%s ORDER BY date",
-            ("AUD", floating_rate))
+            """SELECT date, tenor, rate FROM swap_rates
+               WHERE currency=%s AND floating_rate=%s
+                 AND date >= CURRENT_DATE - INTERVAL %s
+               ORDER BY date""",
+            ("AUD", floating_rate, f"{years_back} years"))
         rows = cur.fetchall()
         conn.close()
         if not rows: return pd.DataFrame()
@@ -4471,13 +4473,17 @@ def fwd_analysis_tab():
     st.subheader("📈 FWD IRS Analysis")
     st.caption("IRS spreads, butterflies, fwd-fwd rates and 6v3 basis from Supabase (BlueGamma data 2018-today).")
 
-    with st.spinner("Loading swap rate history..."):
-        _w3 = _load_swap_rates_history("3M BBSW")
-        _w6 = _load_swap_rates_history("6M BBSW")
+    # Load history only when explicitly requested — prevents hang on every render
+    if st.button("🔄 Load Swap Rate History", key="fwd_load_history", type="secondary"):
+        _load_swap_rates_history.clear()
+        st.session_state["_fwd_w3"] = _load_swap_rates_history("3M BBSW")
+        st.session_state["_fwd_w6"] = _load_swap_rates_history("6M BBSW")
+
+    _w3 = st.session_state.get("_fwd_w3", pd.DataFrame())
+    _w6 = st.session_state.get("_fwd_w6", pd.DataFrame())
 
     if _w3.empty and _w6.empty:
-        st.warning("No swap rate data found in database. Check Supabase connection.")
-        return
+        st.info("Click **🔄 Load Swap Rate History** to populate charts. Spreads can be saved without loading.")
 
     def _fwd(wide, start_y, tenor_y):
         end_y = start_y + tenor_y
@@ -4659,7 +4665,6 @@ def fwd_analysis_tab():
                     if len(_rm_parts)==2 and (_rm_parts[0],_rm_parts[1]) in st.session_state["irs_sp_list"]:
                         st.session_state["irs_sp_list"].remove((_rm_parts[0],_rm_parts[1]))
                         _autosave_fwd_prefs()
-                        st.rerun()
 
         if _sp_add_clicked:
             _l1 = st.session_state.get("sp_l1", _sp_l1)
@@ -4671,7 +4676,8 @@ def fwd_analysis_tab():
             else:
                 st.session_state["irs_sp_list"].append((_l1, _l2))
                 _autosave_fwd_prefs()
-                st.rerun()
+                st.success(f"✅ Added {_l1} → {_l2}")
+                # No rerun — avoids retriggering the history load
 
         c1, c2, c3 = st.columns(3)
         with c1: _sp_yr = st.slider("History (years)", 1, 8, 5, key="sp_yr")
@@ -4757,7 +4763,6 @@ def fwd_analysis_tab():
                     if len(_rp)==3 and tuple(_rp) in st.session_state["irs_fl_list"]:
                         st.session_state["irs_fl_list"].remove(tuple(_rp))
                         _autosave_fwd_prefs()
-                        st.rerun()
 
         if _fl_add_clicked:
             _fw = st.session_state.get("fl_w", _fl_w)
@@ -4770,7 +4775,6 @@ def fwd_analysis_tab():
             else:
                 st.session_state["irs_fl_list"].append((_fw,_fm,_fe))
                 _autosave_fwd_prefs()
-                st.rerun()
 
         c1,c2,c3 = st.columns(3)
         with c1: _fl_yr = st.slider("History (years)",1,8,5,key="fl_yr")
@@ -4843,7 +4847,6 @@ def fwd_analysis_tab():
                             if (_rs,_rt) in st.session_state["fvfv_list"]:
                                 st.session_state["fvfv_list"].remove((_rs,_rt))
                                 _autosave_fwd_prefs()
-                                st.rerun()
                         except: pass
 
         if _fv_add_clicked:
@@ -4854,7 +4857,6 @@ def fwd_analysis_tab():
             else:
                 st.session_state["fvfv_list"].append((_fvs, _fvt))
                 _autosave_fwd_prefs()
-                st.rerun()
 
         c1,c2,c3 = st.columns(3)
         with c1: _fv_yr = st.slider("History (years)",1,8,5,key="fv_yr")
@@ -4919,14 +4921,12 @@ def fwd_analysis_tab():
                     if st.button("➖", key="b6_rm_btn", use_container_width=True) and _b6_rm != "  —  " and _b6_rm in st.session_state["b6_list"]:
                         st.session_state["b6_list"].remove(_b6_rm)
                         _autosave_fwd_prefs()
-                        st.rerun()
 
             if _b6_add_clicked:
                 _btn = st.session_state.get("b6_add_tn", _b6_add_tn)
                 if _btn not in st.session_state["b6_list"]:
                     st.session_state["b6_list"].append(_btn)
                     _autosave_fwd_prefs()
-                    st.rerun()
 
             c1,c2 = st.columns(2)
             with c1: _b6_yr = st.slider("History (years)",1,8,5,key="b6_yr")
@@ -4971,7 +4971,6 @@ def fwd_analysis_tab():
                             if (_rs,_rt) in st.session_state["fv6_list"]:
                                 st.session_state["fv6_list"].remove((_rs,_rt))
                                 _autosave_fwd_prefs()
-                                st.rerun()
                         except: pass
 
         if _fv6_add_clicked:
@@ -4982,7 +4981,6 @@ def fwd_analysis_tab():
             else:
                 st.session_state["fv6_list"].append((_fv6s, _fv6t))
                 _autosave_fwd_prefs()
-                st.rerun()
 
         c1,c2 = st.columns(2)
         with c1: _fv6_yr = st.slider("History (years)",1,8,5,key="fv6_yr")
@@ -5052,7 +5050,6 @@ def fwd_analysis_tab():
                         if len(_rp)==2 and tuple(_rp) in st.session_state["bsp_list"]:
                             st.session_state["bsp_list"].remove(tuple(_rp))
                             _autosave_fwd_prefs()
-                            st.rerun()
 
             if _bsp_add_clicked:
                 _bl1 = st.session_state.get("bsp_l1", _bsp_l1)
@@ -5064,7 +5061,6 @@ def fwd_analysis_tab():
                 else:
                     st.session_state["bsp_list"].append((_bl1, _bl2))
                     _autosave_fwd_prefs()
-                    st.rerun()
 
             c1,c2,c3 = st.columns(3)
             with c1: _bsp_yr = st.slider("History (years)",1,8,5,key="bsp_yr")
