@@ -4519,12 +4519,15 @@ def fwd_analysis_tab():
         if r_s is None or r_e is None: return None
         return (r_e * end_y - r_s * start_y) / tenor_y
 
-    # Convention selector shown once at top
-    _conv = st.radio("Rate Convention", ["Market (≤3Y Q/Q, ≥4Y S/S)", "Q/Q (3M BBSW)", "S/S (6M BBSW)"],
-                     horizontal=True, key="fwd_conv")
-    _conv_key = "Market" if "Market" in _conv else ("Q/Q (3M BBSW)" if "Q/Q" in _conv else "S/S (6M BBSW)")
-
-    st.caption(f"3M BBSW: 1Y-3Y full history (2018-today) | 6M BBSW: 4Y-30Y full history (2018-today)")
+    # Convention selector — only relevant when history is loaded
+    if not _w3.empty or not _w6.empty:
+        _conv = st.radio("Rate Convention", ["Market (≤3Y Q/Q, ≥4Y S/S)", "Q/Q (3M BBSW)", "S/S (6M BBSW)"],
+                         horizontal=True, key="fwd_conv")
+        _conv_key = "Market" if "Market" in _conv else ("Q/Q (3M BBSW)" if "Q/Q" in _conv else "S/S (6M BBSW)")
+        st.caption("3M BBSW: 1Y-3Y | 6M BBSW: 4Y-50Y")
+    else:
+        _conv_key = st.session_state.get("fwd_conv", "Market (≤3Y Q/Q, ≥4Y S/S)")
+        _conv_key = "Market" if "Market" in _conv_key else ("Q/Q (3M BBSW)" if "Q/Q" in _conv_key else "S/S (6M BBSW)")
 
     _an_tabs = st.tabs(["IRS Spreads", "IRS Butterflies", "Fwd-Fwd Rates (3M)", "6v3 Outright", "6v3 Fwd-Fwd", "6v3 Spreads", "6v3 Butterflies"])
 
@@ -4603,13 +4606,13 @@ def fwd_analysis_tab():
             st.dataframe(_sdf.style.format("{:.4f}", na_rep="  —  "),
                          use_container_width=True, height=min(38 + 38*len(_rows), 280))
 
-    # Available tenors for dropdowns — fallback to standard AUD set if DB empty
+    # Always use standard tenor set — never depends on DB data being loaded
+    _STANDARD_TENORS = [1,2,3,4,5,6,7,8,9,10,12,15,20,25,30,40,50]
     _yr_tenors = sorted(list(set(
+        _STANDARD_TENORS +
         [int(c[:-1]) for c in _w3.columns if c.endswith("Y") and c[:-1].isdigit()] +
         [int(c[:-1]) for c in _w6.columns if c.endswith("Y") and c[:-1].isdigit()]
     )))
-    if not _yr_tenors:
-        _yr_tenors = [1,2,3,4,5,6,7,8,9,10,12,15,20,25,30]
     _tn_opts = [f"{y}Y" for y in _yr_tenors]
 
     # Fwd start/tenor options
