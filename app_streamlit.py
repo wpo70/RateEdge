@@ -3778,9 +3778,11 @@ def vol_config_tab():
     else:
         st.caption(" Database: Not configured")
 
-    # Pull latest vol snapshot label per currency from vol_history
-    _latest_snaps = {}
-    if HAS_POSTGRES and get_db_url():
+    # Pull latest vol snapshot label per currency from vol_history (cached 60s)
+    _latest_snaps = st.session_state.get("_latest_vol_snaps_cache", {})
+    _snaps_cache_age = st.session_state.get("_latest_vol_snaps_ts", 0)
+    import time as _time
+    if HAS_POSTGRES and get_db_url() and (_time.time() - _snaps_cache_age > 60):
         try:
             _sc = get_db_connection()
             if _sc:
@@ -3808,6 +3810,8 @@ def vol_config_tab():
                     _latest_snaps[_row[0]] = {"date": _snap_date_str, "label": _row[2]}
                 _scur.close()
                 _sc.close()
+                st.session_state["_latest_vol_snaps_cache"] = _latest_snaps
+                st.session_state["_latest_vol_snaps_ts"] = _time.time()
         except Exception:
             pass
 
@@ -5487,9 +5491,12 @@ def swaptions_tab(vol_mode: str):
             _EXPIRIES = ["1m","3m","6m","1y","2y","3y","5y","7y","10y","15y","20y"]
             _TENORS   = ["1Y","2Y","3Y","5Y","7Y","10Y","15Y","20Y","25Y","30Y"]
 
+            # Gate: only run expensive alpha grid on explicit button click
+            _show_alpha = st.checkbox("Show α consistency check", value=False, key="show_alpha_grid")
             _rows = []
             _any_stale = False
-            for _exp in _EXPIRIES:
+            if _show_alpha:
+             for _exp in _EXPIRIES:
                 _row = {"Expiry": _exp}
                 _exp_y = label_to_years(_exp)
                 for _ten in _TENORS:
@@ -6811,6 +6818,98 @@ def caps_floors_tab(vol_mode: str):
             with _pub_col2:
                 st.caption("Publishes swaption premiums, CFS straddle mids and wedge spreads to Supabase for the live blotter to consume via 🔄 Load Fresh Mids.")
 
+            # ── Publish ALL Blotter Mids (Vol + Premium + FWD ATM) ─────────
+            st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
+            _pb2, _pb3 = st.columns([2, 3])
+            with _pb2:
+                if st.button("📡 Publish All Mids to Blotter", key="publish_all_mids",
+                             type="primary", use_container_width=True) and require_admin("Publish All Mids"):
+                    if not HAS_POSTGRES:
+                        st.error("Database not connected.")
+                    else:
+                        _all_mids = {}
+                        _pub_ccy = ccy
+
+                        # ── 1. ATM BP Vol mids from working vol surface ──────
+                        _atm_s = get_working_atm_surface(_pub_ccy)
+                        if _atm_s is not None:
+                            _atm_w = _atm_s.copy()
+                            if "Expiry" in _atm_w.columns:
+                                _atm_w = _atm_w.set_index("Expiry")
+                            for _exp_lbl in _atm_w.index:
+                                for _ten_col in _atm_w.columns:
+                                    try:
+                                        _v = float(_atm_w.loc[_exp_lbl, _ten_col])
+                                        if not math.isnan(_v) and _v > 0:
+                                            _k = f"vol_{str(_exp_lbl).replace(' ','_')}_{str(_ten_col)}"
+                                            _all_mids[_k] = {"value": round(_v, 4),
+                                                             "label": f"ATM vol {_exp_lbl} {_ten_col} bp"}
+                                    except Exception:
+                                        pass
+
+                        # ── 2. BP Premium mids — Bachelier ATM straddle ──────
+                        # prem = 2 * N(0) * sigma_n * sqrt(T) * annuity * 10000 bp
+                        _curve_pub = get_ccy_curve(_pub_ccy)
+                        _ois_pub   = st.session_state.get("config_basis", {}).get(_pub_ccy, {}).get("ois")
+                        if _atm_s is not None and _curve_pub is not None:
+                            _atm_p = _atm_s.copy()
+                            if "Expiry" in _atm_p.columns:
+                                _atm_p = _atm_p.set_index("Expiry")
+                            for _exp_lbl in _atm_p.index:
+                                _exp_y = label_to_years(str(_exp_lbl))
+                                if _exp_y <= 0:
+                                    continue
+                                for _ten_col in _atm_p.columns:
+                                    try:
+                                        _vbp = float(_atm_p.loc[_exp_lbl, _ten_col])
+                                        if math.isnan(_vbp) or _vbp <= 0:
+                                            continue
+                                        _ten_y = label_to_years(str(_ten_col))
+                                        _, _ann, _ = forward_and_annuity_from_curve(
+                                            _curve_pub, _pub_ccy, _exp_y, _ten_y, _ois_pub)
+                                        _sig_n = _vbp / 10000.0
+                                        _prem_bp = 2 * 0.3989422804 * _sig_n * math.sqrt(max(_exp_y, 1e-6)) * _ann * 10000
+                                        _k2 = f"prem_{str(_exp_lbl).replace(' ','_')}_{str(_ten_col)}"
+                                        _all_mids[_k2] = {"value": round(_prem_bp, 4),
+                                                          "label": f"Straddle prem {_exp_lbl} {_ten_col} bp"}
+                                    except Exception:
+                                        pass
+
+                        # ── 3. FWD ATM IRS mids from forward matrix ──────────
+                        _fwd_m = st.session_state.get("fwd_matrix", {}).get(_pub_ccy)
+                        if _fwd_m is not None and not _fwd_m.empty:
+                            for _fexp in _fwd_m.index:
+                                for _ften in _fwd_m.columns:
+                                    try:
+                                        _fv = float(_fwd_m.loc[_fexp, _ften])
+                                        if not math.isnan(_fv) and _fv > 0:
+                                            _k3 = f"fwd_{str(_fexp).replace(' ','_')}_{str(_ften)}"
+                                            _all_mids[_k3] = {"value": round(_fv, 4),
+                                                              "label": f"FWD ATM {_fexp} {_ften} %"}
+                                    except Exception:
+                                        pass
+
+                        # ── 4. CFS + wedge mids (existing) ───────────────────
+                        for _sk, _wl, _tl, _tw, _cl, _sp in ROW_DATA:
+                            _td = st.session_state.get("cfs_table_data", {}).get(_tl, {})
+                            if _td.get("swaption") is not None:
+                                _all_mids[_tl] = {"value": round(float(_td["swaption"]), 4),
+                                                  "label": f"{_wl} swptn mid"}
+                            if _td.get("cfs_straddle") is not None:
+                                _all_mids[f"cfs_{_tl}"] = {"value": round(float(_td["cfs_straddle"]), 4),
+                                                            "label": f"{_cl} straddle mid"}
+                            _all_mids[f"wedge_{_sk}"] = {"value": round(float(st.session_state.get(_sk, 0)), 4),
+                                                          "label": f"{_wl} wedge bp"}
+                        _all_mids.update(st.session_state.get("atm_cfs_data", {}))
+
+                        _n_pub = publish_blotter_mids(_pub_ccy, _all_mids)
+                        if _n_pub > 0:
+                            st.success(f"✅ Published {_n_pub} mids to blotter — vol, premium, FWD ATM + CFS.")
+                        else:
+                            st.error("Nothing published — load curves and generate forward matrix first.")
+            with _pb3:
+                st.caption("Publishes ATM BP vols, Bachelier straddle premiums, FWD ATM IRS rates and CFS mids. Generate forward matrix first.")
+
 
         # ── ATM CFS Straddle Table ──────────────────────────────────
         st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
@@ -6833,7 +6932,14 @@ def caps_floors_tab(vol_mode: str):
             _ois_tmp = _ois_tmp_cb if _ois_tmp_cb is not None else get_basis_curve(ccy, "ois")
             _ois_local = _ois_tmp if (_ois_tmp is not None and not isinstance(_ois_tmp, bool)) else _curve_local
 
-            if _cfs_tdata and _curve_local is not None:
+            # Cache: only recalculate when curve id or tdata length changes
+            _cfs_id = (ccy, id(_curve_local) if _curve_local is not None else 0, len(_cfs_tdata))
+            _cfs_cached = st.session_state.get("_atm_cfs_cache_key") == _cfs_id
+            if _cfs_cached and st.session_state.get("_atm_cfs_rows_cache"):
+                st.dataframe(pd.DataFrame(st.session_state["_atm_cfs_rows_cache"]),
+                             use_container_width=True, hide_index=True)
+            elif _cfs_tdata and _curve_local is not None:
+                st.session_state["_atm_cfs_cache_key"] = _cfs_id
                 from datetime import date
                 from dateutil.relativedelta import relativedelta
                 _today = date.today()
@@ -6909,6 +7015,7 @@ def caps_floors_tab(vol_mode: str):
                         _atm_cfs_rows.append({"Tenor": f"{_t}Y", "Start": "—", "End": "—", "ATM Fwd %": "—", "Straddle bp": "—", "Flat Vol bp": "—"})
 
                 st.session_state["atm_cfs_data"] = _atm_cfs_data
+                st.session_state["_atm_cfs_rows_cache"] = _atm_cfs_rows
                 if _atm_cfs_rows:
                     st.dataframe(pd.DataFrame(_atm_cfs_rows), use_container_width=True, hide_index=True)
             else:
@@ -6929,19 +7036,26 @@ def caps_floors_tab(vol_mode: str):
                         cfs_straddle = swpt + spread
                         st.session_state["cfs_table_data"][label]["cfs_straddle"] = cfs_straddle
         
-        # Build caplet curve
+        # Build caplet curve — only rebuild when spreads or ATM surface change
         atm = get_working_atm_surface(ccy)
-        
-        caplet_vol_curve = build_caplet_vol_curve(
-            ccy, atm, None,
-            spread_3m1y=spread_3m1y,
-            spread_1y1y=spread_1y1y,
-            spread_2y1y=spread_2y1y,
-            spread_3y1y=spread_3y1y,
-            spread_4y1y=spread_4y1y,
-            spread_5y2y=spread_5y2y,
-            spread_7y3y=spread_7y3y
-        )
+        _caplet_key = (spread_3m1y, spread_1y1y, spread_2y1y, spread_3y1y,
+                       spread_4y1y, spread_5y2y, spread_7y3y,
+                       id(atm) if atm is not None else 0)
+        _cached_key = st.session_state.get("_caplet_curve_key")
+        if _cached_key != _caplet_key or st.session_state.get("caplet_vol_curve_aud") is None:
+            caplet_vol_curve = build_caplet_vol_curve(
+                ccy, atm, None,
+                spread_3m1y=spread_3m1y,
+                spread_1y1y=spread_1y1y,
+                spread_2y1y=spread_2y1y,
+                spread_3y1y=spread_3y1y,
+                spread_4y1y=spread_4y1y,
+                spread_5y2y=spread_5y2y,
+                spread_7y3y=spread_7y3y
+            )
+            st.session_state["_caplet_curve_key"] = _caplet_key
+        else:
+            caplet_vol_curve = st.session_state.get("caplet_vol_curve_aud")
         
         if caplet_vol_curve and len(caplet_vol_curve) > 0:
             st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
