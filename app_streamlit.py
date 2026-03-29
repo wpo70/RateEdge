@@ -3161,8 +3161,10 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
                         "30y v 40y": 40.0, "30y v 50y": 50.0}
         OIS_MAP = {"OIS 1W":1/52,"OIS 1M":1/12,"OIS 2M":2/12,"OIS 3M":3/12,
                    "OIS 4M":4/12,"OIS 5M":5/12,"OIS 6M":6/12,"OIS 9M":9/12,
-                   "OIS 1Y":1.0,"OIS 2Y":2.0,"OIS 3Y":3.0,
-                   "OIS 40Y":40.0,"OIS 50Y":50.0}
+                   "OIS 1Y":1.0,"OIS 2Y":2.0,"OIS 3Y":3.0}
+        # Note: OIS 40Y/50Y are NOT added here — they would seed bootstrap DFs
+        # at those maturities before IRS par bootstrap runs, contaminating the zero curve.
+        # Long-end OIS is read from OIS_AUD sheet and stored in config_basis for charting only.
 
         par_qq: dict = {}
         par_ss: dict = {}
