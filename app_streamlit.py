@@ -553,6 +553,12 @@ def save_all_session_data(user_id: str):
                         bc_save = bc_save.reset_index()
                     _save(f"basis_{basis_type}", ccy, {"values": bc_save.to_dict(orient="records")})
 
+        # AUD par rates — needed to rebuild QQ/SS zero curves after DB load
+        _par_qq = st.session_state.get("_aud_par_qq", {})
+        _par_ss = st.session_state.get("_aud_par_ss", {})
+        if _par_qq and _par_ss:
+            _save("aud_par_rates", "AUD", {"par_qq": _par_qq, "par_ss": _par_ss})
+
         # FWD prefs
         _fwd_prefs = {
             "irs_sp_list":  [list(x) for x in st.session_state.get("irs_sp_list", [])],
@@ -583,8 +589,8 @@ def save_all_session_data(user_id: str):
     return saved
 
 
-def load_all_session_data(user_id: str) -> int:
-    """Load all saved data into session state"""
+def load_all_session_data(user_id: str, load_date: str = None) -> int:
+    """Load all saved data into session state. load_date: specific date string (YYYY-MM-DD) or None for latest."""
     configs = load_all_user_configs(user_id)
     if not configs:
         return 0
@@ -610,8 +616,8 @@ def load_all_session_data(user_id: str) -> int:
         try:
             if ccy == "AUD":
                 # AUD is dual-curve: 3M BBSW for <=3Y (Q/Q), 6M BBSW for >=4Y (S/S)
-                _df_3m = _load_curve_from_db_latest("3M BBSW", "AUD")
-                _df_6m = _load_curve_from_db_latest("6M BBSW", "AUD")
+                _df_3m = _load_curve_from_db_latest("3M BBSW", "AUD", load_date)
+                _df_6m = _load_curve_from_db_latest("6M BBSW", "AUD", load_date)
                 _aud_parts = []
                 if _df_3m is not None and len(_df_3m) > 0:
                     _short = _df_3m[_df_3m["MaturityY"] <= 3.0].copy()
@@ -634,7 +640,7 @@ def load_all_session_data(user_id: str) -> int:
                     )
                     loaded += 1
                 # AUD OIS (AONIA)
-                _df_ois = _load_curve_from_db_latest("AONIA", "AUD")
+                _df_ois = _load_curve_from_db_latest("AONIA", "AUD", load_date)
                 if _df_ois is not None and len(_df_ois) > 0:
                     if "AUD" not in st.session_state["basis_curves"]:
                         st.session_state["basis_curves"]["AUD"] = {}
@@ -646,7 +652,7 @@ def load_all_session_data(user_id: str) -> int:
                     st.session_state["config_basis"]["AUD"]["ois"] = _df_ois
 
             elif ccy == "NZD":
-                _df_bkbm = _load_curve_from_db_latest("3M BKBM", "NZD")
+                _df_bkbm = _load_curve_from_db_latest("3M BKBM", "NZD", load_date)
                 if _df_bkbm is not None and len(_df_bkbm) >= 3:
                     set_ccy_curve("NZD", _df_bkbm)
                     if "config_curves" not in st.session_state:
@@ -657,7 +663,7 @@ def load_all_session_data(user_id: str) -> int:
                         f"NZD curve: 3M BKBM ({len(_df_bkbm)} pts, {_src})"
                     )
                     loaded += 1
-                _df_nzonia = _load_curve_from_db_latest("NZONIA", "NZD")
+                _df_nzonia = _load_curve_from_db_latest("NZONIA", "NZD", load_date)
                 if _df_nzonia is not None and len(_df_nzonia) > 0:
                     if "NZD" not in st.session_state["basis_curves"]:
                         st.session_state["basis_curves"]["NZD"] = {}
@@ -669,7 +675,7 @@ def load_all_session_data(user_id: str) -> int:
                     st.session_state["config_basis"]["NZD"]["ois"] = _df_nzonia
 
             elif ccy == "USD":
-                _df_sofr = _load_curve_from_db_latest("SOFR", "USD")
+                _df_sofr = _load_curve_from_db_latest("SOFR", "USD", load_date)
                 if _df_sofr is not None and len(_df_sofr) >= 3:
                     set_ccy_curve("USD", _df_sofr)
                     if "config_curves" not in st.session_state:
@@ -734,6 +740,89 @@ def load_all_session_data(user_id: str) -> int:
                     loaded += 1
                 except:
                     pass
+
+    # AUD: restore par rates and rebuild pure QQ/SS zero curves
+    # These are not rebuilt on DB load (bootstrap only runs on Excel commit),
+    # so we must restore and rebuild from stored par rates.
+    if "aud_par_rates" in configs and "AUD" in configs["aud_par_rates"]:
+        try:
+            _pdata = configs["aud_par_rates"]["AUD"]["data"]
+            _par_qq = {float(k): float(v) for k, v in _pdata.get("par_qq", {}).items()}
+            _par_ss = {float(k): float(v) for k, v in _pdata.get("par_ss", {}).items()}
+            if _par_qq and _par_ss:
+                st.session_state["_aud_par_qq"] = _par_qq
+                st.session_state["_aud_par_ss"] = _par_ss
+
+                # Rebuild _irs_par_rates["AUD"] so IRS Par chart shows real par rates
+                _par_rows = []
+                for _t, _r in sorted(_par_qq.items()): _par_rows.append({"Tenor": f"{_t}Y", "Par Rate (%)": _r, "Conv": "Q/Q"})
+                for _t, _r in sorted(_par_ss.items()): _par_rows.append({"Tenor": f"{_t}Y", "Par Rate (%)": _r, "Conv": "S/S"})
+                if "_irs_par_rates" not in st.session_state: st.session_state["_irs_par_rates"] = {}
+                st.session_state["_irs_par_rates"]["AUD"] = pd.DataFrame(_par_rows)
+
+                # Rebuild pure QQ and SS zero curves using OIS from session state
+                _ois_df = st.session_state.get("config_basis", {}).get("AUD", {}).get("ois")
+                _basis_df = st.session_state.get("config_basis", {}).get("AUD", {}).get("6v3")
+
+                _ois_rates_rebuild = {}
+                if _ois_df is not None and not _ois_df.empty:
+                    for _, _row in _ois_df.iterrows():
+                        _ois_rates_rebuild[float(_row["MaturityY"])] = float(_row["ZeroRatePct"])
+
+                _bx2 = _by2 = None
+                if _basis_df is not None and not _basis_df.empty:
+                    _bx2 = _basis_df["MaturityY"].to_numpy().astype(float)
+                    _by2 = _basis_df["BasisBp"].to_numpy().astype(float)
+                def _b2(t):
+                    if _bx2 is None: return 0.0
+                    return float(np.interp(t, _bx2, _by2))
+
+                _SPOT2 = 1.0 / 252.0
+
+                def _rebuild_zero(par_inputs, all_qq):
+                    _dfs2 = {0.0: 1.0}
+                    for _t2, _r2 in sorted(_ois_rates_rebuild.items()):
+                        _dfs2[_t2] = math.exp(-_r2 / 100.0 * _t2)
+                    def _dfi2(t):
+                        _ts2 = sorted(_dfs2.keys()); _dfv2 = [_dfs2[x] for x in _ts2]
+                        if t <= _ts2[0]: return _dfv2[0]
+                        if t >= _ts2[-1]:
+                            _z2 = -math.log(_dfv2[-1]) / _ts2[-1]; return math.exp(-_z2 * t)
+                        for _i2 in range(len(_ts2) - 1):
+                            if _ts2[_i2] <= t <= _ts2[_i2+1]:
+                                _w2 = (t - _ts2[_i2]) / (_ts2[_i2+1] - _ts2[_i2])
+                                return math.exp((1-_w2)*math.log(_dfv2[_i2]) + _w2*math.log(_dfv2[_i2+1]))
+                        return _dfv2[-1]
+                    _freq2 = 0.25 if all_qq else 0.50
+                    for _tenor2 in sorted(par_inputs.keys()):
+                        _c2 = par_inputs[_tenor2] / 100.0
+                        _swap_end2 = _SPOT2 + _tenor2
+                        _times2 = []; _t2i = _SPOT2 + _freq2
+                        while _t2i <= _swap_end2 + 1e-9:
+                            _times2.append(round(min(_t2i, _swap_end2), 8)); _t2i += _freq2
+                        if not _times2: continue
+                        _ann2 = sum(_dfi2(_ti2) * _freq2 for _ti2 in _times2[:-1])
+                        _df_end2 = (_dfi2(_SPOT2) - _c2 * _ann2) / (1.0 + _c2 * _freq2)
+                        if _df_end2 > 0 and not math.isnan(_df_end2):
+                            _dfs2[_swap_end2] = _df_end2
+                    _MATS2 = [0.25,0.5,0.75,1.0,1.5,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,12.0,15.0,20.0,25.0,30.0]
+                    _zc2 = {}
+                    for _m2 in _MATS2:
+                        _d2 = _dfi2(_m2)
+                        if _d2 > 0 and not math.isnan(_d2):
+                            _zc2[_m2] = -math.log(_d2) / _m2 * 100
+                    return _zc2
+
+                _par_qq_full2 = dict(_par_qq)
+                for _t2, _r2 in _par_ss.items(): _par_qq_full2[_t2] = _r2 - _b2(_t2) / 100.0
+                _par_ss_full2 = dict(_par_ss)
+                for _t2, _r2 in _par_qq.items(): _par_ss_full2[_t2] = _r2 + _b2(_t2) / 100.0
+
+                st.session_state["_aud_zc_qq"] = _rebuild_zero(_par_qq_full2, all_qq=True)
+                st.session_state["_aud_zc_ss"] = _rebuild_zero(_par_ss_full2, all_qq=False)
+                loaded += 1
+        except Exception as _pex:
+            pass
 
     # Restore FWD Analysis series lists   —   DB always wins, overrides tab defaults
     if "fwd_analysis_prefs" in configs and "GLB" in configs["fwd_analysis_prefs"]:
@@ -2846,8 +2935,8 @@ def init_session():
 
 
 def get_timestamp_str(category: str, ccy: str) -> str:
-    """Get formatted timestamp string for a category/currency (Sydney time)"""
-    from datetime import datetime, timezone
+    """Get formatted timestamp string for a category/currency (Sydney time, AEST/AEDT aware)."""
+    from datetime import datetime, timezone, timedelta
     ts = st.session_state.get("load_timestamps", {}).get(category, {}).get(ccy)
     if ts is None:
         return "Not loaded"
@@ -2855,7 +2944,10 @@ def get_timestamp_str(category: str, ccy: str) -> str:
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
         ts_syd = ts.astimezone(SYDNEY_TZ)
-        return ts_syd.strftime("%Y-%m-%d %H:%M:%S AEST")
+        # Determine AEST (UTC+10) vs AEDT (UTC+11) from actual UTC offset
+        utc_offset_hours = ts_syd.utcoffset().total_seconds() / 3600
+        tz_label = "AEDT" if utc_offset_hours == 11 else "AEST"
+        return ts_syd.strftime(f"%d-%b-%Y %H:%M:%S {tz_label}")
     except:
         return ts.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -3390,17 +3482,44 @@ def vol_config_tab():
     # Database load button - ALWAYS visible at top
     db_url = get_db_url()
     if HAS_POSTGRES and db_url:
+        # Date picker row — default to latest available curve date in DB
+        from datetime import date as _dt_date
+        _date_col, _lbl_col = st.columns([2, 6])
+        with _date_col:
+            # Get available dates from swap_rates for the date picker
+            _avail_dates = []
+            try:
+                _dc = get_db_connection()
+                if _dc:
+                    _dcur = _dc.cursor()
+                    _dcur.execute("SELECT DISTINCT date FROM swap_rates WHERE currency='AUD' ORDER BY date DESC LIMIT 60")
+                    _avail_dates = [r[0] for r in _dcur.fetchall()]
+                    _dc.close()
+            except: pass
+            _default_date = _avail_dates[0] if _avail_dates else _dt_date.today()
+            _load_date = st.date_input(
+                "Curve/Vol date to load",
+                value=_default_date,
+                key="db_load_date",
+                format="DD/MM/YYYY",
+                help="Pick a historical date to restore that day's curves and vols. Defaults to latest available."
+            )
+        with _lbl_col:
+            if _avail_dates:
+                st.caption(f"Curve dates in DB: {', '.join(str(d) for d in _avail_dates[:5])}{'...' if len(_avail_dates)>5 else ''}")
+
         col_db1, col_db2, col_db3 = st.columns([2, 2, 4])
         with col_db1:
             if st.button(" Load from Database", key="load_db_btn_top", type="primary"):
                 user_id = st.session_state.get("username", "default")
                 st.session_state.pop("_load_debug", None)
-                loaded_count = load_all_session_data(user_id)
+                st.session_state["_db_load_date"] = str(_load_date)
+                loaded_count = load_all_session_data(user_id, load_date=str(_load_date))
                 _load_dbg = st.session_state.pop("_load_debug", [])
                 if loaded_count > 0:
                     for _msg in _load_dbg:
                         st.info(f"📊 {_msg}")
-                    st.success(f" Loaded {loaded_count} configs from database")
+                    st.success(f" Loaded {loaded_count} configs from database ({_load_date})")
                     st.rerun()
                 else:
                     st.warning("No saved data found in database")
@@ -3754,18 +3873,25 @@ def vol_config_tab():
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _load_curve_from_db_latest(floating_rate: str, ccy: str = "AUD") -> pd.DataFrame:
-    """Load latest date's rates from swap_rates table, return curve DataFrame."""
+def _load_curve_from_db_latest(floating_rate: str, ccy: str = "AUD", load_date: str = None) -> pd.DataFrame:
+    """Load swap rates from swap_rates table. load_date: specific date or None for latest."""
     try:
         conn = get_db_connection()
         if conn is None:
             return None
         cur = conn.cursor()
-        # Get the most recent date available
-        cur.execute(
-            "SELECT MAX(date) FROM swap_rates WHERE currency=%s AND floating_rate=%s",
-            (ccy, floating_rate)
-        )
+        # Use specified date or find the most recent available
+        if load_date:
+            # Try exact date first, fall back to most recent on or before that date
+            cur.execute(
+                "SELECT MAX(date) FROM swap_rates WHERE currency=%s AND floating_rate=%s AND date <= %s",
+                (ccy, floating_rate, load_date)
+            )
+        else:
+            cur.execute(
+                "SELECT MAX(date) FROM swap_rates WHERE currency=%s AND floating_rate=%s",
+                (ccy, floating_rate)
+            )
         row = cur.fetchone()
         if not row or row[0] is None:
             conn.close()
@@ -3914,15 +4040,18 @@ def curves_tab():
         fig = go.Figure()
         if _show_par:
             if par_rates is not None and not par_rates.empty:
-                # AUD: real par rates from BBG bootstrap (different from zero curve)
-                _par_x = par_rates["Tenor"].apply(lambda x: float(x[:-1]) if x.endswith("Y") else float(x[:-1])/12)
-                _par_y = par_rates["Par Rate (%)"]
+                # AUD: real par rates from BBG/DB restore
+                try:
+                    _par_x = par_rates["Tenor"].apply(lambda x: float(x[:-1]) if str(x).endswith("Y") else float(str(x)[:-1])/12)
+                    _par_y = par_rates["Par Rate (%)"]
+                    fig.add_trace(go.Scatter(x=_par_x, y=_par_y,
+                        mode="lines+markers", name="IRS Par", line=dict(color="#22c55e", width=2)))
+                except Exception:
+                    pass
             else:
-                # NZD/USD: config_curves IS the par curve
-                _par_x = curve_c["MaturityY"]
-                _par_y = curve_c["ZeroRatePct"]
-            fig.add_trace(go.Scatter(x=_par_x, y=_par_y,
-                mode="lines+markers", name="IRS Par", line=dict(color="#22c55e", width=2)))
+                # NZD/USD (or AUD before any config loaded): config_curves IS the par curve
+                fig.add_trace(go.Scatter(x=curve_c["MaturityY"], y=curve_c["ZeroRatePct"],
+                    mode="lines+markers", name="IRS Par", line=dict(color="#22c55e", width=2)))
         if _show_irs:
             fig.add_trace(go.Scatter(x=curve_c["MaturityY"], y=curve_c["ZeroRatePct"],
                 mode="lines+markers", name="IRS Zero", line=dict(color="#3b82f6", width=2)))
