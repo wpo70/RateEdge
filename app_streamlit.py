@@ -640,38 +640,11 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                     )
                     loaded += 1
 
-                    # Build par_qq/par_ss dicts from DB swap rates.
-                    # Supabase swap_rates stores par rates directly as ZeroRatePct.
-                    # These drive the matrix and IRS Par chart — no BBG Excel needed.
-                    try:
-                        _par_qq_db = {}
-                        _par_ss_db = {}
-                        if _df_3m is not None:
-                            for _, _r3 in _df_3m.iterrows():
-                                _mat = float(_r3["MaturityY"])
-                                if _mat <= 3.0 and float(_r3.get("ZeroRatePct", 0)) > 0:
-                                    _par_qq_db[_mat] = float(_r3["ZeroRatePct"])
-                        if _df_6m is not None:
-                            for _, _r6 in _df_6m.iterrows():
-                                _mat = float(_r6["MaturityY"])
-                                if _mat >= 4.0 and float(_r6.get("ZeroRatePct", 0)) > 0:
-                                    _par_ss_db[_mat] = float(_r6["ZeroRatePct"])
-                        if _par_qq_db and _par_ss_db:
-                            st.session_state["_aud_par_qq"] = _par_qq_db
-                            st.session_state["_aud_par_ss"] = _par_ss_db
-                            # Rebuild _irs_par_rates["AUD"] so IRS Par chart shows real par rates
-                            _pr_rows = []
-                            for _pt, _pr in sorted(_par_qq_db.items()):
-                                _pr_rows.append({"Tenor": f"{_pt}Y", "Par Rate (%)": _pr, "Conv": "Q/Q"})
-                            for _pt, _pr in sorted(_par_ss_db.items()):
-                                _pr_rows.append({"Tenor": f"{_pt}Y", "Par Rate (%)": _pr, "Conv": "S/S"})
-                            if "_irs_par_rates" not in st.session_state:
-                                st.session_state["_irs_par_rates"] = {}
-                            st.session_state["_irs_par_rates"]["AUD"] = pd.DataFrame(_pr_rows)
-                            # Flag for deferred zero curve rebuild (needs basis, loaded later)
-                            st.session_state["_aud_needs_zc_rebuild"] = True
-                    except Exception:
-                        pass
+                    # NOTE: par_qq/par_ss (real BBG par rates) are stored in user_configs
+                    # as aud_par_rates and rebuilt below after basis curves are loaded.
+                    # Do NOT attempt to derive par rates from swap_rates — those store
+                    # bootstrapped zero rates, not par rates.
+                    pass
                 # AUD OIS (AONIA)
                 _df_ois = _load_curve_from_db_latest("AONIA", "AUD", load_date)
                 if _df_ois is not None and len(_df_ois) > 0:
@@ -774,70 +747,7 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                 except:
                     pass
 
-    # AUD: rebuild pure QQ/SS zero curves now that basis is loaded.
-    # _aud_needs_zc_rebuild is set when par_qq/par_ss were built from DB swap rates above.
-    if st.session_state.pop("_aud_needs_zc_rebuild", False):
-        try:
-            _par_qq_r = st.session_state.get("_aud_par_qq", {})
-            _par_ss_r = st.session_state.get("_aud_par_ss", {})
-            _basis_r = st.session_state.get("config_basis", {}).get("AUD", {}).get("6v3")
-            _ois_r = st.session_state.get("config_basis", {}).get("AUD", {}).get("ois")
-            if _par_qq_r and _par_ss_r:
-                _bxr = _byr = None
-                if _basis_r is not None and not _basis_r.empty:
-                    _bxr = _basis_r["MaturityY"].to_numpy().astype(float)
-                    _byr = _basis_r["BasisBp"].to_numpy().astype(float)
-                def _br(t):
-                    if _bxr is None: return 0.0
-                    return float(np.interp(t, _bxr, _byr))
-                _ois_map_r = {}
-                if _ois_r is not None and not _ois_r.empty:
-                    for _, _ro in _ois_r.iterrows():
-                        _ois_map_r[float(_ro["MaturityY"])] = float(_ro["ZeroRatePct"])
-                _SPOT_R = 1.0 / 252.0
-                def _rebuild_zc(par_inputs, all_qq):
-                    _dfs_r = {0.0: 1.0}
-                    for _tr, _rr in sorted(_ois_map_r.items()):
-                        _dfs_r[_tr] = math.exp(-_rr / 100.0 * _tr)
-                    def _dfi_r(t):
-                        _tsr = sorted(_dfs_r.keys()); _dfvr = [_dfs_r[x] for x in _tsr]
-                        if t <= _tsr[0]: return _dfvr[0]
-                        if t >= _tsr[-1]:
-                            _zr = -math.log(_dfvr[-1]) / _tsr[-1]; return math.exp(-_zr * t)
-                        for _ir in range(len(_tsr) - 1):
-                            if _tsr[_ir] <= t <= _tsr[_ir+1]:
-                                _wr = (t - _tsr[_ir]) / (_tsr[_ir+1] - _tsr[_ir])
-                                return math.exp((1-_wr)*math.log(_dfvr[_ir]) + _wr*math.log(_dfvr[_ir+1]))
-                        return _dfvr[-1]
-                    _freqr = 0.25 if all_qq else 0.50
-                    for _tenr in sorted(par_inputs.keys()):
-                        _cr = par_inputs[_tenr] / 100.0
-                        _ser = _SPOT_R + _tenr
-                        _timesr = []; _ttr = _SPOT_R + _freqr
-                        while _ttr <= _ser + 1e-9:
-                            _timesr.append(round(min(_ttr, _ser), 8)); _ttr += _freqr
-                        if not _timesr: continue
-                        _annr = sum(_dfi_r(_tir) * _freqr for _tir in _timesr[:-1])
-                        _dfendr = (_dfi_r(_SPOT_R) - _cr * _annr) / (1.0 + _cr * _freqr)
-                        if _dfendr > 0 and not math.isnan(_dfendr):
-                            _dfs_r[_ser] = _dfendr
-                    _MATSR = [0.25,0.5,0.75,1.0,1.5,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,12.0,15.0,20.0,25.0,30.0]
-                    _zcr = {}
-                    for _mr in _MATSR:
-                        _dr = _dfi_r(_mr)
-                        if _dr > 0 and not math.isnan(_dr):
-                            _zcr[_mr] = -math.log(_dr) / _mr * 100
-                    return _zcr
-                _pqf = dict(_par_qq_r)
-                for _tr, _rr in _par_ss_r.items(): _pqf[_tr] = _rr - _br(_tr) / 100.0
-                _psf = dict(_par_ss_r)
-                for _tr, _rr in _par_qq_r.items(): _psf[_tr] = _rr + _br(_tr) / 100.0
-                st.session_state["_aud_zc_qq"] = _rebuild_zc(_pqf, all_qq=True)
-                st.session_state["_aud_zc_ss"] = _rebuild_zc(_psf, all_qq=False)
-        except Exception:
-            pass
-
-    # AUD: also restore from stored aud_par_rates in user_configs (legacy path)
+    # AUD: restore par rates and rebuild zero curves from aud_par_rates in user_configs
     if "aud_par_rates" in configs and "AUD" in configs["aud_par_rates"]:
         try:
             _pdata = configs["aud_par_rates"]["AUD"]["data"]
@@ -3283,13 +3193,22 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
             # Pure SS: >=4Y direct 6M BBSW, <=3Y = (QQ par + basis) bootstrapped at S/S freq.
             # Using separate curves avoids the blended-curve basis error on 4y+ Q/Q forwards.
             try:
-                _basis_6v3 = _st.session_state.get("config_basis", {}).get("AUD", {}).get("6v3")
+                # Read basis directly from Excel — session state not yet populated at this point
+                # since load_config_excel loads curves before basis.
                 _bx = _by = None
-                if _basis_6v3 is not None and not _basis_6v3.empty:
-                    _bx = _basis_6v3["MaturityY"].to_numpy().astype(float)
-                    _by = _basis_6v3["BasisBp"].to_numpy().astype(float)
+                try:
+                    if "Basis_AUD_6v3" in xl.sheet_names:
+                        _raw_b6 = pd.read_excel(xl, sheet_name="Basis_AUD_6v3", usecols=[0,1], header=0)
+                        _raw_b6.columns = ["Tenor (Years)", "Basis (bp)"]
+                        _raw_b6 = _raw_b6.dropna()
+                        _bx = pd.to_numeric(_raw_b6["Tenor (Years)"], errors="coerce").to_numpy()
+                        _by = pd.to_numeric(_raw_b6["Basis (bp)"], errors="coerce").to_numpy()
+                        _mask = ~(np.isnan(_bx) | np.isnan(_by))
+                        _bx = _bx[_mask]; _by = _by[_mask]
+                except Exception:
+                    _bx = _by = None
                 def _basis_at(t):
-                    if _bx is None: return 0.0
+                    if _bx is None or len(_bx) == 0: return 0.0
                     return float(np.interp(t, _bx, _by))
 
                 def _build_pure_zero(par_inputs, all_qq):
@@ -3611,9 +3530,13 @@ def vol_config_tab():
                 loaded_count = load_all_session_data(user_id, load_date=str(_load_date))
                 _load_dbg = st.session_state.pop("_load_debug", [])
                 if loaded_count > 0:
+                    # Store toasts for display after rerun (st.toast persists across rerun)
                     for _msg in _load_dbg:
-                        st.info(f"📊 {_msg}")
-                    st.success(f" Loaded {loaded_count} configs from database ({_load_date})")
+                        st.toast(f"📊 {_msg}", icon="✅")
+                    st.toast(f"Loaded {loaded_count} configs ({_load_date})", icon="✅")
+                    st.session_state["_post_load_msgs"] = _load_dbg
+                    st.session_state["_post_load_count"] = loaded_count
+                    st.session_state["_post_load_date"] = str(_load_date)
                     st.rerun()
                 else:
                     st.warning("No saved data found in database")
@@ -3797,6 +3720,15 @@ def vol_config_tab():
     _auto_msg = st.session_state.pop("_auto_load_msg", None)
     if _auto_msg:
         st.info(_auto_msg)
+
+    # Show post-load summary (persists after rerun from Load from Database)
+    _post_msgs = st.session_state.pop("_post_load_msgs", None)
+    _post_count = st.session_state.pop("_post_load_count", None)
+    _post_date = st.session_state.pop("_post_load_date", None)
+    if _post_count is not None:
+        st.success(f"✅ Loaded {_post_count} configs from database ({_post_date})")
+        for _pm in (_post_msgs or []):
+            st.info(f"📊 {_pm}")
 
     # Show database status
     if HAS_POSTGRES and get_db_url():
