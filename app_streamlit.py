@@ -1207,15 +1207,17 @@ def publish_blotter_mids(ccy: str, mids: dict) -> int:
         if not rows:
             conn.close()
             return 0
-        # Single batch upsert — one round-trip regardless of row count
-        cur.executemany("""
+        # True batch upsert — single SQL statement via execute_values
+        from psycopg2.extras import execute_values
+        execute_values(cur, """
             INSERT INTO blotter_mids (ccy, key, value, label, updated_at)
-            VALUES (%s, %s, %s, %s, NOW())
+            VALUES %s
             ON CONFLICT (ccy, key) DO UPDATE
                 SET value = EXCLUDED.value,
                     label = EXCLUDED.label,
                     updated_at = NOW()
-        """, rows)
+        """, [(ccy, k, v, l, None) for ccy,k,v,l in [(r[0],r[1],r[2],r[3]) for r in rows]],
+        template="(%s, %s, %s, %s, NOW())")
         conn.commit()
         cur.close()
         conn.close()
@@ -4452,7 +4454,39 @@ def curves_tab():
                             except: pass
                 if _all_mids:
                     _n = publish_blotter_mids(_pub_ccy, _all_mids)
-                    st.success(f"✅ Published {_n} mids to blotter for {_pub_ccy}")
+                    # Save snapshot fast — direct INSERT using already-built matrices
+                    try:
+                        from psycopg2.extras import Json as _Json
+                        _snap_conn = get_db_connection()
+                        if _snap_conn:
+                            _snap_uid = st.session_state.get("username", "wpo@rateedge.au")
+                            if _snap_uid in {"wpo70@icloud.com"}: _snap_uid = "wpo@rateedge.au"
+                            # Build atm_vols JSON from working surface
+                            _snap_atm = get_working_atm_surface(_pub_ccy)
+                            _snap_prem_df = st.session_state.get("atm_prem_matrix", {}).get(_pub_ccy, {}).get("prem")
+                            if _snap_atm is not None:
+                                _atm_j = _snap_atm.copy()
+                                if _atm_j.index.name == "Expiry": _atm_j = _atm_j.reset_index()
+                                _atm_json = _Json({"values": _atm_j.to_dict(orient="records")})
+                                _prem_json = None
+                                if _snap_prem_df is not None:
+                                    _pv2 = _snap_prem_df.copy()
+                                    if _pv2.index.name == "Expiry": _pv2 = _pv2.reset_index()
+                                    _prem_json = _Json({"values": _pv2.to_dict(orient="records")})
+                                from datetime import datetime as _dtnow2
+                                _slbl = f"{_pub_ccy} {_dtnow2.now().strftime('%d-%b-%Y %H:%M')}"
+                                _sc2 = _snap_conn.cursor()
+                                _sc2.execute("""
+                                    INSERT INTO vol_history
+                                    (user_id, currency, snapshot_date, label, atm_vols, atm_prems, notes)
+                                    VALUES (%s,%s,NOW(),%s,%s,%s,%s)
+                                """, (_snap_uid, _pub_ccy, _slbl, _atm_json, _prem_json, "Published from Curves tab"))
+                                _snap_conn.commit()
+                                _sc2.close()
+                            _snap_conn.close()
+                    except Exception as _se:
+                        pass  # snapshot failure doesn't block publish
+                    st.success(f"✅ Published {_n} mids + snapshot saved for {_pub_ccy}")
                 else:
                     st.warning("No data — generate forward matrix and ATM matrix first.")
     with _pb2:
