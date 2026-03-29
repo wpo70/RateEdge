@@ -3110,7 +3110,8 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
 
         QQ_MAP = {"6m QQ":0.5,"9m QQ":0.75,"1Y QQ":1.0,"18m QQ":1.5,"2Y QQ":2.0,"3Y QQ":3.0}
         SS_MAP = {"4Y SS":4.0,"5Y SS":5.0,"6Y SS":6.0,"7Y SS":7.0,"8Y SS":8.0,"9Y SS":9.0,
-                  "10Y SS":10.0,"12Y SS":12.0,"15Y SS":15.0,"20Y SS":20.0,"25Y SS":25.0,"30Y SS":30.0}
+                  "10Y SS":10.0,"12Y SS":12.0,"15Y SS":15.0,"20Y SS":20.0,"25Y SS":25.0,"30Y SS":30.0,
+                  "40Y SS":40.0,"50Y SS":50.0}
         OIS_MAP = {"OIS 1W":1/52,"OIS 1M":1/12,"OIS 2M":2/12,"OIS 3M":3/12,
                    "OIS 4M":4/12,"OIS 5M":5/12,"OIS 6M":6/12,"OIS 9M":9/12,
                    "OIS 1Y":1.0,"OIS 2Y":2.0,"OIS 3Y":3.0}
@@ -3274,7 +3275,7 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
                         _df_end = (_dfi(SPOT) - _c * _ann) / (1.0 + _c * _freq)
                         if _df_end > 0 and not math.isnan(_df_end):
                             _dfs[_swap_end] = _df_end
-                    _MATS = [0.25,0.5,0.75,1.0,1.5,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,12.0,15.0,20.0,25.0,30.0]
+                    _MATS = [0.25,0.5,0.75,1.0,1.5,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,12.0,15.0,20.0,25.0,30.0,40.0,50.0]
                     _zc = {}
                     for _m in _MATS:
                         _d = _dfi(_m)
@@ -3326,7 +3327,7 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
             return dfv[-1]
 
         MATURITIES = [0.25, 0.50, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0,
-                      7.0, 8.0, 9.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0]
+                      7.0, 8.0, 9.0, 10.0, 12.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0]
         rows = []
         for m in MATURITIES:
             d = _irs_df(m)
@@ -4443,14 +4444,36 @@ def _load_swap_rates_from_db(floating_rate: str, load_date: str = None) -> pd.Da
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_swap_rates_history(floating_rate: str) -> pd.DataFrame:
+    """Load full historical swap rates as wide DataFrame (date index, tenor columns).
+    Used by FWD IRS Analysis tab for time-series charts."""
+    try:
+        conn = get_db_connection()
+        if conn is None: return pd.DataFrame()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT date, tenor, rate FROM swap_rates WHERE currency=%s AND floating_rate=%s ORDER BY date",
+            ("AUD", floating_rate))
+        rows = cur.fetchall()
+        conn.close()
+        if not rows: return pd.DataFrame()
+        df = pd.DataFrame(rows, columns=["date","tenor","rate"])
+        df["date"] = pd.to_datetime(df["date"])
+        df["rate"] = df["rate"].astype(float)
+        return df.pivot_table(index="date", columns="tenor", values="rate", aggfunc="last").sort_index()
+    except Exception:
+        return pd.DataFrame()
+
+
 def fwd_analysis_tab():
     """FWD Swap & Basis Historical Analysis tab"""
     st.subheader("📈 FWD IRS Analysis")
     st.caption("IRS spreads, butterflies, fwd-fwd rates and 6v3 basis from Supabase (BlueGamma data 2018-today).")
 
     with st.spinner("Loading swap rate history..."):
-        _w3 = _load_swap_rates_from_db("3M BBSW")
-        _w6 = _load_swap_rates_from_db("6M BBSW")
+        _w3 = _load_swap_rates_history("3M BBSW")
+        _w6 = _load_swap_rates_history("6M BBSW")
 
     if _w3.empty and _w6.empty:
         st.warning("No swap rate data found in database. Check Supabase connection.")
@@ -4574,12 +4597,13 @@ def fwd_analysis_tab():
             st.dataframe(_sdf.style.format("{:.4f}", na_rep="  —  "),
                          use_container_width=True, height=min(38 + 38*len(_rows), 280))
 
-    # Available tenors for dropdowns
-    _yr_tenors = sorted(
-        [int(c[:-1]) for c in _w3.columns if c.endswith("Y")] +
-        [int(c[:-1]) for c in _w6.columns if c.endswith("Y")],
-    )
-    _yr_tenors = sorted(list(set(_yr_tenors)))
+    # Available tenors for dropdowns — fallback to standard AUD set if DB empty
+    _yr_tenors = sorted(list(set(
+        [int(c[:-1]) for c in _w3.columns if c.endswith("Y") and c[:-1].isdigit()] +
+        [int(c[:-1]) for c in _w6.columns if c.endswith("Y") and c[:-1].isdigit()]
+    )))
+    if not _yr_tenors:
+        _yr_tenors = [1,2,3,4,5,6,7,8,9,10,12,15,20,25,30]
     _tn_opts = [f"{y}Y" for y in _yr_tenors]
 
     # Fwd start/tenor options
@@ -4651,18 +4675,28 @@ def fwd_analysis_tab():
 
         c1, c2, c3 = st.columns(3)
         with c1: _sp_yr = st.slider("History (years)", 1, 8, 5, key="sp_yr")
-        with c2: _sp_bands = st.checkbox("Mean ~ 1┬ñ├ó bands", True, key="sp_bands")
+        with c2: _sp_bands = st.checkbox("Mean ± 1σ bands", True, key="sp_bands")
 
         _cut = pd.Timestamp.now() - pd.DateOffset(years=_sp_yr)
         _fig = go.Figure()
         _sp_series = {}
+        _no_data_spreads = []
         for _a, _b in st.session_state["irs_sp_list"]:
-            _ay = int(_a[:-1]); _by = int(_b[:-1])
+            try:
+                _ay = int(_a[:-1]); _by = int(_b[:-1])
+            except (ValueError, IndexError):
+                _no_data_spreads.append(f"{_a} → {_b}")
+                continue
             _ra = _conv_rate(_ay, _conv_key); _rb = _conv_rate(_by, _conv_key)
-            if _ra is None or _rb is None: continue
+            if _ra is None or _rb is None:
+                _no_data_spreads.append(f"{_a} → {_b}")
+                continue
             _sr = (_rb - _ra).dropna()
             _sr = _sr[_sr.index >= _cut] * 100
-            _sp_series[f"{_a} → {_b}"] = _sr
+            if not _sr.empty:
+                _sp_series[f"{_a} → {_b}"] = _sr
+            else:
+                _no_data_spreads.append(f"{_a} → {_b}")
 
         _sp_keys = list(_sp_series.keys())
         with c3:
@@ -4690,9 +4724,14 @@ def fwd_analysis_tab():
             for _i, (_lbl, _sr) in enumerate(_sp_series.items()):
                 _add_series(_fig, _lbl, _sr, _sp_colors[_i % len(_sp_colors)], _sp_bands)
 
-        _fig_layout(_fig, _cut, "Spread (bp)")
-        st.plotly_chart(_fig, use_container_width=True)
-        _chart_tools(_fig, _sp_active, "sp", "bp")
+        if _sp_series:
+            _fig_layout(_fig, _cut, "Spread (bp)")
+            st.plotly_chart(_fig, use_container_width=True)
+            _chart_tools(_fig, _sp_active, "sp", "bp")
+        if _no_data_spreads:
+            st.info(f"✅ Saved — no historical data yet to chart: {', '.join(_no_data_spreads)}")
+        if not _sp_series and not _no_data_spreads and st.session_state["irs_sp_list"]:
+            st.info("✅ Spreads saved. No historical swap rate data in DB yet — load via FWD Analysis or swap_rates table.")
 
     # ── TAB 2: IRS BUTTERFLIES ──────────────────────────────────
     with _an_tabs[1]:
@@ -5216,8 +5255,8 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
     NZD/USD: zero curve with IRS-only discounting.
     """
 
-    expiries = ["1w", "1m", "2m", "3m", "6m", "9m", "1y", "18m", "2y", "3y", "4y", "5y", "6y", "7y", "8y", "9y", "10y", "12y", "15y", "20y", "25y", "30y"]
-    tenors = ["1Y", "2Y", "3Y", "4Y", "5Y", "7Y", "10Y", "12Y", "15Y", "20Y", "25Y", "30Y"]
+    expiries = ["1w", "1m", "2m", "3m", "6m", "9m", "1y", "18m", "2y", "3y", "4y", "5y", "6y", "7y", "8y", "9y", "10y", "12y", "15y", "20y", "25y", "30y", "40y", "50y"]
+    tenors = ["1Y", "2Y", "3Y", "4Y", "5Y", "7Y", "10Y", "12Y", "15Y", "20Y", "25Y", "30Y", "40Y", "50Y"]
 
     curve_x = np.array(curve_tuple[0])
     curve_y = np.array(curve_tuple[1]) / 100.0
@@ -9548,18 +9587,40 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)"):
         data=[first],
         frames=frames,
         layout=go.Layout(
-            title=dict(text=title, font=dict(size=14)),
-            height=520,
+            title=dict(text=title, font=dict(color="#f1f5f9", size=13)),
+            height=580,
+            paper_bgcolor="rgba(15,23,42,0.95)",
+            plot_bgcolor="rgba(15,23,42,0.95)",
+            font=dict(color="#94a3b8", family="Arial"),
             scene=dict(
-                xaxis=dict(title="Swap Tenor (Y)", tickmode="array",
-                           tickvals=[1,2,3,5,7,10,15,20,30]),
-                yaxis=dict(title="Option Expiry (Y)", tickmode="array",
-                           tickvals=[0.08,0.25,0.5,1,2,3,5,7,10],
-                           ticktext=["1m","3m","6m","1y","2y","3y","5y","7y","10y"]),
-                zaxis=dict(title="Vol (bp)"),
-                camera=dict(eye=dict(x=1.5, y=-1.8, z=0.9)),
+                bgcolor="rgba(15,23,42,0.95)",
+                xaxis=dict(
+                    title=dict(text="Swap Tenor (Y)", font=dict(color="#94a3b8", size=11)),
+                    tickmode="array", tickvals=[1,2,3,5,7,10,15,20,30],
+                    tickfont=dict(color="#94a3b8", size=9),
+                    gridcolor="#334155", showbackground=True,
+                    backgroundcolor="rgba(15,23,42,0.5)",
+                ),
+                yaxis=dict(
+                    title=dict(text="Option Expiry", font=dict(color="#94a3b8", size=11)),
+                    tickmode="array",
+                    tickvals=[0.08,0.25,0.5,1,2,3,5,7,10,15,20],
+                    ticktext=["1m","3m","6m","1y","2y","3y","5y","7y","10y","15y","20y"],
+                    tickfont=dict(color="#94a3b8", size=9),
+                    gridcolor="#334155", showbackground=True,
+                    backgroundcolor="rgba(15,23,42,0.5)",
+                ),
+                zaxis=dict(
+                    title=dict(text="Vol (bp)", font=dict(color="#94a3b8", size=11)),
+                    tickfont=dict(color="#94a3b8", size=9),
+                    gridcolor="#334155", showbackground=True,
+                    backgroundcolor="rgba(15,23,42,0.5)",
+                ),
+                # Vol editor camera angle: tenor left-right, expiry front-back
+                camera=dict(eye=dict(x=1.8, y=-1.5, z=0.7),
+                            up=dict(x=0, y=0, z=1)),
             ),
-            margin=dict(l=0, r=0, b=40, t=50),
+            margin=dict(l=0, r=0, b=60, t=50),
             updatemenus=[dict(
                 type="buttons", showactive=False, y=0.02, x=0.12,
                 xanchor="right", yanchor="bottom",
@@ -9631,16 +9692,36 @@ def _make_fwd_matrix_surface_fig(pivot: pd.DataFrame, date_range_dates: list,
             colorbar=dict(title="%", thickness=12, len=0.6),
         )],
         layout=go.Layout(
-            title=dict(text=title, font=dict(size=14)),
+            title=dict(text=title, font=dict(color="#f1f5f9", size=13)),
             height=520,
+            paper_bgcolor="rgba(15,23,42,0.95)",
+            plot_bgcolor="rgba(15,23,42,0.95)",
+            font=dict(color="#94a3b8", family="Arial"),
             scene=dict(
-                xaxis=dict(title="Tenor (Y)"),
-                yaxis=dict(title="Date",
-                           tickmode="array",
-                           tickvals=list(range(0, len(dates), max(1, len(dates)//8))),
-                           ticktext=[dates[i] for i in range(0, len(dates), max(1, len(dates)//8))]),
-                zaxis=dict(title="Rate (%)"),
-                camera=dict(eye=dict(x=1.5, y=-1.8, z=0.9)),
+                bgcolor="rgba(15,23,42,0.95)",
+                xaxis=dict(
+                    title=dict(text="Tenor (Y)", font=dict(color="#94a3b8", size=11)),
+                    tickfont=dict(color="#94a3b8", size=9),
+                    gridcolor="#334155", showbackground=True,
+                    backgroundcolor="rgba(15,23,42,0.5)",
+                ),
+                yaxis=dict(
+                    title=dict(text="Date", font=dict(color="#94a3b8", size=11)),
+                    tickmode="array",
+                    tickvals=list(range(0, len(dates), max(1, len(dates)//8))),
+                    ticktext=[dates[i] for i in range(0, len(dates), max(1, len(dates)//8))],
+                    tickfont=dict(color="#94a3b8", size=9),
+                    gridcolor="#334155", showbackground=True,
+                    backgroundcolor="rgba(15,23,42,0.5)",
+                ),
+                zaxis=dict(
+                    title=dict(text="Rate (%)", font=dict(color="#94a3b8", size=11)),
+                    tickfont=dict(color="#94a3b8", size=9),
+                    gridcolor="#334155", showbackground=True,
+                    backgroundcolor="rgba(15,23,42,0.5)",
+                ),
+                camera=dict(eye=dict(x=1.8, y=-1.5, z=0.7),
+                            up=dict(x=0, y=0, z=1)),
             ),
             margin=dict(l=0, r=0, b=40, t=50),
         )
@@ -9714,7 +9795,7 @@ def _make_overlay_fig(snap_a: dict, snap_b: dict):
 
 
 def backtesting_tab():
-    st.subheader("📊 Historical Vol Analysis")
+    st.subheader("📊 Historical VOL Analysis")
 
     ccy = st.session_state.get("selected_ccy", "AUD")
 
@@ -9905,9 +9986,15 @@ def backtesting_tab():
                                                   line=dict(color="#00B4C8", width=2),
                                                   marker=dict(size=6)))
                     _fig3.update_layout(
-                        title=f"{ccy} {_fr_type}  {_sel_date}",
+                        title=dict(text=f"{ccy} {_fr_type}  {_sel_date}", font=dict(color="#f1f5f9")),
                         xaxis_title="Tenor (Y)", yaxis_title="Rate (%)",
-                        height=350, margin=dict(l=40, r=20, t=50, b=40))
+                        height=350, template="plotly_dark",
+                        paper_bgcolor="rgba(15,23,42,0.95)",
+                        plot_bgcolor="rgba(15,23,42,0.8)",
+                        font=dict(color="#94a3b8"),
+                        xaxis=dict(gridcolor="#334155"),
+                        yaxis=dict(gridcolor="#334155"),
+                        margin=dict(l=40, r=20, t=50, b=40))
                     st.plotly_chart(_fig3, use_container_width=True)
 
             elif _fwd_mode == "Overlay A vs B":
@@ -9938,10 +10025,16 @@ def backtesting_tab():
                                                          for v in _delta],
                                            opacity=0.5))
                     _fig4.update_layout(
-                        title=f"{ccy} {_fr_type}  Overlay: {_fd_a} vs {_fd_b}",
+                        title=dict(text=f"{ccy} {_fr_type}  Overlay: {_fd_a} vs {_fd_b}", font=dict(color="#f1f5f9")),
                         xaxis_title="Tenor (Y)", yaxis_title="Rate (%)",
-                        yaxis2=dict(title="Δ bp", overlaying="y", side="right"),
-                        legend=dict(orientation="h", y=-0.2),
+                        template="plotly_dark",
+                        paper_bgcolor="rgba(15,23,42,0.95)",
+                        plot_bgcolor="rgba(15,23,42,0.8)",
+                        font=dict(color="#94a3b8"),
+                        xaxis=dict(gridcolor="#334155"),
+                        yaxis=dict(gridcolor="#334155"),
+                        yaxis2=dict(title="Δ bp", overlaying="y", side="right", gridcolor="#334155"),
+                        legend=dict(orientation="h", y=-0.2, font=dict(color="#e2e8f0")),
                         height=380, margin=dict(l=40, r=60, t=50, b=60))
                     st.plotly_chart(_fig4, use_container_width=True)
 
