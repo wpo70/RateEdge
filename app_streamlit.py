@@ -1309,13 +1309,14 @@ class SwaptionTicket:
 
 def label_to_years(lbl: str) -> float:
     from datetime import date as _date, datetime as _dt
-    # Guard: if it's already a number, return it directly
     try:
         _f = float(lbl)
         if _f >= 0:
             return _f
     except (TypeError, ValueError):
         pass
+    if lbl is None or str(lbl).strip() == "" or str(lbl).strip().lower() in ("none","nan","expiry"):
+        return 0.0
     x = str(lbl).strip()
     # Handle DD/MM/YYYY or YYYY-MM-DD date strings
     for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
@@ -12725,15 +12726,11 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
     vega_rows = []
 
     for i, exp in enumerate(expiries):
-        # Skip numeric index rows (0, 1, 2...) — not valid expiry labels
         try:
-            _f = float(str(exp))
-            if _f == int(_f) and 0 <= _f <= 50 and not str(exp).endswith(('w','m','y','Y')):
-                continue  # pure integer — skip
-        except (ValueError, TypeError):
-            pass
-        exp_y = label_to_years(exp)
-        if exp_y <= 0:
+            exp_y = label_to_years(exp)
+        except Exception:
+            continue
+        if exp_y is None or exp_y <= 0:
             continue
         prow = {"Expiry": exp}
         vrow = {"Expiry": exp}
