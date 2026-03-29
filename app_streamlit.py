@@ -901,6 +901,9 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
 # ============================
 
 def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
+    # Normalise admin email so snapshots are always under one canonical user_id
+    _ADMIN_ALIASES = {"wpo70@icloud.com": "wpo@rateedge.au"}
+    user_id = _ADMIN_ALIASES.get(user_id, user_id)
     """Save current vol matrix and SABR params as historical snapshot"""
     from datetime import datetime
     
@@ -931,14 +934,24 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
         sabr_rho_json = sabr_rho.to_dict(orient="records") if sabr_rho is not None else None
         sabr_nu_json = sabr_nu.to_dict(orient="records") if sabr_nu is not None else None
         
-        # Get premium matrix if available
-        prem_matrix = st.session_state.get("prem_matrix", {}).get(currency)
+        # Use the pricer's own Forward Premium (bp) matrix from Curves tab → Generate ATM Matrix
+        # This is st.session_state["atm_prem_matrix"][currency]["prem"]
+        # If not generated yet, atm_prems is saved as NULL
         atm_prems_json = None
-        if prem_matrix is not None:
-            try:
-                atm_prems_json = prem_matrix.to_dict(orient="records")
-            except Exception:
-                atm_prems_json = None
+        try:
+            _prem_df = st.session_state.get("atm_prem_matrix", {}).get(currency, {}).get("prem")
+            if _prem_df is not None:
+                _prem_save = _prem_df.copy()
+                if _prem_save.index.name == "Expiry":
+                    _prem_save = _prem_save.reset_index()
+                elif "Expiry" not in _prem_save.columns:
+                    _first = _prem_save.index[0] if len(_prem_save) > 0 else None
+                    if isinstance(_first, str):
+                        _prem_save = _prem_save.reset_index()
+                        _prem_save.columns = ["Expiry"] + list(_prem_save.columns[1:])
+                atm_prems_json = _prem_save.to_dict(orient="records")
+        except Exception:
+            atm_prems_json = None
 
         # Insert into vol_history table
         cur = conn.cursor()
@@ -974,6 +987,9 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
 
 
 def list_vol_snapshots(user_id: str, currency: str = None):
+    # Normalise: both admin emails share the same snapshots
+    _ADMIN_ALIASES = {"wpo70@icloud.com": "wpo@rateedge.au", "wpo@rateedge.au": "wpo@rateedge.au"}
+    user_id = _ADMIN_ALIASES.get(user_id, user_id)
     """List all historical vol snapshots for a user"""
     conn = get_db_connection()
     if not conn:
@@ -2749,6 +2765,14 @@ def apply_rateedge_theme(theme_name: str):
             color: #ffffff !important;
             -webkit-text-fill-color: #ffffff !important;
         }}
+        /* Hide Manage App button permanently */
+        [data-testid="manage-app-button"] {{display: none !important;}}
+        button[kind="managedApp"] {{display: none !important;}}
+        .stAppDeployButton {{display: none !important;}}
+        .stDeployButton {{display: none !important;}}
+        [title="Manage app"] {{display: none !important;}}
+        footer {{visibility: hidden;}}
+        #MainMenu {{visibility: hidden;}}
         </style>""",
         unsafe_allow_html=True,
     )
