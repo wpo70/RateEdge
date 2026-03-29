@@ -4193,17 +4193,36 @@ def curves_tab():
                 try:
                     _par_x = par_rates["Tenor"].apply(lambda x: float(x[:-1]) if str(x).endswith("Y") else float(str(x)[:-1])/12)
                     _par_y = par_rates["Par Rate (%)"]
-                    fig.add_trace(go.Scatter(x=_par_x, y=_par_y,
+                    # Supplement with 40Y/50Y from _aud_par_ss if available
+                    _par_ss_ext = st.session_state.get("_aud_par_ss", {})
+                    _ext_x = list(_par_x)
+                    _ext_y = list(_par_y)
+                    for _et in [40.0, 50.0]:
+                        if _et in _par_ss_ext and _et not in list(_par_x):
+                            _ext_x.append(_et)
+                            _ext_y.append(_par_ss_ext[_et])
+                    _ext_pairs = sorted(zip(_ext_x, _ext_y))
+                    fig.add_trace(go.Scatter(
+                        x=[p[0] for p in _ext_pairs],
+                        y=[p[1] for p in _ext_pairs],
                         mode="lines+markers", name="IRS Par", line=dict(color="#22c55e", width=2)))
                 except Exception:
                     pass
             else:
-                # NZD/USD (or AUD before any config loaded): config_curves IS the par curve
+                # NZD/USD: config_curves IS the par curve
                 fig.add_trace(go.Scatter(x=curve_c["MaturityY"], y=curve_c["ZeroRatePct"],
                     mode="lines+markers", name="IRS Par", line=dict(color="#22c55e", width=2)))
         if _show_irs:
-            fig.add_trace(go.Scatter(x=curve_c["MaturityY"], y=curve_c["ZeroRatePct"],
-                mode="lines+markers", name="IRS Zero", line=dict(color="#3b82f6", width=2)))
+            # Use _aud_zc_ss for AUD (includes 40Y/50Y); fallback to blended curve
+            _zc_ss = st.session_state.get("_aud_zc_ss") if ccy == "AUD" else None
+            if _zc_ss and len(_zc_ss) > 0:
+                _zx = sorted(_zc_ss.keys())
+                _zy = [_zc_ss[k] for k in _zx]
+                fig.add_trace(go.Scatter(x=_zx, y=_zy,
+                    mode="lines+markers", name="IRS Zero", line=dict(color="#3b82f6", width=2)))
+            else:
+                fig.add_trace(go.Scatter(x=curve_c["MaturityY"], y=curve_c["ZeroRatePct"],
+                    mode="lines+markers", name="IRS Zero", line=dict(color="#3b82f6", width=2)))
         if _show_ois and oisc is not None and not oisc.empty:
             fig.add_trace(go.Scatter(x=oisc["MaturityY"], y=oisc["ZeroRatePct"],
                 mode="lines+markers", name="OIS", line=dict(color="#f59e0b", width=2)))
@@ -4332,6 +4351,73 @@ def curves_tab():
                     st.dataframe(_disp.style.format(_fmt), use_container_width=True, height=820)
         else:
             st.info("Click **▶ Generate Forward Matrix**")
+
+    # ── 📡 Publish to Blotter ──────────────────────────────────────────────────
+    st.markdown("---")
+    _pb1, _pb2 = st.columns([2, 4])
+    with _pb1:
+        if st.button("📡 Publish ATM Vols / Prems / FWDs to Blotter",
+                     key="curves_publish_blotter", type="primary",
+                     use_container_width=True):
+            if not HAS_POSTGRES:
+                st.error("Database not connected.")
+            elif not is_admin():
+                st.warning("Admin only.")
+            else:
+                _pub_ccy = ccy
+                _all_mids = {}
+                # ATM Vol mids
+                _atm_s = get_working_atm_surface(_pub_ccy)
+                if _atm_s is not None:
+                    _av = _atm_s.copy()
+                    if "Expiry" in _av.columns: _av = _av.set_index("Expiry")
+                    for _el in _av.index:
+                        for _tc in _av.columns:
+                            try:
+                                _v = float(_av.loc[_el, _tc])
+                                if not math.isnan(_v) and _v > 0:
+                                    _all_mids[f"vol_{str(_el)}_{str(_tc)}"] = {
+                                        "value": round(_v, 4),
+                                        "label": f"ATM vol {_el} {_tc} bp"}
+                            except: pass
+                # BP Premium mids — from pricer's own Generate ATM Matrix
+                _prem_df = st.session_state.get("atm_prem_matrix", {}).get(_pub_ccy, {}).get("prem")
+                if _prem_df is not None:
+                    _pv = _prem_df.copy()
+                    if "Expiry" in _pv.columns: _pv = _pv.set_index("Expiry")
+                    for _el in _pv.index:
+                        for _tc in _pv.columns:
+                            try:
+                                _v = float(_pv.loc[_el, _tc])
+                                if not math.isnan(_v) and _v > 0:
+                                    _all_mids[f"prem_{str(_el)}_{str(_tc)}"] = {
+                                        "value": round(_v, 4),
+                                        "label": f"Straddle prem {_el} {_tc} bp"}
+                            except: pass
+                # FWD ATM IRS mids
+                _fwd_m = st.session_state.get("fwd_matrix", {}).get(_pub_ccy)
+                if _fwd_m is not None and not _fwd_m.empty:
+                    for _fexp in _fwd_m.index:
+                        for _ften in _fwd_m.columns:
+                            try:
+                                _fv = float(_fwd_m.loc[_fexp, _ften])
+                                if not math.isnan(_fv) and _fv > 0:
+                                    _all_mids[f"fwd_{str(_fexp)}_{str(_ften)}"] = {
+                                        "value": round(_fv, 4),
+                                        "label": f"FWD ATM {_fexp} {_ften} %"}
+                            except: pass
+                if _all_mids:
+                    _n = publish_blotter_mids(_pub_ccy, _all_mids)
+                    # Also save snapshot so vol_history.atm_prems is current
+                    from datetime import datetime as _dtnow
+                    _snap_lbl = f"{_pub_ccy} {_dtnow.now().strftime('%d-%b-%Y %H:%M')}"
+                    _uid = st.session_state.get("username", "default")
+                    save_vol_snapshot(_uid, _pub_ccy, _snap_lbl, "Published from Curves tab")
+                    st.success(f"✅ Published {_n} mids + saved snapshot for {_pub_ccy}")
+                else:
+                    st.warning("No data — generate forward matrix and ATM matrix first.")
+    with _pb2:
+        st.caption("Publishes ATM vols, bp premiums and FWD ATM rates to the blotter, and saves a vol snapshot. Generate ATM Matrix and Forward Matrix first.")
 
     st.markdown("---")
 
