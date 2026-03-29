@@ -559,6 +559,19 @@ def save_all_session_data(user_id: str):
         if _par_qq and _par_ss:
             _save("aud_par_rates", "AUD", {"par_qq": _par_qq, "par_ss": _par_ss})
 
+        # CFS spreads — save all 9 wedge spread values
+        _cf_spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
+                           "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y","cf_spr_12y3y"]
+        _cf_spread_data = {k: float(st.session_state.get(k, 0)) for k in _cf_spread_keys
+                           if k in st.session_state}
+        if _cf_spread_data:
+            _save("cf_spreads", "AUD", _cf_spread_data)
+
+        # CFS table data — manually entered straddle overrides per wedge
+        _cfs_tdata = st.session_state.get("cfs_table_data", {})
+        if _cfs_tdata:
+            _save("cfs_table_data", "AUD", _cfs_tdata)
+
         # FWD prefs
         _fwd_prefs = {
             "irs_sp_list":  [list(x) for x in st.session_state.get("irs_sp_list", [])],
@@ -826,6 +839,29 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                 st.session_state["_aud_zc_ss"] = _rebuild_zero(_par_ss_full2, all_qq=False)
                 loaded += 1
         except Exception as _pex:
+            pass
+
+    # Restore CFS wedge spreads
+    if "cf_spreads" in configs and "AUD" in configs["cf_spreads"]:
+        try:
+            _cf_d = configs["cf_spreads"]["AUD"]["data"]
+            for _k, _v in _cf_d.items():
+                st.session_state[_k] = float(_v)
+            loaded += 1
+        except Exception:
+            pass
+
+    # Restore CFS table data (manually entered straddle overrides)
+    if "cfs_table_data" in configs and "AUD" in configs["cfs_table_data"]:
+        try:
+            _ctd = configs["cfs_table_data"]["AUD"]["data"]
+            if not isinstance(_ctd, dict):
+                _ctd = {}
+            if "cfs_table_data" not in st.session_state:
+                st.session_state["cfs_table_data"] = {}
+            st.session_state["cfs_table_data"].update(_ctd)
+            loaded += 1
+        except Exception:
             pass
 
     # Restore FWD Analysis series lists   —   DB always wins, overrides tab defaults
@@ -4197,12 +4233,26 @@ def curves_tab():
         elif _need_regen and _mc is None:
             st.error("No curve — upload config first")
 
+        # Also generate 3v1 basis matrix if basis available
+        _mb3v1 = st.session_state.get("config_basis", {}).get(ccy, {}).get("3v1")
+        if _need_regen and _mc is not None and _mb3v1 is not None:
+            if "basis_matrix_3v1" not in st.session_state:
+                st.session_state["basis_matrix_3v1"] = {}
+            st.session_state["basis_matrix_3v1"][ccy] = generate_basis_matrix(ccy, _mb3v1)
+
         if has_fwd:
-            has_basis = ccy in st.session_state.get("basis_matrix", {})
-            _vo = ["IRS Fwd"] + (["6v3 Basis"] if has_basis else [])
+            has_basis   = ccy in st.session_state.get("basis_matrix", {})
+            has_basis3v1 = ccy in st.session_state.get("basis_matrix_3v1", {})
+            _vo = ["IRS Fwd"]
+            if has_basis:    _vo.append("6v3 Basis")
+            if has_basis3v1: _vo.append("3v1 Basis")
             _rv = st.radio("View", _vo, horizontal=True, key="rate_view_toggle")
-            _disp = st.session_state["fwd_matrix"][ccy] if _rv == "IRS Fwd" \
-                    else st.session_state["basis_matrix"].get(ccy)
+            if _rv == "IRS Fwd":
+                _disp = st.session_state["fwd_matrix"][ccy]
+            elif _rv == "6v3 Basis":
+                _disp = st.session_state["basis_matrix"].get(ccy)
+            else:
+                _disp = st.session_state.get("basis_matrix_3v1", {}).get(ccy)
             if _disp is not None:
                 _nc  = [c for c in _disp.columns if c != "Expiry"]
                 _fmt = {c: "{:.4f}" for c in _nc}
@@ -6776,7 +6826,15 @@ def caps_floors_tab(vol_mode: str):
                             _b6v3 = get_basis_curve(ccy, "6v3")
                             _bx = _b6v3["MaturityY"].to_numpy().astype(float) if _b6v3 is not None else None
                             _by = _b6v3["BasisBp"].to_numpy().astype(float) if _b6v3 is not None else None
-                            _fwd_rate = fast_forward_rate(_cx, _cy, _fwd_start_y, _cap_swap_tenor, ccy, freq_override=None, ois_x=_ox, ois_y=_oy, basis6v3_x=_bx, basis6v3_y=_by)
+                            # Use pure QQ zero curve for AUD cap strikes (caps are Q/Q)
+                            _zc_qq_local = st.session_state.get("_aud_zc_qq")
+                            if ccy == "AUD" and _zc_qq_local:
+                                import numpy as _np2
+                                _zqx = _np2.array(sorted(_zc_qq_local.keys()))
+                                _zqy = _np2.array([_zc_qq_local[k] / 100.0 for k in _zqx])
+                                _fwd_rate = fast_forward_rate(_zqx, _zqy, _fwd_start_y, _cap_swap_tenor, ccy, freq_override=0.25, ois_x=_ox, ois_y=_oy)
+                            else:
+                                _fwd_rate = fast_forward_rate(_cx, _cy, _fwd_start_y, _cap_swap_tenor, ccy, freq_override=None, ois_x=_ox, ois_y=_oy, basis6v3_x=_bx, basis6v3_y=_by)
                         # Cumulative CFS straddle
                         _wedge_straddle = _cfs_tdata.get(_key, {}).get("cfs_straddle")
                         if _wedge_straddle is not None:
