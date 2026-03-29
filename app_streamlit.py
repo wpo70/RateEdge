@@ -4452,12 +4452,7 @@ def curves_tab():
                             except: pass
                 if _all_mids:
                     _n = publish_blotter_mids(_pub_ccy, _all_mids)
-                    # Also save snapshot so vol_history.atm_prems is current
-                    from datetime import datetime as _dtnow
-                    _snap_lbl = f"{_pub_ccy} {_dtnow.now().strftime('%d-%b-%Y %H:%M')}"
-                    _uid = st.session_state.get("username", "default")
-                    save_vol_snapshot(_uid, _pub_ccy, _snap_lbl, "Published from Curves tab")
-                    st.success(f"✅ Published {_n} mids + saved snapshot for {_pub_ccy}")
+                    st.success(f"✅ Published {_n} mids to blotter for {_pub_ccy}")
                 else:
                     st.warning("No data — generate forward matrix and ATM matrix first.")
     with _pb2:
@@ -5451,8 +5446,8 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
     NZD/USD: zero curve with IRS-only discounting.
     """
 
-    expiries = ["1w", "1m", "2m", "3m", "6m", "9m", "1y", "18m", "2y", "3y", "4y", "5y", "6y", "7y", "8y", "9y", "10y", "12y", "15y", "20y", "25y", "30y", "40y", "50y"]
-    tenors = ["1Y", "2Y", "3Y", "4Y", "5Y", "7Y", "10Y", "12Y", "15Y", "20Y", "25Y", "30Y", "40Y", "50Y"]
+    expiries = ["1w", "1m", "2m", "3m", "6m", "9m", "1y", "18m", "2y", "3y", "4y", "5y", "6y", "7y", "8y", "9y", "10y", "12y", "15y", "20y", "25y", "30y"]
+    tenors = ["1Y", "2Y", "3Y", "4Y", "5Y", "7Y", "10Y", "12Y", "15Y", "20Y", "25Y", "30Y"]
 
     curve_x = np.array(curve_tuple[0])
     curve_y = np.array(curve_tuple[1]) / 100.0
@@ -10703,30 +10698,17 @@ def rv_tab():
 
             def _fwd_rate(t1, t2):
                 """Forward swap rate using pure QQ/SS zero curves (matches forward matrix)."""
-                if t2 > max(xs_c):
-                    return None
                 tenor = t2 - t1
                 if tenor <= 0:
                     return None
-                # Use QQ for tenors <=3Y, SS for tenors >3Y (market convention)
-                if tenor <= 3.0 and _rv_zc_qq:
-                    try:
+                try:
+                    if tenor <= 3.0 and _rv_zc_qq:
                         return _fwd_from_zc(_rv_zc_qq, float(t1), float(tenor), 0.25)
-                    except Exception:
-                        pass
-                elif tenor > 3.0 and _rv_zc_ss:
-                    try:
+                    if _rv_zc_ss:
                         return _fwd_from_zc(_rv_zc_ss, float(t1), float(tenor), 0.50)
-                    except Exception:
-                        pass
-                # Fallback to zero-curve approximation if QQ/SS not available
-                r1 = _par_rate(t1) / 100
-                r2 = _par_rate(t2) / 100
-                df1 = math.exp(-r1 * t1)
-                df2 = math.exp(-r2 * t2)
-                if df2 <= 0:
-                    return None
-                return ((df1/df2) - 1) / tenor * 100
+                except Exception:
+                    pass
+                return None
 
             fwds_live = {
                 "1y1y":  _fwd_rate(1, 2),
