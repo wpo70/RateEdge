@@ -834,7 +834,7 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                         _df_end2 = (_dfi2(_SPOT2) - _c2 * _ann2) / (1.0 + _c2 * _freq2)
                         if _df_end2 > 0 and not math.isnan(_df_end2):
                             _dfs2[_swap_end2] = _df_end2
-                    _MATS2 = [0.25,0.5,0.75,1.0,1.5,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,12.0,15.0,20.0,25.0,30.0]
+                    _MATS2 = [0.25,0.5,0.75,1.0,1.5,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,12.0,15.0,20.0,25.0,30.0,40.0,50.0]
                     _zc2 = {}
                     for _m2 in _MATS2:
                         _d2 = _dfi2(_m2)
@@ -1190,32 +1190,36 @@ def delete_sod_report(report_id: int) -> bool:
 def publish_blotter_mids(ccy: str, mids: dict) -> int:
     """Publish mid market values to blotter_mids table for the React blotter to consume.
     mids = {key: {"value": float, "label": str}}
-    Returns number of rows upserted.
+    Returns number of rows upserted. Uses executemany for performance.
     """
     conn = get_db_connection()
     if not conn:
         return 0
     try:
         cur = conn.cursor()
-        count = 0
+        rows = []
         for key, data in mids.items():
             val = data.get("value")
             lbl = data.get("label", "")
             if val is None:
                 continue
-            cur.execute("""
-                INSERT INTO blotter_mids (ccy, key, value, label, updated_at)
-                VALUES (%s, %s, %s, %s, NOW())
-                ON CONFLICT (ccy, key) DO UPDATE
-                    SET value = EXCLUDED.value,
-                        label = EXCLUDED.label,
-                        updated_at = NOW()
-            """, (ccy, key, float(val), lbl))
-            count += 1
+            rows.append((ccy, key, float(val), lbl))
+        if not rows:
+            conn.close()
+            return 0
+        # Single batch upsert — one round-trip regardless of row count
+        cur.executemany("""
+            INSERT INTO blotter_mids (ccy, key, value, label, updated_at)
+            VALUES (%s, %s, %s, %s, NOW())
+            ON CONFLICT (ccy, key) DO UPDATE
+                SET value = EXCLUDED.value,
+                    label = EXCLUDED.label,
+                    updated_at = NOW()
+        """, rows)
         conn.commit()
         cur.close()
         conn.close()
-        return count
+        return len(rows)
     except Exception as e:
         st.error(f"Failed to publish blotter mids: {e}")
         return 0
@@ -3607,7 +3611,12 @@ def vol_config_tab():
                     _avail_dates = [r[0] for r in _dcur.fetchall()]
                     _dc.close()
             except: pass
-            _default_date = _avail_dates[0] if _avail_dates else _dt_date.today()
+            _today = _dt_date.today()
+            _latest_db = _avail_dates[0] if _avail_dates else _today
+            _default_date = _today if _today >= _latest_db else _latest_db
+            # Force widget to today if it's still showing an older date
+            if st.session_state.get("db_load_date") and st.session_state["db_load_date"] < _default_date:
+                st.session_state["db_load_date"] = _default_date
             _load_date = st.date_input(
                 "Curve/Vol date to load",
                 value=_default_date,
