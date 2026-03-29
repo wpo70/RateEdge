@@ -6769,7 +6769,7 @@ def caps_floors_tab(vol_mode: str):
                         json.dump({k: st.session_state[k] for k, *_ in ROW_DATA}, _f)
                 except Exception:
                     pass
-                # Also persist to DB for cloud persistence
+                # Also persist to DB
                 if HAS_POSTGRES:
                     try:
                         _user_id = st.session_state.get("username", "default")
@@ -6777,6 +6777,39 @@ def caps_floors_tab(vol_mode: str):
                         save_user_config(_user_id, "cf_spreads", ccy, _spread_data)
                     except Exception:
                         pass
+                # Auto-regenerate swaption premiums so straddle bp updates immediately
+                _curve_cs = get_ccy_curve(ccy)
+                _atm_cs   = get_working_atm_surface(ccy)
+                _ois_cs   = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois")
+                if _curve_cs is not None and _atm_cs is not None:
+                    if "cfs_table_data" not in st.session_state:
+                        st.session_state["cfs_table_data"] = {}
+                    for _lbl, _exp, _ten, _cfs_lbl in [
+                        ("3m1y","3m",1.0,"1Y CFS"),("1y1y","1y",1.0,"2Y CFS"),
+                        ("2y1y","2y",1.0,"3Y CFS"),("3y1y","3y",1.0,"4Y CFS"),
+                        ("4y1y","4y",1.0,"5Y CFS"),("5y2y","5y",2.0,"7Y CFS"),
+                        ("7y3y","7y",3.0,"10Y CFS"),("10y2y","10y",2.0,"12Y CFS"),
+                        ("12y3y","12y",3.0,"15Y CFS"),
+                    ]:
+                        try:
+                            _vbp = get_matrix_value(_atm_cs, _exp, _ten)
+                            if _vbp is None: continue
+                            _ey = label_to_years(_exp)
+                            _, _ann, _ = forward_and_annuity_from_curve(_curve_cs, ccy, _ey, _ten, _ois_cs)
+                            _prem = 2 * 0.3989 * (_vbp/10000.0) * math.sqrt(max(_ey,0.001)) * _ann * 10000
+                            # cfs_straddle = swaption premium + wedge spread
+                            _spd = st.session_state.get(f"cf_spr_{_lbl}", 0)
+                            st.session_state["cfs_table_data"][_lbl] = {
+                                "swaption": round(_prem, 4),
+                                "cfs_label": _cfs_lbl,
+                                "cfs_straddle": round(_prem + _spd, 4)
+                            }
+                        except Exception:
+                            pass
+                # Invalidate ATM CFS cache so table re-renders with new values
+                st.session_state.pop("_atm_cfs_cache_key", None)
+                st.session_state.pop("_atm_cfs_rows_cache", None)
+                st.session_state.pop("_caplet_curve_key", None)
                 st.rerun()
             if br.button("🔔 Generate Swaption Premiums", key="gen_swpt_prem", type="primary"):
                 curve     = get_ccy_curve(ccy)
