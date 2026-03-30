@@ -13350,8 +13350,8 @@ def sod_report_tab():
         st.error("No overlapping expiry/tenor between USD snapshots.")
         return
 
-    _usd_chg = _atm1.loc[_common_exp, _common_ten].astype(float) - \
-               _atm2.loc[_common_exp, _common_ten].astype(float)
+    _usd_chg = _atm1.loc[_common_exp, _common_ten].apply(pd.to_numeric, errors="coerce") - \
+               _atm2.loc[_common_exp, _common_ten].apply(pd.to_numeric, errors="coerce")
 
     # ── USD Premium change ────────────────────────────────────────
     _usd_curve = get_ccy_curve("USD")
