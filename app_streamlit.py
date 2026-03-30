@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from statistics import NormalDist
+_ND = NormalDist()   # module-level — never instantiate per pricing call
 import plotly.graph_objects as go
 import requests
 import scipy.optimize
@@ -1641,11 +1642,24 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         return 0.0, 0.0, []
 
     # IRS for projection, OIS for annuity discounting (dual-curve)
-    # AUD: use 3M BBSW curve for Q/Q, 6M BBSW curve for S/S
-    basis_6v3 = get_basis_curve(ccy, "6v3") if ccy == "AUD" else None
+    # AUD: use bootstrapped pure QQ/SS zero curves for projection (no post-hoc basis hack)
+    _zc_qq_proj = st.session_state.get("_aud_zc_qq") if ccy == "AUD" else None
+    _zc_ss_proj = st.session_state.get("_aud_zc_ss") if ccy == "AUD" else None
+    _use_pure_zc = ccy == "AUD" and _zc_qq_proj is not None and _zc_ss_proj is not None
+
+    # Keep basis_6v3 for fallback path only
+    basis_6v3 = get_basis_curve(ccy, "6v3") if (ccy == "AUD" and not _use_pure_zc) else None
 
     def _df_proj(crv: pd.DataFrame, t: float, freq: float) -> float:
-        """Projection discount factor with convention-aware basis adjustment for AUD."""
+        """Projection DF. AUD: pure QQ/SS bootstrapped zeros. Others: blended curve."""
+        if _use_pure_zc:
+            # Multi-curve: use pure QQ zeros for Q/Q tenors, SS zeros for S/S tenors
+            zc = _zc_qq_proj if freq == 0.25 else _zc_ss_proj
+            _xs = np.array(sorted(zc.keys()))
+            _ys = np.array([zc[k] / 100.0 for k in _xs])
+            z = float(np.interp(t, _xs, _ys))
+            return math.exp(-z * t)
+        # Fallback: blended curve with post-hoc basis adjustment
         xs = crv["MaturityY"].to_numpy().astype(float)
         ys = crv["ZeroRatePct"].to_numpy().astype(float) / 100.0
         z = float(np.interp(t, xs, ys))
@@ -1653,11 +1667,9 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
             bx = basis_6v3["MaturityY"].to_numpy().astype(float)
             by = basis_6v3["BasisBp"].to_numpy().astype(float) / 10000.0
             if freq == 0.25 and t > 3.0:
-                # Q/Q swap, S/S part of curve → adjust down to 3M BBSW
                 b = float(np.interp(t, bx, by))
                 z = z - b
             elif freq == 0.5 and t <= 3.0:
-                # S/S swap, Q/Q part of curve → adjust up to 6M BBSW
                 b = float(np.interp(t, bx, by))
                 z = z + b
         return math.exp(-z * t)
@@ -1706,7 +1718,7 @@ def black_swaption_vanilla(ticket: SwaptionTicket) -> dict:
     vol_sqrt_t = sigma * math.sqrt(T)
     d1 = (lnFK + 0.5 * sigma * sigma * T) / vol_sqrt_t
     d2 = d1 - vol_sqrt_t
-    N = NormalDist().cdf
+    N = _ND.cdf
     phi = lambda x: math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
 
     if ticket.side.lower().startswith("payer"):
@@ -1746,7 +1758,7 @@ def bachelier_swaption_vanilla(ticket: SwaptionTicket) -> dict:
 
     d = (F - K) / (sigma_n * math.sqrt(T))
     phi = math.exp(-0.5 * d * d) / math.sqrt(2 * math.pi)
-    N = NormalDist().cdf(d)
+    N = _ND.cdf(d)
 
     if ticket.side.lower().startswith("payer"):
         price_rate = (F - K) * N + sigma_n * math.sqrt(T) * phi
@@ -1784,7 +1796,7 @@ def black_swaption_digital(ticket: SwaptionTicket) -> dict:
     lnFK = math.log(F / K)
     vol_sqrt_t = sigma * math.sqrt(T)
     d2 = (lnFK - 0.5 * sigma * sigma * T) / vol_sqrt_t
-    N = NormalDist().cdf
+    N = _ND.cdf
     phi = lambda x: math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
 
     if ticket.side.lower().startswith("payer"):
@@ -1813,7 +1825,7 @@ def bachelier_swaption_digital(ticket: SwaptionTicket) -> dict:
 
     d = (F - K) / (sigma_n * math.sqrt(T))
     phi = math.exp(-0.5 * d * d) / math.sqrt(2 * math.pi)
-    N = NormalDist().cdf(d)
+    N = _ND.cdf(d)
 
     if ticket.side.lower().startswith("payer"):
         prob = N
@@ -1872,7 +1884,7 @@ def black_caplet(notional: float, accrual: float,
     vol_sqrt_t = sigma * math.sqrt(T)
     d1 = (lnFK + 0.5 * sigma * sigma * T) / vol_sqrt_t
     d2 = d1 - vol_sqrt_t
-    N = NormalDist().cdf
+    N = _ND.cdf
     phi = lambda x: math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
     if is_cap:
         price_rate = F * N(d1) - K * N(d2)
@@ -1897,7 +1909,7 @@ def bachelier_caplet(notional: float, accrual: float,
     df = math.exp(-r * T)
     d = (F - K) / (sigma_n * math.sqrt(T))
     phi = math.exp(-0.5 * d * d) / math.sqrt(2 * math.pi)
-    N = NormalDist().cdf(d)
+    N = _ND.cdf(d)
     if is_cap:
         price_rate = (F - K) * N + sigma_n * math.sqrt(T) * phi
         delta_rate = N
@@ -2124,7 +2136,7 @@ def build_caplet_vol_curve_from_surface(ccy: str, atm_surface):
     if anchor_mats:
         from scipy.optimize import least_squares
         try:
-            res = least_squares(price_with_interp, [caplet_vols[m] for m in anchor_mats], ftol=1e-12, xtol=1e-12, gtol=1e-12)
+            res = least_squares(price_with_interp, [caplet_vols[m] for m in anchor_mats], ftol=1e-4, xtol=1e-4, gtol=1e-4)
             if res.success:
                 for i, m in enumerate(anchor_mats):
                     caplet_vols[m] = max(res.x[i], 1.0)
@@ -2370,7 +2382,7 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         
         from scipy.optimize import least_squares
         try:
-            result = least_squares(price_with_interp_curve, initial_guess, ftol=1e-12, xtol=1e-12, gtol=1e-12)
+            result = least_squares(price_with_interp_curve, initial_guess, ftol=1e-4, xtol=1e-4, gtol=1e-4)
             
             if result.success:
                 for i, mat in enumerate(anchor_mats_to_solve):
@@ -2783,6 +2795,7 @@ def apply_rateedge_theme(theme_name: str):
         }}
         /* Hide ALL Streamlit chrome — code must not be visible */
         [data-testid="manage-app-button"] {{display: none !important;}}
+        [data-testid="stAppViewerControlButton"] {{display: none !important;}}
         [data-testid="stToolbar"] {{display: none !important;}}
         [data-testid="stDecoration"] {{display: none !important;}}
         [data-testid="stStatusWidget"] {{display: none !important;}}
@@ -5508,16 +5521,32 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
 
     # AUD: load pure QQ and SS zero curves built during bootstrap
     aud_zc_qq = aud_zc_ss = None
+    aud_ois_zc = None
     if ccy == "AUD":
         aud_zc_qq = st.session_state.get("_aud_zc_qq")
         aud_zc_ss = st.session_state.get("_aud_zc_ss")
+        # Build OIS ZC dict for multi-curve discounting
+        _ois_df = st.session_state.get("config_basis", {}).get("AUD", {}).get("ois")
+        if _ois_df is not None and not _ois_df.empty:
+            try:
+                aud_ois_zc = {float(r["MaturityY"]): float(r["ZeroRatePct"])
+                              for _, r in _ois_df.iterrows()}
+            except Exception:
+                aud_ois_zc = None
 
     SPOT_M = 1.0 / 252.0
 
-    def _fwd_from_zc(zc, exp, tenor, freq):
-        """Forward swap rate from a zero curve dict {maturity: zero_rate_pct}."""
+    def _fwd_from_zc(zc, exp, tenor, freq, disc_zc=None):
+        """Forward swap rate. zc=projection zeros, disc_zc=OIS discounting zeros.
+        Multi-curve: projection uses IRS (QQ/SS), annuity discounted with OIS."""
         xs = np.array(sorted(zc.keys()))
         ys = np.array([zc[k] / 100.0 for k in xs])
+        # OIS discounting — fall back to projection curve if no OIS provided
+        if disc_zc is not None:
+            _dx = np.array(sorted(disc_zc.keys()))
+            _dy = np.array([disc_zc[k] / 100.0 for k in sorted(disc_zc.keys())])
+        else:
+            _dx, _dy = xs, ys
         t_s = exp + SPOT_M; t_e = t_s + tenor
         times = []; t = t_s + freq
         while t <= t_e + 1e-9:
@@ -5525,11 +5554,11 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
         if not times: return 0.0
         prev = t_s; ann = 0.0
         for ti in times:
-            z = float(np.interp(ti, xs, ys))
+            z = float(np.interp(ti, _dx, _dy))        # OIS for annuity
             ann += math.exp(-z * ti) * (ti - prev); prev = ti
         if ann <= 0: return 0.0
         zs = float(np.interp(t_s, xs, ys)); ze = float(np.interp(t_e, xs, ys))
-        df_s = math.exp(-zs * t_s); df_e = math.exp(-ze * t_e)
+        df_s = math.exp(-zs * t_s); df_e = math.exp(-ze * t_e)   # IRS for projection
         return (df_s - df_e) / ann * 100.0
 
     matrix = []
@@ -5542,23 +5571,24 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
             tenor_y = float(tenor[:-1])
             try:
                 if ccy == "AUD" and aud_zc_qq is not None and aud_zc_ss is not None:
-                    # ── AUD: pure separate zero curves, no post-hoc basis adjustment ──
-                    # Market: tenor <=3Y → QQ zero curve @ Q/Q freq
-                    #         tenor  >3Y → SS zero curve @ S/S freq
+                    # ── AUD: pure separate zero curves, OIS discounting ──
+                    # Market: tenor <=3Y → QQ projection @ Q/Q freq
+                    #         tenor  >3Y → SS projection @ S/S freq
+                    # Annuity always discounted with OIS (multi-curve framework)
                     if convention == "market":
                         if tenor_y <= 3.0:
-                            fwd = _fwd_from_zc(aud_zc_qq, exp_y, tenor_y, 0.25)
+                            fwd = _fwd_from_zc(aud_zc_qq, exp_y, tenor_y, 0.25, disc_zc=aud_ois_zc)
                         else:
-                            fwd = _fwd_from_zc(aud_zc_ss, exp_y, tenor_y, 0.50)
+                            fwd = _fwd_from_zc(aud_zc_ss, exp_y, tenor_y, 0.50, disc_zc=aud_ois_zc)
                     elif convention == "qq":
-                        fwd = _fwd_from_zc(aud_zc_qq, exp_y, tenor_y, 0.25)
+                        fwd = _fwd_from_zc(aud_zc_qq, exp_y, tenor_y, 0.25, disc_zc=aud_ois_zc)
                     elif convention == "ss":
-                        fwd = _fwd_from_zc(aud_zc_ss, exp_y, tenor_y, 0.50)
+                        fwd = _fwd_from_zc(aud_zc_ss, exp_y, tenor_y, 0.50, disc_zc=aud_ois_zc)
                     else:
                         if tenor_y <= 3.0:
-                            fwd = _fwd_from_zc(aud_zc_qq, exp_y, tenor_y, 0.25)
+                            fwd = _fwd_from_zc(aud_zc_qq, exp_y, tenor_y, 0.25, disc_zc=aud_ois_zc)
                         else:
-                            fwd = _fwd_from_zc(aud_zc_ss, exp_y, tenor_y, 0.50)
+                            fwd = _fwd_from_zc(aud_zc_ss, exp_y, tenor_y, 0.50, disc_zc=aud_ois_zc)
                     row[tenor] = fwd
                 else:
                     # ── NZD/USD: zero curve IRS-only discounting ──────────────
@@ -10470,7 +10500,7 @@ def _load_rv_vols_from_db(ccy: str = "AUD", limit: int = 60) -> pd.DataFrame:
             """SELECT snapshot_date, label, atm_vols FROM vol_history
                WHERE user_id = %s AND currency = %s AND atm_vols IS NOT NULL
                ORDER BY snapshot_date DESC LIMIT %s""",
-            (get_db_url() and "wpo70@icloud.com", ccy, limit)
+            (get_db_url() and st.session_state.get("username", "wpo70@icloud.com"), ccy, limit)
         )
         rows = cur.fetchall()
         conn.close()
@@ -13041,8 +13071,18 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
     expiries = atm_vols["Expiry"].tolist()
     tenors = [c for c in atm_vols.columns if c != "Expiry"]
 
+    # Pre-fetch curves once — not inside the 330-cell loop
     _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
     ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
+
+    # Pre-build OIS zero arrays for df(expiry) calculation
+    _ois_xs = _ois_ys = None
+    if ois_curve is not None and not ois_curve.empty:
+        _ois_xs = ois_curve["MaturityY"].to_numpy().astype(float)
+        _ois_ys = ois_curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
+    else:
+        _ois_xs = curve["MaturityY"].to_numpy().astype(float)
+        _ois_ys = curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
 
     prem_rows = []
     vega_rows = []
@@ -13072,11 +13112,8 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
                 sqrt_t = math.sqrt(max(exp_y, 0.001))
 
                 # ATM straddle FORWARD premium (bp of notional)
-                # spot_prem = 2*N'(0)*sigma*sqrt(T)*annuity
-                # fwd_prem  = spot_prem / df(expiry)  [market convention: OIS discounted]
-                xs_c = curve["MaturityY"].to_numpy().astype(float)
-                ys_c = curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
-                df_expiry = math.exp(-float(np.interp(exp_y, xs_c, ys_c)) * exp_y)
+                # Use pre-fetched OIS arrays for df(expiry)
+                df_expiry = math.exp(-float(np.interp(exp_y, _ois_xs, _ois_ys)) * exp_y)
                 spot_prem_bp = 2 * 0.3989 * sigma_n * sqrt_t * ann * 10000
                 fwd_prem_bp = spot_prem_bp / df_expiry if df_expiry > 0 else spot_prem_bp
                 prow[tenor] = round(fwd_prem_bp, 2)
@@ -13183,7 +13220,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v2803a</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103c</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -13807,8 +13844,14 @@ def sod_report_tab():
                             if "vol_editor" not in st.session_state:
                                 st.session_state["vol_editor"] = {"working": {}, "base": {}, "history": {}, "future": {}, "redo_stack": {}, "view_mode": {}, "smoothing": {}, "paste_data": {}}
                             ve = st.session_state["vol_editor"]
-                            # Get current surface as base
+                            # Get current surface as base — fall back to prev-close snapshot if not loaded
                             _current_atm = get_working_atm_surface("AUD")
+                            if _current_atm is None and _aud_atm is not None:
+                                _current_atm = _aud_atm.copy()
+                                if "Expiry" not in _current_atm.columns:
+                                    _current_atm = _current_atm.reset_index()
+                                    if _current_atm.columns[0] != "Expiry":
+                                        _current_atm.columns = ["Expiry"] + list(_current_atm.columns[1:])
                             if _current_atm is not None:
                                 # Align implied open to base surface shape
                                 # Fill any missing expiries from current ATM
@@ -14469,6 +14512,9 @@ def show_login_page():
     button[kind="managedApp"] {display: none !important;}
     .stAppDeployButton {display: none !important;}
     [title="Manage app"] {display: none !important;}
+    [data-testid="stAppViewerControlButton"] {display: none !important;}
+    [data-testid="stDecoration"] {display: none !important;}
+    .stDeployButton {display: none !important;}
     [data-testid="stSidebar"] {display: none;}
     [data-testid="collapsedControl"] {display: none;}
     .stApp {background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);}
