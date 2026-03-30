@@ -9905,19 +9905,16 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)"):
             continue
         lbl = snap["label"] if snap["label"] else snap["date"].strftime("%Y-%m-%d")
         dates.append(lbl)
-        # Swap axes: X=expiry, Y=tenor, Z=vol (transpose z)
-        import numpy as _np
-        zt = _np.array(z).T  # now shape (n_tenor, n_expiry)
-        # Build hover text: "3m5y = 92.3bp"
+        # Build hover text: "3m5y = 92.3bp" (tenor=X, expiry=Y, z shape=n_expiry×n_tenor)
         _hover = []
-        for ti, tl in enumerate(tenor_labels):
+        for ei, el in enumerate(exp_labels):
             _row = []
-            for ei, el in enumerate(exp_labels):
-                _row.append(f"{el}{tl.lower()}<br>{zt[ti,ei]:.1f}bp")
+            for ti, tl in enumerate(tenor_labels):
+                _row.append(f"{el}{tl.lower()}<br>{z[ei,ti]:.1f}bp")
             _hover.append(_row)
         frames.append(go.Frame(
             data=[go.Surface(
-                x=expiry_y, y=tenor_x, z=zt.tolist(),
+                x=tenor_x, y=expiry_y, z=z.tolist(),
                 colorscale="RdYlGn_r",
                 cmin=50, cmax=130,
                 showscale=True,
@@ -9930,6 +9927,14 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)"):
 
     if not frames:
         return None
+
+    # Format date label e.g. "2026-02-03" → "03-Feb-26"
+    def _fmt_snap_date(s):
+        try:
+            from datetime import datetime as _dt2
+            return _dt2.strptime(s, "%Y-%m-%d").strftime("%d-%b-%y")
+        except Exception:
+            return s
 
     # Initial surface = first frame
     first = frames[0].data[0]
@@ -9945,18 +9950,19 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)"):
             scene=dict(
                 bgcolor="rgba(15,23,42,0.95)",
                 xaxis=dict(
+                    title=dict(text="Swap Tenor (Y)", font=dict(color="#c8d8e8", size=12)),
+                    tickmode="array", tickvals=[1,2,3,5,7,10,15,20,30],
+                    ticktext=["1","2","3","5","7","10","15","20","30"],
+                    tickfont=dict(color="#c8d8e8", size=10),
+                    gridcolor="#334155", showbackground=True,
+                    backgroundcolor="rgba(15,23,42,0.5)",
+                    autorange="reversed",
+                ),
+                yaxis=dict(
                     title=dict(text="Option Expiry", font=dict(color="#c8d8e8", size=12)),
                     tickmode="array",
                     tickvals=[0.08,0.25,0.5,1,2,3,5,7,10,15,20,25,30],
                     ticktext=["1m","3m","6m","1y","2y","3y","5y","7y","10y","15y","20y","25y","30y"],
-                    tickfont=dict(color="#c8d8e8", size=10),
-                    gridcolor="#334155", showbackground=True,
-                    backgroundcolor="rgba(15,23,42,0.5)",
-                ),
-                yaxis=dict(
-                    title=dict(text="Swap Tenor (Y)", font=dict(color="#c8d8e8", size=12)),
-                    tickmode="array", tickvals=[1,2,3,5,7,10,15,20,30],
-                    ticktext=["1","2","3","5","7","10","15","20","30"],
                     tickfont=dict(color="#c8d8e8", size=10),
                     gridcolor="#334155", showbackground=True,
                     backgroundcolor="rgba(15,23,42,0.5)",
@@ -9987,11 +9993,27 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)"):
                 ]
             )],
             sliders=[dict(
-                currentvalue=dict(prefix="Date: ", visible=True, xanchor="center"),
-                steps=[dict(method="animate", args=[[d], dict(mode="immediate",
-                            frame=dict(duration=0, redraw=True))],
-                            label=d.split()[-1] if " " in d else d) for d in dates],
-                len=0.85, x=0.1, y=0.0,
+                currentvalue=dict(
+                    prefix="",
+                    visible=True,
+                    xanchor="center",
+                    font=dict(color="#f1f5f9", size=14, family="Arial"),
+                ),
+                pad=dict(t=20, b=10),
+                steps=[dict(
+                    method="animate",
+                    args=[[d], dict(mode="immediate", frame=dict(duration=0, redraw=True))],
+                    # Show every 5th label to avoid crowding; blank the rest
+                    label=(_fmt_snap_date(d.split()[-1] if " " in d else d)
+                           if _i % 5 == 0 else ""),
+                ) for _i, d in enumerate(dates)],
+                len=0.90, x=0.05, y=0.0,
+                font=dict(color="#94a3b8", size=10, family="Arial"),
+                tickwidth=2,
+                tickcolor="#334155",
+                bgcolor="#0f172a",
+                bordercolor="#334155",
+                borderwidth=1,
             )],
         )
     )
