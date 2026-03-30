@@ -9905,13 +9905,25 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)"):
             continue
         lbl = snap["label"] if snap["label"] else snap["date"].strftime("%Y-%m-%d")
         dates.append(lbl)
+        # Swap axes: X=expiry, Y=tenor, Z=vol (transpose z)
+        import numpy as _np
+        zt = _np.array(z).T  # now shape (n_tenor, n_expiry)
+        # Build hover text: "3m5y = 92.3bp"
+        _hover = []
+        for ti, tl in enumerate(tenor_labels):
+            _row = []
+            for ei, el in enumerate(exp_labels):
+                _row.append(f"{el}{tl.lower()}<br>{zt[ti,ei]:.1f}bp")
+            _hover.append(_row)
         frames.append(go.Frame(
             data=[go.Surface(
-                x=tenor_x, y=expiry_y, z=z.tolist(),
+                x=expiry_y, y=tenor_x, z=zt.tolist(),
                 colorscale="RdYlGn_r",
                 cmin=50, cmax=130,
                 showscale=True,
                 colorbar=dict(title="bp", thickness=12, len=0.6),
+                hovertext=_hover,
+                hovertemplate="%{hovertext}<extra></extra>",
             )],
             name=lbl,
         ))
@@ -9933,15 +9945,6 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)"):
             scene=dict(
                 bgcolor="rgba(15,23,42,0.95)",
                 xaxis=dict(
-                    title=dict(text="Swap Tenor (Y)", font=dict(color="#c8d8e8", size=12)),
-                    tickmode="array", tickvals=[1,2,3,5,7,10,15,20,30],
-                    ticktext=["1","2","3","5","7","10","15","20","30"],
-                    tickfont=dict(color="#c8d8e8", size=10),
-                    gridcolor="#334155", showbackground=True,
-                    backgroundcolor="rgba(15,23,42,0.5)",
-                    autorange="reversed",
-                ),
-                yaxis=dict(
                     title=dict(text="Option Expiry", font=dict(color="#c8d8e8", size=12)),
                     tickmode="array",
                     tickvals=[0.08,0.25,0.5,1,2,3,5,7,10,15,20,25,30],
@@ -9949,6 +9952,15 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)"):
                     tickfont=dict(color="#c8d8e8", size=10),
                     gridcolor="#334155", showbackground=True,
                     backgroundcolor="rgba(15,23,42,0.5)",
+                ),
+                yaxis=dict(
+                    title=dict(text="Swap Tenor (Y)", font=dict(color="#c8d8e8", size=12)),
+                    tickmode="array", tickvals=[1,2,3,5,7,10,15,20,30],
+                    ticktext=["1","2","3","5","7","10","15","20","30"],
+                    tickfont=dict(color="#c8d8e8", size=10),
+                    gridcolor="#334155", showbackground=True,
+                    backgroundcolor="rgba(15,23,42,0.5)",
+                    autorange="reversed",
                 ),
                 zaxis=dict(
                     title=dict(text="Vol (bp)", font=dict(color="#c8d8e8", size=12)),
