@@ -2781,14 +2781,25 @@ def apply_rateedge_theme(theme_name: str):
             color: #ffffff !important;
             -webkit-text-fill-color: #ffffff !important;
         }}
-        /* Hide Manage App button permanently */
+        /* Hide ALL Streamlit chrome — code must not be visible */
         [data-testid="manage-app-button"] {{display: none !important;}}
+        [data-testid="stToolbar"] {{display: none !important;}}
+        [data-testid="stDecoration"] {{display: none !important;}}
+        [data-testid="stStatusWidget"] {{display: none !important;}}
         button[kind="managedApp"] {{display: none !important;}}
         .stAppDeployButton {{display: none !important;}}
         .stDeployButton {{display: none !important;}}
         [title="Manage app"] {{display: none !important;}}
-        footer {{visibility: hidden;}}
-        #MainMenu {{visibility: hidden;}}
+        [title="View app on Streamlit Community Cloud"] {{display: none !important;}}
+        a[href*="github.com"] {{display: none !important;}}
+        a[href*="streamlit.io"] {{display: none !important;}}
+        .viewerBadge_container__r5tak {{display: none !important;}}
+        .viewerBadge_link__qRIco {{display: none !important;}}
+        header[data-testid="stHeader"] > div:last-child {{display: none !important;}}
+        header[data-testid="stHeader"] .stToolbarActions {{display: none !important;}}
+        footer {{visibility: hidden !important; display: none !important;}}
+        #MainMenu {{visibility: hidden !important; display: none !important;}}
+        header {{visibility: hidden !important;}}
         </style>""",
         unsafe_allow_html=True,
     )
@@ -5746,14 +5757,15 @@ def swaptions_tab(vol_mode: str):
                         _row[_ten] = "  —  "
                 _rows.append(_row)
 
-            if _any_stale:
-                st.warning("⚙️ Stale ~ detected   —   cells show implied vs stored ~ divergence. 🟡 >10%, 🔴 >20%. Consider recalibrating.")
-            else:
-                st.success("✅ ~ consistent with ATM surface across all cells (within 10%)")
-
-            _alpha_df = pd.DataFrame(_rows).set_index("Expiry")
-            st.dataframe(_alpha_df, use_container_width=True)
-            st.caption("Divergence = (implied ~ from ATM vol  →  stored ~) / stored ~ ≈ 100%. ~, ρ,ν, × held fixed.")
+            if _show_alpha:
+                if _any_stale:
+                    st.warning("⚙️ Stale α detected — cells show implied vs stored α divergence. 🟡 >10%, 🔴 >20%. Consider recalibrating.")
+                else:
+                    st.success("✅ α consistent with ATM surface across all cells (within 10%)")
+                if _rows:
+                    _alpha_df = pd.DataFrame(_rows).set_index("Expiry")
+                    st.dataframe(_alpha_df, use_container_width=True)
+                    st.caption("Divergence = (implied α from ATM vol − stored α) / stored α × 100%. β, ρ, ν held fixed.")
 
             _rc1, _rc2 = st.columns([2, 4])
             with _rc1:
@@ -6501,6 +6513,9 @@ def swaptions_tab(vol_mode: str):
             if st.button("🗑️ Clear All", key="sw_clear_portfolio"):
                 st.session_state["swaption_portfolio"] = []
                 st.session_state["portfolio"] = []
+                # Bust all per-row calc caches to prevent hang on next render
+                for _ck in [k for k in st.session_state if k.startswith("_sw_price_") or k.startswith("_sw_calc_")]:
+                    del st.session_state[_ck]
                 _save_portfolio()
                 st.rerun()
         df = pd.DataFrame(st.session_state["swaption_portfolio"])
@@ -11824,17 +11839,15 @@ def rv_tab():
                 if _wi_n == 0:
                     st.info("No historical snapshots found — run Load Vol Snapshots in Historical VOL Analysis tab first.")
                 else:
-                    _snap_opts = {f"{s['label'] or s['date'].strftime('%d-%b-%Y')} ({s['date'].strftime('%d-%b-%Y')})": s
+                    _snap_opts = {f"{s['label']} ({s['date'].strftime('%d-%b-%Y')})": s
                                   for s in _wi_snaps}
                     _sel_snap = st.selectbox("Select Historical Date", list(_snap_opts.keys()),
                                               key="wi_hist_snap")
 
                     if st.button("▶ Load Scenario", key="wi_load_scenario", type="primary"):
                         _hs = _snap_opts[_sel_snap]
-                        _hist_df = pd.DataFrame(_hs["atm_vols"]["values"] if isinstance(_hs.get("atm_vols"), dict)
-                                                else _hs.get("df", pd.DataFrame()).to_dict(orient="records"))
-                        if "Expiry" in _hist_df.columns:
-                            _hist_df = _hist_df.set_index("Expiry")
+                        # snap dict has keys: id, date, label, df (DataFrame already indexed)
+                        _hist_df = _hs["df"].copy()
 
                         _curr_df = _wi_atm.copy()
                         if "Expiry" in _curr_df.columns: _curr_df = _curr_df.set_index("Expiry")
@@ -11890,11 +11903,7 @@ def rv_tab():
                     for _hs2 in _wi_snaps:
                         _hdf2 = _hs2.get("df")
                         if _hdf2 is None:
-                            try:
-                                _hdf2 = pd.DataFrame(_hs2["atm_vols"]["values"])
-                                if "Expiry" in _hdf2.columns: _hdf2 = _hdf2.set_index("Expiry")
-                            except Exception:
-                                continue
+                            continue
                         for _exp2 in _hdf2.index:
                             for _ten2 in _hdf2.columns:
                                 try:
@@ -13832,6 +13841,7 @@ def sod_report_tab():
                                 if "sod_loaded" not in ve:
                                     ve["sod_loaded"] = {}
                                 ve["sod_loaded"]["AUD"] = True
+                                st.session_state["vol_editor_auto_load"] = True
                                 st.success("✅ Implied open loaded into Vol Editor. Go to Vol Editor tab to review and publish.")
                             else:
                                 st.warning("Load AUD ATM surface first before loading SOD implied open.")
