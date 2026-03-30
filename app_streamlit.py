@@ -9920,7 +9920,8 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)"):
                 showscale=True,
                 colorbar=dict(title="bp", thickness=12, len=0.6),
                 hovertext=_hover,
-                hovertemplate="%{hovertext}<extra></extra>",
+                hovertemplate="<b>%{hovertext}</b><extra></extra>",
+                hoverlabel=dict(bgcolor="#1e3a5f", font=dict(color="#f1f5f9", size=13, family="Arial")),
             )],
             name=lbl,
         ))
@@ -10005,7 +10006,7 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)"):
                     args=[[d], dict(mode="immediate", frame=dict(duration=0, redraw=True))],
                     # Show every 5th label to avoid crowding; blank the rest
                     label=(_fmt_snap_date(d.split()[-1] if " " in d else d)
-                           if _i % 5 == 0 else ""),
+                           if _i % 3 == 0 else ""),
                 ) for _i, d in enumerate(dates)],
                 len=0.90, x=0.05, y=0.0,
                 font=dict(color="#94a3b8", size=10, family="Arial"),
@@ -10587,6 +10588,7 @@ def rv_tab():
         "📈 Curve RV & Spread Analysis",
         "💡 Swaption Trade Ideas",
         "💡 Cap/Floor Trade Ideas",
+        "🔮 What-If Scenarios",
     ])
 
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
@@ -11733,6 +11735,218 @@ def rv_tab():
 
 
 
+
+
+    with rv_tabs[4]:
+        st.markdown("### 🔮 What-If Scenarios")
+        st.caption("Stress-test and scenario analysis using 2+ months of AUD vol history.")
+
+        _wi_atm = get_working_atm_surface("AUD")
+        if _wi_atm is None:
+            st.warning("Load AUD ATM vol surface first.")
+        else:
+            _wi_snaps = _load_vol_snapshots_for_viz("AUD", "2026-02-01", "2026-12-31")
+            _wi_n = len(_wi_snaps)
+            st.caption(f"Using {_wi_n} historical snapshots in database.")
+
+            wi_tab1, wi_tab2, wi_tab3 = st.tabs([
+                "📈 Vol Shock / Parallel Shift",
+                "📅 Historical Scenario Replay",
+                "🚨 Vol Percentile Alerts",
+            ])
+
+            # ── TAB 1: Vol Shock ─────────────────────────────────────────────
+            with wi_tab1:
+                st.markdown("#### Apply Vol Shock to Current Surface")
+                st.caption("Shift the current ATM vol surface and see the impact on key swaption prices.")
+
+                _sh_c1, _sh_c2, _sh_c3 = st.columns(3)
+                with _sh_c1:
+                    _shock_parallel = st.number_input("Parallel Shift (bp)", min_value=-50, max_value=50,
+                                                       value=0, step=1, key="wi_shock_parallel")
+                with _sh_c2:
+                    _shock_exp_tilt = st.number_input("Expiry Tilt (bp/yr, + = longer higher)",
+                                                       min_value=-5.0, max_value=5.0,
+                                                       value=0.0, step=0.5, key="wi_shock_exp_tilt")
+                with _sh_c3:
+                    _shock_ten_tilt = st.number_input("Tenor Tilt (bp/yr, + = longer higher)",
+                                                       min_value=-5.0, max_value=5.0,
+                                                       value=0.0, step=0.5, key="wi_shock_ten_tilt")
+
+                if st.button("▶ Apply Shock & Show Δ", key="wi_apply_shock", type="primary"):
+                    import plotly.graph_objects as _go_wi
+                    _av = _wi_atm.copy()
+                    if "Expiry" in _av.columns: _av = _av.set_index("Expiry")
+                    _tenor_cols = [c for c in _av.columns]
+
+                    _shocked = _av.copy()
+                    _delta   = pd.DataFrame(index=_av.index, columns=_av.columns, dtype=float)
+
+                    for _exp_lbl in _av.index:
+                        _exp_y = label_to_years(str(_exp_lbl))
+                        for _ten_col in _tenor_cols:
+                            try:
+                                _ten_y = float(str(_ten_col).replace("Y","").replace("y",""))
+                                _base = float(_av.loc[_exp_lbl, _ten_col])
+                                _adj = _shock_parallel + _shock_exp_tilt * _exp_y + _shock_ten_tilt * _ten_y
+                                _shocked.loc[_exp_lbl, _ten_col] = round(_base + _adj, 2)
+                                _delta.loc[_exp_lbl, _ten_col] = round(_adj, 2)
+                            except Exception:
+                                pass
+
+                    # Show delta heatmap
+                    _nc = [c for c in _delta.columns]
+                    _fmt = {c: "{:+.1f}" for c in _nc}
+                    st.markdown("**Vol Change (bp):**")
+                    st.dataframe(_delta.style.format(_fmt).background_gradient(
+                        "RdYlGn", axis=None, subset=_nc,
+                        vmin=-max(abs(_shock_parallel)+5, 1), vmax=max(abs(_shock_parallel)+5, 1)),
+                        use_container_width=True)
+
+                    # Key swaption pricer cells
+                    st.markdown("**Shocked Surface ATM Vols (bp):**")
+                    _nc2 = [c for c in _shocked.columns]
+                    st.dataframe(_shocked.style.format({c: "{:.2f}" for c in _nc2}).background_gradient(
+                        "RdYlGn_r", axis=None, subset=_nc2),
+                        use_container_width=True, height=350)
+
+                    # Store shocked surface in session for further use
+                    st.session_state["_wi_shocked_surface"] = _shocked
+                    st.success(f"Shocked surface stored. Parallel: {_shock_parallel:+.0f}bp | "
+                               f"Expiry tilt: {_shock_exp_tilt:+.1f}bp/yr | Tenor tilt: {_shock_ten_tilt:+.1f}bp/yr")
+
+            # ── TAB 2: Historical Scenario Replay ────────────────────────────
+            with wi_tab2:
+                st.markdown("#### Historical Scenario Replay")
+                st.caption("Load any historical vol snapshot as the working scenario surface. "
+                           "Compares to today and shows the vol change.")
+
+                if _wi_n == 0:
+                    st.info("No historical snapshots found — run Load Vol Snapshots in Historical VOL Analysis tab first.")
+                else:
+                    _snap_opts = {f"{s['label'] or s['date'].strftime('%d-%b-%Y')} ({s['date'].strftime('%d-%b-%Y')})": s
+                                  for s in _wi_snaps}
+                    _sel_snap = st.selectbox("Select Historical Date", list(_snap_opts.keys()),
+                                              key="wi_hist_snap")
+
+                    if st.button("▶ Load Scenario", key="wi_load_scenario", type="primary"):
+                        _hs = _snap_opts[_sel_snap]
+                        _hist_df = pd.DataFrame(_hs["atm_vols"]["values"] if isinstance(_hs.get("atm_vols"), dict)
+                                                else _hs.get("df", pd.DataFrame()).to_dict(orient="records"))
+                        if "Expiry" in _hist_df.columns:
+                            _hist_df = _hist_df.set_index("Expiry")
+
+                        _curr_df = _wi_atm.copy()
+                        if "Expiry" in _curr_df.columns: _curr_df = _curr_df.set_index("Expiry")
+
+                        _common_exp = [e for e in _hist_df.index if e in _curr_df.index]
+                        _common_ten = [c for c in _hist_df.columns if c in _curr_df.columns]
+
+                        if _common_exp and _common_ten:
+                            _hist_sub = _hist_df.loc[_common_exp, _common_ten].apply(pd.to_numeric, errors="coerce")
+                            _curr_sub = _curr_df.loc[_common_exp, _common_ten].apply(pd.to_numeric, errors="coerce")
+                            _chg = _curr_sub - _hist_sub
+
+                            col_a, col_b = st.columns(2)
+                            with col_a:
+                                st.markdown(f"**Historical: {_sel_snap}**")
+                                st.dataframe(_hist_sub.style.format("{:.2f}").background_gradient(
+                                    "RdYlGn_r", axis=None), use_container_width=True, height=320)
+                            with col_b:
+                                st.markdown("**Change vs Today (bp):**")
+                                _fmt_chg = {c: "{:+.2f}" for c in _common_ten}
+                                st.dataframe(_chg.style.format(_fmt_chg).background_gradient(
+                                    "RdYlGn", axis=None,
+                                    vmin=-10, vmax=10), use_container_width=True, height=320)
+
+                            # Summary stats
+                            _avg_chg = float(_chg.mean().mean())
+                            _max_chg = float(_chg.max().max())
+                            _min_chg = float(_chg.min().min())
+                            m1, m2, m3 = st.columns(3)
+                            m1.metric("Avg Change", f"{_avg_chg:+.1f}bp")
+                            m2.metric("Max Increase", f"{_max_chg:+.1f}bp")
+                            m3.metric("Max Decrease", f"{_min_chg:+.1f}bp")
+
+                            st.session_state["_wi_scenario_surface"] = _hist_df
+                            st.success(f"Historical scenario loaded: {_sel_snap}")
+
+            # ── TAB 3: Vol Percentile Alerts ─────────────────────────────────
+            with wi_tab3:
+                st.markdown("#### Vol Percentile Alerts")
+                st.caption("Shows where current vols sit in the historical distribution. "
+                           "Red = top decile (expensive), Green = bottom decile (cheap).")
+
+                if _wi_n < 5:
+                    st.info(f"Need at least 5 snapshots for percentile analysis (have {_wi_n}). "
+                            "Load more data in Historical VOL Analysis.")
+                else:
+                    _av2 = _wi_atm.copy()
+                    if "Expiry" in _av2.columns: _av2 = _av2.set_index("Expiry")
+                    _tenor_cols2 = [c for c in _av2.columns]
+
+                    # Build historical distribution per cell
+                    _hist_data = {}  # (exp, ten) -> list of historical vols
+                    for _hs2 in _wi_snaps:
+                        _hdf2 = _hs2.get("df")
+                        if _hdf2 is None:
+                            try:
+                                _hdf2 = pd.DataFrame(_hs2["atm_vols"]["values"])
+                                if "Expiry" in _hdf2.columns: _hdf2 = _hdf2.set_index("Expiry")
+                            except Exception:
+                                continue
+                        for _exp2 in _hdf2.index:
+                            for _ten2 in _hdf2.columns:
+                                try:
+                                    _v2 = float(_hdf2.loc[_exp2, _ten2])
+                                    if not math.isnan(_v2):
+                                        _hist_data.setdefault((_exp2, _ten2), []).append(_v2)
+                                except Exception:
+                                    pass
+
+                    # Build percentile table
+                    _pct_rows = []
+                    for _exp2 in _av2.index:
+                        _row2 = {"Expiry": str(_exp2)}
+                        for _ten2 in _tenor_cols2:
+                            try:
+                                _curr_v = float(_av2.loc[_exp2, _ten2])
+                                _hist_v = _hist_data.get((_exp2, _ten2), [])
+                                if len(_hist_v) >= 3:
+                                    _pct = float(np.mean(np.array(_hist_v) <= _curr_v) * 100)
+                                    _row2[_ten2] = round(_pct, 0)
+                                else:
+                                    _row2[_ten2] = None
+                            except Exception:
+                                _row2[_ten2] = None
+                        _pct_rows.append(_row2)
+
+                    _pct_df = pd.DataFrame(_pct_rows).set_index("Expiry")
+                    _nc3 = [c for c in _pct_df.columns]
+
+                    st.markdown(f"**Percentile of current vol vs {_wi_n}-day history "
+                                f"(100=all-time high, 0=all-time low):**")
+                    st.dataframe(
+                        _pct_df.style.format("{:.0f}%", na_rep="—").background_gradient(
+                            "RdYlGn_r", axis=None, subset=_nc3, vmin=0, vmax=100),
+                        use_container_width=True, height=400)
+
+                    # Alerts for extreme cells
+                    _alerts = []
+                    for _exp2 in _pct_df.index:
+                        for _ten2 in _pct_df.columns:
+                            _p = _pct_df.loc[_exp2, _ten2]
+                            if _p is not None and not math.isnan(float(_p if _p is not None else float('nan'))):
+                                if float(_p) >= 90:
+                                    _alerts.append(f"🔴 **{_exp2}{_ten2.lower()}** vol at {float(_p):.0f}th pct — EXPENSIVE")
+                                elif float(_p) <= 10:
+                                    _alerts.append(f"🟢 **{_exp2}{_ten2.lower()}** vol at {float(_p):.0f}th pct — CHEAP")
+                    if _alerts:
+                        st.markdown("**Extreme Vol Alerts:**")
+                        for _a in _alerts[:20]:
+                            st.markdown(_a)
+                    else:
+                        st.success("No extreme percentile readings (all cells 10th–90th percentile).")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
