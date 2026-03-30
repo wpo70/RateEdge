@@ -9956,7 +9956,7 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)"):
                     gridcolor="#334155", showbackground=True,
                     backgroundcolor="rgba(15,23,42,0.5)",
                 ),
-                camera=dict(eye=dict(x=-1.6, y=-1.8, z=0.8),
+                camera=dict(eye=dict(x=1.8, y=1.6, z=0.8),
                             up=dict(x=0, y=0, z=1)),
                 aspectmode="manual",
                 aspectratio=dict(x=1.4, y=1.0, z=0.7),
@@ -9978,7 +9978,7 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)"):
                 currentvalue=dict(prefix="Date: ", visible=True, xanchor="center"),
                 steps=[dict(method="animate", args=[[d], dict(mode="immediate",
                             frame=dict(duration=0, redraw=True))],
-                            label=d) for d in dates],
+                            label=d.split()[-1] if " " in d else d) for d in dates],
                 len=0.85, x=0.1, y=0.0,
             )],
         )

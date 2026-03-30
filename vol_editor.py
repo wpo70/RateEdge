@@ -328,9 +328,11 @@ let changed=false,rotLocked=false;
 
 const scene=new THREE.Scene();
 scene.background=new THREE.Color(0x0a1628);
-const cam=new THREE.PerspectiveCamera(45,cn.clientWidth/cn.clientHeight,0.1,1000);
+const _W=()=>cn.offsetWidth||cn.parentElement?.offsetWidth||800;
+const _H=()=>cn.offsetHeight||500;
+const cam=new THREE.PerspectiveCamera(45,_W()/_H(),0.1,1000);
 const ren=new THREE.WebGLRenderer({{canvas:cv,antialias:true}});
-ren.setSize(cn.clientWidth,cn.clientHeight);
+ren.setSize(_W(),_H());
 ren.setPixelRatio(Math.min(devicePixelRatio,2));
 
 // Lighting
@@ -592,7 +594,9 @@ if(navigator.clipboard){{
 }};
 
 (function anim(){{requestAnimationFrame(anim);ren.render(scene,cam);}})();
-window.onresize=()=>{{cam.aspect=cn.clientWidth/cn.clientHeight;cam.updateProjectionMatrix();ren.setSize(cn.clientWidth,cn.clientHeight);}};
+window.onresize=()=>{{cam.aspect=_W()/_H();cam.updateProjectionMatrix();ren.setSize(_W(),_H());}};
+setTimeout(()=>{{cam.aspect=_W()/_H();cam.updateProjectionMatrix();ren.setSize(_W(),_H());}},200);
+setTimeout(()=>{{cam.aspect=_W()/_H();cam.updateProjectionMatrix();ren.setSize(_W(),_H());}},800);
 }})();
 </script></body></html>'''
     components.html(html, height=height+100, scrolling=False)
