@@ -1207,17 +1207,16 @@ def publish_blotter_mids(ccy: str, mids: dict) -> int:
         if not rows:
             conn.close()
             return 0
-        # True batch upsert — single SQL statement via execute_values
-        from psycopg2.extras import execute_values
-        execute_values(cur, """
+        # True batch upsert via execute_values
+        from psycopg2.extras import execute_values as _ev
+        _ev(cur, """
             INSERT INTO blotter_mids (ccy, key, value, label, updated_at)
             VALUES %s
             ON CONFLICT (ccy, key) DO UPDATE
                 SET value = EXCLUDED.value,
                     label = EXCLUDED.label,
                     updated_at = NOW()
-        """, [(ccy, k, v, l, None) for ccy,k,v,l in [(r[0],r[1],r[2],r[3]) for r in rows]],
-        template="(%s, %s, %s, %s, NOW())")
+        """, rows, template="(%s, %s, %s, %s, NOW())")
         conn.commit()
         cur.close()
         conn.close()
