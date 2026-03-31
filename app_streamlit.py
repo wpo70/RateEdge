@@ -6552,9 +6552,9 @@ def caps_floors_tab(vol_mode: str):
     _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
     ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
     if curve is not None:
-        # Calculate forward for swap from first_fixing to final_maturity
-        swap_tenor = tenor_y - first_fixing_y
-        fwd, _, _ = forward_and_annuity_from_curve(curve, ccy, first_fixing_y, swap_tenor, ois_curve)
+        # Forward swap rate: first_fixing start, full tenor length
+        # e.g. 3m x 5Y = fwd starting in 3m for 5Y (NOT 4.75Y)
+        fwd, _, _ = forward_and_annuity_from_curve(curve, ccy, first_fixing_y, tenor_y, ois_curve)
         
         # Build QUARTERLY cap schedule   —   MUST use same 1/252 base as bootstrap
         # so pricer T values exactly match the bootstrapped vol curve anchor points.
@@ -7595,6 +7595,46 @@ def caps_floors_tab(vol_mode: str):
         if r["caplet_details"]:
             with st.expander(" Caplet/Floorlet Breakdown", expanded=False):
                 st.dataframe(pd.DataFrame(r["caplet_details"]), use_container_width=True, hide_index=True)
+
+    # ── Cap/Floor Portfolio Blotter ───────────────────────────────────────────
+    _cf_port = [t for t in st.session_state.get("portfolio", []) if t.get("instrument_type") == "Cap/Floor"]
+    if _cf_port:
+        st.markdown("---")
+        _ph1, _ph2 = st.columns([3, 1])
+        with _ph1:
+            st.markdown("### Cap/Floor Blotter")
+        with _ph2:
+            if st.button("🗑️ Clear All", key="cf_clear_portfolio"):
+                st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", []) if t.get("instrument_type") != "Cap/Floor"]
+                st.rerun()
+
+        _df = pd.DataFrame(_cf_port)
+        _df["_sort"] = _df["expiry"].apply(lambda e: label_to_years(str(e)))
+        _df = _df.sort_values("_sort").reset_index(drop=True)
+        _df_disp = _df.drop(columns=["_sort"]).copy()
+        for _col in ["pv", "delta", "vega", "gamma"]:
+            if _col in _df_disp.columns:
+                _df_disp[_col] = (_df_disp[_col] / 1e3).round(1)
+        if "pv_bp" in _df_disp.columns:
+            _df_disp["pv_bp"] = _df_disp["pv_bp"].round(4)
+        _df_disp.rename(columns={
+            "pv": "PV (k)", "pv_bp": "PV (bp)",
+            "delta": "Delta (k)", "vega": "Vega (k)",
+            "gamma": "Gamma (k)", "instrument_type": "Type",
+        }, inplace=True)
+        _show_cols = [c for c in ["Type","currency","structure","expiry","tenor","strike","forward","notional_mm","PV (bp)","PV (k)","Delta (k)","Vega (k)","Gamma (k)","model"] if c in _df_disp.columns]
+        st.dataframe(_df_disp[_show_cols], use_container_width=True, hide_index=True)
+
+        # Net greeks
+        _net_pv   = sum(t.get("pv", 0) for t in _cf_port)
+        _net_delt = sum(t.get("delta", 0) for t in _cf_port)
+        _net_vega = sum(t.get("vega", 0) for t in _cf_port)
+        _net_bp   = sum(t.get("pv_bp", 0) for t in _cf_port)
+        _nc1, _nc2, _nc3, _nc4 = st.columns(4)
+        _nc1.metric("Net PV (bp)", f"{_net_bp:.2f}")
+        _nc2.metric("Net PV ($)", f"${_net_pv:,.0f}")
+        _nc3.metric("Net Delta ($)", f"${_net_delt:,.0f}")
+        _nc4.metric("Net Vega ($)", f"${_net_vega:,.0f}")
 
 
 def exotics_tab(vol_mode: str):
@@ -13169,7 +13209,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104u</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104w</div>
             </div>
             """,
             unsafe_allow_html=True,
