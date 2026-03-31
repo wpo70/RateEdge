@@ -23,7 +23,6 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from statistics import NormalDist
-_ND = NormalDist()   # module-level — never instantiate per pricing call
 import plotly.graph_objects as go
 import requests
 import scipy.optimize
@@ -798,10 +797,7 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                 if _ois_df is not None and not _ois_df.empty:
                     for _, _row in _ois_df.iterrows():
                         _t_ois = float(_row["MaturityY"])
-                        # CRITICAL: only seed OIS up to 3Y — same as BBG_Feed bootstrap path.
-                        # Seeding OIS beyond 3Y overrides the IRS par bootstrap at long maturities,
-                        # causing matrix to diverge from fresh-commit values.
-                        if _t_ois <= 3.01:
+                        if _t_ois <= 3.01:  # only seed OIS up to 3Y — matches BBG_Feed bootstrap path
                             _ois_rates_rebuild[_t_ois] = float(_row["ZeroRatePct"])
 
                 _bx2 = _by2 = None
@@ -1647,24 +1643,11 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         return 0.0, 0.0, []
 
     # IRS for projection, OIS for annuity discounting (dual-curve)
-    # AUD: use bootstrapped pure QQ/SS zero curves for projection (no post-hoc basis hack)
-    _zc_qq_proj = st.session_state.get("_aud_zc_qq") if ccy == "AUD" else None
-    _zc_ss_proj = st.session_state.get("_aud_zc_ss") if ccy == "AUD" else None
-    _use_pure_zc = ccy == "AUD" and _zc_qq_proj is not None and _zc_ss_proj is not None
-
-    # Keep basis_6v3 for fallback path only
-    basis_6v3 = get_basis_curve(ccy, "6v3") if (ccy == "AUD" and not _use_pure_zc) else None
+    # AUD: use 3M BBSW curve for Q/Q, 6M BBSW curve for S/S
+    basis_6v3 = get_basis_curve(ccy, "6v3") if ccy == "AUD" else None
 
     def _df_proj(crv: pd.DataFrame, t: float, freq: float) -> float:
-        """Projection DF. AUD: pure QQ/SS bootstrapped zeros. Others: blended curve."""
-        if _use_pure_zc:
-            # Multi-curve: use pure QQ zeros for Q/Q tenors, SS zeros for S/S tenors
-            zc = _zc_qq_proj if freq == 0.25 else _zc_ss_proj
-            _xs = np.array(sorted(zc.keys()))
-            _ys = np.array([zc[k] / 100.0 for k in _xs])
-            z = float(np.interp(t, _xs, _ys))
-            return math.exp(-z * t)
-        # Fallback: blended curve with post-hoc basis adjustment
+        """Projection discount factor with convention-aware basis adjustment for AUD."""
         xs = crv["MaturityY"].to_numpy().astype(float)
         ys = crv["ZeroRatePct"].to_numpy().astype(float) / 100.0
         z = float(np.interp(t, xs, ys))
@@ -1672,9 +1655,11 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
             bx = basis_6v3["MaturityY"].to_numpy().astype(float)
             by = basis_6v3["BasisBp"].to_numpy().astype(float) / 10000.0
             if freq == 0.25 and t > 3.0:
+                # Q/Q swap, S/S part of curve → adjust down to 3M BBSW
                 b = float(np.interp(t, bx, by))
                 z = z - b
             elif freq == 0.5 and t <= 3.0:
+                # S/S swap, Q/Q part of curve → adjust up to 6M BBSW
                 b = float(np.interp(t, bx, by))
                 z = z + b
         return math.exp(-z * t)
@@ -1723,7 +1708,7 @@ def black_swaption_vanilla(ticket: SwaptionTicket) -> dict:
     vol_sqrt_t = sigma * math.sqrt(T)
     d1 = (lnFK + 0.5 * sigma * sigma * T) / vol_sqrt_t
     d2 = d1 - vol_sqrt_t
-    N = _ND.cdf
+    N = NormalDist().cdf
     phi = lambda x: math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
 
     if ticket.side.lower().startswith("payer"):
@@ -1763,7 +1748,7 @@ def bachelier_swaption_vanilla(ticket: SwaptionTicket) -> dict:
 
     d = (F - K) / (sigma_n * math.sqrt(T))
     phi = math.exp(-0.5 * d * d) / math.sqrt(2 * math.pi)
-    N = _ND.cdf(d)
+    N = NormalDist().cdf(d)
 
     if ticket.side.lower().startswith("payer"):
         price_rate = (F - K) * N + sigma_n * math.sqrt(T) * phi
@@ -1801,7 +1786,7 @@ def black_swaption_digital(ticket: SwaptionTicket) -> dict:
     lnFK = math.log(F / K)
     vol_sqrt_t = sigma * math.sqrt(T)
     d2 = (lnFK - 0.5 * sigma * sigma * T) / vol_sqrt_t
-    N = _ND.cdf
+    N = NormalDist().cdf
     phi = lambda x: math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
 
     if ticket.side.lower().startswith("payer"):
@@ -1830,7 +1815,7 @@ def bachelier_swaption_digital(ticket: SwaptionTicket) -> dict:
 
     d = (F - K) / (sigma_n * math.sqrt(T))
     phi = math.exp(-0.5 * d * d) / math.sqrt(2 * math.pi)
-    N = _ND.cdf(d)
+    N = NormalDist().cdf(d)
 
     if ticket.side.lower().startswith("payer"):
         prob = N
@@ -1889,7 +1874,7 @@ def black_caplet(notional: float, accrual: float,
     vol_sqrt_t = sigma * math.sqrt(T)
     d1 = (lnFK + 0.5 * sigma * sigma * T) / vol_sqrt_t
     d2 = d1 - vol_sqrt_t
-    N = _ND.cdf
+    N = NormalDist().cdf
     phi = lambda x: math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
     if is_cap:
         price_rate = F * N(d1) - K * N(d2)
@@ -1914,7 +1899,7 @@ def bachelier_caplet(notional: float, accrual: float,
     df = math.exp(-r * T)
     d = (F - K) / (sigma_n * math.sqrt(T))
     phi = math.exp(-0.5 * d * d) / math.sqrt(2 * math.pi)
-    N = _ND.cdf(d)
+    N = NormalDist().cdf(d)
     if is_cap:
         price_rate = (F - K) * N + sigma_n * math.sqrt(T) * phi
         delta_rate = N
@@ -2141,7 +2126,7 @@ def build_caplet_vol_curve_from_surface(ccy: str, atm_surface):
     if anchor_mats:
         from scipy.optimize import least_squares
         try:
-            res = least_squares(price_with_interp, [caplet_vols[m] for m in anchor_mats], ftol=1e-4, xtol=1e-4, gtol=1e-4)
+            res = least_squares(price_with_interp, [caplet_vols[m] for m in anchor_mats], ftol=1e-12, xtol=1e-12, gtol=1e-12)
             if res.success:
                 for i, m in enumerate(anchor_mats):
                     caplet_vols[m] = max(res.x[i], 1.0)
@@ -2387,7 +2372,7 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         
         from scipy.optimize import least_squares
         try:
-            result = least_squares(price_with_interp_curve, initial_guess, ftol=1e-4, xtol=1e-4, gtol=1e-4)
+            result = least_squares(price_with_interp_curve, initial_guess, ftol=1e-12, xtol=1e-12, gtol=1e-12)
             
             if result.success:
                 for i, mat in enumerate(anchor_mats_to_solve):
@@ -2800,7 +2785,6 @@ def apply_rateedge_theme(theme_name: str):
         }}
         /* Hide ALL Streamlit chrome — code must not be visible */
         [data-testid="manage-app-button"] {{display: none !important;}}
-        [data-testid="stAppViewerControlButton"] {{display: none !important;}}
         [data-testid="stToolbar"] {{display: none !important;}}
         [data-testid="stDecoration"] {{display: none !important;}}
         [data-testid="stStatusWidget"] {{display: none !important;}}
@@ -2813,34 +2797,21 @@ def apply_rateedge_theme(theme_name: str):
         a[href*="streamlit.io"] {{display: none !important;}}
         .viewerBadge_container__r5tak {{display: none !important;}}
         .viewerBadge_link__qRIco {{display: none !important;}}
+        header[data-testid="stHeader"] > div:last-child {{display: none !important;}}
+        header[data-testid="stHeader"] .stToolbarActions {{display: none !important;}}
         footer {{visibility: hidden !important; display: none !important;}}
         #MainMenu {{visibility: hidden !important; display: none !important;}}
+        header[data-testid="stHeader"] {{background: transparent !important; height: 0 !important; min-height: 0 !important;}}
         </style>""",
         unsafe_allow_html=True,
     )
     
-    # Force colors and remove chrome via JavaScript
+    # Force radio/checkbox colors with JavaScript (runs after render)
     import streamlit.components.v1 as components
     components.html("""
     <script>
-    function fixUI() {
+    function fixColors() {
         const p = window.parent.document;
-        // Remove manage app / deploy buttons from DOM entirely
-        const removeSelectors = [
-            '[data-testid="manage-app-button"]',
-            '[data-testid="stAppViewerControlButton"]',
-            '[data-testid="stDecoration"]',
-            '[data-testid="stStatusWidget"]',
-            'button[kind="managedApp"]',
-            '[title="Manage app"]',
-            '[title="View app on Streamlit Community Cloud"]',
-            'a[href*="github.com"][target="_blank"]',
-        ];
-        removeSelectors.forEach(sel => {
-            p.querySelectorAll(sel).forEach(el => {
-                el.style.setProperty('display', 'none', 'important');
-            });
-        });
         // Checkboxes - WHITE
         p.querySelectorAll('[data-testid="stCheckbox"] label, [data-testid="stCheckbox"] span, [data-testid="stCheckbox"] p, [data-testid="stCheckbox"] div').forEach(el => {
             el.style.setProperty('color', '#ffffff', 'important');
@@ -2851,17 +2822,19 @@ def apply_rateedge_theme(theme_name: str):
             el.style.setProperty('color', '#fbbf24', 'important');
             el.style.setProperty('-webkit-text-fill-color', '#fbbf24', 'important');
         });
+        // Baseweb checkbox labels - WHITE
         p.querySelectorAll('[data-baseweb="checkbox"] ~ div').forEach(el => {
             el.style.setProperty('color', '#ffffff', 'important');
             el.style.setProperty('-webkit-text-fill-color', '#ffffff', 'important');
         });
+        // Baseweb radio labels - YELLOW
         p.querySelectorAll('[data-baseweb="radio"] ~ div').forEach(el => {
             el.style.setProperty('color', '#fbbf24', 'important');
             el.style.setProperty('-webkit-text-fill-color', '#fbbf24', 'important');
         });
     }
-    fixUI();
-    setInterval(fixUI, 500);
+    fixColors();
+    setInterval(fixColors, 300);
     </script>
     """, height=0)
 
@@ -3456,40 +3429,27 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
 def load_config_excel(upload, load_type: str = "all") -> dict:
     """
     Load config from Excel with selective loading.
-    load_type: "atm", "atm_aud", "sabr", "curves", "curves_aud", or "all"
+    load_type: "atm", "sabr", "curves", or "all"
     Returns dict with counts of what was loaded.
     """
     xl = pd.ExcelFile(upload)
     loaded = {"atm": 0, "sabr": 0, "curves": 0, "basis": 0}
-
-    # Determine which currencies to process for each type
-    ccy_list = SUPPORTED_CURRENCIES
-    load_atm        = load_type == "all"
-    load_atm_aud    = load_type in ["atm_aud", "all"]
-    load_atm_usd_nzd = load_type in ["atm_usd_nzd", "all"]
-    load_sabr       = load_type == "all"
-    load_curves     = load_type in ["curves", "all"]
-    load_curves_aud = False  # always included in load_curves for AUD
-
-    for ccy in ccy_list:
-        # Load ATM vols — per-currency logic
-        _load_this_atm = (
-            load_atm or
-            (load_atm_aud and ccy == "AUD") or
-            (load_atm_usd_nzd and ccy in ["USD", "NZD"])
-        )
-        if _load_this_atm:
+    
+    for ccy in SUPPORTED_CURRENCIES:
+        # Load ATM vols
+        if load_type in ["atm", "all"]:
             atm_name = f"ATM_Vols_{ccy}"
             if atm_name in xl.sheet_names:
                 atm_raw = pd.read_excel(xl, sheet_name=atm_name)
                 atm_df = load_atm_surface(atm_raw, atm_name)
+                # Get existing SABR data to preserve
                 _, old_a, old_b, old_r, old_n = get_ccy_vol_data(ccy)
                 set_ccy_vol_data(ccy, atm_df, old_a, old_b, old_r, old_n)
                 set_timestamp("atm", ccy)
                 loaded["atm"] += 1
 
         # Load SABR grids
-        if load_sabr:
+        if load_type in ["sabr", "all"]:
             sabr_a = sabr_b = sabr_r = sabr_n = None
             has_sabr = False
             for base in ["SABR_Alpha", "SABR_Beta", "SABR_Rho", "SABR_Nu"]:
@@ -3500,23 +3460,34 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                     has_sabr = True
                 else:
                     df = None
-                if base == "SABR_Alpha":   sabr_a = df
-                elif base == "SABR_Beta":  sabr_b = df
-                elif base == "SABR_Rho":   sabr_r = df
-                elif base == "SABR_Nu":    sabr_n = df
+                if base == "SABR_Alpha":
+                    sabr_a = df
+                elif base == "SABR_Beta":
+                    sabr_b = df
+                elif base == "SABR_Rho":
+                    sabr_r = df
+                elif base == "SABR_Nu":
+                    sabr_n = df
+            
             if has_sabr:
+                # Get existing ATM to preserve
                 old_atm, _, _, _, _ = get_ccy_vol_data(ccy)
                 set_ccy_vol_data(ccy, old_atm, sabr_a, sabr_b, sabr_r, sabr_n)
                 set_timestamp("sabr", ccy)
                 loaded["sabr"] += 1
 
         # Load curves and basis curves
-        if load_curves:
+        if load_type in ["curves", "all"]:
             curve_df = None
+
+            # AUD: bootstrap from BBG_Feed par rates (live rates → correct zeros)
             if ccy == "AUD":
                 bootstrapped = bootstrap_aud_zeros_from_bbg_feed(xl)
                 if bootstrapped is not None and len(bootstrapped) >= 15:
                     curve_df = bootstrapped
+
+            # Fallback for AUD (if bootstrap fails) and primary for NZD/USD:
+            # always read directly from Curves_{CCY} sheet
             if curve_df is None:
                 curve_name = f"Curves_{ccy}"
                 if curve_name in xl.sheet_names:
@@ -3525,6 +3496,7 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                         curve_df = load_curve_flexible(raw_curve, curve_name)
                     except:
                         curve_df = load_curve(raw_curve, curve_name)
+
             if curve_df is not None and len(curve_df) > 0:
                 set_ccy_curve(ccy, curve_df)
                 if "config_curves" not in st.session_state:
@@ -3764,25 +3736,20 @@ def vol_config_tab():
     
     if upload is not None:
         st.markdown("#### Select what to commit:")
-
+        
         load_type = st.radio(
             "Commit options",
-            ["All", "SOD IRS", "AUD Vol", "USD & NZD Vol"],
+            ["All", "ATM Vol Only", "IRS Curves Only"],
             index=0,
             horizontal=True,
-            key="load_type_radio",
-            help=(
-                "SOD IRS: load AUD + NZD + USD IRS curves (all three). "
-                "AUD Vol: AUD ATM surface only. "
-                "USD & NZD Vol: USD and NZD ATM surfaces only."
-            )
+            key="load_type_radio"
         )
-
+        
+        # Map selection to load_type
         type_map = {
-            "All":          "all",
-            "SOD IRS":      "curves",        # all CCY curves
-            "AUD Vol":      "atm_aud",       # AUD ATM only
-            "USD & NZD Vol":"atm_usd_nzd",   # USD + NZD ATM only
+            "All": "all",
+            "ATM Vol Only": "atm",
+            "IRS Curves Only": "curves"
         }
         
         if st.button(" Commit Selected Data", key="commit_btn", type="primary"):
@@ -4542,18 +4509,46 @@ def curves_tab():
 
     st.markdown("---")
 
-    # ── ATM Vol / Forward Premium / Vega ──────────────────────────────────────
+    # ── Swap Rates Validator ───────────────────────────────────────────────────
+    if st.session_state.get("_swap_load_warnings"):
+        for _slw in st.session_state["_swap_load_warnings"]:
+            st.error(_slw)
+        if st.button("Clear swap rate warnings", key="clear_swap_warns"):
+            st.session_state.pop("_swap_load_warnings", None)
+            st.rerun()
+
+    if st.button("▶ Show Swap Rate Validator", key="swap_validator_toggle") or st.session_state.get("_swap_validator_open"):
+        st.session_state["_swap_validator_open"] = True
+        from datetime import date as _svdate
+        _sv_col1, _sv_col2, _sv_col3 = st.columns([2, 2, 2])
+        with _sv_col1:
+            _sv_date = st.date_input("Date to check", value=_svdate.today(), key="swap_val_date")
+        with _sv_col2:
+            _sv_fr = st.selectbox("Floating Rate", ["3M BBSW", "6M BBSW", "AONIA", "3M BKBM", "NZONIA", "SOFR"], key="swap_val_fr")
+        with _sv_col3:
+            if st.button("▶ Run Check", key="run_swap_check", type="primary"):
+                _load_swap_rates_from_db.clear()
+                _sv_df = _load_swap_rates_from_db(_sv_fr, str(_sv_date))
+                if _sv_df.empty:
+                    st.warning(f"No data found for {_sv_fr} on {_sv_date} (or nearby dates)")
+                else:
+                    _sv_dict = _sv_df["rate"].to_dict() if "rate" in _sv_df.columns else _sv_df.iloc[:,0].to_dict()
+                    _sv_warns = check_swap_rates_sanity(_sv_dict, _sv_fr, ccy)
+                    if _sv_warns:
+                        for _svw in _sv_warns:
+                            st.error(_svw)
+                    else:
+                        st.success(f"✅ {_sv_fr} clean on {_sv_date}")
+                    st.dataframe(_sv_df, use_container_width=True)
+        if st.button("✕ Close Validator", key="close_swap_val"):
+            st.session_state["_swap_validator_open"] = False
+            st.rerun()
+
+    st.markdown("---")
+
     # ── ATM Vol / Forward Premium / Vega ──────────────────────────────────────
     if "atm_prem_matrix" not in st.session_state: st.session_state["atm_prem_matrix"] = {}
     if "atm_section_open" not in st.session_state: st.session_state["atm_section_open"] = True
-
-    # Auto-generate ATM matrix if not yet built for this currency
-    _atm_auto, _, _, _, _ = get_ccy_vol_data(ccy)
-    _mc_atm = st.session_state.get("config_curves", {}).get(ccy)
-    if _atm_auto is not None and _mc_atm is not None and ccy not in st.session_state.get("atm_prem_matrix", {}):
-        _mb_atm = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
-        pm, vm = calculate_atm_premium_matrix(ccy, _mc_atm, _atm_auto, _mb_atm)
-        st.session_state["atm_prem_matrix"][ccy] = {"vol": _atm_auto, "prem": pm, "vega": vm}
 
     _al = "▼ Hide ATM Vol / Premium / Vega" if st.session_state["atm_section_open"] else "▶ Show ATM Vol / Premium / Vega"
     if st.button(_al, key="atm_toggle"):
@@ -4778,24 +4773,18 @@ def fwd_analysis_tab():
     _an_tabs = st.tabs(["IRS Spreads", "IRS Butterflies", "Fwd-Fwd Rates (3M)", "6v3 Outright", "6v3 Fwd-Fwd", "6v3 Spreads", "6v3 Butterflies"])
 
     def _autosave_fwd_prefs():
-        """Persist FWD analysis series lists to DB. Debounced — skips if saved in last 5s."""
-        if not HAS_POSTGRES or not get_db_url():
-            return
-        import time as _t
-        _last = st.session_state.get("_fwd_prefs_last_save", 0)
-        if _t.time() - _last < 5:
-            return
-        _uid = st.session_state.get("username", "default")
-        _prefs = {
-            "irs_sp_list": [list(x) for x in st.session_state.get("irs_sp_list", [])],
-            "irs_fl_list": [list(x) for x in st.session_state.get("irs_fl_list", [])],
-            "fvfv_list":   [list(x) for x in st.session_state.get("fvfv_list",   [])],
-            "b6_list":     list(st.session_state.get("b6_list", [])),
-            "fv6_list":    [list(x) for x in st.session_state.get("fv6_list",    [])],
-            "bsp_list":    [list(x) for x in st.session_state.get("bsp_list",    [])],
-        }
-        save_user_config(_uid, "fwd_analysis_prefs", "GLB", _prefs)
-        st.session_state["_fwd_prefs_last_save"] = _t.time()
+        """Persist FWD analysis series lists to DB so they survive session restarts."""
+        if HAS_POSTGRES and get_db_url():
+            _uid = st.session_state.get("username", "default")
+            _prefs = {
+                "irs_sp_list": [list(x) for x in st.session_state.get("irs_sp_list", [])],
+                "irs_fl_list": [list(x) for x in st.session_state.get("irs_fl_list", [])],
+                "fvfv_list":   [list(x) for x in st.session_state.get("fvfv_list",   [])],
+                "b6_list":     list(st.session_state.get("b6_list", [])),
+                "fv6_list":    [list(x) for x in st.session_state.get("fv6_list",    [])],
+                "bsp_list":    [list(x) for x in st.session_state.get("bsp_list",    [])],
+            }
+            save_user_config(_uid, "fwd_analysis_prefs", "GLB", _prefs)
 
     def _chart_tools(fig, series_dict: dict, key: str, ylab: str = "bp"):
         """📂 Download + date-range picker + Hi/Lo/Mean/Std/Current stats box."""
@@ -5524,24 +5513,14 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
 
     # AUD: load pure QQ and SS zero curves built during bootstrap
     aud_zc_qq = aud_zc_ss = None
-    aud_ois_zc = None
     if ccy == "AUD":
         aud_zc_qq = st.session_state.get("_aud_zc_qq")
         aud_zc_ss = st.session_state.get("_aud_zc_ss")
-        # Build OIS ZC dict for multi-curve discounting
-        _ois_df = st.session_state.get("config_basis", {}).get("AUD", {}).get("ois")
-        if _ois_df is not None and not _ois_df.empty:
-            try:
-                aud_ois_zc = {float(r["MaturityY"]): float(r["ZeroRatePct"])
-                              for _, r in _ois_df.iterrows()}
-            except Exception:
-                aud_ois_zc = None
 
     SPOT_M = 1.0 / 252.0
 
-    def _fwd_from_zc(zc, exp, tenor, freq, disc_zc=None):
-        """Forward swap rate from zero curve. Single-curve: IRS zeros for both
-        projection and annuity — matches BBG AUD forward swap rate convention."""
+    def _fwd_from_zc(zc, exp, tenor, freq):
+        """Forward swap rate from a zero curve dict {maturity: zero_rate_pct}."""
         xs = np.array(sorted(zc.keys()))
         ys = np.array([zc[k] / 100.0 for k in xs])
         t_s = exp + SPOT_M; t_e = t_s + tenor
@@ -5568,24 +5547,23 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
             tenor_y = float(tenor[:-1])
             try:
                 if ccy == "AUD" and aud_zc_qq is not None and aud_zc_ss is not None:
-                    # ── AUD: pure separate zero curves, OIS discounting ──
-                    # Market: tenor <=3Y → QQ projection @ Q/Q freq
-                    #         tenor  >3Y → SS projection @ S/S freq
-                    # Annuity always discounted with OIS (multi-curve framework)
+                    # ── AUD: pure separate zero curves, no post-hoc basis adjustment ──
+                    # Market: tenor <=3Y → QQ zero curve @ Q/Q freq
+                    #         tenor  >3Y → SS zero curve @ S/S freq
                     if convention == "market":
                         if tenor_y <= 3.0:
-                            fwd = _fwd_from_zc(aud_zc_qq, exp_y, tenor_y, 0.25, disc_zc=aud_ois_zc)
+                            fwd = _fwd_from_zc(aud_zc_qq, exp_y, tenor_y, 0.25)
                         else:
-                            fwd = _fwd_from_zc(aud_zc_ss, exp_y, tenor_y, 0.50, disc_zc=aud_ois_zc)
+                            fwd = _fwd_from_zc(aud_zc_ss, exp_y, tenor_y, 0.50)
                     elif convention == "qq":
-                        fwd = _fwd_from_zc(aud_zc_qq, exp_y, tenor_y, 0.25, disc_zc=aud_ois_zc)
+                        fwd = _fwd_from_zc(aud_zc_qq, exp_y, tenor_y, 0.25)
                     elif convention == "ss":
-                        fwd = _fwd_from_zc(aud_zc_ss, exp_y, tenor_y, 0.50, disc_zc=aud_ois_zc)
+                        fwd = _fwd_from_zc(aud_zc_ss, exp_y, tenor_y, 0.50)
                     else:
                         if tenor_y <= 3.0:
-                            fwd = _fwd_from_zc(aud_zc_qq, exp_y, tenor_y, 0.25, disc_zc=aud_ois_zc)
+                            fwd = _fwd_from_zc(aud_zc_qq, exp_y, tenor_y, 0.25)
                         else:
-                            fwd = _fwd_from_zc(aud_zc_ss, exp_y, tenor_y, 0.50, disc_zc=aud_ois_zc)
+                            fwd = _fwd_from_zc(aud_zc_ss, exp_y, tenor_y, 0.50)
                     row[tenor] = fwd
                 else:
                     # ── NZD/USD: zero curve IRS-only discounting ──────────────
@@ -6117,14 +6095,9 @@ def swaptions_tab(vol_mode: str):
                 zlabel = "Vol (bp)" if surf_mode_sw == "Vol (bp)" else "Fwd Premium (bp)"
                 z_arr = np.array(z_vals, dtype=float)
 
-                # Surface trace — label-aware hover
-                # Build customdata array with [expiry_label, tenor_label] per grid point
-                _cd = np.array([[[sorted_exp[i], sorted_ten[j]]
-                                  for j in range(len(sorted_ten))]
-                                 for i in range(len(sorted_exp))])
+                # Surface trace   —   matches Vol Editor style
                 surf_trace = go.Surface(
                     x=ten_yrs, y=exp_yrs, z=z_arr,
-                    customdata=_cd,
                     colorscale=[
                         [0.0,  "#0ea5e9"],
                         [0.25, "#22d3ee"],
@@ -6135,7 +6108,7 @@ def swaptions_tab(vol_mode: str):
                     opacity=0.92,
                     colorbar=dict(title=dict(text=zlabel, font=dict(color="#94a3b8", size=11)),
                                   tickfont=dict(color="#94a3b8"), thickness=10, len=0.6, x=1.02),
-                    hovertemplate=f"Expiry: %{{customdata[0]}}<br>Tenor: %{{customdata[1]}}<br>{zlabel}: %{{z:.1f}}<extra></extra>",
+                    hovertemplate=f"Tenor: %{{x:.1f}}y<br>Expiry: %{{y:.2f}}y<br>{zlabel}: %{{z:.1f}}<extra></extra>",
                     lighting=dict(ambient=0.7, diffuse=0.8, specular=0.3, roughness=0.5),
                     lightposition=dict(x=1000, y=1000, z=2000),
                 )
@@ -10502,7 +10475,7 @@ def _load_rv_vols_from_db(ccy: str = "AUD", limit: int = 60) -> pd.DataFrame:
             """SELECT snapshot_date, label, atm_vols FROM vol_history
                WHERE user_id = %s AND currency = %s AND atm_vols IS NOT NULL
                ORDER BY snapshot_date DESC LIMIT %s""",
-            (get_db_url() and st.session_state.get("username", "wpo70@icloud.com"), ccy, limit)
+            (get_db_url() and "wpo70@icloud.com", ccy, limit)
         )
         rows = cur.fetchall()
         conn.close()
@@ -13073,18 +13046,8 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
     expiries = atm_vols["Expiry"].tolist()
     tenors = [c for c in atm_vols.columns if c != "Expiry"]
 
-    # Pre-fetch curves once — not inside the 330-cell loop
     _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
     ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
-
-    # Pre-build OIS zero arrays for df(expiry) calculation
-    _ois_xs = _ois_ys = None
-    if ois_curve is not None and not ois_curve.empty:
-        _ois_xs = ois_curve["MaturityY"].to_numpy().astype(float)
-        _ois_ys = ois_curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
-    else:
-        _ois_xs = curve["MaturityY"].to_numpy().astype(float)
-        _ois_ys = curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
 
     prem_rows = []
     vega_rows = []
@@ -13114,8 +13077,11 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
                 sqrt_t = math.sqrt(max(exp_y, 0.001))
 
                 # ATM straddle FORWARD premium (bp of notional)
-                # Use pre-fetched OIS arrays for df(expiry)
-                df_expiry = math.exp(-float(np.interp(exp_y, _ois_xs, _ois_ys)) * exp_y)
+                # spot_prem = 2*N'(0)*sigma*sqrt(T)*annuity
+                # fwd_prem  = spot_prem / df(expiry)  [market convention: OIS discounted]
+                xs_c = curve["MaturityY"].to_numpy().astype(float)
+                ys_c = curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
+                df_expiry = math.exp(-float(np.interp(exp_y, xs_c, ys_c)) * exp_y)
                 spot_prem_bp = 2 * 0.3989 * sigma_n * sqrt_t * ann * 10000
                 fwd_prem_bp = spot_prem_bp / df_expiry if df_expiry > 0 else spot_prem_bp
                 prow[tenor] = round(fwd_prem_bp, 2)
@@ -13205,88 +13171,13 @@ def main():
             except Exception:
                 if user_id in _ADMIN_EMAILS:
                     st.session_state["user_role"] = "admin"
-            # Auto-load all session data (curves + SABR + basis) from Supabase
+            # Auto-load all session data (curves + vols + SABR + basis) from Supabase
             try:
                 _auto_loaded = load_all_session_data(user_id)
                 if _auto_loaded > 0:
                     st.session_state["_auto_load_msg"] = f"✅ Auto-loaded {_auto_loaded} configs from database"
             except Exception as _ale:
                 st.session_state["_auto_load_msg"] = f"⚠️ Auto-load failed: {_ale}"
-
-            # Always load latest vol snapshot from vol_history for each currency
-            # This ensures most recent EOD vols are always shown regardless of Excel config
-            try:
-                _snap_conn = get_db_connection()
-                if _snap_conn:
-                    _snap_cur = _snap_conn.cursor()
-                    _snap_loaded = []
-                    for _ccy in SUPPORTED_CURRENCIES:
-                        # Get latest snapshot for this currency (any user_id — admin shares snapshots)
-                        _snap_cur.execute("""
-                            SELECT id FROM vol_history
-                            WHERE currency = %s AND atm_vols IS NOT NULL
-                            ORDER BY snapshot_date DESC LIMIT 1
-                        """, (_ccy,))
-                        _snap_row = _snap_cur.fetchone()
-                        if _snap_row:
-                            _snap_id = _snap_row[0]
-                            _snap_cur2 = _snap_conn.cursor()
-                            _snap_cur2.execute("""
-                                SELECT currency, atm_vols, sabr_alpha, sabr_beta, sabr_rho, sabr_nu, label, snapshot_date
-                                FROM vol_history WHERE id = %s
-                            """, (_snap_id,))
-                            _srow = _snap_cur2.fetchone()
-                            _snap_cur2.close()
-                            if _srow:
-                                _sc, _av, _sa, _sb, _sr, _sn, _slbl, _sdt = _srow
-                                if "vol_data" not in st.session_state:
-                                    st.session_state["vol_data"] = {}
-                                if _sc not in st.session_state["vol_data"]:
-                                    st.session_state["vol_data"][_sc] = {}
-                                if _av:
-                                    _atm_df = pd.DataFrame(_av["values"])
-                                    if "Expiry" in _atm_df.columns:
-                                        _atm_df = _atm_df[["Expiry"] + [c for c in _atm_df.columns if c != "Expiry"]]
-                                    st.session_state["vol_data"][_sc]["atm"] = _atm_df
-                                    # Load into vol editor too
-                                    if "vol_editor" not in st.session_state:
-                                        st.session_state["vol_editor"] = {"working": {}, "base": {}, "history": {}, "future": {}, "redo_stack": {}}
-                                    st.session_state["vol_editor"]["base"][_sc] = _atm_df.copy()
-                                    st.session_state["vol_editor"]["working"][_sc] = _atm_df.copy()
-                                # Load SABR if present in snapshot
-                                for _param, _pdata in [("alpha",_sa),("beta",_sb),("rho",_sr),("nu",_sn)]:
-                                    if _pdata and "values" in _pdata:
-                                        try:
-                                            st.session_state["vol_data"][_sc][_param] = pd.DataFrame(_pdata["values"])
-                                        except: pass
-
-                                # If SABR missing from snapshot, initialise defaults so recalibrate button works
-                                _vd = st.session_state["vol_data"][_sc]
-                                if _vd.get("alpha") is None and _vd.get("atm") is not None:
-                                    try:
-                                        _atm_ref = _vd["atm"].copy()
-                                        _exp_col = "Expiry"
-                                        _tcols = [c for c in _atm_ref.columns if c != _exp_col]
-                                        # Default params: beta=0.5, rho=-0.25, nu=0.30
-                                        for _pp, _dv in [("beta", 0.5), ("rho", -0.25), ("nu", 0.30)]:
-                                            _df_p = _atm_ref[[_exp_col]].copy()
-                                            for _tc in _tcols:
-                                                _df_p[_tc] = _dv
-                                            _vd[_pp] = _df_p
-                                        # Alpha: initialise to ATM vol / 10000 (rough starting point)
-                                        _df_a = _atm_ref.copy()
-                                        for _tc in _tcols:
-                                            _df_a[_tc] = _df_a[_tc] / 10000.0
-                                        _vd["alpha"] = _df_a
-                                    except: pass
-                                _snap_loaded.append(f"{_sc}: {_slbl} ({str(_sdt)[:10]})")
-                    _snap_cur.close()
-                    _snap_conn.close()
-                    if _snap_loaded:
-                        _cur_msg = st.session_state.get("_auto_load_msg", "")
-                        st.session_state["_auto_load_msg"] = _cur_msg + f"\n📊 Latest vols loaded: {', '.join(_snap_loaded)}"
-            except Exception as _vle:
-                pass
             st.session_state["db_auto_loaded"] = True
 
     # Sidebar for settings
@@ -13297,7 +13188,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104a</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104b</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -13921,14 +13812,8 @@ def sod_report_tab():
                             if "vol_editor" not in st.session_state:
                                 st.session_state["vol_editor"] = {"working": {}, "base": {}, "history": {}, "future": {}, "redo_stack": {}, "view_mode": {}, "smoothing": {}, "paste_data": {}}
                             ve = st.session_state["vol_editor"]
-                            # Get current surface as base — fall back to prev-close snapshot if not loaded
+                            # Get current surface as base
                             _current_atm = get_working_atm_surface("AUD")
-                            if _current_atm is None and _aud_atm is not None:
-                                _current_atm = _aud_atm.copy()
-                                if "Expiry" not in _current_atm.columns:
-                                    _current_atm = _current_atm.reset_index()
-                                    if _current_atm.columns[0] != "Expiry":
-                                        _current_atm.columns = ["Expiry"] + list(_current_atm.columns[1:])
                             if _current_atm is not None:
                                 # Align implied open to base surface shape
                                 # Fill any missing expiries from current ATM
@@ -14583,17 +14468,17 @@ def show_login_page():
     st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    #MainMenu {visibility: hidden;}
+    header {visibility: hidden;}
     footer {visibility: hidden;}
     [data-testid="manage-app-button"] {display: none !important;}
     button[kind="managedApp"] {display: none !important;}
     .stAppDeployButton {display: none !important;}
     [title="Manage app"] {display: none !important;}
-    [data-testid="stAppViewerControlButton"] {display: none !important;}
-    [data-testid="stDecoration"] {display: none !important;}
-    .stDeployButton {display: none !important;}
+    [data-testid="stSidebar"] {display: none;}
+    [data-testid="collapsedControl"] {display: none;}
     .stApp {background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);}
+    section[data-testid="stSidebar"] {display: none !important;}
+    .stDeployButton {display: none !important;}
     .stTextInput > div > div > input {
         background: #1e293b !important;
         color: white !important;
