@@ -5988,37 +5988,58 @@ def swaptions_tab(vol_mode: str):
         st.caption(f"Width: **{width_bp:.0f} bp** | Payer +{(strike_pct-fwd_pct)*100:.0f}bp | Receiver {(strike_pct_2-fwd_pct)*100:.0f}bp")
         
     elif structure == "Payer Ladder":
-        st.caption("Buy 1x ATM Payer + Sell 2x OTM Payer (bullish/range view)")
-        col_k1, col_k2, col_k3 = st.columns(3)
+        st.caption("Buy 1x K1 Payer + Sell 1x K2 + Sell 1x K3 — limited cost, capped upside")
+        col_k1, col_k2mode, col_k3mode = st.columns(3)
         with col_k1:
-            strike_pct = st.number_input("K1 - Long Payer (%)", min_value=0.0, max_value=20.0,
-                                         value=round(fwd_pct, 4), format="%.4f", key="sw_strike_1",
-                                         help="ATM - buy 1x")
-        with col_k2:
-            strike_pct_2 = st.number_input("K2 - Short Payer (%)", min_value=0.0, max_value=20.0,
-                                           value=round(fwd_pct + 0.25, 4), format="%.4f", key="sw_strike_2",
-                                           help="OTM - sell 1x")
-        with col_k3:
-            strike_pct_3 = st.number_input("K3 - Short Payer (%)", min_value=0.0, max_value=20.0,
-                                           value=round(fwd_pct + 0.50, 4), format="%.4f", key="sw_strike_3",
-                                           help="Further OTM - sell 1x")
-        st.caption(f"Max profit at K2, unlimited downside above K3")
+            strike_pct = st.number_input("K1 Strike (%)", min_value=0.0, max_value=20.0,
+                                         value=round(fwd_pct + 0.25, 4), format="%.4f", key="sw_strike_1",
+                                         help="Base strike — buy 1x")
+        with col_k2mode:
+            _k2_off_sel = st.radio("K2 offset from K1", ["10bp","25bp","50bp","Manual"], horizontal=True, key="sw_k2_off")
+            if _k2_off_sel == "Manual":
+                strike_pct_2 = st.number_input("K2 (%)", min_value=0.0, max_value=20.0,
+                                               value=round(strike_pct + 0.25, 4), format="%.4f", key="sw_strike_2")
+            else:
+                _k2_bp = {"10bp":0.10,"25bp":0.25,"50bp":0.50}[_k2_off_sel]
+                strike_pct_2 = round(strike_pct + _k2_bp, 4)
+                st.metric("K2", f"{strike_pct_2:.4f}%")
+        with col_k3mode:
+            _k3_off_sel = st.radio("K3 offset from K2", ["10bp","25bp","50bp","Manual"], horizontal=True, key="sw_k3_off")
+            if _k3_off_sel == "Manual":
+                strike_pct_3 = st.number_input("K3 (%)", min_value=0.0, max_value=20.0,
+                                               value=round(strike_pct_2 + 0.25, 4), format="%.4f", key="sw_strike_3")
+            else:
+                _k3_bp = {"10bp":0.10,"25bp":0.25,"50bp":0.50}[_k3_off_sel]
+                strike_pct_3 = round(strike_pct_2 + _k3_bp, 4)
+                st.metric("K3", f"{strike_pct_3:.4f}%")
+        st.caption(f"K1={strike_pct:.4f}% (+{(strike_pct-fwd_pct)*100:.0f}bp) | K2={strike_pct_2:.4f}% | K3={strike_pct_3:.4f}%")
         
     elif structure == "Receiver Ladder":
-        st.caption("Buy 1x ATM Receiver + Sell 2x OTM Receiver (bearish/range view)")
-        col_k1, col_k2, col_k3 = st.columns(3)
+        st.caption("Buy 1x K1 Receiver + Sell 1x K2 + Sell 1x K3 — limited cost, capped downside")
+        col_k1, col_k2mode, col_k3mode = st.columns(3)
         with col_k1:
-            strike_pct = st.number_input("K1 - Long Receiver (%)", min_value=0.0, max_value=20.0,
-                                         value=round(fwd_pct, 4), format="%.4f", key="sw_strike_1",
-                                         help="ATM - buy 1x")
-        with col_k2:
-            strike_pct_2 = st.number_input("K2 - Short Receiver (%)", min_value=0.0, max_value=20.0,
-                                           value=round(fwd_pct - 0.25, 4), format="%.4f", key="sw_strike_2",
-                                           help="OTM - sell 1x")
-        with col_k3:
-            strike_pct_3 = st.number_input("K3 - Short Receiver (%)", min_value=0.0, max_value=20.0,
-                                           value=round(fwd_pct - 0.50, 4), format="%.4f", key="sw_strike_3",
-                                           help="Further OTM - sell 1x")
+            strike_pct = st.number_input("K1 Strike (%)", min_value=0.0, max_value=20.0,
+                                         value=round(fwd_pct - 0.25, 4), format="%.4f", key="sw_strike_1",
+                                         help="Base strike — buy 1x")
+        with col_k2mode:
+            _k2_off_sel = st.radio("K2 offset from K1", ["10bp","25bp","50bp","Manual"], horizontal=True, key="sw_k2_off")
+            if _k2_off_sel == "Manual":
+                strike_pct_2 = st.number_input("K2 (%)", min_value=0.0, max_value=20.0,
+                                               value=round(strike_pct - 0.25, 4), format="%.4f", key="sw_strike_2")
+            else:
+                _k2_bp = {"10bp":0.10,"25bp":0.25,"50bp":0.50}[_k2_off_sel]
+                strike_pct_2 = round(strike_pct - _k2_bp, 4)
+                st.metric("K2", f"{strike_pct_2:.4f}%")
+        with col_k3mode:
+            _k3_off_sel = st.radio("K3 offset from K2", ["10bp","25bp","50bp","Manual"], horizontal=True, key="sw_k3_off")
+            if _k3_off_sel == "Manual":
+                strike_pct_3 = st.number_input("K3 (%)", min_value=0.0, max_value=20.0,
+                                               value=round(strike_pct_2 - 0.25, 4), format="%.4f", key="sw_strike_3")
+            else:
+                _k3_bp = {"10bp":0.10,"25bp":0.25,"50bp":0.50}[_k3_off_sel]
+                strike_pct_3 = round(strike_pct_2 - _k3_bp, 4)
+                st.metric("K3", f"{strike_pct_3:.4f}%")
+        st.caption(f"K1={strike_pct:.4f}% (-{abs((strike_pct-fwd_pct)*100):.0f}bp) | K2={strike_pct_2:.4f}% | K3={strike_pct_3:.4f}%")
 
     # Vol source
     st.markdown("---")
@@ -6330,61 +6351,59 @@ def swaptions_tab(vol_mode: str):
                 vol_k1 = get_vol_for_strike(strike_pct)
                 vol_k2 = get_vol_for_strike(strike_pct_2)
                 vol_k3 = get_vol_for_strike(strike_pct_3)
-                # Long 1x ATM Payer, Short 1x OTM Payer, Short 1x Further OTM Payer
                 ticket_1 = SwaptionTicket(
                     side="Payer", payoff_type="vanilla", notional=notional*1e6, currency=ccy,
                     expiry_years=expiry_y, swap_tenor_years=tenor_y, forward=fwd_pct/100.0,
                     strike=strike_pct/100.0, vol=vol_k1, discount_rate=eff_disc_rate, annuity=ann,
-                    model=model_type, label=f"Long Payer K1", use_curve=curve is not None)
+                    model=model_type, label=f"Long 1x Payer K1={strike_pct:.2f}%", use_curve=curve is not None)
                 ticket_2 = SwaptionTicket(
                     side="Payer", payoff_type="vanilla", notional=notional*1e6, currency=ccy,
                     expiry_years=expiry_y, swap_tenor_years=tenor_y, forward=fwd_pct/100.0,
                     strike=strike_pct_2/100.0, vol=vol_k2, discount_rate=eff_disc_rate, annuity=ann,
-                    model=model_type, label=f"Short Payer K2", use_curve=curve is not None)
+                    model=model_type, label=f"Short 1x Payer K2={strike_pct_2:.2f}%", use_curve=curve is not None)
                 ticket_3 = SwaptionTicket(
                     side="Payer", payoff_type="vanilla", notional=notional*1e6, currency=ccy,
                     expiry_years=expiry_y, swap_tenor_years=tenor_y, forward=fwd_pct/100.0,
                     strike=strike_pct_3/100.0, vol=vol_k3, discount_rate=eff_disc_rate, annuity=ann,
-                    model=model_type, label=f"Short Payer K3", use_curve=curve is not None)
+                    model=model_type, label=f"Short 1x Payer K3={strike_pct_3:.2f}%", use_curve=curve is not None)
                 res_1 = price_swaption(ticket_1)
                 res_2 = price_swaption(ticket_2)
                 res_3 = price_swaption(ticket_3)
-                legs.append(("Long Payer", strike_pct, 1, res_1))
-                legs.append(("Short Payer", strike_pct_2, -1, res_2))
-                legs.append(("Short Payer", strike_pct_3, -1, res_3))
+                legs.append(("Long 1x Payer", strike_pct, 1, res_1))
+                legs.append(("Short 1x Payer", strike_pct_2, -1, res_2))
+                legs.append(("Short 1x Payer", strike_pct_3, -1, res_3))
                 res = {k: res_1.get(k,0) - res_2.get(k,0) - res_3.get(k,0) for k in res_1}
                 res["bpv"] = res_1["bpv"]
-                label = f"Payer Ladder {expiry_display}x{swap_tenor}"
+                label = f"Payer Ladder {expiry_display}x{swap_tenor} ({strike_pct:.2f}/{strike_pct_2:.2f}/{strike_pct_3:.2f})"
                 
             elif structure == "Receiver Ladder":
                 vol_k1 = get_vol_for_strike(strike_pct)
                 vol_k2 = get_vol_for_strike(strike_pct_2)
                 vol_k3 = get_vol_for_strike(strike_pct_3)
-                # Long 1x ATM Receiver, Short 1x OTM Receiver, Short 1x Further OTM Receiver
                 ticket_1 = SwaptionTicket(
                     side="Receiver", payoff_type="vanilla", notional=notional*1e6, currency=ccy,
                     expiry_years=expiry_y, swap_tenor_years=tenor_y, forward=fwd_pct/100.0,
                     strike=strike_pct/100.0, vol=vol_k1, discount_rate=eff_disc_rate, annuity=ann,
-                    model=model_type, label=f"Long Receiver K1", use_curve=curve is not None)
+                    model=model_type, label=f"Long 1x Receiver K1={strike_pct:.2f}%", use_curve=curve is not None)
                 ticket_2 = SwaptionTicket(
                     side="Receiver", payoff_type="vanilla", notional=notional*1e6, currency=ccy,
                     expiry_years=expiry_y, swap_tenor_years=tenor_y, forward=fwd_pct/100.0,
                     strike=strike_pct_2/100.0, vol=vol_k2, discount_rate=eff_disc_rate, annuity=ann,
-                    model=model_type, label=f"Short Receiver K2", use_curve=curve is not None)
+                    model=model_type, label=f"Short 1x Receiver K2={strike_pct_2:.2f}%", use_curve=curve is not None)
                 ticket_3 = SwaptionTicket(
                     side="Receiver", payoff_type="vanilla", notional=notional*1e6, currency=ccy,
                     expiry_years=expiry_y, swap_tenor_years=tenor_y, forward=fwd_pct/100.0,
                     strike=strike_pct_3/100.0, vol=vol_k3, discount_rate=eff_disc_rate, annuity=ann,
-                    model=model_type, label=f"Short Receiver K3", use_curve=curve is not None)
+                    model=model_type, label=f"Short 1x Receiver K3={strike_pct_3:.2f}%", use_curve=curve is not None)
                 res_1 = price_swaption(ticket_1)
                 res_2 = price_swaption(ticket_2)
                 res_3 = price_swaption(ticket_3)
-                legs.append(("Long Receiver", strike_pct, 1, res_1))
-                legs.append(("Short Receiver", strike_pct_2, -1, res_2))
-                legs.append(("Short Receiver", strike_pct_3, -1, res_3))
+                legs.append(("Long 1x Receiver", strike_pct, 1, res_1))
+                legs.append(("Short 1x Receiver", strike_pct_2, -1, res_2))
+                legs.append(("Short 1x Receiver", strike_pct_3, -1, res_3))
                 res = {k: res_1.get(k,0) - res_2.get(k,0) - res_3.get(k,0) for k in res_1}
                 res["bpv"] = res_1["bpv"]
-                label = f"Receiver Ladder {expiry_display}x{swap_tenor}"
+                label = f"Receiver Ladder {expiry_display}x{swap_tenor} ({strike_pct:.2f}/{strike_pct_2:.2f}/{strike_pct_3:.2f})"
             
             st.success(f" Priced: **{label}** | PV = ${res['pv']:,.0f} ({res.get('pv_bp_fwd', res['pv_bp']):.2f} bp fwd)")
         
@@ -13264,7 +13283,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105d</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105e</div>
             </div>
             """,
             unsafe_allow_html=True,
