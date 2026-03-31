@@ -3853,45 +3853,53 @@ def vol_config_tab():
         _cc = st.session_state.get("config_curves", {}).get(ccy)
         curve = _cc if _cc is not None else get_ccy_curve(ccy)
 
-        # ATM status
+        # ATM Vol timestamps
         if atm is not None:
             _atm_rows = atm.shape[0] if hasattr(atm, 'shape') else "?"
             _atm_cols = atm.shape[1] if hasattr(atm, 'shape') else "?"
             atm_status = f"✅ {_atm_rows}×{_atm_cols}"
             _snap = _latest_snaps.get(ccy, {})
-            if _snap and _snap.get('label'):
-                atm_time = f"{_snap.get('label','')}  |  {_snap.get('date','')}"
-            else:
-                atm_time = get_timestamp_str("atm", ccy)
+            atm_saved   = _snap.get('date', '—') if _snap else '—'
+            atm_loaded  = get_timestamp_str("atm", ccy)
         else:
-            atm_status = "Not loaded"
-            atm_time = ""
+            atm_status = "❌ Not loaded"
+            atm_saved = '—'; atm_loaded = '—'
 
-        # Curve status — source date from DB load
+        # IRS Curve timestamps
         if curve is not None and len(curve) > 0:
-            _src_date = curve["_source_date"].iloc[0] if "_source_date" in curve.columns else ""
+            _src_date = curve["_source_date"].iloc[0] if "_source_date" in curve.columns else "—"
             curve_status = f"✅ {len(curve)} pts"
-            curve_time = f"Supabase  |  {_src_date}" if _src_date else get_timestamp_str("curves", ccy)
+            curve_saved  = str(_src_date) if _src_date else '—'
+            curve_loaded = get_timestamp_str("curves", ccy)
         else:
-            curve_status = "Not loaded"
-            curve_time = ""
+            curve_status = "❌ Not loaded"
+            curve_saved = '—'; curve_loaded = '—'
 
         st.markdown(
             f"""
             <div style="background:{card_bg};border:1px solid {border_color};border-radius:10px;padding:1rem;margin:0.5rem 0;">
-                <div style="font-weight:600;font-size:1.1rem;color:{text_color};margin-bottom:0.5rem;">
-                    {ccy}
-                </div>
-                <table style="width:100%;color:{text_color};font-size:0.9rem;">
-                    <tr>
-                        <td style="padding:0.25rem 0;width:120px;">ATM Vol</td>
-                        <td style="padding:0.25rem 0;">{atm_status}</td>
-                        <td style="padding:0.25rem 0;color:{muted_color};font-size:0.75rem;">{atm_time}</td>
+                <div style="font-weight:600;font-size:1.1rem;color:{text_color};margin-bottom:0.5rem;">{ccy}</div>
+                <table style="width:100%;color:{text_color};font-size:0.85rem;border-collapse:collapse;">
+                    <tr style="color:{muted_color};font-size:0.72rem;border-bottom:1px solid {border_color};">
+                        <td style="padding:0.2rem 0.5rem 0.2rem 0;width:110px;"></td>
+                        <td style="padding:0.2rem 0.5rem;">Status</td>
+                        <td style="padding:0.2rem 0.5rem;">Last Saved</td>
+                        <td style="padding:0.2rem 0.5rem;">Loaded</td>
+                        <td style="padding:0.2rem 0.5rem;">Live</td>
                     </tr>
                     <tr>
-                        <td style="padding:0.25rem 0;">IRS Curve</td>
-                        <td style="padding:0.25rem 0;">{curve_status}</td>
-                        <td style="padding:0.25rem 0;color:{muted_color};font-size:0.75rem;">{curve_time}</td>
+                        <td style="padding:0.3rem 0.5rem 0.3rem 0;color:{muted_color};font-size:0.8rem;">ATM Vol</td>
+                        <td style="padding:0.3rem 0.5rem;">{atm_status}</td>
+                        <td style="padding:0.3rem 0.5rem;color:{muted_color};font-size:0.78rem;">{atm_saved}</td>
+                        <td style="padding:0.3rem 0.5rem;color:{muted_color};font-size:0.78rem;">{atm_loaded}</td>
+                        <td style="padding:0.3rem 0.5rem;color:#64748b;font-size:0.78rem;">—</td>
+                    </tr>
+                    <tr>
+                        <td style="padding:0.3rem 0.5rem 0.3rem 0;color:{muted_color};font-size:0.8rem;">IRS Curve</td>
+                        <td style="padding:0.3rem 0.5rem;">{curve_status}</td>
+                        <td style="padding:0.3rem 0.5rem;color:{muted_color};font-size:0.78rem;">{curve_saved}</td>
+                        <td style="padding:0.3rem 0.5rem;color:{muted_color};font-size:0.78rem;">{curve_loaded}</td>
+                        <td style="padding:0.3rem 0.5rem;color:#64748b;font-size:0.78rem;">—</td>
                     </tr>
                 </table>
             </div>
@@ -13156,7 +13164,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104r</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104s</div>
             </div>
             """,
             unsafe_allow_html=True,
