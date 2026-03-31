@@ -3738,7 +3738,6 @@ def vol_config_tab():
                 loaded_count = load_all_session_data(user_id, load_date=str(_load_date))
                 _load_dbg = st.session_state.pop("_load_debug", [])
                 if loaded_count > 0:
-                    # Store toasts for display after rerun (st.toast persists across rerun)
                     for _msg in _load_dbg:
                         st.toast(f"📊 {_msg}", icon="✅")
                     st.toast(f"Loaded {loaded_count} configs ({_load_date})", icon="✅")
@@ -3806,6 +3805,15 @@ def vol_config_tab():
                     except Exception as e:
                         st.error(f"Clear failed: {e}")
             st.caption(" Database connected")
+
+        with col_db3:
+            if st.button("🔄 Reload Vols from DB", key="reload_vols_btn", type="secondary"):
+                # Clear cached vol data and reload from vol_history
+                for _ccy in ["AUD","NZD","USD"]:
+                    st.session_state.get("vol_data", {}).pop(_ccy, None)
+                    st.session_state.pop(f"_sabr_init_{_ccy}", None)
+                st.session_state["db_auto_loaded"] = False
+                st.rerun()
     
     st.markdown("---")
     
@@ -13479,7 +13487,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105p</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105q</div>
             </div>
             """,
             unsafe_allow_html=True,
