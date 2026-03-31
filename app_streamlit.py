@@ -1652,16 +1652,19 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         ys = crv["ZeroRatePct"].to_numpy().astype(float) / 100.0
         z = float(np.interp(t, xs, ys))
         if ccy == "AUD" and basis_6v3 is not None and not basis_6v3.empty:
-            bx = basis_6v3["MaturityY"].to_numpy().astype(float)
-            by = basis_6v3["BasisBp"].to_numpy().astype(float) / 10000.0
-            if freq == 0.25 and t > 3.0:
-                # Q/Q swap, S/S part of curve → adjust down to 3M BBSW
-                b = float(np.interp(t, bx, by))
-                z = z - b
-            elif freq == 0.5 and t <= 3.0:
-                # S/S swap, Q/Q part of curve → adjust up to 6M BBSW
-                b = float(np.interp(t, bx, by))
-                z = z + b
+            try:
+                # Handle different column name formats
+                _b6_cols = basis_6v3.columns.tolist()
+                _mat_col = next((c for c in _b6_cols if "matur" in c.lower() or "tenor" in c.lower() or c in ("MaturityY","Tenor","tenor_years")), _b6_cols[0])
+                _bp_col  = next((c for c in _b6_cols if "basis" in c.lower() or "bp" in c.lower() or "spread" in c.lower()), _b6_cols[1])
+                bx = basis_6v3[_mat_col].to_numpy().astype(float)
+                by = basis_6v3[_bp_col].to_numpy().astype(float) / 10000.0
+                if freq == 0.25 and t > 3.0:
+                    z = z - float(np.interp(t, bx, by))
+                elif freq == 0.5 and t <= 3.0:
+                    z = z + float(np.interp(t, bx, by))
+            except Exception:
+                pass
         return math.exp(-z * t)
 
     def _df_disc(crv: pd.DataFrame, t: float) -> float:
@@ -3929,13 +3932,13 @@ def vol_config_tab():
         _cc = st.session_state.get("config_curves", {}).get(ccy)
         curve = _cc if _cc is not None else get_ccy_curve(ccy)
 
-        # ATM status — show latest snapshot label if available
-        _snap = _latest_snaps.get(ccy, {})
+        # ATM status
         if atm is not None:
             _atm_rows = atm.shape[0] if hasattr(atm, 'shape') else "?"
             _atm_cols = atm.shape[1] if hasattr(atm, 'shape') else "?"
             atm_status = f"✅ {_atm_rows}×{_atm_cols}"
-            if _snap:
+            _snap = _latest_snaps.get(ccy, {})
+            if _snap and _snap.get('label'):
                 atm_time = f"{_snap.get('label','')}  |  {_snap.get('date','')}"
             else:
                 atm_time = get_timestamp_str("atm", ccy)
@@ -3960,7 +3963,7 @@ def vol_config_tab():
                 </div>
                 <table style="width:100%;color:{text_color};font-size:0.9rem;">
                     <tr>
-                        <td style="padding:0.25rem 0;width:120px;">ATM Surface</td>
+                        <td style="padding:0.25rem 0;width:120px;">ATM Vol</td>
                         <td style="padding:0.25rem 0;">{atm_status}</td>
                         <td style="padding:0.25rem 0;color:{muted_color};font-size:0.75rem;">{atm_time}</td>
                     </tr>
@@ -13208,7 +13211,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104h</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104k</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -13267,53 +13270,88 @@ def main():
 
         # Technical Support
         with st.expander("🛠️ Technical Support", expanded=False):
-            _user_email = st.session_state.get("user_email", "")
-            _user_name  = st.session_state.get("username", "")
+            _user_email = st.session_state.get("username", "")
 
             _issue_type = st.selectbox(
                 "Issue type",
-                [
-                    "Pricing Issue",
-                    "Curve / Data Issue",
-                    "Vol Surface Issue",
-                    "CFS / Wedge Issue",
-                    "SOD Report Issue",
-                    "Login / Access Issue",
-                    "Performance / Loading",
-                    "Other",
-                ],
+                ["Pricing Issue", "Curve / Data Issue", "Vol Surface Issue",
+                 "CFS / Wedge Issue", "SOD Report Issue", "Login / Access Issue",
+                 "Performance / Loading", "Other"],
                 key="support_issue_type"
             )
-
             _severity = st.selectbox(
                 "Severity",
-                [
-                    "🔴  Critical   —   platform unusable",
-                    "🔴  High   —   major feature broken",
-                    "🟡  Medium   —   partial functionality affected",
-                    "🟢  Low   —   cosmetic / minor issue",
-                ],
+                ["🔴 Critical — platform unusable", "🔴 High — major feature broken",
+                 "🟡 Medium — partial functionality affected", "🟢 Low — cosmetic / minor"],
                 key="support_severity"
             )
-
             _support_desc = st.text_area(
                 "Describe the issue",
                 placeholder="What happened? What were you pricing? Any error messages?",
-                height=80,
-                key="support_desc"
+                height=80, key="support_desc"
             )
 
-            # Build mailto
-            _subj = f"RateEdge Support   —   {_issue_type}"
-            _body = (
-                f"User: {_user_name} ({_user_email})%0A"
-                f"Issue Type: {_issue_type}%0A"
-                f"Severity: {_severity.split('  —  ')[0].strip()}%0A%0A"
-                f"Description:%0A{_support_desc.replace(chr(10), '%0A') if _support_desc else '[please describe]'}%0A"
-            )
-            _mailto = f"mailto:wpo@rateedge.au?subject={_subj.replace(' ', '%20').replace('  —  ','--')}&body={_body}"
+            if st.button("📨 Submit Support Ticket", key="submit_support_btn", type="primary", use_container_width=True):
+                if not _support_desc.strip():
+                    st.warning("Please describe the issue first.")
+                else:
+                    _sev_label = _severity.split("—")[0].strip()
+                    _subj = f"RateEdge Support — {_issue_type} [{_sev_label}]"
+                    _body_html = f"""
+                    <h2>RateEdge Support Ticket</h2>
+                    <table>
+                    <tr><td><b>User</b></td><td>{_user_email}</td></tr>
+                    <tr><td><b>Issue Type</b></td><td>{_issue_type}</td></tr>
+                    <tr><td><b>Severity</b></td><td>{_sev_label}</td></tr>
+                    <tr><td><b>Description</b></td><td>{_support_desc.replace(chr(10), '<br>')}</td></tr>
+                    </table>
+                    """
+                    _body_text = f"User: {_user_email}\nIssue: {_issue_type}\nSeverity: {_sev_label}\n\n{_support_desc}"
+                    _sms_body  = f"RateEdge Support [{_sev_label}] from {_user_email}: {_issue_type} — {_support_desc[:120]}"
 
-            st.info(f"📧 Email **wpo@rateedge.au** with the details above.\n\nSubject: {_issue_type}   —   {_severity.split('  —  ')[0].strip()}")
+                    _sent_email = False
+                    _sent_sms   = False
+
+                    try:
+                        _resend_key = st.secrets.get("RESEND_API_KEY", os.environ.get("RESEND_API_KEY", ""))
+                        if _resend_key:
+                            import requests as _req
+                            # Email to Will
+                            _er = _req.post(
+                                "https://api.resend.com/emails",
+                                headers={"Authorization": f"Bearer {_resend_key}", "Content-Type": "application/json"},
+                                json={"from": "support@rateedge.au", "to": ["wpo@rateedge.au"],
+                                      "subject": _subj, "html": _body_html, "text": _body_text},
+                                timeout=10
+                            )
+                            _sent_email = _er.status_code in (200, 201)
+
+                            # SMS via Clicksend (add CLICKSEND_USERNAME + CLICKSEND_API_KEY to Render env vars)
+                            _cs_user = st.secrets.get("CLICKSEND_USERNAME", os.environ.get("CLICKSEND_USERNAME", ""))
+                            _cs_key  = st.secrets.get("CLICKSEND_API_KEY",  os.environ.get("CLICKSEND_API_KEY",  ""))
+                            if _cs_user and _cs_key:
+                                import base64 as _b64
+                                _auth = _b64.b64encode(f"{_cs_user}:{_cs_key}".encode()).decode()
+                                _sr = _req.post(
+                                    "https://rest.clicksend.com/v3/sms/send",
+                                    headers={"Authorization": f"Basic {_auth}", "Content-Type": "application/json"},
+                                    json={"messages": [{"source": "RateEdge", "body": _sms_body, "to": "+61478829669"}]},
+                                    timeout=10
+                                )
+                                _sent_sms = _sr.status_code in (200, 201)
+                            else:
+                                _sent_sms = False  # SMS not configured yet
+                        else:
+                            st.warning("RESEND_API_KEY not configured — ticket not sent.")
+                    except Exception as _se:
+                        st.error(f"Failed to send: {_se}")
+
+                    if _sent_email:
+                        st.success("✅ Support ticket sent to wpo@rateedge.au")
+                    if _sent_sms:
+                        st.success("✅ SMS alert sent")
+                    if not _sent_email and not _sent_sms:
+                        st.info(f"📧 Email manually: wpo@rateedge.au\nSubject: {_subj}")
 
         st.markdown("---")
         # User Management (admin only)
