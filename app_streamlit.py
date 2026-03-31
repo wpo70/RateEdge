@@ -1284,39 +1284,44 @@ def get_matrix_value(mat: Optional[pd.DataFrame],
                      tenor_years: float) -> Optional[float]:
     if mat is None or mat.empty:
         return None
-    # Case-insensitive Expiry match
-    lbl = str(expiry_label).strip().lower()
-    row = mat[mat["Expiry"].astype(str).str.strip().str.lower() == lbl]
-    if row.empty:
-        # Fallback: interpolate by years
-        try:
-            _exp_y = label_to_years(lbl)
-            _ys = mat["Expiry"].apply(lambda x: label_to_years(str(x).strip().lower())).values
-            tenor_y_int = int(round(tenor_years))
-            col = f"{tenor_y_int}Y"
-            if col not in mat.columns:
-                matches = [c for c in mat.columns if str(c).strip().lower() == col.lower()]
-                if not matches: return None
-                col = matches[0]
-            _vals = pd.to_numeric(mat[col], errors='coerce').values
-            _mask = ~np.isnan(_vals)
-            if _mask.sum() < 2: return None
-            return float(np.interp(_exp_y, _ys[_mask], _vals[_mask]))
-        except Exception:
-            return None
-    tenor_y_int = int(round(tenor_years))
-    # Try exact column match then case-insensitive
-    col = f"{tenor_y_int}Y"
-    if col not in mat.columns:
-        col_lower = col.lower()
-        matches = [c for c in mat.columns if str(c).strip().lower() == col_lower]
-        if not matches:
-            return None
-        col = matches[0]
-    val = row.iloc[0][col]
-    if pd.isna(val):
+
+    _tcols = [c for c in mat.columns if c != "Expiry"]
+    if not _tcols:
         return None
-    return float(val)
+
+    # Build tenor years array for column interpolation
+    _ten_yrs = []
+    for _c in _tcols:
+        try: _ten_yrs.append(label_to_years(str(_c)))
+        except: _ten_yrs.append(0.0)
+    _ten_yrs = np.array(_ten_yrs, dtype=float)
+
+    # Build expiry years array
+    _exp_yrs = mat["Expiry"].apply(lambda x: label_to_years(str(x).strip().lower())).values.astype(float)
+    _exp_y_req = label_to_years(str(expiry_label).strip().lower())
+
+    # For each expiry row, interpolate across tenor axis first
+    _row_vals = []
+    for _i in range(len(mat)):
+        _row = pd.to_numeric(mat[_tcols].iloc[_i], errors='coerce').values.astype(float)
+        _mask = ~np.isnan(_row)
+        if _mask.sum() < 1:
+            _row_vals.append(np.nan)
+        elif _mask.sum() == 1:
+            _row_vals.append(float(_row[_mask][0]))
+        else:
+            # np.interp clamps at boundaries = flat extrapolation
+            _row_vals.append(float(np.interp(tenor_years, _ten_yrs[_mask], _row[_mask])))
+
+    _row_vals = np.array(_row_vals, dtype=float)
+    _valid = ~np.isnan(_row_vals)
+    if _valid.sum() < 1:
+        return None
+    if _valid.sum() == 1:
+        return float(_row_vals[_valid][0])
+
+    # Interpolate (with flat extrapolation) across expiry axis
+    return float(np.interp(_exp_y_req, _exp_yrs[_valid], _row_vals[_valid]))
 
 
 def get_sabr_params_from_matrices(a: Optional[pd.DataFrame],
@@ -5886,57 +5891,6 @@ def swaptions_tab(vol_mode: str):
             with _rc2:
                 st.caption("Updates ~ to match current ATM surface. ~, ρ,ν, × remain locked. Run daily at session start in Sticky-ATM mode.")
 
-            # Load calibrated rho/nu (admin only)
-            if is_admin():
-                st.markdown("---")
-                _lc1, _lc2, _lc3 = st.columns([2, 2, 4])
-                with _lc1:
-                    if ccy in _SABR_REF and st.button("📥 Load Calibrated ρ / ν", key=f"load_sabr_cal_{ccy}", type="secondary"):
-                        _n_updated = _apply_sabr_calibration(ccy)
-                        if _n_updated > 0:
-                            st.session_state[f"_sabr_init_{ccy}"] = True
-                            st.success(f"✅ ρ / ν loaded — {_n_updated} cells calibrated. Run Recalibrate Alpha to update ~.")
-                            st.rerun()
-                        else:
-                            st.warning("Load ATM surface first.")
-                with _lc2:
-                    _cal_upload = st.file_uploader("Upload new calibration (.xlsx)", type=["xlsx"], key=f"sabr_cal_upload_{ccy}", label_visibility="collapsed")
-                    if _cal_upload is not None:
-                        try:
-                            import io as _io
-                            _xl = pd.read_excel(_io.BytesIO(_cal_upload.read()), sheet_name=None)
-                            # Look for Rho and Nu sheets matching this CCY
-                            _rho_sheet = next((s for s in _xl if "rho" in s.lower() and ccy.lower() in s.lower()), 
-                                            next((s for s in _xl if "rho" in s.lower()), None))
-                            _nu_sheet  = next((s for s in _xl if "nu" in s.lower() and ccy.lower() in s.lower()),
-                                            next((s for s in _xl if s.lower() in ("nu","nu (ν)","nu (v)")), None))
-                            if _rho_sheet and _nu_sheet:
-                                _rho_df = _xl[_rho_sheet]
-                                _nu_df  = _xl[_nu_sheet]
-                                # First col = expiry labels, remaining = tenors
-                                _exp_col_r = _rho_df.columns[0]
-                                _ten_cols_r = list(_rho_df.columns[1:])
-                                _exp_yrs = [label_to_years(str(e)) for e in _rho_df[_exp_col_r]]
-                                _ten_yrs = [label_to_years(str(t)) for t in _ten_cols_r]
-                                _rho_arr = _rho_df[_ten_cols_r].values.astype(float)
-                                _nu_arr  = _nu_df[_ten_cols_r].values.astype(float)
-                                # Update _SABR_REF in place
-                                _SABR_REF[ccy] = {
-                                    "expiries": [str(e) for e in _rho_df[_exp_col_r]],
-                                    "tenors":   _ten_cols_r,
-                                    "rho": {str(_rho_df[_exp_col_r].iloc[i]): list(_rho_arr[i]) for i in range(len(_rho_arr))},
-                                    "nu":  {str(_rho_df[_exp_col_r].iloc[i]): list(_nu_arr[i])  for i in range(len(_nu_arr))},
-                                }
-                                st.session_state[f"_sabr_ref_updated_{ccy}"] = _cal_upload.name
-                                st.success(f"✅ Calibration loaded from {_cal_upload.name} — {len(_exp_yrs)} expiries × {len(_ten_yrs)} tenors. Click 'Load Calibrated ρ / ν' to apply.")
-                            else:
-                                st.error(f"Could not find Rho/Nu sheets for {ccy}. Sheets found: {list(_xl.keys())}")
-                        except Exception as _ue:
-                            st.error(f"Upload error: {_ue}")
-                with _lc3:
-                    _ref_tag = st.session_state.get(f"_sabr_ref_updated_{ccy}", "31-Mar-2026 (built-in)")
-                    st.caption(f"Calibration ref: {_ref_tag} | Upload new Excel with 'Rho' and 'Nu' sheets (expiry in col A, tenors in row 1)")
-    
     # Row 1: Structure Type and Model
     col_struct, col_model, col_prem = st.columns([2, 1, 1])
     with col_struct:
@@ -9745,6 +9699,52 @@ def vol_surface_editor_tab():
                     st.success(f"✅ Full SABR calibration complete. {_n_cells - _errors} cells updated, {_errors} skipped.")
                     if _errors > 0:
                         st.caption("Skipped cells had no ATM vol data or optimiser failed to converge.")
+
+            # ── Load Calibrated ρ / ν ─────────────────────────────────
+            if _expert_unlocked:
+                st.markdown("---")
+                st.markdown("##### 📥 Load Calibrated ρ / ν")
+                _lc1, _lc2, _lc3 = st.columns([2, 2, 4])
+                with _lc1:
+                    if ccy in _SABR_REF and st.button("📥 Load Calibrated ρ / ν", key=f"load_sabr_cal_{ccy}", type="secondary"):
+                        _n_updated = _apply_sabr_calibration(ccy)
+                        if _n_updated > 0:
+                            st.session_state[f"_sabr_init_{ccy}"] = True
+                            st.success(f"✅ ρ / ν loaded — {_n_updated} cells. Run Recalibrate Alpha in Swaptions tab.")
+                            st.rerun()
+                        else:
+                            st.warning("Load ATM surface first.")
+                with _lc2:
+                    _cal_upload = st.file_uploader("Upload calibration (.xlsx)", type=["xlsx"], key=f"sabr_cal_upload_{ccy}", label_visibility="collapsed")
+                    if _cal_upload is not None:
+                        try:
+                            import io as _io
+                            _xl = pd.read_excel(_io.BytesIO(_cal_upload.read()), sheet_name=None)
+                            _rho_sheet = next((s for s in _xl if "rho" in s.lower() and ccy.lower() in s.lower()),
+                                             next((s for s in _xl if "rho" in s.lower()), None))
+                            _nu_sheet  = next((s for s in _xl if "nu" in s.lower() and ccy.lower() in s.lower()),
+                                             next((s for s in _xl if s.lower() in ("nu","nu (ν)","nu (v)")), None))
+                            if _rho_sheet and _nu_sheet:
+                                _rho_df = _xl[_rho_sheet]; _nu_df = _xl[_nu_sheet]
+                                _exp_col_r = _rho_df.columns[0]
+                                _ten_cols_r = list(_rho_df.columns[1:])
+                                _rho_arr = _rho_df[_ten_cols_r].values.astype(float)
+                                _nu_arr  = _nu_df[_ten_cols_r].values.astype(float)
+                                _SABR_REF[ccy] = {
+                                    "expiries": [str(e) for e in _rho_df[_exp_col_r]],
+                                    "tenors":   _ten_cols_r,
+                                    "rho": {str(_rho_df[_exp_col_r].iloc[i]): list(_rho_arr[i]) for i in range(len(_rho_arr))},
+                                    "nu":  {str(_rho_df[_exp_col_r].iloc[i]): list(_nu_arr[i])  for i in range(len(_nu_arr))},
+                                }
+                                st.session_state[f"_sabr_ref_updated_{ccy}"] = _cal_upload.name
+                                st.success(f"✅ {_cal_upload.name} loaded — {len(_ten_cols_r)} tenors × {len(_rho_arr)} expiries. Click Load to apply.")
+                            else:
+                                st.error(f"Sheets not found. Available: {list(_xl.keys())}")
+                        except Exception as _ue:
+                            st.error(f"Upload error: {_ue}")
+                with _lc3:
+                    _ref_tag = st.session_state.get(f"_sabr_ref_updated_{ccy}", "31-Mar-2026 (built-in)")
+                    st.caption(f"Ref: {_ref_tag} | Excel needs 'Rho' and 'Nu' sheets — expiry in col A, tenors in row 1")
     
     # Sync back to the main app's vol_data if published
     # (The vol_editor module handles publishing internally via session state)
@@ -13470,7 +13470,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105h</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105j</div>
             </div>
             """,
             unsafe_allow_html=True,
