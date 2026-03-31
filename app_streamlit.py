@@ -1289,39 +1289,30 @@ def get_matrix_value(mat: Optional[pd.DataFrame],
     if not _tcols:
         return None
 
-    # Build tenor years array for column interpolation
-    _ten_yrs = []
-    for _c in _tcols:
-        try: _ten_yrs.append(label_to_years(str(_c)))
-        except: _ten_yrs.append(0.0)
-    _ten_yrs = np.array(_ten_yrs, dtype=float)
-
-    # Build expiry years array
+    _ten_yrs = np.array([label_to_years(str(c)) for c in _tcols], dtype=float)
     _exp_yrs = mat["Expiry"].apply(lambda x: label_to_years(str(x).strip().lower())).values.astype(float)
     _exp_y_req = label_to_years(str(expiry_label).strip().lower())
 
-    # For each expiry row, interpolate across tenor axis first
-    _row_vals = []
+    # Fast path: exact expiry row match
+    _lbl = str(expiry_label).strip().lower()
+    _row_match = mat[mat["Expiry"].astype(str).str.strip().str.lower() == _lbl]
+    if not _row_match.empty:
+        _row_vals = pd.to_numeric(_row_match.iloc[0][_tcols], errors='coerce').values.astype(float)
+        _mask = ~np.isnan(_row_vals)
+        if _mask.sum() == 0: return None
+        return float(np.interp(tenor_years, _ten_yrs[_mask], _row_vals[_mask]))
+
+    # Slow path: interpolate across expiry axis too
+    _col_vals = []
     for _i in range(len(mat)):
         _row = pd.to_numeric(mat[_tcols].iloc[_i], errors='coerce').values.astype(float)
         _mask = ~np.isnan(_row)
-        if _mask.sum() < 1:
-            _row_vals.append(np.nan)
-        elif _mask.sum() == 1:
-            _row_vals.append(float(_row[_mask][0]))
-        else:
-            # np.interp clamps at boundaries = flat extrapolation
-            _row_vals.append(float(np.interp(tenor_years, _ten_yrs[_mask], _row[_mask])))
-
-    _row_vals = np.array(_row_vals, dtype=float)
-    _valid = ~np.isnan(_row_vals)
-    if _valid.sum() < 1:
-        return None
-    if _valid.sum() == 1:
-        return float(_row_vals[_valid][0])
-
-    # Interpolate (with flat extrapolation) across expiry axis
-    return float(np.interp(_exp_y_req, _exp_yrs[_valid], _row_vals[_valid]))
+        if _mask.sum() == 0: _col_vals.append(np.nan); continue
+        _col_vals.append(float(np.interp(tenor_years, _ten_yrs[_mask], _row[_mask])))
+    _col_vals = np.array(_col_vals, dtype=float)
+    _valid = ~np.isnan(_col_vals)
+    if _valid.sum() == 0: return None
+    return float(np.interp(_exp_y_req, _exp_yrs[_valid], _col_vals[_valid]))
 
 
 def get_sabr_params_from_matrices(a: Optional[pd.DataFrame],
@@ -4763,7 +4754,6 @@ def _load_swap_rates_history(floating_rate: str, years_back: int = 2) -> pd.Data
 def fwd_analysis_tab():
     """FWD Swap & Basis Historical Analysis tab"""
     st.subheader("📈 FWD IRS Analysis")
-    st.caption("IRS spreads, butterflies, fwd-fwd rates and 6v3 basis from Supabase (BlueGamma data 2018-today).")
 
     # Load history only when explicitly requested — prevents hang on every render
     if st.button("🔄 Load Swap Rate History", key="fwd_load_history", type="secondary"):
@@ -13470,7 +13460,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105j</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105l</div>
             </div>
             """,
             unsafe_allow_html=True,
