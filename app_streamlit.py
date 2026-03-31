@@ -4535,8 +4535,9 @@ def curves_tab():
     st.markdown("---")
 
     # ── ATM Vol / Forward Premium / Vega ──────────────────────────────────────
-    # ── ATM Vol / Forward Premium / Vega — always visible, auto-generates ──────
+    # ── ATM Vol / Forward Premium / Vega ──────────────────────────────────────
     if "atm_prem_matrix" not in st.session_state: st.session_state["atm_prem_matrix"] = {}
+    if "atm_section_open" not in st.session_state: st.session_state["atm_section_open"] = True
 
     # Auto-generate ATM matrix if not yet built for this currency
     _atm_auto, _, _, _, _ = get_ccy_vol_data(ccy)
@@ -4546,7 +4547,12 @@ def curves_tab():
         pm, vm = calculate_atm_premium_matrix(ccy, _mc_atm, _atm_auto, _mb_atm)
         st.session_state["atm_prem_matrix"][ccy] = {"vol": _atm_auto, "prem": pm, "vega": vm}
 
-    if True:  # always open
+    _al = "▼ Hide ATM Vol / Premium / Vega" if st.session_state["atm_section_open"] else "▶ Show ATM Vol / Premium / Vega"
+    if st.button(_al, key="atm_toggle"):
+        st.session_state["atm_section_open"] = not st.session_state["atm_section_open"]
+        st.rerun()
+
+    if st.session_state["atm_section_open"]:
         atm_vols, _, _, _, _ = get_ccy_vol_data(ccy)
         if atm_vols is None:
             st.info("No ATM vols — upload config first")
@@ -5526,16 +5532,10 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
     SPOT_M = 1.0 / 252.0
 
     def _fwd_from_zc(zc, exp, tenor, freq, disc_zc=None):
-        """Forward swap rate. zc=projection zeros, disc_zc=OIS discounting zeros.
-        Multi-curve: projection uses IRS (QQ/SS), annuity discounted with OIS."""
+        """Forward swap rate from zero curve. Single-curve: IRS zeros for both
+        projection and annuity — matches BBG AUD forward swap rate convention."""
         xs = np.array(sorted(zc.keys()))
         ys = np.array([zc[k] / 100.0 for k in xs])
-        # OIS discounting — fall back to projection curve if no OIS provided
-        if disc_zc is not None:
-            _dx = np.array(sorted(disc_zc.keys()))
-            _dy = np.array([disc_zc[k] / 100.0 for k in sorted(disc_zc.keys())])
-        else:
-            _dx, _dy = xs, ys
         t_s = exp + SPOT_M; t_e = t_s + tenor
         times = []; t = t_s + freq
         while t <= t_e + 1e-9:
@@ -5543,11 +5543,11 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
         if not times: return 0.0
         prev = t_s; ann = 0.0
         for ti in times:
-            z = float(np.interp(ti, _dx, _dy))        # OIS for annuity
+            z = float(np.interp(ti, xs, ys))
             ann += math.exp(-z * ti) * (ti - prev); prev = ti
         if ann <= 0: return 0.0
         zs = float(np.interp(t_s, xs, ys)); ze = float(np.interp(t_e, xs, ys))
-        df_s = math.exp(-zs * t_s); df_e = math.exp(-ze * t_e)   # IRS for projection
+        df_s = math.exp(-zs * t_s); df_e = math.exp(-ze * t_e)
         return (df_s - df_e) / ann * 100.0
 
     matrix = []
@@ -13214,7 +13214,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103i</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103j</div>
             </div>
             """,
             unsafe_allow_html=True,
