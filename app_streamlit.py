@@ -12541,7 +12541,9 @@ def portfolio_tab():
     cols_order = [c for c in cols_order if c in df_display.columns]
     df_display = df_display[cols_order]
 
-    st.dataframe(df_display, use_container_width=True)
+    # Height scales with number of rows (35px/row + header), min 200, max 600 — scrollable
+    _tbl_height = min(max(200, len(df_display) * 35 + 38), 600)
+    st.dataframe(df_display, use_container_width=True, height=_tbl_height)
 
     # Reload / Reprice
     st.markdown("##### Reload into Swaption Pricer")
@@ -13209,7 +13211,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104w</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104x</div>
             </div>
             """,
             unsafe_allow_html=True,
