@@ -4535,15 +4535,18 @@ def curves_tab():
     st.markdown("---")
 
     # ── ATM Vol / Forward Premium / Vega ──────────────────────────────────────
+    # ── ATM Vol / Forward Premium / Vega — always visible, auto-generates ──────
     if "atm_prem_matrix" not in st.session_state: st.session_state["atm_prem_matrix"] = {}
-    if "atm_section_open" not in st.session_state: st.session_state["atm_section_open"] = False
 
-    _al = "▼ Hide ATM Vol / Premium / Vega" if st.session_state["atm_section_open"] else "▶ Show ATM Vol / Premium / Vega"
-    if st.button(_al, key="atm_toggle"):
-        st.session_state["atm_section_open"] = not st.session_state["atm_section_open"]
-        st.rerun()
+    # Auto-generate ATM matrix if not yet built for this currency
+    _atm_auto, _, _, _, _ = get_ccy_vol_data(ccy)
+    _mc_atm = st.session_state.get("config_curves", {}).get(ccy)
+    if _atm_auto is not None and _mc_atm is not None and ccy not in st.session_state.get("atm_prem_matrix", {}):
+        _mb_atm = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
+        pm, vm = calculate_atm_premium_matrix(ccy, _mc_atm, _atm_auto, _mb_atm)
+        st.session_state["atm_prem_matrix"][ccy] = {"vol": _atm_auto, "prem": pm, "vega": vm}
 
-    if st.session_state["atm_section_open"]:
+    if True:  # always open
         atm_vols, _, _, _, _ = get_ccy_vol_data(ccy)
         if atm_vols is None:
             st.info("No ATM vols — upload config first")
@@ -13211,7 +13214,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103h</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103i</div>
             </div>
             """,
             unsafe_allow_html=True,
