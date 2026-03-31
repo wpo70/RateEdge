@@ -2799,6 +2799,8 @@ def apply_rateedge_theme(theme_name: str):
             -webkit-text-fill-color: #ffffff !important;
         }}
         /* Hide ALL Streamlit chrome — code must not be visible */
+        [data-testid="stSidebar"] {display: flex !important;}
+        section[data-testid="stSidebar"] {display: flex !important;}
         [data-testid="manage-app-button"] {{display: none !important;}}
         [data-testid="stAppViewerControlButton"] {{display: none !important;}}
         [data-testid="stToolbar"] {{display: none !important;}}
@@ -2813,7 +2815,6 @@ def apply_rateedge_theme(theme_name: str):
         a[href*="streamlit.io"] {{display: none !important;}}
         .viewerBadge_container__r5tak {{display: none !important;}}
         .viewerBadge_link__qRIco {{display: none !important;}}
-        header[data-testid="stHeader"] > div:last-child {{display: none !important;}}
         header[data-testid="stHeader"] .stToolbarActions {{display: none !important;}}
         footer {{visibility: hidden !important; display: none !important;}}
         #MainMenu {{visibility: hidden !important; display: none !important;}}
@@ -2846,6 +2847,12 @@ def apply_rateedge_theme(theme_name: str):
         p.querySelectorAll('[data-baseweb="radio"] ~ div').forEach(el => {
             el.style.setProperty('color', '#fbbf24', 'important');
             el.style.setProperty('-webkit-text-fill-color', '#fbbf24', 'important');
+        });
+        // Force sidebar collapse arrow visible
+        p.querySelectorAll('[data-testid="collapsedControl"]').forEach(el => {
+            el.style.setProperty('display', 'flex', 'important');
+            el.style.setProperty('visibility', 'visible', 'important');
+            el.style.setProperty('opacity', '1', 'important');
         });
     }
     fixColors();
@@ -3037,9 +3044,6 @@ def init_session():
     # Track if we've auto-loaded from DB this session
     if "db_auto_loaded" not in st.session_state:
         st.session_state["db_auto_loaded"] = False
-    # SABR panel always visible by default
-    if "sabr_panel_visible" not in st.session_state:
-        st.session_state["sabr_panel_visible"] = True
     # SABR panel always visible by default
     if "sabr_panel_visible" not in st.session_state:
         st.session_state["sabr_panel_visible"] = True
@@ -13196,13 +13200,88 @@ def main():
             except Exception:
                 if user_id in _ADMIN_EMAILS:
                     st.session_state["user_role"] = "admin"
-            # Auto-load all session data (curves + vols + SABR + basis) from Supabase
+            # Auto-load all session data (curves + SABR + basis) from Supabase
             try:
                 _auto_loaded = load_all_session_data(user_id)
                 if _auto_loaded > 0:
                     st.session_state["_auto_load_msg"] = f"✅ Auto-loaded {_auto_loaded} configs from database"
             except Exception as _ale:
                 st.session_state["_auto_load_msg"] = f"⚠️ Auto-load failed: {_ale}"
+
+            # Always load latest vol snapshot from vol_history for each currency
+            # This ensures most recent EOD vols are always shown regardless of Excel config
+            try:
+                _snap_conn = get_db_connection()
+                if _snap_conn:
+                    _snap_cur = _snap_conn.cursor()
+                    _snap_loaded = []
+                    for _ccy in SUPPORTED_CURRENCIES:
+                        # Get latest snapshot for this currency (any user_id — admin shares snapshots)
+                        _snap_cur.execute("""
+                            SELECT id FROM vol_history
+                            WHERE currency = %s AND atm_vols IS NOT NULL
+                            ORDER BY snapshot_date DESC LIMIT 1
+                        """, (_ccy,))
+                        _snap_row = _snap_cur.fetchone()
+                        if _snap_row:
+                            _snap_id = _snap_row[0]
+                            _snap_cur2 = _snap_conn.cursor()
+                            _snap_cur2.execute("""
+                                SELECT currency, atm_vols, sabr_alpha, sabr_beta, sabr_rho, sabr_nu, label, snapshot_date
+                                FROM vol_history WHERE id = %s
+                            """, (_snap_id,))
+                            _srow = _snap_cur2.fetchone()
+                            _snap_cur2.close()
+                            if _srow:
+                                _sc, _av, _sa, _sb, _sr, _sn, _slbl, _sdt = _srow
+                                if "vol_data" not in st.session_state:
+                                    st.session_state["vol_data"] = {}
+                                if _sc not in st.session_state["vol_data"]:
+                                    st.session_state["vol_data"][_sc] = {}
+                                if _av:
+                                    _atm_df = pd.DataFrame(_av["values"])
+                                    if "Expiry" in _atm_df.columns:
+                                        _atm_df = _atm_df[["Expiry"] + [c for c in _atm_df.columns if c != "Expiry"]]
+                                    st.session_state["vol_data"][_sc]["atm"] = _atm_df
+                                    # Load into vol editor too
+                                    if "vol_editor" not in st.session_state:
+                                        st.session_state["vol_editor"] = {"working": {}, "base": {}, "history": {}, "future": {}, "redo_stack": {}}
+                                    st.session_state["vol_editor"]["base"][_sc] = _atm_df.copy()
+                                    st.session_state["vol_editor"]["working"][_sc] = _atm_df.copy()
+                                # Load SABR if present in snapshot
+                                for _param, _pdata in [("alpha",_sa),("beta",_sb),("rho",_sr),("nu",_sn)]:
+                                    if _pdata and "values" in _pdata:
+                                        try:
+                                            st.session_state["vol_data"][_sc][_param] = pd.DataFrame(_pdata["values"])
+                                        except: pass
+
+                                # If SABR missing from snapshot, initialise defaults so recalibrate button works
+                                _vd = st.session_state["vol_data"][_sc]
+                                if _vd.get("alpha") is None and _vd.get("atm") is not None:
+                                    try:
+                                        _atm_ref = _vd["atm"].copy()
+                                        _exp_col = "Expiry"
+                                        _tcols = [c for c in _atm_ref.columns if c != _exp_col]
+                                        # Default params: beta=0.5, rho=-0.25, nu=0.30
+                                        for _pp, _dv in [("beta", 0.5), ("rho", -0.25), ("nu", 0.30)]:
+                                            _df_p = _atm_ref[[_exp_col]].copy()
+                                            for _tc in _tcols:
+                                                _df_p[_tc] = _dv
+                                            _vd[_pp] = _df_p
+                                        # Alpha: initialise to ATM vol / 10000 (rough starting point)
+                                        _df_a = _atm_ref.copy()
+                                        for _tc in _tcols:
+                                            _df_a[_tc] = _df_a[_tc] / 10000.0
+                                        _vd["alpha"] = _df_a
+                                    except: pass
+                                _snap_loaded.append(f"{_sc}: {_slbl} ({str(_sdt)[:10]})")
+                    _snap_cur.close()
+                    _snap_conn.close()
+                    if _snap_loaded:
+                        _cur_msg = st.session_state.get("_auto_load_msg", "")
+                        st.session_state["_auto_load_msg"] = _cur_msg + f"\n📊 Latest vols loaded: {', '.join(_snap_loaded)}"
+            except Exception as _vle:
+                pass
             st.session_state["db_auto_loaded"] = True
 
     # Sidebar for settings
@@ -13213,7 +13292,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103n</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103s</div>
             </div>
             """,
             unsafe_allow_html=True,
