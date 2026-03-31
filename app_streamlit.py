@@ -637,88 +637,9 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
         if ccy not in st.session_state["vol_data"]:
             st.session_state["vol_data"][ccy] = {}
         
-        # Auto-load curves from swap_rates (most recent date available per currency)
-        try:
-            if ccy == "AUD":
-                # AUD is dual-curve: 3M BBSW for <=3Y (Q/Q), 6M BBSW for >=4Y (S/S)
-                _df_3m = _load_curve_from_db_latest("3M BBSW", "AUD", load_date)
-                _df_6m = _load_curve_from_db_latest("6M BBSW", "AUD", load_date)
-                _aud_parts = []
-                if _df_3m is not None and len(_df_3m) > 0:
-                    _short = _df_3m[_df_3m["MaturityY"] <= 3.0].copy()
-                    if len(_short) > 0:
-                        _aud_parts.append(_short)
-                if _df_6m is not None and len(_df_6m) > 0:
-                    _long = _df_6m[_df_6m["MaturityY"] >= 4.0].copy()
-                    if len(_long) > 0:
-                        _aud_parts.append(_long)
-                if _aud_parts:
-                    import pandas as _pd2
-                    _aud_curve = _pd2.concat(_aud_parts).sort_values("MaturityY").reset_index(drop=True)
-                    set_ccy_curve("AUD", _aud_curve)
-                    if "config_curves" not in st.session_state:
-                        st.session_state["config_curves"] = {}
-                    st.session_state["config_curves"]["AUD"] = _aud_curve
-                    _src3 = _df_3m["_source_date"].iloc[0] if _df_3m is not None and "_source_date" in _df_3m.columns else "?"
-                    st.session_state.setdefault("_load_debug", []).append(
-                        f"AUD curve: 3M BBSW ≤3Y + 6M BBSW ≥4Y ({len(_aud_curve)} pts, {_src3})"
-                    )
-                    loaded += 1
-
-                    # NOTE: par_qq/par_ss (real BBG par rates) are stored in user_configs
-                    # as aud_par_rates and rebuilt below after basis curves are loaded.
-                    # Do NOT attempt to derive par rates from swap_rates — those store
-                    # bootstrapped zero rates, not par rates.
-                    pass
-                # AUD OIS (AONIA)
-                _df_ois = _load_curve_from_db_latest("AONIA", "AUD", load_date)
-                if _df_ois is not None and len(_df_ois) > 0:
-                    if "AUD" not in st.session_state["basis_curves"]:
-                        st.session_state["basis_curves"]["AUD"] = {}
-                    st.session_state["basis_curves"]["AUD"]["ois"] = _df_ois
-                    if "config_basis" not in st.session_state:
-                        st.session_state["config_basis"] = {}
-                    if "AUD" not in st.session_state["config_basis"]:
-                        st.session_state["config_basis"]["AUD"] = {}
-                    st.session_state["config_basis"]["AUD"]["ois"] = _df_ois
-
-            elif ccy == "NZD":
-                _df_bkbm = _load_curve_from_db_latest("3M BKBM", "NZD", load_date)
-                if _df_bkbm is not None and len(_df_bkbm) >= 3:
-                    set_ccy_curve("NZD", _df_bkbm)
-                    if "config_curves" not in st.session_state:
-                        st.session_state["config_curves"] = {}
-                    st.session_state["config_curves"]["NZD"] = _df_bkbm
-                    _src = _df_bkbm["_source_date"].iloc[0] if "_source_date" in _df_bkbm.columns else "?"
-                    st.session_state.setdefault("_load_debug", []).append(
-                        f"NZD curve: 3M BKBM ({len(_df_bkbm)} pts, {_src})"
-                    )
-                    loaded += 1
-                _df_nzonia = _load_curve_from_db_latest("NZONIA", "NZD", load_date)
-                if _df_nzonia is not None and len(_df_nzonia) > 0:
-                    if "NZD" not in st.session_state["basis_curves"]:
-                        st.session_state["basis_curves"]["NZD"] = {}
-                    st.session_state["basis_curves"]["NZD"]["ois"] = _df_nzonia
-                    if "config_basis" not in st.session_state:
-                        st.session_state["config_basis"] = {}
-                    if "NZD" not in st.session_state["config_basis"]:
-                        st.session_state["config_basis"]["NZD"] = {}
-                    st.session_state["config_basis"]["NZD"]["ois"] = _df_nzonia
-
-            elif ccy == "USD":
-                _df_sofr = _load_curve_from_db_latest("SOFR", "USD", load_date)
-                if _df_sofr is not None and len(_df_sofr) >= 3:
-                    set_ccy_curve("USD", _df_sofr)
-                    if "config_curves" not in st.session_state:
-                        st.session_state["config_curves"] = {}
-                    st.session_state["config_curves"]["USD"] = _df_sofr
-                    _src = _df_sofr["_source_date"].iloc[0] if "_source_date" in _df_sofr.columns else "?"
-                    st.session_state.setdefault("_load_debug", []).append(
-                        f"USD curve: SOFR ({len(_df_sofr)} pts, {_src})"
-                    )
-                    loaded += 1
-        except Exception:
-            pass
+        # NOTE: Curves are NOT auto-loaded from DB on login.
+        # Curves must be committed from BBG_Feed via Vol/Upload tab.
+        # This ensures curves always reflect the live BBG rates, not stale DB zeros.
 
         # Load ATM vols into vol_data
         if "atm_vols" in configs and ccy in configs["atm_vols"]:
@@ -4665,12 +4586,13 @@ def _load_swap_rates_from_db(floating_rate: str, load_date: str = None) -> pd.Da
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _load_swap_rates_history(floating_rate: str, years_back: int = 5) -> pd.DataFrame:
-    """Load historical swap rates (date × tenor). Default last 5 years to avoid hang."""
+def _load_swap_rates_history(floating_rate: str, years_back: int = 2) -> pd.DataFrame:
+    """Load historical swap rates (date × tenor). Default last 2 years."""
     try:
         conn = get_db_connection()
         if conn is None: return pd.DataFrame()
         cur = conn.cursor()
+        cur.execute("SET statement_timeout = '15s'")
         cur.execute(
             """SELECT date, tenor, rate FROM swap_rates
                WHERE currency=%s AND floating_rate=%s
@@ -4752,18 +4674,23 @@ def fwd_analysis_tab():
     _an_tabs = st.tabs(["IRS Spreads", "IRS Butterflies", "Fwd-Fwd Rates (3M)", "6v3 Outright", "6v3 Fwd-Fwd", "6v3 Spreads", "6v3 Butterflies"])
 
     def _autosave_fwd_prefs():
-        """Persist FWD analysis series lists to DB so they survive session restarts."""
-        if HAS_POSTGRES and get_db_url():
-            _uid = st.session_state.get("username", "default")
-            _prefs = {
-                "irs_sp_list": [list(x) for x in st.session_state.get("irs_sp_list", [])],
-                "irs_fl_list": [list(x) for x in st.session_state.get("irs_fl_list", [])],
-                "fvfv_list":   [list(x) for x in st.session_state.get("fvfv_list",   [])],
-                "b6_list":     list(st.session_state.get("b6_list", [])),
-                "fv6_list":    [list(x) for x in st.session_state.get("fv6_list",    [])],
-                "bsp_list":    [list(x) for x in st.session_state.get("bsp_list",    [])],
-            }
-            save_user_config(_uid, "fwd_analysis_prefs", "GLB", _prefs)
+        """Persist FWD analysis series lists to DB. Debounced — skips if saved in last 5s."""
+        if not HAS_POSTGRES or not get_db_url():
+            return
+        import time as _t
+        if _t.time() - st.session_state.get("_fwd_prefs_last_save", 0) < 5:
+            return
+        _uid = st.session_state.get("username", "default")
+        _prefs = {
+            "irs_sp_list": [list(x) for x in st.session_state.get("irs_sp_list", [])],
+            "irs_fl_list": [list(x) for x in st.session_state.get("irs_fl_list", [])],
+            "fvfv_list":   [list(x) for x in st.session_state.get("fvfv_list",   [])],
+            "b6_list":     list(st.session_state.get("b6_list", [])),
+            "fv6_list":    [list(x) for x in st.session_state.get("fv6_list",    [])],
+            "bsp_list":    [list(x) for x in st.session_state.get("bsp_list",    [])],
+        }
+        save_user_config(_uid, "fwd_analysis_prefs", "GLB", _prefs)
+        st.session_state["_fwd_prefs_last_save"] = _t.time()
 
     def _chart_tools(fig, series_dict: dict, key: str, ylab: str = "bp"):
         """📂 Download + date-range picker + Hi/Lo/Mean/Std/Current stats box."""
@@ -5702,6 +5629,23 @@ def swaptions_tab(vol_mode: str):
         # Alpha comparison table
         _, _a, _b, _r, _n = get_ccy_vol_data(ccy)
         _atm_surf = get_working_atm_surface(ccy)
+
+        # Auto-init default SABR if ATM loaded but SABR missing — runs every render
+        if _a is None and _atm_surf is not None:
+            try:
+                _ar = _atm_surf.copy()
+                _tc = [c for c in _ar.columns if c != "Expiry"]
+                _vd = st.session_state.setdefault("vol_data", {}).setdefault(ccy, {})
+                for _pp, _dv in [("beta", 0.5), ("rho", -0.25), ("nu", 0.30)]:
+                    _dp = _ar[["Expiry"]].copy()
+                    for _t in _tc: _dp[_t] = _dv
+                    _vd[_pp] = _dp
+                _da = _ar.copy()
+                for _t in _tc: _da[_t] = _da[_t] / 10000.0
+                _vd["alpha"] = _da
+                _, _a, _b, _r, _n = get_ccy_vol_data(ccy)
+            except Exception:
+                pass
 
         if _a is not None and _atm_surf is not None and curve is not None:
             _EXPIRIES = ["1m","3m","6m","1y","2y","3y","5y","7y","10y","15y","20y"]
@@ -13211,7 +13155,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104n</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104q</div>
             </div>
             """,
             unsafe_allow_html=True,
