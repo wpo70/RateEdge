@@ -3448,15 +3448,21 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
 
     # Determine which currencies to process for each type
     ccy_list = SUPPORTED_CURRENCIES
-    load_atm   = load_type in ["atm", "all"]
-    load_atm_aud = load_type == "atm_aud"
-    load_sabr  = load_type in ["sabr", "all"]
-    load_curves = load_type in ["curves", "all"]
-    load_curves_aud = load_type == "curves_aud"
+    load_atm        = load_type == "all"
+    load_atm_aud    = load_type in ["atm_aud", "all"]
+    load_atm_usd_nzd = load_type in ["atm_usd_nzd", "all"]
+    load_sabr       = load_type == "all"
+    load_curves     = load_type in ["curves", "all"]
+    load_curves_aud = False  # always included in load_curves for AUD
 
     for ccy in ccy_list:
-        # Load ATM vols
-        if load_atm or (load_atm_aud and ccy == "AUD"):
+        # Load ATM vols — per-currency logic
+        _load_this_atm = (
+            load_atm or
+            (load_atm_aud and ccy == "AUD") or
+            (load_atm_usd_nzd and ccy in ["USD", "NZD"])
+        )
+        if _load_this_atm:
             atm_name = f"ATM_Vols_{ccy}"
             if atm_name in xl.sheet_names:
                 atm_raw = pd.read_excel(xl, sheet_name=atm_name)
@@ -3489,7 +3495,7 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                 loaded["sabr"] += 1
 
         # Load curves and basis curves
-        if load_curves or (load_curves_aud and ccy == "AUD"):
+        if load_curves:
             curve_df = None
             if ccy == "AUD":
                 bootstrapped = bootstrap_aud_zeros_from_bbg_feed(xl)
@@ -3742,23 +3748,25 @@ def vol_config_tab():
     
     if upload is not None:
         st.markdown("#### Select what to commit:")
-        
+
         load_type = st.radio(
             "Commit options",
-            ["All", "IRS Curves Only", "AUD Curves Only", "AUD Vol Only", "ATM Vol Only"],
+            ["All", "SOD IRS", "AUD Vol", "USD & NZD Vol"],
             index=0,
             horizontal=True,
             key="load_type_radio",
-            help="IRS Curves Only: all CCY curves. AUD Curves Only: AUD bootstrap only. AUD Vol Only: AUD ATM surface only."
+            help=(
+                "SOD IRS: load AUD + NZD + USD IRS curves (all three). "
+                "AUD Vol: AUD ATM surface only. "
+                "USD & NZD Vol: USD and NZD ATM surfaces only."
+            )
         )
-        
-        # Map selection to load_type
+
         type_map = {
-            "All": "all",
-            "IRS Curves Only": "curves",
-            "AUD Curves Only": "curves_aud",
-            "AUD Vol Only": "atm_aud",
-            "ATM Vol Only": "atm",
+            "All":          "all",
+            "SOD IRS":      "curves",        # all CCY curves
+            "AUD Vol":      "atm_aud",       # AUD ATM only
+            "USD & NZD Vol":"atm_usd_nzd",   # USD + NZD ATM only
         }
         
         if st.button(" Commit Selected Data", key="commit_btn", type="primary"):
@@ -13195,7 +13203,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103f</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103g</div>
             </div>
             """,
             unsafe_allow_html=True,
