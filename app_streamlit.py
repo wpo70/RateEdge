@@ -2799,8 +2799,6 @@ def apply_rateedge_theme(theme_name: str):
             -webkit-text-fill-color: #ffffff !important;
         }}
         /* Hide ALL Streamlit chrome — code must not be visible */
-        [data-testid="stSidebar"] {display: flex !important;}
-        section[data-testid="stSidebar"] {display: flex !important;}
         [data-testid="manage-app-button"] {{display: none !important;}}
         [data-testid="stAppViewerControlButton"] {{display: none !important;}}
         [data-testid="stToolbar"] {{display: none !important;}}
@@ -13292,7 +13290,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103s</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103t</div>
             </div>
             """,
             unsafe_allow_html=True,
