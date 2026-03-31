@@ -2892,6 +2892,123 @@ def is_read_only() -> bool:
     """Check if current user is read-only or trainee."""
     return st.session_state.get("user_role", "read_only") in ("read_only", "trainee")
 
+# ── SABR Calibration Reference Data (31-Mar-2026) ──────────────────────────
+# Source: Market vol cube calibration. Per-cell rho and nu from smile data.
+# Rows = expiry, Cols = tenor. Values interpolated for missing cells.
+_SABR_REF = {
+    "AUD": {
+        "expiries": ["1m","3m","6m","1y","2y","5y","10y","15y","20y","30y"],
+        "tenors":   ["1Y","2Y","3Y","4Y","5Y","7Y","10Y","15Y","20Y","30Y"],
+        "rho": {
+            "1m":  [-0.20,-0.17,-0.14,-0.17,-0.12,-0.06, 0.03, 0.06, 0.06, 0.06],
+            "3m":  [-0.09,-0.01, 0.02, 0.04, 0.06, 0.04, 0.07, 0.08, 0.08, 0.07],
+            "6m":  [-0.03, 0.03, 0.05, 0.04, 0.06, 0.07, 0.08, 0.09, 0.10, 0.09],
+            "1y":  [ 0.03, 0.07, 0.09, 0.10, 0.09, 0.11, 0.11, 0.13, 0.14, 0.14],
+            "2y":  [ 0.08, 0.13, 0.15, 0.15, 0.16, 0.18, 0.19, 0.19, 0.20, 0.20],
+            "5y":  [ 0.16, 0.16, 0.19, 0.19, 0.20, 0.22, 0.22, 0.22, 0.23, 0.22],
+            "10y": [ 0.19, 0.17, 0.18, 0.18, 0.25, 0.27, 0.28, 0.28, 0.29, 0.26],
+            "15y": [ 0.22, 0.22, 0.22, 0.22, 0.29, 0.29, 0.33, 0.33, 0.34, 0.29],
+            "20y": [ 0.25, 0.25, 0.25, 0.25, 0.35, 0.35, 0.40, 0.40, 0.38, 0.31],
+            "30y": [ 0.18, 0.18, 0.18, 0.18, 0.31, 0.31, 0.40, 0.40, 0.40, 0.40],
+        },
+        "nu": {
+            "1m":  [0.50, 0.44, 0.43, 0.47, 0.42, 0.46, 0.40, 0.41, 0.38, 0.39],
+            "3m":  [0.48, 0.46, 0.44, 0.45, 0.41, 0.42, 0.36, 0.38, 0.35, 0.37],
+            "6m":  [0.44, 0.43, 0.41, 0.41, 0.37, 0.38, 0.34, 0.36, 0.33, 0.36],
+            "1y":  [0.42, 0.36, 0.34, 0.34, 0.32, 0.31, 0.28, 0.29, 0.27, 0.28],
+            "2y":  [0.38, 0.31, 0.29, 0.29, 0.27, 0.24, 0.23, 0.23, 0.23, 0.23],
+            "5y":  [0.31, 0.29, 0.26, 0.26, 0.24, 0.20, 0.19, 0.19, 0.19, 0.18],
+            "10y": [0.25, 0.22, 0.20, 0.20, 0.18, 0.16, 0.14, 0.14, 0.14, 0.14],
+            "15y": [0.21, 0.21, 0.18, 0.18, 0.15, 0.15, 0.13, 0.13, 0.13, 0.12],
+            "20y": [0.19, 0.19, 0.16, 0.16, 0.13, 0.13, 0.12, 0.12, 0.12, 0.11],
+            "30y": [0.19, 0.19, 0.16, 0.16, 0.13, 0.13, 0.12, 0.12, 0.12, 0.11],
+        },
+    },
+    "USD": {
+        "expiries": ["1m","3m","6m","9m","1y","2y","3y","5y","7y","10y","15y","20y","30y"],
+        "tenors":   ["1Y","2Y","5Y","10Y","15Y","20Y","30Y"],
+        "rho": {
+            "1m":  [-0.211,-0.015, 0.164, 0.408, 0.261, 0.142, 0.125],
+            "3m":  [-0.164,-0.057, 0.087, 0.149, 0.133, 0.120, 0.127],
+            "6m":  [-0.055, 0.030, 0.037, 0.138, 0.106, 0.078, 0.109],
+            "9m":  [-0.078, 0.012, 0.067, 0.162, 0.142, 0.126, 0.139],
+            "1y":  [-0.093, 0.006, 0.104, 0.191, 0.184, 0.180, 0.173],
+            "2y":  [ 0.093, 0.158, 0.155, 0.187, 0.168, 0.157, 0.172],
+            "3y":  [ 0.273, 0.223, 0.238, 0.223, 0.223, 0.229, 0.208],
+            "5y":  [ 0.387, 0.290, 0.311, 0.286, 0.278, 0.276, 0.270],
+            "7y":  [ 0.360, 0.323, 0.301, 0.321, 0.315, 0.313, 0.322],
+            "10y": [ 0.378, 0.341, 0.373, 0.467, 0.436, 0.415, 0.420],
+            "15y": [ 0.336, 0.319, 0.375, 0.506, 0.470, 0.441, 0.396],
+            "20y": [ 0.313, 0.286, 0.398, 0.558, 0.491, 0.434, 0.378],
+            "30y": [ 0.260, 0.247, 0.358, 0.406, 0.373, 0.359, 0.488],
+        },
+        "nu": {
+            "1m":  [0.923, 0.710, 0.609, 0.722, 0.618, 0.516, 0.492],
+            "3m":  [0.832, 0.700, 0.514, 0.533, 0.496, 0.460, 0.481],
+            "6m":  [0.674, 0.602, 0.493, 0.446, 0.440, 0.434, 0.431],
+            "9m":  [0.576, 0.503, 0.428, 0.404, 0.390, 0.378, 0.386],
+            "1y":  [0.468, 0.400, 0.360, 0.360, 0.340, 0.320, 0.338],
+            "2y":  [0.255, 0.262, 0.264, 0.266, 0.266, 0.266, 0.266],
+            "3y":  [0.210, 0.244, 0.223, 0.214, 0.213, 0.213, 0.216],
+            "5y":  [0.180, 0.193, 0.183, 0.183, 0.190, 0.197, 0.192],
+            "7y":  [0.173, 0.184, 0.180, 0.193, 0.195, 0.199, 0.187],
+            "10y": [0.153, 0.170, 0.179, 0.151, 0.152, 0.154, 0.157],
+            "15y": [0.144, 0.160, 0.151, 0.134, 0.136, 0.139, 0.147],
+            "20y": [0.140, 0.156, 0.138, 0.126, 0.128, 0.130, 0.135],
+            "30y": [0.138, 0.148, 0.132, 0.123, 0.120, 0.117, 0.110],
+        },
+    },
+}
+
+def _apply_sabr_calibration(ccy: str) -> int:
+    """Apply per-cell rho/nu from calibration reference. Returns cells updated."""
+    ref = _SABR_REF.get(ccy)
+    if ref is None: return 0
+    _, a, b, r, n = get_ccy_vol_data(ccy)
+    atm = get_working_atm_surface(ccy)
+    if atm is None: return 0
+    
+    exp_ref  = ref["expiries"]
+    ten_ref  = ref["tenors"]
+    exp_yrs  = [label_to_years(e) for e in exp_ref]
+    ten_yrs  = [float(t[:-1]) for t in ten_ref]
+    rho_grid = np.array([ref["rho"][e] for e in exp_ref], dtype=float)
+    nu_grid  = np.array([ref["nu"][e]  for e in exp_ref], dtype=float)
+    
+    # Get ATM expiry/tenor labels from surface
+    atm_exps = atm["Expiry"].astype(str).str.strip().str.lower().tolist()
+    atm_tens = [c for c in atm.columns if c != "Expiry"]
+    
+    # Build new rho and nu dataframes via bilinear interpolation
+    _df_rho = atm[["Expiry"]].copy()
+    _df_nu  = atm[["Expiry"]].copy()
+    
+    updated = 0
+    for _tc in atm_tens:
+        _ty = label_to_years(str(_tc))
+        _rho_col = []
+        _nu_col  = []
+        for _exp_lbl in atm_exps:
+            _ey = label_to_years(_exp_lbl)
+            _rho_interp = float(np.interp(_ey, exp_yrs,
+                [float(np.interp(_ty, ten_yrs, rho_grid[i])) for i in range(len(exp_ref))]))
+            _nu_interp  = float(np.interp(_ey, exp_yrs,
+                [float(np.interp(_ty, ten_yrs, nu_grid[i]))  for i in range(len(exp_ref))]))
+            _rho_col.append(round(np.clip(_rho_interp, -0.95, 0.95), 3))
+            _nu_col.append(round(max(_nu_interp, 0.001), 3))
+            updated += 1
+        _df_rho[_tc] = _rho_col
+        _df_nu[_tc]  = _nu_col
+    
+    # Preserve alpha and beta, update rho and nu
+    if "vol_data" not in st.session_state: st.session_state["vol_data"] = {}
+    if ccy not in st.session_state["vol_data"]: st.session_state["vol_data"][ccy] = {}
+    _vd = st.session_state["vol_data"][ccy]
+    _old_atm, _old_a, _old_b, _, _ = get_ccy_vol_data(ccy)
+    set_ccy_vol_data(ccy, _old_atm, _old_a, _old_b, _df_rho, _df_nu)
+    return updated
+
+
 def is_trainee() -> bool:
     """Check if current user is trainee — view only, no pricing or editing."""
     return st.session_state.get("user_role", "read_only") == "trainee"
@@ -5768,6 +5885,22 @@ def swaptions_tab(vol_mode: str):
                         st.rerun()
             with _rc2:
                 st.caption("Updates ~ to match current ATM surface. ~, ρ,ν, × remain locked. Run daily at session start in Sticky-ATM mode.")
+
+            # Load calibrated rho/nu (admin only)
+            if is_admin() and ccy in _SABR_REF:
+                st.markdown("---")
+                _lc1, _lc2 = st.columns([2, 4])
+                with _lc1:
+                    if st.button("📥 Load Calibrated ρ / ν", key=f"load_sabr_cal_{ccy}", type="secondary"):
+                        _n_updated = _apply_sabr_calibration(ccy)
+                        if _n_updated > 0:
+                            st.session_state[f"_sabr_init_{ccy}"] = True
+                            st.success(f"✅ ρ / ν loaded — {_n_updated} cells calibrated. Run Recalibrate Alpha to update ~.")
+                            st.rerun()
+                        else:
+                            st.warning("Load ATM surface first.")
+                with _lc2:
+                    st.caption(f"Replaces flat ρ/ν defaults with per-cell calibrated values. ATM surface must be loaded first.")
     
     # Row 1: Structure Type and Model
     col_struct, col_model, col_prem = st.columns([2, 1, 1])
@@ -5832,12 +5965,14 @@ def swaptions_tab(vol_mode: str):
     #                 / Ann(expiry, tenor)   — swap triangle
     if curve is not None:
         if is_midcurve:
-            # Swap triangle: R_mid = (Ann_long * R_long - Ann_short * R_short) / Ann_mid
-            _t_long  = expiry_y + delay_y          # e.g. 6m for 3m→3m
-            _t_exp   = expiry_y                     # e.g. 3m
-            fwd_long, ann_long, _ = forward_and_annuity_from_curve(curve, ccy, _t_long, tenor_y, ois_curve, freq_override=freq_override)
-            fwd_short, ann_short, _ = forward_and_annuity_from_curve(curve, ccy, _t_exp, delay_y, ois_curve)
-            fwd_mid, ann, _ = forward_and_annuity_from_curve(curve, ccy, _t_exp, tenor_y, ois_curve, freq_override=freq_override)
+            # Swap triangle for midcurve: Xm→YmTY
+            # Long:  start=expiry, tenor=delay+tenor  e.g. 6m×2Y for 6m→1y1Y
+            # Short: start=expiry, tenor=delay         e.g. 6m×1Y for 6m→1y1Y
+            # Mid annuity: start=expiry+delay, tenor=tenor  e.g. 1.5y×1Y
+            # R(mid) = [Ann(long)*R(long) - Ann(short)*R(short)] / Ann(mid)
+            fwd_long, ann_long, _   = forward_and_annuity_from_curve(curve, ccy, expiry_y, delay_y + tenor_y, ois_curve, freq_override=freq_override)
+            fwd_short, ann_short, _ = forward_and_annuity_from_curve(curve, ccy, expiry_y, delay_y, ois_curve)
+            fwd_mid, ann, _         = forward_and_annuity_from_curve(curve, ccy, expiry_y + delay_y, tenor_y, ois_curve, freq_override=freq_override)
             if ann > 0 and ann_long > 0 and ann_short > 0:
                 fwd = (ann_long * fwd_long - ann_short * fwd_short) / ann
             else:
@@ -5887,9 +6022,11 @@ def swaptions_tab(vol_mode: str):
             try:
                 ois_xs = ois_curve["MaturityY"].to_numpy().astype(float)
                 ois_ys = ois_curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
-                eff_disc_rate = float(np.interp(expiry_y, ois_xs, ois_ys))
+                # For midcurve, discount to when the underlying swap actually starts
+                _disc_t = expiry_y + delay_y if is_midcurve else expiry_y
+                eff_disc_rate = float(np.interp(_disc_t, ois_xs, ois_ys))
                 disc_source = "OIS"
-                st.caption(f"OIS rate: {eff_disc_rate*100:.2f}%")
+                st.caption(f"OIS rate: {eff_disc_rate*100:.2f}% @ {_disc_t:.2f}Y")
             except Exception:
                 eff_disc_rate = 0.035
                 disc_source = "Flat (fallback)"
@@ -9422,10 +9559,25 @@ def vol_surface_editor_tab():
     ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
     
     st.markdown("---")
-    
+
+    # Gate editor render — prevents hang on every tab visit
+    if not st.session_state.get(f"_vol_editor_open_{ccy}"):
+        _c1, _c2 = st.columns([2, 4])
+        with _c1:
+            if st.button("✏️ Open Vol Editor", key=f"open_vol_editor_{ccy}", type="primary"):
+                st.session_state[f"_vol_editor_open_{ccy}"] = True
+                st.rerun()
+        with _c2:
+            st.caption("Click to open the interactive vol surface editor.")
+        return
+
+    if st.button("✕ Close Editor", key=f"close_vol_editor_{ccy}"):
+        st.session_state[f"_vol_editor_open_{ccy}"] = False
+        st.rerun()
+
     # Render the unified editor with mode toggle (Hybrid vs 3D Drag)
     updated_surface = render_vol_surface_editor_unified(ccy, atm, curve, ois_curve)
-    
+
     # Render bulk adjustment tools
     with st.expander(" Quick Adjustments (Parallel Shift, Scale, Tilt)", expanded=False):
         render_bulk_adjustment_tools(ccy)
@@ -13283,7 +13435,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105e</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105g</div>
             </div>
             """,
             unsafe_allow_html=True,
