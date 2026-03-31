@@ -5649,7 +5649,7 @@ def swaptions_tab(vol_mode: str):
                 _ar = _atm_surf.copy()
                 _tc = [c for c in _ar.columns if c != "Expiry"]
                 _vd = st.session_state.setdefault("vol_data", {}).setdefault(ccy, {})
-                for _pp, _dv in [("beta", 0.5), ("rho", -0.25), ("nu", 0.30)]:
+                for _pp, _dv in [("beta", 0.5), ("rho", 0.20), ("nu", 0.30)]:
                     _dp = _ar[["Expiry"]].copy()
                     for _t in _tc: _dp[_t] = _dv
                     _vd[_pp] = _dp
@@ -13198,7 +13198,7 @@ def main():
                                     try:
                                         _ar = _vd["atm"].copy()
                                         _tc = [c for c in _ar.columns if c!="Expiry"]
-                                        for _pp,_dv in [("beta",0.5),("rho",-0.25),("nu",0.30)]:
+                                        for _pp,_dv in [("beta",0.5),("rho",0.20),("nu",0.30)]:
                                             _dp = _ar[["Expiry"]].copy()
                                             for _t in _tc: _dp[_t]=_dv
                                             _vd[_pp]=_dp
@@ -13220,7 +13220,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105a</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105b</div>
             </div>
             """,
             unsafe_allow_html=True,
