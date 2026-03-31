@@ -797,7 +797,7 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                 if _ois_df is not None and not _ois_df.empty:
                     for _, _row in _ois_df.iterrows():
                         _t_ois = float(_row["MaturityY"])
-                        if _t_ois <= 3.01:  # only seed OIS up to 3Y — matches BBG_Feed bootstrap path
+                        if _t_ois <= 3.01:  # only seed OIS up to 3Y — matches BBG_Feed bootstrap
                             _ois_rates_rebuild[_t_ois] = float(_row["ZeroRatePct"])
 
                 _bx2 = _by2 = None
@@ -2801,7 +2801,7 @@ def apply_rateedge_theme(theme_name: str):
         header[data-testid="stHeader"] .stToolbarActions {{display: none !important;}}
         footer {{visibility: hidden !important; display: none !important;}}
         #MainMenu {{visibility: hidden !important; display: none !important;}}
-        header[data-testid="stHeader"] {{background: transparent !important; height: 0 !important; min-height: 0 !important;}}
+        header {{visibility: hidden !important;}}
         </style>""",
         unsafe_allow_html=True,
     )
@@ -3022,7 +3022,6 @@ def init_session():
     # Track if we've auto-loaded from DB this session
     if "db_auto_loaded" not in st.session_state:
         st.session_state["db_auto_loaded"] = False
-    # SABR panel always visible by default
     if "sabr_panel_visible" not in st.session_state:
         st.session_state["sabr_panel_visible"] = True
     # Correlation matrix + CMS bumps   —   load from file if exists
@@ -3437,12 +3436,14 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
     
     for ccy in SUPPORTED_CURRENCIES:
         # Load ATM vols
-        if load_type in ["atm", "all"]:
+        _load_atm = (load_type in ["atm", "all"] or
+                     (load_type == "atm_aud" and ccy == "AUD") or
+                     (load_type == "atm_usd_nzd" and ccy in ["USD", "NZD"]))
+        if _load_atm:
             atm_name = f"ATM_Vols_{ccy}"
             if atm_name in xl.sheet_names:
                 atm_raw = pd.read_excel(xl, sheet_name=atm_name)
                 atm_df = load_atm_surface(atm_raw, atm_name)
-                # Get existing SABR data to preserve
                 _, old_a, old_b, old_r, old_n = get_ccy_vol_data(ccy)
                 set_ccy_vol_data(ccy, atm_df, old_a, old_b, old_r, old_n)
                 set_timestamp("atm", ccy)
@@ -3739,17 +3740,16 @@ def vol_config_tab():
         
         load_type = st.radio(
             "Commit options",
-            ["All", "ATM Vol Only", "IRS Curves Only"],
+            ["All", "SOD IRS", "AUD Vol", "USD & NZD Vol"],
             index=0,
             horizontal=True,
             key="load_type_radio"
         )
-        
-        # Map selection to load_type
         type_map = {
             "All": "all",
-            "ATM Vol Only": "atm",
-            "IRS Curves Only": "curves"
+            "SOD IRS": "curves",
+            "AUD Vol": "atm_aud",
+            "USD & NZD Vol": "atm_usd_nzd",
         }
         
         if st.button(" Commit Selected Data", key="commit_btn", type="primary"):
@@ -4517,32 +4517,7 @@ def curves_tab():
             st.session_state.pop("_swap_load_warnings", None)
             st.rerun()
 
-    if st.button("▶ Show Swap Rate Validator", key="swap_validator_toggle") or st.session_state.get("_swap_validator_open"):
-        st.session_state["_swap_validator_open"] = True
-        from datetime import date as _svdate
-        _sv_col1, _sv_col2, _sv_col3 = st.columns([2, 2, 2])
-        with _sv_col1:
-            _sv_date = st.date_input("Date to check", value=_svdate.today(), key="swap_val_date")
-        with _sv_col2:
-            _sv_fr = st.selectbox("Floating Rate", ["3M BBSW", "6M BBSW", "AONIA", "3M BKBM", "NZONIA", "SOFR"], key="swap_val_fr")
-        with _sv_col3:
-            if st.button("▶ Run Check", key="run_swap_check", type="primary"):
-                _load_swap_rates_from_db.clear()
-                _sv_df = _load_swap_rates_from_db(_sv_fr, str(_sv_date))
-                if _sv_df.empty:
-                    st.warning(f"No data found for {_sv_fr} on {_sv_date} (or nearby dates)")
-                else:
-                    _sv_dict = _sv_df["rate"].to_dict() if "rate" in _sv_df.columns else _sv_df.iloc[:,0].to_dict()
-                    _sv_warns = check_swap_rates_sanity(_sv_dict, _sv_fr, ccy)
-                    if _sv_warns:
-                        for _svw in _sv_warns:
-                            st.error(_svw)
-                    else:
-                        st.success(f"✅ {_sv_fr} clean on {_sv_date}")
-                    st.dataframe(_sv_df, use_container_width=True)
-        if st.button("✕ Close Validator", key="close_swap_val"):
-            st.session_state["_swap_validator_open"] = False
-            st.rerun()
+
 
     st.markdown("---")
 
@@ -13171,13 +13146,71 @@ def main():
             except Exception:
                 if user_id in _ADMIN_EMAILS:
                     st.session_state["user_role"] = "admin"
-            # Auto-load all session data (curves + vols + SABR + basis) from Supabase
             try:
                 _auto_loaded = load_all_session_data(user_id)
                 if _auto_loaded > 0:
                     st.session_state["_auto_load_msg"] = f"✅ Auto-loaded {_auto_loaded} configs from database"
             except Exception as _ale:
                 st.session_state["_auto_load_msg"] = f"⚠️ Auto-load failed: {_ale}"
+            # Load latest vol snapshot from vol_history for each currency
+            try:
+                _snap_conn = get_db_connection()
+                if _snap_conn:
+                    _snap_cur = _snap_conn.cursor()
+                    _snap_loaded = []
+                    for _ccy in SUPPORTED_CURRENCIES:
+                        _snap_cur.execute("""
+                            SELECT id FROM vol_history
+                            WHERE currency = %s AND atm_vols IS NOT NULL
+                            ORDER BY snapshot_date DESC LIMIT 1
+                        """, (_ccy,))
+                        _snap_row = _snap_cur.fetchone()
+                        if _snap_row:
+                            _snap_cur2 = _snap_conn.cursor()
+                            _snap_cur2.execute("""
+                                SELECT currency, atm_vols, sabr_alpha, sabr_beta, sabr_rho, sabr_nu, label, snapshot_date
+                                FROM vol_history WHERE id = %s
+                            """, (_snap_row[0],))
+                            _srow = _snap_cur2.fetchone()
+                            _snap_cur2.close()
+                            if _srow:
+                                _sc, _av, _sa, _sb, _sr, _sn, _slbl, _sdt = _srow
+                                if "vol_data" not in st.session_state: st.session_state["vol_data"] = {}
+                                if _sc not in st.session_state["vol_data"]: st.session_state["vol_data"][_sc] = {}
+                                if _av:
+                                    _atm_df = pd.DataFrame(_av["values"])
+                                    if "Expiry" in _atm_df.columns:
+                                        _atm_df = _atm_df[["Expiry"] + [c for c in _atm_df.columns if c != "Expiry"]]
+                                    st.session_state["vol_data"][_sc]["atm"] = _atm_df
+                                    if "vol_editor" not in st.session_state:
+                                        st.session_state["vol_editor"] = {"working":{}, "base":{}, "history":{}, "future":{}, "redo_stack":{}}
+                                    st.session_state["vol_editor"]["base"][_sc] = _atm_df.copy()
+                                    st.session_state["vol_editor"]["working"][_sc] = _atm_df.copy()
+                                for _param, _pdata in [("alpha",_sa),("beta",_sb),("rho",_sr),("nu",_sn)]:
+                                    if _pdata and "values" in _pdata:
+                                        try: st.session_state["vol_data"][_sc][_param] = pd.DataFrame(_pdata["values"])
+                                        except: pass
+                                # Default SABR if missing
+                                _vd = st.session_state["vol_data"][_sc]
+                                if _vd.get("alpha") is None and _vd.get("atm") is not None:
+                                    try:
+                                        _atm_ref = _vd["atm"].copy()
+                                        _tcols = [c for c in _atm_ref.columns if c != "Expiry"]
+                                        for _pp, _dv in [("beta",0.5),("rho",-0.25),("nu",0.30)]:
+                                            _df_p = _atm_ref[["Expiry"]].copy()
+                                            for _tc in _tcols: _df_p[_tc] = _dv
+                                            _vd[_pp] = _df_p
+                                        _df_a = _atm_ref.copy()
+                                        for _tc in _tcols: _df_a[_tc] = _df_a[_tc] / 10000.0
+                                        _vd["alpha"] = _df_a
+                                    except: pass
+                                _snap_loaded.append(f"{_sc}: {_slbl}")
+                    _snap_cur.close()
+                    _snap_conn.close()
+                    if _snap_loaded:
+                        _cur = st.session_state.get("_auto_load_msg", "")
+                        st.session_state["_auto_load_msg"] = _cur + f" | Latest vols loaded: {', '.join(_snap_loaded)}"
+            except: pass
             st.session_state["db_auto_loaded"] = True
 
     # Sidebar for settings
@@ -13188,7 +13221,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104c</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104e</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -14474,7 +14507,10 @@ def show_login_page():
     button[kind="managedApp"] {display: none !important;}
     .stAppDeployButton {display: none !important;}
     [title="Manage app"] {display: none !important;}
+    [data-testid="stSidebar"] {display: none;}
+    [data-testid="collapsedControl"] {display: none;}
     .stApp {background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);}
+    section[data-testid="stSidebar"] {display: none !important;}
     .stDeployButton {display: none !important;}
     .stTextInput > div > div > input {
         background: #1e293b !important;
