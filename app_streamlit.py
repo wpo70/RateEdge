@@ -2815,18 +2815,32 @@ def apply_rateedge_theme(theme_name: str):
         .viewerBadge_link__qRIco {{display: none !important;}}
         footer {{visibility: hidden !important; display: none !important;}}
         #MainMenu {{visibility: hidden !important; display: none !important;}}
-        header {{visibility: hidden !important;}}
-        [data-testid="collapsedControl"] {{visibility: visible !important; display: flex !important; position: fixed !important; top: 0.5rem !important; left: 0.5rem !important; z-index: 999999 !important;}}
         </style>""",
         unsafe_allow_html=True,
     )
     
-    # Force radio/checkbox colors with JavaScript (runs after render)
+    # Force colors and remove chrome via JavaScript
     import streamlit.components.v1 as components
     components.html("""
     <script>
-    function fixColors() {
+    function fixUI() {
         const p = window.parent.document;
+        // Remove manage app / deploy buttons from DOM entirely
+        const removeSelectors = [
+            '[data-testid="manage-app-button"]',
+            '[data-testid="stAppViewerControlButton"]',
+            '[data-testid="stDecoration"]',
+            '[data-testid="stStatusWidget"]',
+            'button[kind="managedApp"]',
+            '[title="Manage app"]',
+            '[title="View app on Streamlit Community Cloud"]',
+            'a[href*="github.com"][target="_blank"]',
+        ];
+        removeSelectors.forEach(sel => {
+            p.querySelectorAll(sel).forEach(el => {
+                el.style.setProperty('display', 'none', 'important');
+            });
+        });
         // Checkboxes - WHITE
         p.querySelectorAll('[data-testid="stCheckbox"] label, [data-testid="stCheckbox"] span, [data-testid="stCheckbox"] p, [data-testid="stCheckbox"] div').forEach(el => {
             el.style.setProperty('color', '#ffffff', 'important');
@@ -2837,25 +2851,17 @@ def apply_rateedge_theme(theme_name: str):
             el.style.setProperty('color', '#fbbf24', 'important');
             el.style.setProperty('-webkit-text-fill-color', '#fbbf24', 'important');
         });
-        // Baseweb checkbox labels - WHITE
         p.querySelectorAll('[data-baseweb="checkbox"] ~ div').forEach(el => {
             el.style.setProperty('color', '#ffffff', 'important');
             el.style.setProperty('-webkit-text-fill-color', '#ffffff', 'important');
         });
-        // Baseweb radio labels - YELLOW
         p.querySelectorAll('[data-baseweb="radio"] ~ div').forEach(el => {
             el.style.setProperty('color', '#fbbf24', 'important');
             el.style.setProperty('-webkit-text-fill-color', '#fbbf24', 'important');
         });
-        // Force sidebar collapse arrow visible
-        p.querySelectorAll('[data-testid="collapsedControl"]').forEach(el => {
-            el.style.setProperty('display', 'flex', 'important');
-            el.style.setProperty('visibility', 'visible', 'important');
-            el.style.setProperty('opacity', '1', 'important');
-        });
     }
-    fixColors();
-    setInterval(fixColors, 300);
+    fixUI();
+    setInterval(fixUI, 500);
     </script>
     """, height=0)
 
@@ -13291,7 +13297,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103z</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104a</div>
             </div>
             """,
             unsafe_allow_html=True,
