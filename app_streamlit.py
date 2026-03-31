@@ -321,7 +321,8 @@ def get_db_connection():
             password=params["password"], sslmode=params["sslmode"],
             connect_timeout=10,
             keepalives=1, keepalives_idle=30,
-            keepalives_interval=10, keepalives_count=3
+            keepalives_interval=10, keepalives_count=3,
+            options="-c statement_timeout=15000"  # 15s max per query
         )
         return conn
     except Exception:
@@ -2758,7 +2759,7 @@ def apply_rateedge_theme(theme_name: str):
         });
     }
     fixColors();
-    setInterval(fixColors, 300);
+    setInterval(fixColors, 2000);
     </script>
     """, height=0)
 
@@ -13168,7 +13169,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104t</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104u</div>
             </div>
             """,
             unsafe_allow_html=True,
