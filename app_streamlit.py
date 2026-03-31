@@ -5767,29 +5767,34 @@ def swaptions_tab(vol_mode: str):
     # For backwards compatibility
     side = structure
 
-    # Row 2: Notional, Expiry, Tenor, Leg Convention
-    col_not, col_exp, col_tenor, col_conv = st.columns([2, 2, 2, 2])
+    # Row 2: Notional, Expiry, Expiry Date, Tenor, Leg Convention
+    col_not, col_exp, col_expdt, col_tenor, col_conv = st.columns([2, 2, 2, 2, 2])
     with col_not:
         notional = st.number_input("Notional (mm)", min_value=1.0, max_value=10000.0, value=100.0, step=10.0, key="sw_not")
     with col_exp:
-        EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","📅 Custom Date..."]
+        EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y"]
         expiry_sel = st.selectbox("Expiry", EXPIRY_PRESETS, index=4, key="sw_expiry")
-        if expiry_sel == "📅 Custom Date...":
-            from datetime import date as _sw_date, timedelta as _sw_td
-            custom_dt = st.date_input(
-                "Expiry Date",
-                value=_sw_date.today() + _sw_td(days=365*5),
-                min_value=_sw_date.today() + _sw_td(days=1),
-                key="sw_custom_expiry_date",
-                format="DD/MM/YYYY"
-            )
-            expiry = custom_dt.strftime("%d/%m/%Y")
-            expiry_y = label_to_years(expiry)
-            expiry_display = expiry  # for labels
-        else:
-            expiry = expiry_sel
-            expiry_y = label_to_years(expiry)
-            expiry_display = expiry
+        expiry = expiry_sel
+        expiry_y = label_to_years(expiry)
+        expiry_display = expiry
+    with col_expdt:
+        # Show mod-foll date for selected tenor, allow custom date override
+        from datetime import date as _sw_date
+        _calc_dt = modified_following(_sw_date.today() + __import__('datetime').timedelta(days=int(expiry_y * 365.25)))
+        _default_dt_str = _calc_dt.strftime("%d/%m/%Y")
+        _custom_dt_str = st.text_input("Expiry Date (DD/MM/YY)", value=_default_dt_str, key="sw_expiry_date_override")
+        # If user changed it, override expiry_y
+        try:
+            from datetime import datetime as _swdt
+            _formats = ["%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d"]
+            _parsed = None
+            for _fmt in _formats:
+                try: _parsed = _swdt.strptime(_custom_dt_str.strip(), _fmt).date(); break
+                except: pass
+            if _parsed and _parsed != _calc_dt:
+                expiry_y = max((_parsed - _sw_date.today()).days / 365.0, 1/365.0)
+                expiry_display = _parsed.strftime("%d/%m/%Y")
+        except: pass
     with col_tenor:
         tenor_options = ["1Y","2Y","3Y","4Y","5Y","6Y","7Y","8Y","9Y","10Y","12Y","15Y","20Y","25Y","30Y"]
         swap_tenor = st.selectbox("Swap Tenor", tenor_options, index=4, key="sw_tenor")
@@ -13211,7 +13216,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104y</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104z</div>
             </div>
             """,
             unsafe_allow_html=True,
