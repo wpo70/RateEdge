@@ -6025,9 +6025,12 @@ def swaptions_tab(vol_mode: str):
             disc_source = "Flat"
         else:
             try:
-                ois_xs = ois_curve["MaturityY"].to_numpy().astype(float)
-                ois_ys = ois_curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
-                # For midcurve, discount to when the underlying swap actually starts
+                _ois_col_m = next((c for c in ois_curve.columns if "matur" in str(c).lower()), None)
+                _ois_col_z = next((c for c in ois_curve.columns if "zero" in str(c).lower() or "rate" in str(c).lower()), None)
+                if _ois_col_m is None or _ois_col_z is None:
+                    raise ValueError("OIS curve missing MaturityY/ZeroRatePct columns")
+                ois_xs = ois_curve[_ois_col_m].to_numpy().astype(float)
+                ois_ys = ois_curve[_ois_col_z].to_numpy().astype(float) / 100.0
                 _disc_t = expiry_y + delay_y if is_midcurve else expiry_y
                 eff_disc_rate = float(np.interp(_disc_t, ois_xs, ois_ys))
                 disc_source = "OIS"
@@ -13476,7 +13479,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105m</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105p</div>
             </div>
             """,
             unsafe_allow_html=True,
