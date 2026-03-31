@@ -3033,6 +3033,9 @@ def init_session():
     # Track if we've auto-loaded from DB this session
     if "db_auto_loaded" not in st.session_state:
         st.session_state["db_auto_loaded"] = False
+    # SABR panel always visible by default
+    if "sabr_panel_visible" not in st.session_state:
+        st.session_state["sabr_panel_visible"] = True
     # Correlation matrix + CMS bumps   —   load from file if exists
     if not any(f"corr_{k}" in st.session_state for k in _CORR_DEFAULTS):
         _loaded_cfg = _load_exotics_config()
@@ -3437,27 +3440,34 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
 def load_config_excel(upload, load_type: str = "all") -> dict:
     """
     Load config from Excel with selective loading.
-    load_type: "atm", "sabr", "curves", or "all"
+    load_type: "atm", "atm_aud", "sabr", "curves", "curves_aud", or "all"
     Returns dict with counts of what was loaded.
     """
     xl = pd.ExcelFile(upload)
     loaded = {"atm": 0, "sabr": 0, "curves": 0, "basis": 0}
-    
-    for ccy in SUPPORTED_CURRENCIES:
+
+    # Determine which currencies to process for each type
+    ccy_list = SUPPORTED_CURRENCIES
+    load_atm   = load_type in ["atm", "all"]
+    load_atm_aud = load_type == "atm_aud"
+    load_sabr  = load_type in ["sabr", "all"]
+    load_curves = load_type in ["curves", "all"]
+    load_curves_aud = load_type == "curves_aud"
+
+    for ccy in ccy_list:
         # Load ATM vols
-        if load_type in ["atm", "all"]:
+        if load_atm or (load_atm_aud and ccy == "AUD"):
             atm_name = f"ATM_Vols_{ccy}"
             if atm_name in xl.sheet_names:
                 atm_raw = pd.read_excel(xl, sheet_name=atm_name)
                 atm_df = load_atm_surface(atm_raw, atm_name)
-                # Get existing SABR data to preserve
                 _, old_a, old_b, old_r, old_n = get_ccy_vol_data(ccy)
                 set_ccy_vol_data(ccy, atm_df, old_a, old_b, old_r, old_n)
                 set_timestamp("atm", ccy)
                 loaded["atm"] += 1
 
         # Load SABR grids
-        if load_type in ["sabr", "all"]:
+        if load_sabr:
             sabr_a = sabr_b = sabr_r = sabr_n = None
             has_sabr = False
             for base in ["SABR_Alpha", "SABR_Beta", "SABR_Rho", "SABR_Nu"]:
@@ -3468,34 +3478,23 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                     has_sabr = True
                 else:
                     df = None
-                if base == "SABR_Alpha":
-                    sabr_a = df
-                elif base == "SABR_Beta":
-                    sabr_b = df
-                elif base == "SABR_Rho":
-                    sabr_r = df
-                elif base == "SABR_Nu":
-                    sabr_n = df
-            
+                if base == "SABR_Alpha":   sabr_a = df
+                elif base == "SABR_Beta":  sabr_b = df
+                elif base == "SABR_Rho":   sabr_r = df
+                elif base == "SABR_Nu":    sabr_n = df
             if has_sabr:
-                # Get existing ATM to preserve
                 old_atm, _, _, _, _ = get_ccy_vol_data(ccy)
                 set_ccy_vol_data(ccy, old_atm, sabr_a, sabr_b, sabr_r, sabr_n)
                 set_timestamp("sabr", ccy)
                 loaded["sabr"] += 1
 
         # Load curves and basis curves
-        if load_type in ["curves", "all"]:
+        if load_curves or (load_curves_aud and ccy == "AUD"):
             curve_df = None
-
-            # AUD: bootstrap from BBG_Feed par rates (live rates → correct zeros)
             if ccy == "AUD":
                 bootstrapped = bootstrap_aud_zeros_from_bbg_feed(xl)
                 if bootstrapped is not None and len(bootstrapped) >= 15:
                     curve_df = bootstrapped
-
-            # Fallback for AUD (if bootstrap fails) and primary for NZD/USD:
-            # always read directly from Curves_{CCY} sheet
             if curve_df is None:
                 curve_name = f"Curves_{ccy}"
                 if curve_name in xl.sheet_names:
@@ -3504,7 +3503,6 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                         curve_df = load_curve_flexible(raw_curve, curve_name)
                     except:
                         curve_df = load_curve(raw_curve, curve_name)
-
             if curve_df is not None and len(curve_df) > 0:
                 set_ccy_curve(ccy, curve_df)
                 if "config_curves" not in st.session_state:
@@ -3747,17 +3745,20 @@ def vol_config_tab():
         
         load_type = st.radio(
             "Commit options",
-            ["All", "ATM Vol Only", "IRS Curves Only"],
+            ["All", "IRS Curves Only", "AUD Curves Only", "AUD Vol Only", "ATM Vol Only"],
             index=0,
             horizontal=True,
-            key="load_type_radio"
+            key="load_type_radio",
+            help="IRS Curves Only: all CCY curves. AUD Curves Only: AUD bootstrap only. AUD Vol Only: AUD ATM surface only."
         )
         
         # Map selection to load_type
         type_map = {
             "All": "all",
+            "IRS Curves Only": "curves",
+            "AUD Curves Only": "curves_aud",
+            "AUD Vol Only": "atm_aud",
             "ATM Vol Only": "atm",
-            "IRS Curves Only": "curves"
         }
         
         if st.button(" Commit Selected Data", key="commit_btn", type="primary"):
@@ -13194,7 +13195,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103e</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103f</div>
             </div>
             """,
             unsafe_allow_html=True,
