@@ -7478,10 +7478,14 @@ def caps_floors_tab(vol_mode: str):
             # Calculate premium in bp: (PV / Notional) * 10000
             pv_bp = (pv_total / (notional * 1e6)) * 10000.0 if notional > 0 else 0.0
             
-            # Calculate one_bp for DV01 (keep for leg breakdown if needed)
-            disc_rate = interpolate_zero(ois_curve, first_fixing_y)
-            horizon_df = math.exp(-disc_rate * first_fixing_y)
-            one_bp_annuity = horizon_df * notional * 1e6 * tenor_y * 0.0001
+            # one_bp = sum of caplet annuities = sum(notional * accrual_i * df(Ti) * 0.0001)
+            # Matches how bachelier_caplet computes delta so delta_ratio = 50% ATM exactly
+            one_bp_annuity = 0.0
+            for _Ti, _acc in sched:
+                if _Ti <= first_fixing_y + 1.0/252.0:
+                    continue
+                _df_i = math.exp(-interpolate_zero(ois_curve, _Ti) * _Ti)
+                one_bp_annuity += notional * 1e6 * _acc * _df_i * 0.0001
 
             st.success(f"✅ Priced: **{label}** | PV = ${pv_total:,.0f} ({pv_bp:.4f} bp)")
             
@@ -13164,7 +13168,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104s</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104t</div>
             </div>
             """,
             unsafe_allow_html=True,
