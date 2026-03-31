@@ -5568,7 +5568,7 @@ def swaptions_tab(vol_mode: str):
     # Apply any pending reload from blotter/portfolio BEFORE widgets render
     _pending = st.session_state.get("sw_pending_reload")
     if _pending:
-        EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","ƒôÇ Custom Date..."]
+        EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","📅 Custom Date..."]
         tenor_options = ["1Y","2Y","3Y","4Y","5Y","6Y","7Y","8Y","9Y","10Y","12Y","15Y","20Y","25Y","30Y"]
         structures = ["Payer","Receiver","ATM Straddle","Strangle","Risk Reversal","Payer Ladder","Receiver Ladder"]
         if _pending.get("expiry") in EXPIRY_PRESETS:
@@ -5772,9 +5772,9 @@ def swaptions_tab(vol_mode: str):
     with col_not:
         notional = st.number_input("Notional (mm)", min_value=1.0, max_value=10000.0, value=100.0, step=10.0, key="sw_not")
     with col_exp:
-        EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","ƒôÇ Custom Date..."]
+        EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","📅 Custom Date..."]
         expiry_sel = st.selectbox("Expiry", EXPIRY_PRESETS, index=4, key="sw_expiry")
-        if expiry_sel == "ƒôÇ Custom Date...":
+        if expiry_sel == "📅 Custom Date...":
             from datetime import date as _sw_date, timedelta as _sw_td
             custom_dt = st.date_input(
                 "Expiry Date",
@@ -6491,7 +6491,7 @@ def swaptions_tab(vol_mode: str):
         if st.button("🔄 Reload & Reprice", key="sw_reload_btn") and reload_sel != "  —  ":
             row_idx = int(reload_sel.split(":")[0])
             row = df.loc[row_idx]
-            EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","ƒôÇ Custom Date..."]
+            EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","📅 Custom Date..."]
             tenor_options = ["1Y","2Y","3Y","4Y","5Y","6Y","7Y","8Y","9Y","10Y","12Y","15Y","20Y","25Y","30Y"]
             exp_val = str(row.get("expiry", "5y"))
             tenor_val = str(row.get("tenor", "5Y"))
@@ -12558,7 +12558,7 @@ def portfolio_tab():
         if st.button("🔄 Reload & Reprice", key="ptf_reload_btn") and reload_sel_ptf != "  —  ":
             row_idx = int(reload_sel_ptf.split(":")[0])
             row = df.loc[row_idx]
-            EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","ƒôÇ Custom Date..."]
+            EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","📅 Custom Date..."]
             tenor_options = ["1Y","2Y","3Y","4Y","5Y","6Y","7Y","8Y","9Y","10Y","12Y","15Y","20Y","25Y","30Y"]
             exp_val = str(row.get("expiry", "5y"))
             tenor_val = str(row.get("tenor", "5Y"))
@@ -13211,7 +13211,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104x</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104y</div>
             </div>
             """,
             unsafe_allow_html=True,
