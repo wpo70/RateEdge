@@ -5630,8 +5630,8 @@ def swaptions_tab(vol_mode: str):
         _, _a, _b, _r, _n = get_ccy_vol_data(ccy)
         _atm_surf = get_working_atm_surface(ccy)
 
-        # Auto-init default SABR if ATM loaded but SABR missing — runs every render
-        if _a is None and _atm_surf is not None:
+        # Auto-init default SABR if ATM loaded but SABR missing — once per session
+        if _a is None and _atm_surf is not None and not st.session_state.get(f"_sabr_init_{ccy}"):
             try:
                 _ar = _atm_surf.copy()
                 _tc = [c for c in _ar.columns if c != "Expiry"]
@@ -5643,6 +5643,7 @@ def swaptions_tab(vol_mode: str):
                 _da = _ar.copy()
                 for _t in _tc: _da[_t] = _da[_t] / 10000.0
                 _vd["alpha"] = _da
+                st.session_state[f"_sabr_init_{ccy}"] = True
                 _, _a, _b, _r, _n = get_ccy_vol_data(ccy)
             except Exception:
                 pass
@@ -13155,7 +13156,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104q</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104r</div>
             </div>
             """,
             unsafe_allow_html=True,
