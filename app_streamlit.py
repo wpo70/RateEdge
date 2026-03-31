@@ -2818,6 +2818,7 @@ def apply_rateedge_theme(theme_name: str):
         footer {{visibility: hidden !important; display: none !important;}}
         #MainMenu {{visibility: hidden !important; display: none !important;}}
         header {{visibility: hidden !important;}}
+        [data-testid="collapsedControl"] {{visibility: visible !important; display: block !important;}}
         </style>""",
         unsafe_allow_html=True,
     )
@@ -13214,7 +13215,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103k</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103l</div>
             </div>
             """,
             unsafe_allow_html=True,
