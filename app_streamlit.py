@@ -2874,8 +2874,12 @@ def is_admin() -> bool:
     return st.session_state.get("user_role", "read_only") == "admin"
 
 def is_read_only() -> bool:
-    """Check if current user is read-only."""
-    return st.session_state.get("user_role", "read_only") == "read_only"
+    """Check if current user is read-only or trainee."""
+    return st.session_state.get("user_role", "read_only") in ("read_only", "trainee")
+
+def is_trainee() -> bool:
+    """Check if current user is trainee — view only, no pricing or editing."""
+    return st.session_state.get("user_role", "read_only") == "trainee"
 
 def require_admin(label="🔒 Admin only"):
     """Show a lock message if user is not admin. Returns True if admin."""
@@ -3679,7 +3683,7 @@ def vol_config_tab():
             "USD & NZD Vol": "atm_usd_nzd"
         }
         
-        if st.button(" Commit Selected Data", key="commit_btn", type="primary"):
+        if st.button(" Commit Selected Data", key="commit_btn", type="primary", disabled=is_trainee()):
             selected_type = type_map[load_type]
             loaded = load_config_excel(upload, selected_type)
             
@@ -3927,7 +3931,7 @@ def vol_config_tab():
             
             snap_notes = st.text_area("Notes (optional)", placeholder="Additional context about this snapshot...", key="snap_notes", height=100)
             
-            if st.button("💾 Save Snapshot", key="save_snapshot_btn", type="primary"):
+            if st.button("💾 Save Snapshot", key="save_snapshot_btn", type="primary", disabled=is_trainee()):
                 if not snap_label.strip():
                     st.error("Please provide a label for this snapshot")
                 else:
@@ -4352,7 +4356,7 @@ def curves_tab():
     st.markdown("---")
     _pb1, _pb2 = st.columns([2, 4])
     with _pb1:
-        if st.button("📡 Publish ATM Vols / Prems / FWDs to Blotter",
+        if st.button("📡 Publish ATM Vols / Prems / FWDs to Blotter", disabled=is_trainee(),
                      key="curves_publish_blotter", type="primary",
                      use_container_width=True):
             if not HAS_POSTGRES:
@@ -7356,7 +7360,7 @@ def caps_floors_tab(vol_mode: str):
 
     st.markdown("---")
     
-    if st.button(" Price Cap/Floor", key="cf_price", type="primary"):
+    if st.button(" Price Cap/Floor", key="cf_price", type="primary", disabled=is_trainee()):
         try:
             pv_total = 0.0
             delta_total = 0.0
@@ -13216,7 +13220,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104z</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105a</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -13258,6 +13262,7 @@ def main():
                 <div style="background:#1e3a5f;padding:0.75rem;border-radius:8px;margin-top:0.5rem;">
                     <div style="color:#94a3b8;font-size:0.7rem;">Logged in as</div>
                     <div style="color:#22c55e;font-weight:600;">{st.session_state.get('username', 'User')}</div>
+                    <div style="color:#94a3b8;font-size:0.65rem;margin-top:2px;">{st.session_state.get('user_role','read_only').upper()}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -13377,7 +13382,7 @@ def main():
                             for _email, _role in _users:
                                 _c1, _c2 = st.columns([3,2])
                                 _c1.caption(_email)
-                                _new_role = _c2.selectbox("", ["admin","read_only"],
+                                _new_role = _c2.selectbox("", ["admin","read_only","trainee"],
                                     index=0 if _role=="admin" else 1,
                                     key=f"role_{_email}", label_visibility="collapsed")
                                 if _new_role != _role:
