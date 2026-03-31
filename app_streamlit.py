@@ -13188,7 +13188,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104b</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104c</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -14474,10 +14474,7 @@ def show_login_page():
     button[kind="managedApp"] {display: none !important;}
     .stAppDeployButton {display: none !important;}
     [title="Manage app"] {display: none !important;}
-    [data-testid="stSidebar"] {display: none;}
-    [data-testid="collapsedControl"] {display: none;}
     .stApp {background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);}
-    section[data-testid="stSidebar"] {display: none !important;}
     .stDeployButton {display: none !important;}
     .stTextInput > div > div > input {
         background: #1e293b !important;
