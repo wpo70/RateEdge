@@ -2815,6 +2815,8 @@ def apply_rateedge_theme(theme_name: str):
         .viewerBadge_link__qRIco {{display: none !important;}}
         footer {{visibility: hidden !important; display: none !important;}}
         #MainMenu {{visibility: hidden !important; display: none !important;}}
+        header {{visibility: hidden !important;}}
+        [data-testid="collapsedControl"] {{visibility: visible !important; display: flex !important; position: fixed !important; top: 0.5rem !important; left: 0.5rem !important; z-index: 999999 !important;}}
         </style>""",
         unsafe_allow_html=True,
     )
@@ -13289,7 +13291,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103y</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103z</div>
             </div>
             """,
             unsafe_allow_html=True,
