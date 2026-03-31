@@ -13214,6 +13214,29 @@ def main():
             st.session_state["db_auto_loaded"] = True
 
     # Sidebar for settings
+    # Top settings bar — always visible regardless of sidebar state
+    _tb1, _tb2, _tb3, _tb4 = st.columns([2, 2, 2, 6])
+    with _tb1:
+        theme_choice = st.selectbox("Theme", ["Dealer Dark", "Clean Light"],
+            index=0 if st.session_state.get("theme_name", "Dealer Dark") == "Dealer Dark" else 1,
+            key="top_theme")
+        st.session_state["theme_name"] = theme_choice
+    with _tb2:
+        ccy = st.selectbox("Currency", SUPPORTED_CURRENCIES, index=0, key="top_ccy")
+    with _tb3:
+        vol_mode = st.selectbox("Vol Mode", ["Normal (bp)", "Black (lognormal)"], index=0, key="top_volmode")
+    with _tb4:
+        if st.session_state.get("authenticated"):
+            _c1, _c2 = st.columns([4,1])
+            with _c1:
+                st.caption(f"Logged in as **{st.session_state.get('username', '')}**")
+            with _c2:
+                if st.button("Logout", key="top_logout"):
+                    st.session_state["authenticated"] = False
+                    st.session_state["username"] = None
+                    st.session_state["db_auto_loaded"] = False
+                    st.rerun()
+
     with st.sidebar:
         st.markdown(
             """
@@ -13221,7 +13244,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104f</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104g</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -14507,7 +14530,6 @@ def show_login_page():
     button[kind="managedApp"] {display: none !important;}
     .stAppDeployButton {display: none !important;}
     [title="Manage app"] {display: none !important;}
-    [data-testid="collapsedControl"] {display: none;}
     .stApp {background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);}
     .stDeployButton {display: none !important;}
     .stTextInput > div > div > input {
