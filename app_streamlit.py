@@ -1288,7 +1288,22 @@ def get_matrix_value(mat: Optional[pd.DataFrame],
     lbl = str(expiry_label).strip().lower()
     row = mat[mat["Expiry"].astype(str).str.strip().str.lower() == lbl]
     if row.empty:
-        return None
+        # Fallback: interpolate by years
+        try:
+            _exp_y = label_to_years(lbl)
+            _ys = mat["Expiry"].apply(lambda x: label_to_years(str(x).strip().lower())).values
+            tenor_y_int = int(round(tenor_years))
+            col = f"{tenor_y_int}Y"
+            if col not in mat.columns:
+                matches = [c for c in mat.columns if str(c).strip().lower() == col.lower()]
+                if not matches: return None
+                col = matches[0]
+            _vals = pd.to_numeric(mat[col], errors='coerce').values
+            _mask = ~np.isnan(_vals)
+            if _mask.sum() < 2: return None
+            return float(np.interp(_exp_y, _ys[_mask], _vals[_mask]))
+        except Exception:
+            return None
     tenor_y_int = int(round(tenor_years))
     # Try exact column match then case-insensitive
     col = f"{tenor_y_int}Y"
@@ -5772,7 +5787,7 @@ def swaptions_tab(vol_mode: str):
     side = structure
 
     # Row 2: Notional, Expiry, Expiry Date, Tenor, Leg Convention
-    col_not, col_exp, col_expdt, col_tenor, col_conv = st.columns([2, 2, 2, 2, 2])
+    col_not, col_exp, col_expdt, col_delay, col_tenor, col_conv = st.columns([2, 2, 2, 2, 2, 2])
     with col_not:
         notional = st.number_input("Notional (mm)", min_value=1.0, max_value=10000.0, value=100.0, step=10.0, key="sw_not")
     with col_exp:
@@ -5782,12 +5797,10 @@ def swaptions_tab(vol_mode: str):
         expiry_y = label_to_years(expiry)
         expiry_display = expiry
     with col_expdt:
-        # Show mod-foll date for selected tenor, allow custom date override
         from datetime import date as _sw_date
         _calc_dt = modified_following(_sw_date.today() + __import__('datetime').timedelta(days=int(expiry_y * 365.25)))
         _default_dt_str = _calc_dt.strftime("%d/%m/%Y")
         _custom_dt_str = st.text_input("Expiry Date (DD/MM/YY)", value=_default_dt_str, key="sw_expiry_date_override")
-        # If user changed it, override expiry_y
         try:
             from datetime import datetime as _swdt
             _formats = ["%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d"]
@@ -5799,6 +5812,11 @@ def swaptions_tab(vol_mode: str):
                 expiry_y = max((_parsed - _sw_date.today()).days / 365.0, 1/365.0)
                 expiry_display = _parsed.strftime("%d/%m/%Y")
         except: pass
+    with col_delay:
+        DELAY_PRESETS = ["None","1m","2m","3m","6m","9m","1y","18m","2y"]
+        delay_sel = st.selectbox("Delay Start (Midcurve)", DELAY_PRESETS, index=0, key="sw_delay_start")
+        delay_y = 0.0 if delay_sel == "None" else label_to_years(delay_sel)
+        is_midcurve = delay_y > 0
     with col_tenor:
         tenor_options = ["1Y","2Y","3Y","4Y","5Y","6Y","7Y","8Y","9Y","10Y","12Y","15Y","20Y","25Y","30Y"]
         swap_tenor = st.selectbox("Swap Tenor", tenor_options, index=4, key="sw_tenor")
@@ -5807,22 +5825,43 @@ def swaptions_tab(vol_mode: str):
         leg_conv = st.radio("Leg Convention", ["Market", "Q/Q", "S/S"], horizontal=True, key="sw_leg_conv")
         freq_override = None if leg_conv == "Market" else (0.25 if leg_conv == "Q/Q" else 0.5)
 
-    # Forward: always compute from curve for accuracy — never pull from potentially stale matrix cache.
+    # Forward rate calculation
+    # Vanilla:   fwd = forward_and_annuity(expiry_y, tenor_y)
+    # Midcurve:  ATM = [Ann(expiry+delay, tenor) * R(expiry+delay, tenor)
+    #                 - Ann(expiry, delay) * R(expiry, delay)]
+    #                 / Ann(expiry, tenor)   — swap triangle
     if curve is not None:
-        fwd, ann, _ = forward_and_annuity_from_curve(curve, ccy, expiry_y, tenor_y, ois_curve, freq_override=freq_override)
+        if is_midcurve:
+            # Swap triangle: R_mid = (Ann_long * R_long - Ann_short * R_short) / Ann_mid
+            _t_long  = expiry_y + delay_y          # e.g. 6m for 3m→3m
+            _t_exp   = expiry_y                     # e.g. 3m
+            fwd_long, ann_long, _ = forward_and_annuity_from_curve(curve, ccy, _t_long, tenor_y, ois_curve, freq_override=freq_override)
+            fwd_short, ann_short, _ = forward_and_annuity_from_curve(curve, ccy, _t_exp, delay_y, ois_curve)
+            fwd_mid, ann, _ = forward_and_annuity_from_curve(curve, ccy, _t_exp, tenor_y, ois_curve, freq_override=freq_override)
+            if ann > 0 and ann_long > 0 and ann_short > 0:
+                fwd = (ann_long * fwd_long - ann_short * fwd_short) / ann
+            else:
+                fwd = fwd_mid
+            fwd_source = f"midcurve ({expiry}→{delay_sel}{swap_tenor})"
+        else:
+            fwd, ann, _ = forward_and_annuity_from_curve(curve, ccy, expiry_y, tenor_y, ois_curve, freq_override=freq_override)
+            fwd_source = "curve"
         if basis_6v3 is not None and ccy == "AUD":
-            basis_bp = interpolate_basis(basis_6v3, expiry_y + tenor_y / 2)
+            basis_bp = interpolate_basis(basis_6v3, expiry_y + delay_y + tenor_y / 2)
             if leg_conv == "Q/Q" and tenor_y > 3.0:
                 fwd = fwd - basis_bp / 10000.0
             elif leg_conv == "S/S" and tenor_y <= 3.0:
                 fwd = fwd + basis_bp / 10000.0
-        fwd_source = "curve"
     else:
         fwd = 0.04
         ann = tenor_y
         fwd_source = "default"
+        is_midcurve = False
 
     fwd_pct = fwd * 100
+    # Midcurve label suffix
+    if is_midcurve:
+        expiry_display = f"{expiry_display}→{delay_sel}"
     # Safety defaults in case col blocks don't execute
     eff_disc_rate = 0.035
     disc_source = "Flat (default)"
@@ -6127,11 +6166,16 @@ def swaptions_tab(vol_mode: str):
             vol = atm_val / 10000.0
             vol_used_display = atm_val
         else:
+            # Only compute SABR vol on render if params already cached — avoid hang
             sabr = get_sabr_params_from_matrices(a, b, r, n, expiry, tenor_y)
-            if sabr:
-                vol = sabr_implied_vol_black(fwd_pct/100.0, strike_pct/100.0, expiry_y,
-                                             sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"])
-                vol_used_display = vol * 100.0
+            if sabr and sabr.get("alpha", 0) > 0:
+                try:
+                    vol = sabr_implied_vol_black(fwd_pct/100.0, strike_pct/100.0, expiry_y,
+                                                 sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"])
+                    vol_used_display = vol * 100.0
+                except Exception:
+                    vol = atm_val / 100.0
+                    vol_used_display = atm_val
             else:
                 vol = atm_val / 100.0
                 vol_used_display = vol * 100.0
@@ -13220,7 +13264,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105b</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105d</div>
             </div>
             """,
             unsafe_allow_html=True,
