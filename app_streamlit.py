@@ -1387,13 +1387,39 @@ def sabr_implied_vol_black(F: float, K: float, T: float,
 
 
 def sabr_normal_atm_vol(F: float, T: float, alpha: float, beta: float, rho: float, nu: float) -> float:
-    """Normal (Bachelier) SABR ATM vol approximation.
-    ┬ñ├ó_N(F,F) ├ö├½├¬ alpha * F^beta * [1 + ((2-3ρ,ν~)/24)*×~*T]
-    Returns vol in same units as alpha (i.e. if alpha is bp-decimal, returns bp-decimal).
-    """
+    """Normal (Bachelier) SABR ATM vol approximation."""
     if T <= 0 or alpha <= 0 or F <= 0:
         return 0.0
     return alpha * (F ** beta) * (1.0 + (2.0 - 3.0 * rho ** 2) / 24.0 * nu ** 2 * T)
+
+
+def sabr_normal_vol_smile(F: float, K: float, T: float,
+                           alpha: float, beta: float, rho: float, nu: float) -> float:
+    """Full Normal SABR smile vol (Hagan et al.). Returns vol in same units as alpha.
+    For ATM (K≈F) reduces to sabr_normal_atm_vol."""
+    if T <= 0 or alpha <= 0 or F <= 0 or K <= 0:
+        return sabr_normal_atm_vol(F, T, alpha, beta, rho, nu)
+    if abs(K - F) < 1e-8:
+        return sabr_normal_atm_vol(F, T, alpha, beta, rho, nu)
+    try:
+        FK = F * K
+        FK_mid = FK ** ((1 - beta) / 2.0)
+        log_FK = math.log(F / K)
+        z = (nu / alpha) * FK_mid * log_FK
+        if abs(z) < 1e-7:
+            x_z = 1.0
+        else:
+            _sq = math.sqrt(1 - 2 * rho * z + z ** 2)
+            _denom = math.log((_sq + z - rho) / (1 - rho))
+            x_z = z / _denom if abs(_denom) > 1e-10 else 1.0
+        A = alpha / (FK_mid * (1 + (1 - beta) ** 2 / 24 * log_FK ** 2 +
+                                (1 - beta) ** 4 / 1920 * log_FK ** 4))
+        B = 1 + ((1 - beta) ** 2 / 24 * alpha ** 2 / FK ** (1 - beta) +
+                  rho * beta * nu * alpha / (4 * FK ** ((1 - beta) / 2)) +
+                  (2 - 3 * rho ** 2) / 24 * nu ** 2) * T
+        return A * x_z * B
+    except Exception:
+        return sabr_normal_atm_vol(F, T, alpha, beta, rho, nu)
 
 
 def sabr_implied_alpha_from_atm(atm_vol_normal: float, F: float, T: float,
@@ -6339,29 +6365,19 @@ def swaptions_tab(vol_mode: str):
             return vol_input / 10000.0 if vol_mode.startswith("Normal") else vol_input / 100.0
         else:
             _smile = st.session_state.get("sabr_smile_mode", "Sticky-ATM (alpha-sticky)")
+            sabr = get_sabr_params_from_matrices(a, b, r, n, expiry, tenor_y)
             if vol_mode.startswith("Normal"):
-                if "Sticky-Strike" in _smile:
-                    # Use ATM vol regardless of strike   —   most conservative
-                    return atm_val / 10000.0
+                if sabr and sabr.get("alpha", 0) > 0:
+                    # Apply Normal SABR smile for OTM strikes
+                    return sabr_normal_vol_smile(
+                        fwd_pct/100.0, k_pct/100.0, expiry_y,
+                        sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"])
                 else:
-                    # Sticky-Delta and Sticky-ATM both use ATM vol in Normal mode
-                    # (smile shape differences are in Black mode; Normal mode is flat by convention here)
                     return atm_val / 10000.0
             else:
-                sabr = get_sabr_params_from_matrices(a, b, r, n, expiry, tenor_y)
-                if sabr:
-                    if "Sticky-Strike" in _smile:
-                        # Price at absolute strike K   —   moneyness changes with forward
-                        return sabr_implied_vol_black(fwd_pct/100.0, k_pct/100.0, expiry_y,
-                                                       sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"])
-                    elif "Sticky-Delta" in _smile:
-                        # Params fixed, evaluate smile at current strike relative to current forward
-                        return sabr_implied_vol_black(fwd_pct/100.0, k_pct/100.0, expiry_y,
-                                                       sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"])
-                    else:
-                        # Sticky-ATM: use (potentially recalibrated) alpha from vol_data
-                        return sabr_implied_vol_black(fwd_pct/100.0, k_pct/100.0, expiry_y,
-                                                       sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"])
+                if sabr and sabr.get("alpha", 0) > 0:
+                    return sabr_implied_vol_black(fwd_pct/100.0, k_pct/100.0, expiry_y,
+                                                   sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"])
                 else:
                     return atm_val / 100.0
 
@@ -13460,7 +13476,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105l</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105m</div>
             </div>
             """,
             unsafe_allow_html=True,
