@@ -13211,7 +13211,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104k</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104l</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -13326,21 +13326,22 @@ def main():
                             )
                             _sent_email = _er.status_code in (200, 201)
 
-                            # SMS via Clicksend (add CLICKSEND_USERNAME + CLICKSEND_API_KEY to Render env vars)
-                            _cs_user = st.secrets.get("CLICKSEND_USERNAME", os.environ.get("CLICKSEND_USERNAME", ""))
-                            _cs_key  = st.secrets.get("CLICKSEND_API_KEY",  os.environ.get("CLICKSEND_API_KEY",  ""))
-                            if _cs_user and _cs_key:
+                            # SMS via Twilio
+                            _tw_sid   = st.secrets.get("TWILIO_SID",   os.environ.get("TWILIO_SID",   "ACbb0ff7ea8f12c1386d4553977b8d8db7"))
+                            _tw_token = st.secrets.get("TWILIO_TOKEN", os.environ.get("TWILIO_TOKEN", "b9ac6de9ef599cb6843be8e5772abe86"))
+                            _tw_from  = st.secrets.get("TWILIO_FROM",  os.environ.get("TWILIO_FROM",  "RateEdge"))
+                            if _tw_sid and _tw_token:
                                 import base64 as _b64
-                                _auth = _b64.b64encode(f"{_cs_user}:{_cs_key}".encode()).decode()
+                                _tw_auth = _b64.b64encode(f"{_tw_sid}:{_tw_token}".encode()).decode()
                                 _sr = _req.post(
-                                    "https://rest.clicksend.com/v3/sms/send",
-                                    headers={"Authorization": f"Basic {_auth}", "Content-Type": "application/json"},
-                                    json={"messages": [{"source": "RateEdge", "body": _sms_body, "to": "+61478829669"}]},
+                                    f"https://api.twilio.com/2010-04-01/Accounts/{_tw_sid}/Messages.json",
+                                    headers={"Authorization": f"Basic {_tw_auth}"},
+                                    data={"To": "+61478829669", "From": _tw_from, "Body": _sms_body},
                                     timeout=10
                                 )
                                 _sent_sms = _sr.status_code in (200, 201)
                             else:
-                                _sent_sms = False  # SMS not configured yet
+                                _sent_sms = False
                         else:
                             st.warning("RESEND_API_KEY not configured — ticket not sent.")
                     except Exception as _se:
