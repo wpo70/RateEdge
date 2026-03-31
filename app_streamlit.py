@@ -2817,8 +2817,6 @@ def apply_rateedge_theme(theme_name: str):
         header[data-testid="stHeader"] .stToolbarActions {{display: none !important;}}
         footer {{visibility: hidden !important; display: none !important;}}
         #MainMenu {{visibility: hidden !important; display: none !important;}}
-        header[data-testid="stHeader"] {{background: transparent !important;}}
-        [data-testid="collapsedControl"] {{visibility: visible !important; display: flex !important; z-index: 999 !important;}}
         </style>""",
         unsafe_allow_html=True,
     )
@@ -13215,7 +13213,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103m</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103n</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -14501,8 +14499,8 @@ def show_login_page():
     st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
-    [data-testid="collapsedControl"] {visibility: visible !important; display: flex !important;}
+    footer {visibility: hidden;}
+    #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     [data-testid="manage-app-button"] {display: none !important;}
     button[kind="managedApp"] {display: none !important;}
