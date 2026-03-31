@@ -797,7 +797,12 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                 _ois_rates_rebuild = {}
                 if _ois_df is not None and not _ois_df.empty:
                     for _, _row in _ois_df.iterrows():
-                        _ois_rates_rebuild[float(_row["MaturityY"])] = float(_row["ZeroRatePct"])
+                        _t_ois = float(_row["MaturityY"])
+                        # CRITICAL: only seed OIS up to 3Y — same as BBG_Feed bootstrap path.
+                        # Seeding OIS beyond 3Y overrides the IRS par bootstrap at long maturities,
+                        # causing matrix to diverge from fresh-commit values.
+                        if _t_ois <= 3.01:
+                            _ois_rates_rebuild[_t_ois] = float(_row["ZeroRatePct"])
 
                 _bx2 = _by2 = None
                 if _basis_df is not None and not _basis_df.empty:
@@ -3033,6 +3038,9 @@ def init_session():
     # Track if we've auto-loaded from DB this session
     if "db_auto_loaded" not in st.session_state:
         st.session_state["db_auto_loaded"] = False
+    # SABR panel always visible by default
+    if "sabr_panel_visible" not in st.session_state:
+        st.session_state["sabr_panel_visible"] = True
     # SABR panel always visible by default
     if "sabr_panel_visible" not in st.session_state:
         st.session_state["sabr_panel_visible"] = True
@@ -13203,7 +13211,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103g</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103h</div>
             </div>
             """,
             unsafe_allow_html=True,
