@@ -797,7 +797,7 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                 if _ois_df is not None and not _ois_df.empty:
                     for _, _row in _ois_df.iterrows():
                         _t_ois = float(_row["MaturityY"])
-                        if _t_ois <= 3.01:  # only seed OIS up to 3Y — matches BBG_Feed bootstrap
+                        if _t_ois <= 3.01:  # only seed OIS up to 3Y
                             _ois_rates_rebuild[_t_ois] = float(_row["ZeroRatePct"])
 
                 _bx2 = _by2 = None
@@ -3436,9 +3436,9 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
     
     for ccy in SUPPORTED_CURRENCIES:
         # Load ATM vols
-        _load_atm = (load_type in ["atm", "all"] or
-                     (load_type == "atm_aud" and ccy == "AUD") or
-                     (load_type == "atm_usd_nzd" and ccy in ["USD", "NZD"]))
+        _load_atm = (load_type in ["atm","all"] or
+                     (load_type=="atm_aud" and ccy=="AUD") or
+                     (load_type=="atm_usd_nzd" and ccy in ["USD","NZD"]))
         if _load_atm:
             atm_name = f"ATM_Vols_{ccy}"
             if atm_name in xl.sheet_names:
@@ -3745,11 +3745,13 @@ def vol_config_tab():
             horizontal=True,
             key="load_type_radio"
         )
+        
+        # Map selection to load_type
         type_map = {
             "All": "all",
             "SOD IRS": "curves",
             "AUD Vol": "atm_aud",
-            "USD & NZD Vol": "atm_usd_nzd",
+            "USD & NZD Vol": "atm_usd_nzd"
         }
         
         if st.button(" Commit Selected Data", key="commit_btn", type="primary"):
@@ -4516,7 +4518,6 @@ def curves_tab():
         if st.button("Clear swap rate warnings", key="clear_swap_warns"):
             st.session_state.pop("_swap_load_warnings", None)
             st.rerun()
-
 
 
     st.markdown("---")
@@ -13152,91 +13153,54 @@ def main():
                     st.session_state["_auto_load_msg"] = f"✅ Auto-loaded {_auto_loaded} configs from database"
             except Exception as _ale:
                 st.session_state["_auto_load_msg"] = f"⚠️ Auto-load failed: {_ale}"
-            # Load latest vol snapshot from vol_history for each currency
             try:
-                _snap_conn = get_db_connection()
-                if _snap_conn:
-                    _snap_cur = _snap_conn.cursor()
-                    _snap_loaded = []
-                    for _ccy in SUPPORTED_CURRENCIES:
-                        _snap_cur.execute("""
-                            SELECT id FROM vol_history
-                            WHERE currency = %s AND atm_vols IS NOT NULL
-                            ORDER BY snapshot_date DESC LIMIT 1
-                        """, (_ccy,))
-                        _snap_row = _snap_cur.fetchone()
-                        if _snap_row:
-                            _snap_cur2 = _snap_conn.cursor()
-                            _snap_cur2.execute("""
-                                SELECT currency, atm_vols, sabr_alpha, sabr_beta, sabr_rho, sabr_nu, label, snapshot_date
-                                FROM vol_history WHERE id = %s
-                            """, (_snap_row[0],))
-                            _srow = _snap_cur2.fetchone()
-                            _snap_cur2.close()
+                _sc = get_db_connection()
+                if _sc:
+                    _cur = _sc.cursor()
+                    _sl = []
+                    for _cy in SUPPORTED_CURRENCIES:
+                        _cur.execute("SELECT id FROM vol_history WHERE currency=%s AND atm_vols IS NOT NULL ORDER BY snapshot_date DESC LIMIT 1",(_cy,))
+                        _row = _cur.fetchone()
+                        if _row:
+                            _cur2 = _sc.cursor()
+                            _cur2.execute("SELECT currency,atm_vols,sabr_alpha,sabr_beta,sabr_rho,sabr_nu,label,snapshot_date FROM vol_history WHERE id=%s",(_row[0],))
+                            _srow = _cur2.fetchone()
+                            _cur2.close()
                             if _srow:
-                                _sc, _av, _sa, _sb, _sr, _sn, _slbl, _sdt = _srow
+                                _cc2,_av,_sa,_sb,_sr,_sn,_lbl,_dt = _srow
                                 if "vol_data" not in st.session_state: st.session_state["vol_data"] = {}
-                                if _sc not in st.session_state["vol_data"]: st.session_state["vol_data"][_sc] = {}
+                                if _cc2 not in st.session_state["vol_data"]: st.session_state["vol_data"][_cc2] = {}
                                 if _av:
-                                    _atm_df = pd.DataFrame(_av["values"])
-                                    if "Expiry" in _atm_df.columns:
-                                        _atm_df = _atm_df[["Expiry"] + [c for c in _atm_df.columns if c != "Expiry"]]
-                                    st.session_state["vol_data"][_sc]["atm"] = _atm_df
-                                    if "vol_editor" not in st.session_state:
-                                        st.session_state["vol_editor"] = {"working":{}, "base":{}, "history":{}, "future":{}, "redo_stack":{}}
-                                    st.session_state["vol_editor"]["base"][_sc] = _atm_df.copy()
-                                    st.session_state["vol_editor"]["working"][_sc] = _atm_df.copy()
-                                for _param, _pdata in [("alpha",_sa),("beta",_sb),("rho",_sr),("nu",_sn)]:
-                                    if _pdata and "values" in _pdata:
-                                        try: st.session_state["vol_data"][_sc][_param] = pd.DataFrame(_pdata["values"])
+                                    _df = pd.DataFrame(_av["values"])
+                                    if "Expiry" in _df.columns: _df = _df[["Expiry"]+[c for c in _df.columns if c!="Expiry"]]
+                                    st.session_state["vol_data"][_cc2]["atm"] = _df
+                                    if "vol_editor" not in st.session_state: st.session_state["vol_editor"]={"working":{},"base":{},"history":{},"future":{},"redo_stack":{}}
+                                    st.session_state["vol_editor"]["base"][_cc2] = _df.copy()
+                                    st.session_state["vol_editor"]["working"][_cc2] = _df.copy()
+                                for _pm,_pd in [("alpha",_sa),("beta",_sb),("rho",_sr),("nu",_sn)]:
+                                    if _pd and "values" in _pd:
+                                        try: st.session_state["vol_data"][_cc2][_pm] = pd.DataFrame(_pd["values"])
                                         except: pass
-                                # Default SABR if missing
-                                _vd = st.session_state["vol_data"][_sc]
+                                _vd = st.session_state["vol_data"][_cc2]
                                 if _vd.get("alpha") is None and _vd.get("atm") is not None:
                                     try:
-                                        _atm_ref = _vd["atm"].copy()
-                                        _tcols = [c for c in _atm_ref.columns if c != "Expiry"]
-                                        for _pp, _dv in [("beta",0.5),("rho",-0.25),("nu",0.30)]:
-                                            _df_p = _atm_ref[["Expiry"]].copy()
-                                            for _tc in _tcols: _df_p[_tc] = _dv
-                                            _vd[_pp] = _df_p
-                                        _df_a = _atm_ref.copy()
-                                        for _tc in _tcols: _df_a[_tc] = _df_a[_tc] / 10000.0
-                                        _vd["alpha"] = _df_a
+                                        _ar = _vd["atm"].copy()
+                                        _tc = [c for c in _ar.columns if c!="Expiry"]
+                                        for _pp,_dv in [("beta",0.5),("rho",-0.25),("nu",0.30)]:
+                                            _dp = _ar[["Expiry"]].copy()
+                                            for _t in _tc: _dp[_t]=_dv
+                                            _vd[_pp]=_dp
+                                        _da = _ar.copy()
+                                        for _t in _tc: _da[_t]=_da[_t]/10000.0
+                                        _vd["alpha"]=_da
                                     except: pass
-                                _snap_loaded.append(f"{_sc}: {_slbl}")
-                    _snap_cur.close()
-                    _snap_conn.close()
-                    if _snap_loaded:
-                        _cur = st.session_state.get("_auto_load_msg", "")
-                        st.session_state["_auto_load_msg"] = _cur + f" | Latest vols loaded: {', '.join(_snap_loaded)}"
+                                _sl.append(f"{_cc2}:{_lbl}")
+                    _cur.close(); _sc.close()
+                    if _sl: st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Vols: {', '.join(_sl)}"
             except: pass
             st.session_state["db_auto_loaded"] = True
 
     # Sidebar for settings
-    # Top settings bar — always visible regardless of sidebar state
-    _tb1, _tb2, _tb3, _tb4 = st.columns([2, 2, 2, 6])
-    with _tb1:
-        theme_choice = st.selectbox("Theme", ["Dealer Dark", "Clean Light"],
-            index=0 if st.session_state.get("theme_name", "Dealer Dark") == "Dealer Dark" else 1,
-            key="top_theme")
-        st.session_state["theme_name"] = theme_choice
-    with _tb2:
-        ccy = st.selectbox("Currency", SUPPORTED_CURRENCIES, index=0, key="top_ccy")
-    with _tb3:
-        vol_mode = st.selectbox("Vol Mode", ["Normal (bp)", "Black (lognormal)"], index=0, key="top_volmode")
-    with _tb4:
-        if st.session_state.get("authenticated"):
-            _c1, _c2 = st.columns([4,1])
-            with _c1:
-                st.caption(f"Logged in as **{st.session_state.get('username', '')}**")
-            with _c2:
-                if st.button("Logout", key="top_logout"):
-                    st.session_state["authenticated"] = False
-                    st.session_state["username"] = None
-                    st.session_state["db_auto_loaded"] = False
-                    st.rerun()
-
     with st.sidebar:
         st.markdown(
             """
@@ -13244,7 +13208,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104g</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3104h</div>
             </div>
             """,
             unsafe_allow_html=True,
