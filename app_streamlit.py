@@ -2881,27 +2881,67 @@ def get_cms_bump(tenor: str) -> float:
     return float(st.session_state.get(f"cms_bump_{tenor}", 0.0))
 
 def _save_portfolio():
-    """Persist swaption portfolio to disk."""
+    """Save full portfolio to Supabase user_configs (per user scratchpad)."""
     try:
-        with open(_PORTFOLIO_FILE, "w") as _f:
-            json.dump(st.session_state.get("swaption_portfolio", []), _f, default=str)
+        _uid = st.session_state.get("username", "")
+        _port = st.session_state.get("portfolio", [])
+        if _uid and HAS_POSTGRES:
+            _conn = get_db_connection()
+            if _conn:
+                _cur = _conn.cursor()
+                _cur.execute("""
+                    INSERT INTO user_configs (user_id, config_type, config_data, updated_at)
+                    VALUES (%s, 'portfolio', %s, NOW())
+                    ON CONFLICT (user_id, config_type)
+                    DO UPDATE SET config_data = EXCLUDED.config_data, updated_at = NOW()
+                """, (_uid, json.dumps({"portfolio": _port}, default=str)))
+                _conn.commit()
+                _cur.close()
+                _conn.close()
+                return
     except Exception:
         pass
+    # Fallback to file
+    try:
+        with open(_PORTFOLIO_FILE, "w") as _f:
+            json.dump(st.session_state.get("portfolio", []), _f, default=str)
+    except: pass
 
 def _load_portfolio() -> list:
-    """Load persisted swaption portfolio from disk."""
+    """Load portfolio from Supabase per user, fallback to file."""
+    try:
+        _uid = st.session_state.get("username", "")
+        if _uid and HAS_POSTGRES:
+            _conn = get_db_connection()
+            if _conn:
+                _cur = _conn.cursor()
+                _cur.execute("""
+                    SELECT config_data FROM user_configs
+                    WHERE user_id = %s AND config_type = 'portfolio'
+                """, (_uid,))
+                _row = _cur.fetchone()
+                _cur.close()
+                _conn.close()
+                if _row and _row[0]:
+                    _data = _row[0] if isinstance(_row[0], dict) else json.loads(_row[0])
+                    _port = _data.get("portfolio", [])
+                    for entry in _port:
+                        for fld in ("pv","pv_bp","delta","gamma","vega","theta","bpv","strike","forward","notional_mm"):
+                            if fld in entry:
+                                try: entry[fld] = float(entry[fld])
+                                except: pass
+                    return _port
+    except Exception:
+        pass
+    # Fallback to file
     try:
         with open(_PORTFOLIO_FILE, "r") as _f:
             data = json.load(_f)
-        # Re-cast numeric fields that may have been serialised as strings
         for entry in data:
-            for fld in ("pv", "pv_bp", "delta", "gamma", "vega", "theta", "bpv",
-                        "strike", "forward", "notional_mm"):
+            for fld in ("pv","pv_bp","delta","gamma","vega","theta","bpv","strike","forward","notional_mm"):
                 if fld in entry:
-                    try:
-                        entry[fld] = float(entry[fld])
-                    except (ValueError, TypeError):
-                        pass
+                    try: entry[fld] = float(entry[fld])
+                    except: pass
         return data
     except Exception:
         return []
@@ -13477,6 +13517,13 @@ def main():
                     _cur.close(); _sc.close()
                     if _sl: st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Vols: {', '.join(_sl)}"
             except: pass
+            # Load portfolio scratchpad for this user
+            try:
+                _saved_port = _load_portfolio()
+                if _saved_port:
+                    st.session_state["portfolio"] = _saved_port
+                    st.session_state["swaption_portfolio"] = [t for t in _saved_port if t.get("instrument_type","Swaption") == "Swaption"]
+            except: pass
             st.session_state["db_auto_loaded"] = True
 
     # Sidebar for settings
@@ -13487,7 +13534,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105s</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105t</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -13535,6 +13582,7 @@ def main():
                 unsafe_allow_html=True,
             )
             if st.button(" Logout", key="logout_btn", use_container_width=True):
+                _save_portfolio()  # Persist portfolio before logout
                 st.session_state["authenticated"] = False
                 st.session_state["username"] = None
                 st.session_state["db_auto_loaded"] = False
