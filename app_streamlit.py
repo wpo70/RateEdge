@@ -2813,7 +2813,9 @@ def apply_rateedge_theme(theme_name: str):
         a[href*="streamlit.io"] {{display: none !important;}}
         .viewerBadge_container__r5tak {{display: none !important;}}
         .viewerBadge_link__qRIco {{display: none !important;}}
-        header[data-testid="stHeader"] .stToolbarActions {{display: none !important;}}
+        header[data-testid="stHeader"] .stToolbarActions button:not([data-testid="baseButton-headerNoPadding"]) {{display: none !important;}}
+        [data-testid="stToolbar"] {{display: none !important;}}
+        [data-testid="stDecoration"] {{display: none !important;}}
         footer {{visibility: hidden !important; display: none !important;}}
         #MainMenu {{visibility: hidden !important; display: none !important;}}
         </style>""",
@@ -13290,7 +13292,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103t</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103u</div>
             </div>
             """,
             unsafe_allow_html=True,
