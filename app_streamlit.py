@@ -13297,7 +13297,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103w</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103x</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -14593,10 +14593,7 @@ def show_login_page():
     [data-testid="stAppViewerControlButton"] {display: none !important;}
     [data-testid="stDecoration"] {display: none !important;}
     .stDeployButton {display: none !important;}
-    [data-testid="stSidebar"] {visibility: hidden; width: 0 !important; min-width: 0 !important;}
     .stApp {background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);}
-    section[data-testid="stSidebar"] {visibility: hidden; width: 0 !important; min-width: 0 !important;}
-    .stDeployButton {display: none !important;}
     .stTextInput > div > div > input {
         background: #1e293b !important;
         color: white !important;
