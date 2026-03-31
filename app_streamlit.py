@@ -1505,12 +1505,146 @@ def df_from_curve(curve: pd.DataFrame, t: float) -> float:
     return math.exp(-z * t)
 
 
-def _next_bd(d: "date") -> "date":
-    """Next business day (Mon-Fri, no holiday calendar)."""
-    from datetime import date as _date, timedelta as _td
-    while d.weekday() >= 5:
+def _next_bd(d: "date", ccy: str = "AUD") -> "date":
+    """Next business day using currency-specific holiday calendar."""
+    from datetime import timedelta as _td
+    while not _is_bd(d, ccy):
         d += _td(days=1)
     return d
+
+
+def _is_bd(d: "date", ccy: str = "AUD") -> bool:
+    """True if d is a business day for the given currency."""
+    if d.weekday() >= 5:
+        return False
+    if ccy == "AUD":
+        return is_au_bd(d)
+    elif ccy == "NZD":
+        return _is_nz_bd(d)
+    elif ccy == "USD":
+        return _is_us_bd(d)
+    return d.weekday() < 5
+
+
+# ── NZD: Auckland/Wellington calendar ────────────────────────────────────────
+_NZ_HOL_CACHE: dict = {}
+
+def _nz_holidays(year: int) -> set:
+    """New Zealand public holidays (Auckland region) for 20Y forward scheduling."""
+    h = set()
+
+    def _sub_mon(d):
+        wd = d.weekday()
+        if wd == 5: return d + timedelta(days=2)
+        if wd == 6: return d + timedelta(days=1)
+        return d
+
+    # New Year's Day + 2 Jan
+    h.add(_sub_mon(date(year, 1, 1)))
+    nyd2 = date(year, 1, 2)
+    h.add(_sub_mon(nyd2) if nyd2.weekday() not in (5, 6) else _sub_mon(nyd2))
+    # Ensure both New Year days are covered even with weekend shifts
+    _nyd1_adj = _sub_mon(date(year, 1, 1))
+    _nyd2_adj = _nyd1_adj + timedelta(days=1) if _nyd1_adj == date(year, 1, 1) else _sub_mon(date(year, 1, 2))
+    h.add(_nyd2_adj)
+    # Waitangi Day — 6 Feb
+    h.add(_sub_mon(date(year, 2, 6)))
+    # Good Friday + Easter Monday
+    gf, em = _easter(year)
+    h.add(gf); h.add(em)
+    # Anzac Day — 25 Apr
+    anzac = date(year, 4, 25)
+    h.add(anzac + timedelta(days=1) if anzac.weekday() == 6 else anzac)
+    # King's Birthday — 1st Monday June (NZ)
+    june_mons = [date(year, 6, d) for d in range(1, 31) if date(year, 6, d).weekday() == 0]
+    if june_mons: h.add(june_mons[0])
+    # Matariki — varies by year (approximate: 4th Friday in June/July area)
+    # Using legislated dates where known, approximation otherwise
+    matariki_dates = {
+        2022: date(2022, 6, 24), 2023: date(2023, 7, 14), 2024: date(2024, 6, 28),
+        2025: date(2025, 6, 20), 2026: date(2026, 7, 10), 2027: date(2027, 6, 25),
+        2028: date(2028, 7, 14), 2029: date(2029, 7, 6),  2030: date(2030, 6, 21),
+        2031: date(2031, 7, 11), 2032: date(2032, 7, 2),  2033: date(2033, 6, 24),
+        2034: date(2034, 7, 7),  2035: date(2035, 6, 29), 2036: date(2036, 7, 18),
+        2037: date(2037, 7, 10), 2038: date(2038, 6, 25), 2039: date(2039, 7, 15),
+        2040: date(2040, 7, 6),  2041: date(2041, 7, 19), 2042: date(2042, 7, 4),
+        2043: date(2043, 6, 26), 2044: date(2044, 7, 15), 2045: date(2045, 6, 30),
+    }
+    if year in matariki_dates: h.add(matariki_dates[year])
+    # Labour Day — 4th Monday October
+    oct_mons = [date(year, 10, d) for d in range(1, 32) if date(year, 10, d).weekday() == 0]
+    if len(oct_mons) >= 4: h.add(oct_mons[3])
+    # Auckland Anniversary — last Monday January
+    jan_mons = [date(year, 1, d) for d in range(1, 32) if date(year, 1, d).weekday() == 0]
+    if jan_mons: h.add(jan_mons[-1])
+    # Christmas + Boxing Day
+    xmas = date(year, 12, 25); box = date(year, 12, 26)
+    xwd = xmas.weekday()
+    if xwd == 5:
+        h.add(date(year, 12, 27)); h.add(date(year, 12, 28))
+    elif xwd == 6:
+        h.add(date(year, 12, 26)); h.add(date(year, 12, 27))
+    else:
+        h.add(xmas)
+        bwd = box.weekday()
+        if bwd == 5: h.add(date(year, 12, 28))
+        elif bwd == 6: h.add(date(year, 12, 27))
+        else: h.add(box)
+    return h
+
+def _is_nz_bd(d: date) -> bool:
+    if d.weekday() >= 5: return False
+    if d.year not in _NZ_HOL_CACHE: _NZ_HOL_CACHE[d.year] = _nz_holidays(d.year)
+    return d not in _NZ_HOL_CACHE[d.year]
+
+
+# ── USD: Federal Reserve / New York calendar ─────────────────────────────────
+_US_HOL_CACHE: dict = {}
+
+def _us_holidays(year: int) -> set:
+    """US Federal holidays (NY financial centre) for 20Y forward scheduling."""
+    h = set()
+
+    def _sub_mon(d):
+        wd = d.weekday()
+        if wd == 5: return d + timedelta(days=2)
+        if wd == 6: return d + timedelta(days=1)
+        return d
+
+    # New Year's Day
+    h.add(_sub_mon(date(year, 1, 1)))
+    # MLK Day — 3rd Monday January
+    jan_mons = [date(year, 1, d) for d in range(1, 32) if date(year, 1, d).weekday() == 0]
+    if len(jan_mons) >= 3: h.add(jan_mons[2])
+    # Presidents' Day — 3rd Monday February
+    feb_mons = [date(year, 2, d) for d in range(1, 29) if date(year, 2, d).weekday() == 0]
+    if len(feb_mons) >= 3: h.add(feb_mons[2])
+    # Memorial Day — last Monday May
+    may_mons = [date(year, 5, d) for d in range(1, 32) if date(year, 5, d).weekday() == 0]
+    if may_mons: h.add(may_mons[-1])
+    # Juneteenth — 19 Jun (from 2021)
+    if year >= 2021: h.add(_sub_mon(date(year, 6, 19)))
+    # Independence Day — 4 Jul
+    h.add(_sub_mon(date(year, 7, 4)))
+    # Labor Day — 1st Monday September
+    sep_mons = [date(year, 9, d) for d in range(1, 31) if date(year, 9, d).weekday() == 0]
+    if sep_mons: h.add(sep_mons[0])
+    # Columbus Day — 2nd Monday October
+    oct_mons = [date(year, 10, d) for d in range(1, 32) if date(year, 10, d).weekday() == 0]
+    if len(oct_mons) >= 2: h.add(oct_mons[1])
+    # Veterans Day — 11 Nov
+    h.add(_sub_mon(date(year, 11, 11)))
+    # Thanksgiving — 4th Thursday November
+    nov_thus = [date(year, 11, d) for d in range(1, 31) if date(year, 11, d).weekday() == 3]
+    if len(nov_thus) >= 4: h.add(nov_thus[3])
+    # Christmas
+    h.add(_sub_mon(date(year, 12, 25)))
+    return h
+
+def _is_us_bd(d: date) -> bool:
+    if d.weekday() >= 5: return False
+    if d.year not in _US_HOL_CACHE: _US_HOL_CACHE[d.year] = _us_holidays(d.year)
+    return d not in _US_HOL_CACHE[d.year]
 
 def _add_months(d: "date", months: int) -> "date":
     """Add whole months, clamping to end-of-month."""
@@ -1528,13 +1662,13 @@ def _add_years(d: "date", years: int) -> "date":
     except ValueError:
         return _date(d.year + years, d.month, 28)
 
-def _mod_fol(d: "date") -> "date":
-    """Modified following: if adjusted date falls in next month, go backward."""
+def _mod_fol(d: "date", ccy: str = "AUD") -> "date":
+    """Modified following with currency-aware holiday calendar."""
     from datetime import timedelta as _td
-    nd = _next_bd(d)
+    nd = _next_bd(d, ccy)
     if nd.month != d.month:
         pd_ = d
-        while pd_.weekday() >= 5:
+        while not _is_bd(pd_, ccy):
             pd_ -= _td(days=1)
         return pd_
     return nd
@@ -1553,35 +1687,34 @@ def _pricing_date() -> "date":
         pass
     return _date.today()
 
-def _spot_date(spot_lag_bd: int) -> "date":
-    """Spot date = today + spot_lag business days."""
+def _spot_date(spot_lag_bd: int, ccy: str = "AUD") -> "date":
+    """Spot date = today + spot_lag business days (currency-aware calendar)."""
     from datetime import timedelta as _td
     d = _pricing_date()
     count = 0
     while count < spot_lag_bd:
         d += _td(days=1)
-        if d.weekday() < 5:
+        if _is_bd(d, ccy):
             count += 1
     return d
 
-def _fwd_start_date(expiry_years: float, spot_lag_bd: int) -> "date":
-    """Forward start date: spot + expiry (mod-fol). Uses days for <1m, months otherwise."""
+def _fwd_start_date(expiry_years: float, spot_lag_bd: int, ccy: str = "AUD") -> "date":
+    """Forward start date: spot + expiry (mod-fol, ccy-aware calendar)."""
     from datetime import timedelta as _td
-    spot = _spot_date(spot_lag_bd)
+    spot = _spot_date(spot_lag_bd, ccy)
     total_days = expiry_years * 365.25
     total_months = int(round(expiry_years * 12))
     if total_days < 27:
-        # Sub-monthly: add whole days then mod-fol
         raw = spot + _td(days=int(round(total_days)))
     else:
         raw = _add_months(spot, total_months)
-    return _mod_fol(raw)
+    return _mod_fol(raw, ccy)
 
-def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_period: int) -> List[Tuple[float, float]]:
+def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_period: int,
+                         ccy: str = "AUD") -> List[Tuple[float, float]]:
     """
-    Build actual payment schedule using mod-fol date arithmetic.
+    Build payment schedule with currency-aware mod-fol holiday calendar.
     Returns list of (time_in_years_from_today, act365_accrual).
-    Final cashflow uses total months (not rounded years) to handle 18m, 1.5Y etc correctly.
     """
     today = _pricing_date()
     total_months = int(round(tenor_years * 12))
@@ -1589,9 +1722,8 @@ def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_perio
     schedule = []
     prev = fwd_start
     for i in range(1, n + 1):
-        # Always use months arithmetic - last cashflow uses total_months exactly
         raw = _add_months(fwd_start, i * months_per_period if i < n else total_months)
-        pay = _mod_fol(raw)
+        pay = _mod_fol(raw, ccy)
         accrual = _act365(prev, pay)
         t_years = _act365(today, pay)
         schedule.append((t_years, accrual))
@@ -1599,17 +1731,32 @@ def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_perio
     return schedule
 
 def build_aud_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]:
-    """AUD: T+1BD spot, mod-fol, Act/365. Q/Q (3m) for ≤3Y, S/S (6m) for >3Y."""
+    """AUD: T+1BD spot, AFMA mod-fol (Sydney calendar), Act/365. Q/Q ≤3Y, S/S >3Y."""
     months_per = 3 if tenor <= 3.0 else 6
-    fwd_start = _fwd_start_date(expiry, spot_lag_bd=1)
-    return _build_date_schedule(fwd_start, tenor, months_per)
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=1, ccy="AUD")
+    return _build_date_schedule(fwd_start, tenor, months_per, ccy="AUD")
 
 
-def build_generic_schedule(expiry: float, tenor: float, freq: float = 0.5, spot_lag: float = 1.0) -> List[Tuple[float, float]]:
-    """T+2BD spot (NZD/USD), mod-fol, Act/365. freq: 0.25=Q/Q, 0.5=S/S."""
+def build_nzd_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]:
+    """NZD: T+2BD spot, NZ mod-fol (Auckland calendar), Act/365. Q/Q ≤2Y, S/S >2Y."""
+    months_per = 3 if tenor <= 2.0 else 6
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=2, ccy="NZD")
+    return _build_date_schedule(fwd_start, tenor, months_per, ccy="NZD")
+
+
+def build_usd_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]:
+    """USD: T+2BD spot, NY mod-fol (Federal calendar), Act/360 approx as Act/365. S/S fixed."""
+    months_per = 6
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=2, ccy="USD")
+    return _build_date_schedule(fwd_start, tenor, months_per, ccy="USD")
+
+
+def build_generic_schedule(expiry: float, tenor: float, freq: float = 0.5,
+                           spot_lag: float = 1.0, ccy: str = "AUD") -> List[Tuple[float, float]]:
+    """Generic schedule builder with ccy-aware holiday calendar."""
     months_per = int(round(freq * 12))
-    fwd_start = _fwd_start_date(expiry, spot_lag_bd=int(round(spot_lag)))
-    return _build_date_schedule(fwd_start, tenor, months_per)
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=int(round(spot_lag)), ccy=ccy)
+    return _build_date_schedule(fwd_start, tenor, months_per, ccy=ccy)
 
 
 def forward_and_annuity_from_curve(curve: pd.DataFrame,
@@ -1625,18 +1772,17 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
     freq_override: 0.25 = Q/Q, 0.5 = S/S, None = market convention
     """
     if freq_override is not None:
-        # T+2 BD for NZD/USD, T+1 BD for AUD (AFMA calendar   —   year frac approx here)
-        spot_lag = 2.0 / 252.0 if ccy in ["NZD", "USD"] else 1.0 / 252.0
-        sched = build_generic_schedule(expiry, tenor, freq=freq_override, spot_lag=spot_lag * 252)
+        spot_lag = 2.0 if ccy in ["NZD", "USD"] else 1.0
+        sched = build_generic_schedule(expiry, tenor, freq=freq_override,
+                                       spot_lag=spot_lag, ccy=ccy)
     elif ccy == "AUD":
         sched = build_aud_schedule(expiry, tenor)
     elif ccy == "NZD":
-        freq_nzd = 0.25 if tenor <= 2.0 else 0.5
-        sched = build_generic_schedule(expiry, tenor, freq=freq_nzd, spot_lag=2.0)
+        sched = build_nzd_schedule(expiry, tenor)
     elif ccy == "USD":
-        sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=2.0)
+        sched = build_usd_schedule(expiry, tenor)
     else:
-        sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=1.0)
+        sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=1.0, ccy=ccy)
 
     if not sched:
         return 0.0, 0.0, []
@@ -2795,7 +2941,6 @@ def apply_rateedge_theme(theme_name: str):
         }}
         /* Hide ALL Streamlit chrome — code must not be visible */
         [data-testid="manage-app-button"] {{display: none !important;}}
-        [data-testid="stAppViewerControlButton"] {{display: none !important;}}
         [data-testid="stToolbar"] {{display: none !important;}}
         [data-testid="stDecoration"] {{display: none !important;}}
         [data-testid="stStatusWidget"] {{display: none !important;}}
@@ -4345,6 +4490,22 @@ def curves_tab():
     has_fwd = ccy in st.session_state.get("fwd_matrix", {}) and \
               not st.session_state["fwd_matrix"][ccy].empty
 
+    # Auto-generate on first load if curve is available and matrix not yet built
+    _mc_auto = st.session_state.get("config_curves", {}).get(ccy)
+    _mb_auto = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
+    if not has_fwd and _mc_auto is not None:
+        fm = generate_forward_matrix_convention(ccy, _mc_auto, _mb_auto, "market")
+        st.session_state["fwd_matrix"][ccy] = fm
+        st.session_state["fwd_convention"] = "market"
+        st.session_state["fwd_ccy"] = ccy
+        if _mb_auto is not None:
+            st.session_state["basis_matrix"][ccy] = generate_basis_matrix(ccy, _mb_auto)
+        _mb3v1_auto = st.session_state.get("config_basis", {}).get(ccy, {}).get("3v1")
+        if _mb3v1_auto is not None:
+            if "basis_matrix_3v1" not in st.session_state: st.session_state["basis_matrix_3v1"] = {}
+            st.session_state["basis_matrix_3v1"][ccy] = generate_basis_matrix(ccy, _mb3v1_auto)
+        has_fwd = True
+
     _fl = "▼ Hide Forward Swap Rates" if st.session_state["fwd_section_open"] else "▶ Show Forward Swap Rates"
     if st.button(_fl, key="fwd_toggle"):
         st.session_state["fwd_section_open"] = not st.session_state["fwd_section_open"]
@@ -4556,7 +4717,15 @@ def curves_tab():
 
     # ── ATM Vol / Forward Premium / Vega ──────────────────────────────────────
     if "atm_prem_matrix" not in st.session_state: st.session_state["atm_prem_matrix"] = {}
-    if "atm_section_open" not in st.session_state: st.session_state["atm_section_open"] = False
+    if "atm_section_open" not in st.session_state: st.session_state["atm_section_open"] = True
+
+    # Auto-generate ATM matrix on load if not yet built
+    _atm_auto, _, _, _, _ = get_ccy_vol_data(ccy)
+    _mc_atm = st.session_state.get("config_curves", {}).get(ccy)
+    if _atm_auto is not None and _mc_atm is not None and ccy not in st.session_state.get("atm_prem_matrix", {}):
+        _mb_atm = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
+        pm, vm = calculate_atm_premium_matrix(ccy, _mc_atm, _atm_auto, _mb_atm)
+        st.session_state["atm_prem_matrix"][ccy] = {"vol": _atm_auto, "prem": pm, "vega": vm}
 
     _al = "▼ Hide ATM Vol / Premium / Vega" if st.session_state["atm_section_open"] else "▶ Show ATM Vol / Premium / Vega"
     if st.button(_al, key="atm_toggle"):
@@ -13220,7 +13389,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103c</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3103d</div>
             </div>
             """,
             unsafe_allow_html=True,
