@@ -4761,7 +4761,7 @@ def _load_swap_rates_from_db(floating_rate: str, load_date: str = None) -> pd.Da
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _load_swap_rates_history(floating_rate: str, years_back: int = 2) -> pd.DataFrame:
+def _load_swap_rates_history(floating_rate: str, years_back: int = 20) -> pd.DataFrame:
     """Load historical swap rates (date × tenor). Default last 2 years."""
     try:
         conn = get_db_connection()
@@ -13487,7 +13487,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105q</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105s</div>
             </div>
             """,
             unsafe_allow_html=True,
