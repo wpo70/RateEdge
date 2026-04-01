@@ -6598,7 +6598,13 @@ def swaptions_tab(vol_mode: str):
                          notional_mm=notional, strike=strike_pct, forward=fwd_pct, pv=res["pv"],
                          pv_bp=display_prem_bp, premium_type=premium_type,
                          delta=res["delta"], gamma=res["gamma"], vega=res["vega"],
-                         theta=res["theta"], bpv=res["bpv"], label=label)
+                         theta=res["theta"], bpv=res["bpv"], label=label,
+                         legs=[{"name": l[0], "strike": l[1], "qty": l[2],
+                                "pv": l[3].get("pv",0), "pv_bp": l[3].get("pv_bp",0),
+                                "delta": l[3].get("delta",0)} for l in legs],
+                         expiry_date=expiry_date.strftime('%d-%b-%Y') if 'expiry_date' in dir() else "",
+                         swap_start=expiry_date.strftime('%d-%b-%Y') if 'expiry_date' in dir() else "",
+                         )
             st.session_state["swaption_portfolio"].append(entry)
             st.session_state["portfolio"].append(entry)
             _save_portfolio()
@@ -6685,40 +6691,118 @@ def swaptions_tab(vol_mode: str):
             if st.button("🗑️ Clear All", key="sw_clear_portfolio"):
                 st.session_state["swaption_portfolio"] = []
                 st.session_state["portfolio"] = []
-                # Bust all per-row calc caches to prevent hang on next render
                 for _ck in [k for k in st.session_state if k.startswith("_sw_price_") or k.startswith("_sw_calc_")]:
                     del st.session_state[_ck]
                 _save_portfolio()
                 st.rerun()
+
         df = pd.DataFrame(st.session_state["swaption_portfolio"])
-        # Sort key: convert expiry label to years so 1m < 2m < 3m < 1y < 2y etc.
         df["_expiry_sort"] = df["expiry"].apply(lambda e: label_to_years(str(e)))
         df = df.sort_values("_expiry_sort").reset_index(drop=True)
-        df_display = df.drop(columns=["_expiry_sort"]).copy()
-        df_display["pv_bp"] = df_display["pv_bp"].round(2)
-        df_display["pv"] = (df_display["pv"] / 1e3).round(1)
-        df_display["delta"] = (df_display["delta"] / 1e3).round(1)
-        df_display["vega"] = (df_display["vega"] / 1e3).round(1)
-        df_display["gamma"] = (df_display["gamma"] / 1e3).round(1)
-        df_display["theta"] = (df_display["theta"] / 1e3).round(1)
-        df_display.rename(
-            columns={
-                "pv": "PV (k)",
-                "pv_bp": "PV (bp)",
-                "vol_input": "Vol",
-                "delta": "Delta (k)",
-                "vega": "Vega (k)",
-                "gamma": "Gamma (k)",
-                "theta": "Theta (k)",
-            },
-            inplace=True,
-        )
-        st.dataframe(df_display, use_container_width=True)
 
-        # Reload / Reprice   —   load a blotter row back into the pricer
+        # ── Per-row display with legs breakdown ──────────────────────
+        for idx, row in df.iterrows():
+            _struct = row.get("structure", "")
+            _label  = row.get("label", f"{row.get('expiry','')}x{row.get('tenor','')}")
+            _pv     = float(row.get("pv", 0))
+            _pv_bp  = float(row.get("pv_bp", 0))
+            _delta  = float(row.get("delta", 0))
+            _notl   = float(row.get("notional_mm", 100))
+            _ccy    = row.get("currency", "AUD")
+            _strike = float(row.get("strike", 0))
+            _fwd    = float(row.get("forward", 0))
+            _expiry = row.get("expiry", "")
+            _tenor  = row.get("tenor", "")
+            _legs   = row.get("legs", [])
+            _exp_date = row.get("expiry_date", "")
+
+            with st.container():
+                c1, c2, c3, c4, c5, c6 = st.columns([3, 1.2, 1.2, 1.2, 1.2, 0.8])
+                with c1: st.markdown(f"**{idx+1}. {_label}**")
+                with c2: st.metric("PV (bp)", f"{_pv_bp:.2f}")
+                with c3: st.metric("PV ($k)", f"{_pv/1000:,.1f}")
+                with c4: st.metric("Delta ($k)", f"{_delta/1000:,.1f}")
+                with c5: st.metric("Notional", f"{_notl:.0f}mm")
+                with c6:
+                    if st.button("🗑️", key=f"sw_del_{idx}_{_label[:8]}", help="Remove"):
+                        st.session_state["swaption_portfolio"].pop(idx)
+                        st.session_state["portfolio"] = [p for p in st.session_state["portfolio"]
+                                                          if p.get("label") != _label or
+                                                          p.get("expiry") != _expiry]
+                        _save_portfolio()
+                        st.rerun()
+
+                # Legs breakdown for R/R and Ladders
+                if _struct in ["Risk Reversal", "Payer Ladder", "Receiver Ladder"] and _legs:
+                    _leg_rows = []
+                    for _lg in _legs:
+                        _qty = int(_lg.get("qty", 1))
+                        _side = "Long" if _qty > 0 else "Short"
+                        _leg_rows.append({
+                            "Leg": _lg.get("name", ""),
+                            "B/S": _side,
+                            "Strike (%)": f"{float(_lg.get('strike',0)):.4f}",
+                            "PV ($k)": f"{float(_lg.get('pv',0))/1000:,.1f}",
+                            "PV (bp)": f"{float(_lg.get('pv_bp',0)):.2f}",
+                            "Delta ($k)": f"{float(_lg.get('delta',0))/1000:,.1f}",
+                        })
+                    st.dataframe(pd.DataFrame(_leg_rows), use_container_width=True, hide_index=True)
+
+                # Quick Tix
+                with st.expander(f"📋 Quick Tix — {_label[:40]}", expanded=False):
+                    # Build dates
+                    from datetime import date as _date
+                    from dateutil.relativedelta import relativedelta as _rdelta
+                    _today = _date.today()
+                    try:
+                        _exp_y  = label_to_years(str(_expiry))
+                        _ten_y  = float(str(_tenor).replace("Y","").replace("y",""))
+                        _exp_dt = _today + _rdelta(days=int(_exp_y*365.25))
+                        _start_dt = _exp_dt + _rdelta(days=2)  # T+2 start
+                        _end_dt = _start_dt + _rdelta(months=int(_ten_y*12))
+                        # Quarterly roll dates (first 4)
+                        _rolls = []
+                        _r = _start_dt + _rdelta(months=3)
+                        for _ in range(4):
+                            _rolls.append(_r.strftime('%d-%b-%Y'))
+                            _r += _rdelta(months=3)
+                        _rolls_str = ", ".join(_rolls[:4]) + ("..." if _ten_y > 1 else "")
+
+                        # Net delta direction
+                        _net_delta = _delta
+                        _delta_dir = "Pay Fixed (hedge = pay fixed IRS)" if _net_delta > 0 else "Rec Fixed (hedge = receive fixed IRS)"
+                        _delta_mm = abs(_net_delta) / 10000  # DV01 → notional approx
+
+                        _tix = f"""=== {_ccy} {_struct.upper()} ===
+Expiry:      {_exp_dt.strftime('%d-%b-%Y')} ({_expiry})
+Swap Start:  {_start_dt.strftime('%d-%b-%Y')}
+Swap End:    {_end_dt.strftime('%d-%b-%Y')}
+Tenor:       {_tenor}
+Rolls:       {_rolls_str}
+Fwd Rate:    {_fwd:.4f}%
+"""
+                        if _legs and _struct in ["Risk Reversal", "Payer Ladder", "Receiver Ladder"]:
+                            for _lg in _legs:
+                                _s = "BUY" if int(_lg.get("qty",1)) > 0 else "SELL"
+                                _tix += f"{_s} {_lg.get('name',''):20s} K={float(_lg.get('strike',0)):.4f}%\n"
+                        else:
+                            _tix += f"Strike:      {_strike:.4f}%\n"
+
+                        _tix += f"""Premium:     {_pv_bp:.2f} bp ({'+' if _pv>=0 else ''}{_pv/1000:,.1f}k)
+Net Delta:   {_net_delta/1000:,.1f}k  →  {_delta_dir}
+Notional:    {_notl:.0f}mm {_ccy}"""
+
+                        st.code(_tix, language=None)
+                        st.caption("Copy ↑ and paste into chat/IB/email")
+                    except Exception as _te:
+                        st.caption(f"Could not build tix: {_te}")
+
+                st.markdown("---")
+
+        # Reload into Pricer
         st.markdown("##### Reload into Pricer")
         row_labels = [
-            f"{i}: {r.get('label', f"{r.get('expiry','')}x{r.get('tenor','')}")}"
+            f"{i}: {r.get('label', str(r.get('expiry','?')) + 'x' + str(r.get('tenor','?')))}"
             for i, r in df.iterrows()
         ]
         reload_sel = st.selectbox("Select ticket", ["  —  "] + row_labels, key="sw_reload_sel")
@@ -13556,7 +13640,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105z</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106a</div>
             </div>
             """,
             unsafe_allow_html=True,
