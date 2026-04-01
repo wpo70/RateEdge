@@ -511,25 +511,9 @@ def save_all_session_data(user_id: str):
 
         _debug_msgs = []
         for ccy in SUPPORTED_CURRENCIES:
-            # Curves saved to swap_rates on upload (see vol_config_tab commit block)
+            # ATM vols are NOT saved to user_configs — they live in vol_history only
+            # Saving here caused stale/wrong surfaces to override vol_history on load
             vol_data = st.session_state.get("vol_data", {}).get(ccy, {})
-            atm = vol_data.get("atm")
-            if atm is not None:
-                atm_save = atm.copy()
-                if atm_save.index.name == "Expiry":
-                    atm_save = atm_save.reset_index()
-                elif "Expiry" not in atm_save.columns:
-                    first_idx = atm_save.index[0] if len(atm_save) > 0 else None
-                    if isinstance(first_idx, str) and first_idx.lower().endswith(('w','m','y')):
-                        atm_save = atm_save.reset_index()
-                        atm_save.columns = ["Expiry"] + list(atm_save.columns[1:])
-                records = []
-                for _, row in atm_save.iterrows():
-                    rec = {"Expiry": row.get("Expiry", "")}
-                    for col in atm_save.columns:
-                        if col != "Expiry": rec[col] = row[col]
-                    records.append(rec)
-                _save("atm_vols", ccy, {"values": records})
 
             for param in ["alpha", "beta", "rho", "nu"]:
                 val = vol_data.get(param)
@@ -642,23 +626,8 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
         # Curves must be committed from BBG_Feed via Vol/Upload tab.
         # This ensures curves always reflect the live BBG rates, not stale DB zeros.
 
-        # Load ATM vols into vol_data
-        if "atm_vols" in configs and ccy in configs["atm_vols"]:
-            try:
-                df = pd.DataFrame(configs["atm_vols"][ccy]["data"]["values"])
-                if "Expiry" in df.columns:
-                    cols = ["Expiry"] + [c for c in df.columns if c != "Expiry"]
-                    df = df[cols]
-                st.session_state["vol_data"][ccy]["atm"] = df
-                ve = st.session_state["vol_editor"]
-                ve["base"][ccy] = df.copy()
-                ve["working"][ccy] = df.copy()
-                ve["history"][ccy] = []
-                ve["future"][ccy] = []
-                ve["redo_stack"][ccy] = []
-                loaded += 1
-            except Exception as _e:
-                st.session_state.setdefault("_load_errors", []).append(f"atm/{ccy}: {_e}")
+        # ATM vols are NOT loaded from user_configs — they come from vol_history only
+        # (see auto-load block at login which pulls latest snapshot per currency)
         
         # Load SABR params into vol_data
         for param in ["alpha", "beta", "rho", "nu"]:
@@ -13545,7 +13514,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105u</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105v</div>
             </div>
             """,
             unsafe_allow_html=True,
