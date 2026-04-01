@@ -13514,7 +13514,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105x</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105y</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -14922,12 +14922,8 @@ def show_login_page():
             st.markdown(f'<p style="color: #94a3b8; text-align: center; margin-bottom: 16px;">Code sent to <strong style="color: #f1f5f9;">{st.session_state.auth_email}</strong></p>', unsafe_allow_html=True)
             with st.form("otp_form", clear_on_submit=False):
                 otp = st.text_input("Code", placeholder="Enter 6-digit code", max_chars=6, key="login_otp_input", label_visibility="collapsed")
-                col_back, col_verify = st.columns(2)
-                with col_back:
-                    _back = st.form_submit_button("← Back", use_container_width=True)
-                with col_verify:
-                    _verify = st.form_submit_button("Verify", use_container_width=True)
-            if _back:
+                _verify = st.form_submit_button("Verify", use_container_width=True)
+            if st.button("← Back", key="back_btn", use_container_width=True, type="secondary"):
                 st.session_state.auth_step = 'email'
                 st.rerun()
             if _verify:
