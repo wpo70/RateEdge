@@ -6757,7 +6757,7 @@ def caps_floors_tab(vol_mode: str):
 
     col_type, col_model = st.columns(2)
     with col_type:
-        cf_type = st.selectbox("Instrument", ["Cap", "Floor", "Straddle", "Collar", "Strangle"], index=2, key="cf_type")
+        cf_type = st.selectbox("Instrument", ["Cap", "Floor", "Straddle", "Collar", "Strangle", "Digital Cap", "Digital Floor"], index=2, key="cf_type")
     with col_model:
         model = st.selectbox("Model", ["Normal", "Black"], index=0, key="cf_model")
 
@@ -6924,8 +6924,18 @@ def caps_floors_tab(vol_mode: str):
         
         width_bp = (strike - strike_pct_2) * 10000
         st.caption(f"Width: **{width_bp:.0f} bp**")
-    
-    # Use OIS curve for discounting (no flat rate input)
+
+    elif cf_type in ["Digital Cap", "Digital Floor"]:
+        st.caption(f"{'Binary Cap' if cf_type=='Digital Cap' else 'Binary Floor'} — pays **100bp × notional × accrual** on each reset date if BBSW fixes {'at or above' if cf_type=='Digital Cap' else 'at or below'} strike. Priced as tight call spread.")
+        strike_mode = st.radio("Strike Mode", ["ATM", "10 bp", "25 bp", "50 bp", "100 bp", "Manual"],
+                               horizontal=True, key="cf_dig_strike_mode")
+        offset_map = {"ATM": 0, "10 bp": 10, "25 bp": 25, "50 bp": 50, "100 bp": 100, "Manual": None}
+        offset = offset_map[strike_mode]
+        if strike_mode == "Manual":
+            strike = st.number_input("Strike (%)", value=round(fwd_pct, 4), format="%.4f", key="cf_strike") / 100.0
+        else:
+            strike = fwd + (offset/10000.0 if cf_type == "Digital Cap" else -offset/10000.0)
+            st.info(f"Strike: **{strike*100:.4f}%** ({strike_mode} {'OTM' if offset > 0 else 'ATM'})")
 
     vol_src = st.radio(
         "Vol source",
@@ -7656,6 +7666,24 @@ def caps_floors_tab(vol_mode: str):
                         "Delta": f"{res['delta']:,.0f}",
                     })
                 return {"pv": pv, "delta": delta, "vega": vega, "gamma": gamma, "caplets": caplets}
+
+            def price_digital_strip(strike_val, is_cap_flag, leg_name=""):
+                """Digital cap/floor — 100bp × notional × accrual payout per period.
+                Priced as tight call spread: [V(K-0.5bp) - V(K+0.5bp)] / 1bp × 100bp"""
+                eps = 0.0001  # 1bp spread
+                lo = price_strip(strike_val - eps/2, is_cap_flag, leg_name)
+                hi = price_strip(strike_val + eps/2, is_cap_flag, leg_name)
+                scale = 0.01 / eps  # 100bp payout / 1bp spread width
+                pv    = (lo["pv"]    - hi["pv"])    * scale
+                delta = (lo["delta"] - hi["delta"]) * scale
+                vega  = (lo["vega"]  - hi["vega"])  * scale
+                gamma = (lo["gamma"] - hi["gamma"]) * scale
+                # Tag caplets with digital flag
+                caplets = lo["caplets"]
+                for c in caplets:
+                    c["Leg"] = leg_name
+                    c["PV"] = f"${(float(c['PV'].replace('$','').replace(',','')) - float(hi['caplets'][caplets.index(c)]['PV'].replace('$','').replace(',',''))) * scale:,.0f}" if caplets.index(c) < len(hi["caplets"]) else c["PV"]
+                return {"pv": pv, "delta": delta, "vega": vega, "gamma": gamma, "caplets": caplets}
             
             legs = []
             
@@ -7709,6 +7737,20 @@ def caps_floors_tab(vol_mode: str):
                 legs.append(("OTM Cap", strike*100, 1, res_cap))
                 legs.append(("OTM Floor", strike_pct_2*100, 1, res_floor))
                 label = f"Strangle {first_fixing}-{tenor} ({strike_pct_2*100:.2f}/{strike*100:.2f})"
+
+            elif cf_type == "Digital Cap":
+                res = price_digital_strip(strike, True, "Digital Cap")
+                pv_total, delta_total, vega_total, gamma_total = res["pv"], res["delta"], res["vega"], res["gamma"]
+                caplet_details = res["caplets"]
+                legs.append(("Digital Cap", strike*100, 1, res))
+                label = f"Digital Cap {first_fixing}-{tenor} K={strike*100:.2f}% | 100bp payout per fixing"
+
+            elif cf_type == "Digital Floor":
+                res = price_digital_strip(strike, False, "Digital Floor")
+                pv_total, delta_total, vega_total, gamma_total = res["pv"], res["delta"], res["vega"], res["gamma"]
+                caplet_details = res["caplets"]
+                legs.append(("Digital Floor", strike*100, 1, res))
+                label = f"Digital Floor {first_fixing}-{tenor} K={strike*100:.2f}% | 100bp payout per fixing"
 
             # Calculate premium in bp: (PV / Notional) * 10000
             pv_bp = (pv_total / (notional * 1e6)) * 10000.0 if notional > 0 else 0.0
@@ -13514,7 +13556,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105y</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105z</div>
             </div>
             """,
             unsafe_allow_html=True,
