@@ -13514,7 +13514,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105v</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105w</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -14890,11 +14890,11 @@ def show_login_page():
             st.session_state.auth_step = 'email'
         
         if st.session_state.auth_step == 'email':
-            email = st.text_input("Email", placeholder="Enter your email", key="login_email_input", label_visibility="collapsed")
-            
-            st.markdown('<p style="color: #94a3b8; font-size: 0.85rem; text-align: center; margin: -8px 0 24px 0;">We\'ll send you a verification code</p>', unsafe_allow_html=True)
-            
-            if st.button("Send Code", key="send_code_btn", use_container_width=True):
+            with st.form("email_form", clear_on_submit=False):
+                email = st.text_input("Email", placeholder="Enter your email", key="login_email_input", label_visibility="collapsed")
+                st.markdown('<p style="color: #94a3b8; font-size: 0.85rem; text-align: center; margin: -8px 0 24px 0;">We\'ll send you a verification code</p>', unsafe_allow_html=True)
+                _submitted = st.form_submit_button("Send Code", use_container_width=True)
+            if _submitted:
                 if email and "@" in email:
                     status, data = request_otp(email.strip().lower())
                     if status == 200:
@@ -14910,79 +14910,74 @@ def show_login_page():
         
         elif st.session_state.auth_step == 'otp':
             st.markdown(f'<p style="color: #94a3b8; text-align: center; margin-bottom: 16px;">Code sent to <strong style="color: #f1f5f9;">{st.session_state.auth_email}</strong></p>', unsafe_allow_html=True)
-            
-            otp = st.text_input("Code", placeholder="Enter 6-digit code", max_chars=6, key="login_otp_input", label_visibility="collapsed")
-            
-            col_back, col_verify = st.columns(2)
-            
-            with col_back:
-                if st.button("Back", key="back_btn", use_container_width=True, type="secondary"):
-                    st.session_state.auth_step = 'email'
-                    st.rerun()
-            
-            with col_verify:
-                if st.button("Verify", key="verify_btn", use_container_width=True):
-                    if otp and len(otp) == 6:
-                        status, data = verify_otp(st.session_state.auth_email, otp)
-                        if status == 200:
-                            # Single session enforcement   —   store token in DB, invalidate old session
-                            import secrets as _sec
-                            _sess_token = _sec.token_hex(32)
-                            try:
-                                if HAS_POSTGRES:
-                                    _conn = get_db_connection()
-                                    if _conn:
-                                        _cur = _conn.cursor()
-                                        _cur.execute("""
-                                            CREATE TABLE IF NOT EXISTS active_sessions (
-                                                email TEXT PRIMARY KEY,
-                                                session_token TEXT NOT NULL,
-                                                created_at TIMESTAMPTZ DEFAULT NOW()
-                                            )
-                                        """)
-                                        _cur.execute("""
-                                            INSERT INTO active_sessions (email, session_token, created_at)
-                                            VALUES (%s, %s, NOW())
-                                            ON CONFLICT (email) DO UPDATE SET session_token=EXCLUDED.session_token, created_at=NOW()
-                                        """, (st.session_state.auth_email, _sess_token))
-                                        # Ensure user_roles table exists
-                                        _cur.execute("""
-                                            CREATE TABLE IF NOT EXISTS user_roles (
-                                                email TEXT PRIMARY KEY,
-                                                role TEXT NOT NULL DEFAULT 'read_only',
-                                                created_at TIMESTAMPTZ DEFAULT NOW()
-                                            )
-                                        """)
-                                        # Insert user with default read_only role if not exists
-                                        _cur.execute("""
-                                            INSERT INTO user_roles (email, role)
-                                            VALUES (%s, 'read_only')
-                                            ON CONFLICT (email) DO NOTHING
-                                        """, (st.session_state.auth_email,))
-                                        # Fetch role for this user
-                                        _cur.execute("SELECT role FROM user_roles WHERE email=%s", (st.session_state.auth_email,))
-                                        _role_row = _cur.fetchone()
-                                        _ADMIN_EMAILS = {"wpo70@icloud.com", "wpo@rateedge.au"}
-                                        if st.session_state.auth_email in _ADMIN_EMAILS:
-                                            st.session_state["user_role"] = "admin"
-                                        else:
-                                            st.session_state["user_role"] = _role_row[0] if _role_row else "read_only"
-                                        _conn.commit()
-                                        _conn.close()
-                            except Exception:
-                                pass
-                            st.session_state["authenticated"] = True
-                            st.session_state["username"] = st.session_state.auth_email
-                            st.session_state["user_email"] = st.session_state.auth_email
-                            st.session_state["session_token"] = _sess_token
-                            st.session_state.auth_step = 'email'
-                            # Reset auto-load flag so spreads + configs reload for this user
-                            st.session_state["db_auto_loaded"] = False
-                            st.rerun()
-                        else:
-                            st.error(data.get("error", "Invalid code"))
+            with st.form("otp_form", clear_on_submit=False):
+                otp = st.text_input("Code", placeholder="Enter 6-digit code", max_chars=6, key="login_otp_input", label_visibility="collapsed")
+                col_back, col_verify = st.columns(2)
+                with col_back:
+                    _back = st.form_submit_button("← Back", use_container_width=True)
+                with col_verify:
+                    _verify = st.form_submit_button("Verify", use_container_width=True)
+            if _back:
+                st.session_state.auth_step = 'email'
+                st.rerun()
+            if _verify:
+                if otp and len(otp) == 6:
+                    status, data = verify_otp(st.session_state.auth_email, otp)
+                    if status == 200:
+                        # Single session enforcement — store token in DB, invalidate old session
+                        import secrets as _sec
+                        _sess_token = _sec.token_hex(32)
+                        try:
+                            if HAS_POSTGRES:
+                                _conn = get_db_connection()
+                                if _conn:
+                                    _cur = _conn.cursor()
+                                    _cur.execute("""
+                                        CREATE TABLE IF NOT EXISTS active_sessions (
+                                            email TEXT PRIMARY KEY,
+                                            session_token TEXT NOT NULL,
+                                            created_at TIMESTAMPTZ DEFAULT NOW()
+                                        )
+                                    """)
+                                    _cur.execute("""
+                                        INSERT INTO active_sessions (email, session_token, created_at)
+                                        VALUES (%s, %s, NOW())
+                                        ON CONFLICT (email) DO UPDATE SET session_token=EXCLUDED.session_token, created_at=NOW()
+                                    """, (st.session_state.auth_email, _sess_token))
+                                    _cur.execute("""
+                                        CREATE TABLE IF NOT EXISTS user_roles (
+                                            email TEXT PRIMARY KEY,
+                                            role TEXT NOT NULL DEFAULT 'read_only',
+                                            created_at TIMESTAMPTZ DEFAULT NOW()
+                                        )
+                                    """)
+                                    _cur.execute("""
+                                        INSERT INTO user_roles (email, role)
+                                        VALUES (%s, 'read_only')
+                                        ON CONFLICT (email) DO NOTHING
+                                    """, (st.session_state.auth_email,))
+                                    _cur.execute("SELECT role FROM user_roles WHERE email=%s", (st.session_state.auth_email,))
+                                    _role_row = _cur.fetchone()
+                                    _ADMIN_EMAILS = {"wpo70@icloud.com", "wpo@rateedge.au"}
+                                    if st.session_state.auth_email in _ADMIN_EMAILS:
+                                        st.session_state["user_role"] = "admin"
+                                    else:
+                                        st.session_state["user_role"] = _role_row[0] if _role_row else "read_only"
+                                    _conn.commit()
+                                    _conn.close()
+                        except Exception:
+                            pass
+                        st.session_state["authenticated"] = True
+                        st.session_state["username"] = st.session_state.auth_email
+                        st.session_state["user_email"] = st.session_state.auth_email
+                        st.session_state["session_token"] = _sess_token
+                        st.session_state.auth_step = 'email'
+                        st.session_state["db_auto_loaded"] = False
+                        st.rerun()
                     else:
-                        st.error("Please enter the 6-digit code")
+                        st.error(data.get("error", "Invalid code"))
+                else:
+                    st.error("Please enter the 6-digit code")
         
         st.markdown(
             "<div style='text-align:center;margin-top:1rem;color:#64748b;font-size:0.85rem'>"
