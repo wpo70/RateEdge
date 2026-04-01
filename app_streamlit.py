@@ -13514,7 +13514,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105w</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3105x</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -14859,6 +14859,16 @@ def show_login_page():
         font-weight: 600 !important;
     }
     .stButton > button:hover {background: #b91c1c !important;}
+    .stFormSubmitButton > button {
+        background: #dc2626 !important;
+        color: white !important;
+        border: none !important;
+        width: 100% !important;
+        border-radius: 8px !important;
+        padding: 12px !important;
+        font-weight: 600 !important;
+    }
+    .stFormSubmitButton > button:hover {background: #b91c1c !important;}
     </style>
     """, unsafe_allow_html=True)
     
