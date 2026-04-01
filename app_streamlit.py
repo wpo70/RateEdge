@@ -2926,12 +2926,40 @@ def _load_portfolio() -> list:
         return []
 
 def is_admin() -> bool:
-    """Check if current user has admin role."""
+    """Admin — full access including SABR calibration, user management, all DB ops."""
     return st.session_state.get("user_role", "read_only") == "admin"
 
+def is_user() -> bool:
+    """User — can edit vol surfaces, upload EOD/intraday snapshots, edit CFS wedges."""
+    return st.session_state.get("user_role", "read_only") in ("admin", "user")
+
+def is_view_only() -> bool:
+    """View-only — can load IRS/vols, price options, copy Quick Tix. No editing."""
+    return st.session_state.get("user_role", "read_only") == "read_only"
+
 def is_read_only() -> bool:
-    """Check if current user is read-only or trainee."""
+    """Read-only or trainee — cannot edit or save anything."""
     return st.session_state.get("user_role", "read_only") in ("read_only", "trainee")
+
+def is_trainee() -> bool:
+    """Trainee — can load IRS/vols and price locally only. No saving or Quick Tix."""
+    return st.session_state.get("user_role", "read_only") == "trainee"
+
+def can_upload_vol() -> bool:
+    """Can upload/save vol snapshots to DB."""
+    return st.session_state.get("user_role", "read_only") in ("admin", "user")
+
+def can_edit_wedges() -> bool:
+    """Can edit CFS wedge spreads."""
+    return st.session_state.get("user_role", "read_only") in ("admin", "user")
+
+def can_price() -> bool:
+    """Can price options."""
+    return st.session_state.get("user_role", "read_only") in ("admin", "user", "read_only")
+
+def can_quick_tix() -> bool:
+    """Can use Quick Tix copy function."""
+    return st.session_state.get("user_role", "read_only") in ("admin", "user", "read_only")
 
 # ── SABR Calibration Reference Data (31-Mar-2026) ──────────────────────────
 # Source: Market vol cube calibration. Per-cell rho and nu from smile data.
@@ -3864,7 +3892,7 @@ def vol_config_tab():
             "USD & NZD Vol": "atm_usd_nzd"
         }
         
-        if st.button(" Commit Selected Data", key="commit_btn", type="primary", disabled=is_trainee()):
+        if st.button(" Commit Selected Data", key="commit_btn", type="primary", disabled=not can_upload_vol()):
             selected_type = type_map[load_type]
             loaded = load_config_excel(upload, selected_type)
             
@@ -4112,7 +4140,7 @@ def vol_config_tab():
             
             snap_notes = st.text_area("Notes (optional)", placeholder="Additional context about this snapshot...", key="snap_notes", height=100)
             
-            if st.button("💾 Save Snapshot", key="save_snapshot_btn", type="primary", disabled=is_trainee()):
+            if st.button("💾 Save Snapshot", key="save_snapshot_btn", type="primary", disabled=not can_upload_vol()):
                 if not snap_label.strip():
                     st.error("Please provide a label for this snapshot")
                 else:
@@ -6749,7 +6777,8 @@ def swaptions_tab(vol_mode: str):
                     st.dataframe(pd.DataFrame(_leg_rows), use_container_width=True, hide_index=True)
 
                 # Quick Tix
-                with st.expander(f"📋 Quick Tix — {_label[:40]}", expanded=False):
+                if can_quick_tix():
+                 with st.expander(f"📋 Quick Tix — {_label[:40]}", expanded=False):
                     # Build dates
                     from datetime import date as _date
                     from dateutil.relativedelta import relativedelta as _rdelta
@@ -7679,7 +7708,7 @@ def caps_floors_tab(vol_mode: str):
 
     st.markdown("---")
     
-    if st.button(" Price Cap/Floor", key="cf_price", type="primary", disabled=is_trainee()):
+    if st.button(" Price Cap/Floor", key="cf_price", type="primary", disabled=not can_upload_vol()):
         try:
             pv_total = 0.0
             delta_total = 0.0
@@ -13587,9 +13616,8 @@ def main():
                         _cur.execute("""
                             SELECT id FROM vol_history 
                             WHERE currency=%s AND atm_vols IS NOT NULL
-                            AND (user_id=%s OR user_id='wpo@rateedge.au')
                             ORDER BY snapshot_date DESC LIMIT 1
-                        """, (_cy, _uid))
+                        """, (_cy,))
                         _row = _cur.fetchone()
                         if _row:
                             _cur2 = _sc.cursor()
@@ -13645,7 +13673,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106b</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106d</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -15084,7 +15112,8 @@ def show_login_page():
                                     _cur.execute("""
                                         CREATE TABLE IF NOT EXISTS user_roles (
                                             email TEXT PRIMARY KEY,
-                                            role TEXT NOT NULL DEFAULT 'read_only',
+                                            role TEXT NOT NULL DEFAULT 'read_only'
+                                                CHECK (role IN ('admin','user','read_only','trainee')),
                                             created_at TIMESTAMPTZ DEFAULT NOW()
                                         )
                                     """)
@@ -15099,7 +15128,10 @@ def show_login_page():
                                     if st.session_state.auth_email in _ADMIN_EMAILS:
                                         st.session_state["user_role"] = "admin"
                                     else:
-                                        st.session_state["user_role"] = _role_row[0] if _role_row else "read_only"
+                                        _db_role = _role_row[0] if _role_row else "read_only"
+                                        # Validate role value
+                                        _db_role = _db_role if _db_role in ("admin","user","read_only","trainee") else "read_only"
+                                        st.session_state["user_role"] = _db_role
                                     _conn.commit()
                                     _conn.close()
                         except Exception:
