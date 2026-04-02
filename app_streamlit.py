@@ -2927,7 +2927,11 @@ def _load_portfolio() -> list:
 
 def is_admin() -> bool:
     """Admin — full access including SABR calibration, user management, all DB ops."""
-    return st.session_state.get("user_role", "read_only") == "admin"
+    return st.session_state.get("user_role", "read_only") in ("admin", "super_admin")
+
+def is_super_admin() -> bool:
+    """Super admin — can change roles, unhide hidden tabs. Will only."""
+    return st.session_state.get("user_role", "read_only") == "super_admin"
 
 def is_user() -> bool:
     """User — can edit vol surfaces, upload EOD/intraday snapshots, edit CFS wedges."""
@@ -13673,7 +13677,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106d</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106e</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -13726,6 +13730,42 @@ def main():
                 st.session_state["username"] = None
                 st.session_state["db_auto_loaded"] = False
                 st.rerun()
+
+            # ── Super Admin: User Role Management ────────────────────
+            if is_super_admin():
+                st.markdown("---")
+                with st.expander("👑 User Management", expanded=False):
+                    try:
+                        _rm_conn = get_db_connection()
+                        if _rm_conn:
+                            _rm_cur = _rm_conn.cursor()
+                            _rm_cur.execute("SELECT email, role FROM user_roles ORDER BY email")
+                            _rm_rows = _rm_cur.fetchall()
+                            _rm_cur.close()
+                            _rm_conn.close()
+                            if _rm_rows:
+                                for _rm_email, _rm_role in _rm_rows:
+                                    _rc1, _rc2 = st.columns([2, 1])
+                                    with _rc1:
+                                        st.caption(_rm_email)
+                                    with _rc2:
+                                        _new_role = st.selectbox(
+                                            "Role", ["admin","user","read_only","trainee"],
+                                            index=["admin","user","read_only","trainee"].index(_rm_role) if _rm_role in ["admin","user","read_only","trainee"] else 2,
+                                            key=f"role_{_rm_email}",
+                                            label_visibility="collapsed"
+                                        )
+                                    if _new_role != _rm_role:
+                                        if st.button(f"Save {_rm_email[:15]}", key=f"save_role_{_rm_email}"):
+                                            _uc = get_db_connection()
+                                            if _uc:
+                                                _uc2 = _uc.cursor()
+                                                _uc2.execute("UPDATE user_roles SET role=%s WHERE email=%s", (_new_role, _rm_email))
+                                                _uc.commit(); _uc2.close(); _uc.close()
+                                                st.success(f"✅ {_rm_email} → {_new_role}")
+                                                st.rerun()
+                    except Exception as _rme:
+                        st.caption(f"Role mgmt error: {_rme}")
         else:
             st.warning(" Login required")
             st.caption("Use the main login page to sign in with your email")
@@ -13896,56 +13936,46 @@ def main():
         pass
 
     # Only show tabs if authenticated
-    tabs = st.tabs(
-        [
-            "🏡 Home",
-            "📋 Vol / Upload",
-            "📏 Curves",
-            "📈 FWD IRS Analysis",
-            "📊 Historical VOL Analysis",
-            "📊 Swaptions",
-            "🔔 Caps & Floors",
-            "💼 Portfolio",
-            "⚛️ RV / Calendar",
-            "🔮 Exotics",
-            "📏 SOD Report",
-            "✅ Vol Editor",
-            "📑 Vol Export",
-            "📍 Multi-CCY",
-            "📜 Bond Options",
-        ]
-    )
+    _show_hidden = is_super_admin()
 
-    with tabs[0]:
-        home_tab()
-    with tabs[1]:
-        vol_config_tab()
-    with tabs[2]:
-        curves_tab()
-    with tabs[3]:
-        fwd_analysis_tab()
-    with tabs[4]:
-        backtesting_tab()
-    with tabs[5]:
-        swaptions_tab(vol_mode)
-    with tabs[6]:
-        caps_floors_tab(vol_mode)
-    with tabs[7]:
-        portfolio_tab()
-    with tabs[8]:
-        rv_tab()
-    with tabs[9]:
-        exotics_tab(vol_mode)
-    with tabs[10]:
-        sod_report_tab()
-    with tabs[11]:
-        vol_surface_editor_tab()
-    with tabs[12]:
-        vol_export_tab()
-    with tabs[13]:
-        multi_ccy_tab(vol_mode)
-    with tabs[14]:
-        bond_option_tab()
+    _tab_names = [
+        "🏡 Home",
+        "📋 Vol / Upload",
+        "📏 Curves",
+        "📈 FWD IRS Analysis",
+        "📊 Historical VOL Analysis",
+        "📊 Swaptions",
+        "🔔 Caps & Floors",
+        "💼 Portfolio",
+        "⚛️ RV / Calendar",
+        "🔮 Exotics",
+        "📏 SOD Report",
+        "✅ Vol Editor",
+        "📑 Vol Export",
+    ]
+    _tab_funcs = [
+        home_tab,
+        vol_config_tab,
+        curves_tab,
+        fwd_analysis_tab,
+        backtesting_tab,
+        lambda: swaptions_tab(vol_mode),
+        lambda: caps_floors_tab(vol_mode),
+        portfolio_tab,
+        rv_tab,
+        lambda: exotics_tab(vol_mode),
+        sod_report_tab,
+        vol_surface_editor_tab,
+        vol_export_tab,
+    ]
+    if _show_hidden:
+        _tab_names += ["📍 Multi-CCY", "📜 Bond Options"]
+        _tab_funcs += [lambda: multi_ccy_tab(vol_mode), bond_option_tab]
+
+    tabs = st.tabs(_tab_names)
+    for _ti, _tf in enumerate(_tab_funcs):
+        with tabs[_ti]:
+            _tf()
 
 
 def sod_report_tab():
@@ -15126,11 +15156,10 @@ def show_login_page():
                                     _role_row = _cur.fetchone()
                                     _ADMIN_EMAILS = {"wpo70@icloud.com", "wpo@rateedge.au"}
                                     if st.session_state.auth_email in _ADMIN_EMAILS:
-                                        st.session_state["user_role"] = "admin"
+                                        st.session_state["user_role"] = "super_admin"
                                     else:
                                         _db_role = _role_row[0] if _role_row else "read_only"
-                                        # Validate role value
-                                        _db_role = _db_role if _db_role in ("admin","user","read_only","trainee") else "read_only"
+                                        _db_role = _db_role if _db_role in ("super_admin","admin","user","read_only","trainee") else "read_only"
                                         st.session_state["user_role"] = _db_role
                                     _conn.commit()
                                     _conn.close()
