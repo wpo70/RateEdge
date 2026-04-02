@@ -2093,7 +2093,8 @@ def build_caplet_vol_curve_from_surface(ccy: str, atm_surface):
     if anchor_mats:
         from scipy.optimize import least_squares
         try:
-            res = least_squares(price_with_interp, [caplet_vols[m] for m in anchor_mats], ftol=1e-12, xtol=1e-12, gtol=1e-12)
+            res = least_squares(price_with_interp, [caplet_vols[m] for m in anchor_mats],
+                                ftol=1e-4, xtol=1e-4, gtol=1e-4, max_nfev=200)
             if res.success:
                 for i, m in enumerate(anchor_mats):
                     caplet_vols[m] = max(res.x[i], 1.0)
@@ -2339,7 +2340,9 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         
         from scipy.optimize import least_squares
         try:
-            result = least_squares(price_with_interp_curve, initial_guess, ftol=1e-12, xtol=1e-12, gtol=1e-12)
+            result = least_squares(price_with_interp_curve, initial_guess,
+                                   ftol=1e-4, xtol=1e-4, gtol=1e-4,
+                                   max_nfev=200)
             
             if result.success:
                 for i, mat in enumerate(anchor_mats_to_solve):
@@ -3351,6 +3354,9 @@ def set_ccy_vol_data(ccy: str, atm, a, b, r, n):
         existing_atm, _, _, _, _ = (st.session_state.get("vol_data", {}).get(ccy, {}).get("atm"), None, None, None, None)
         atm = existing_atm  # preserve the DB-loaded surface
     st.session_state["vol_data"][ccy] = {"atm": atm, "alpha": a, "beta": b, "rho": r, "nu": n}
+    if atm is not None:
+        _h = st.session_state.get(f"_atm_hash_{ccy}", 0)
+        st.session_state[f"_atm_hash_{ccy}"] = _h + 1
     ve = st.session_state["vol_editor"]
     if atm is not None:
         ve["base"][ccy] = atm.copy()
@@ -4310,6 +4316,8 @@ def vol_config_tab():
                                     if "vol_editor" in st.session_state:
                                         st.session_state["vol_editor"]["working"].pop(ccy, None)
                                         st.session_state["vol_editor"]["base"].pop(ccy, None)
+                                    _h = st.session_state.get(f"_atm_hash_{ccy}", 0)
+                                    st.session_state[f"_atm_hash_{ccy}"] = _h + 1
                                     
                                     # Update timestamps
                                     if "timestamps" not in st.session_state:
@@ -7672,9 +7680,11 @@ def caps_floors_tab(vol_mode: str):
         
         # Build caplet curve — only rebuild when spreads or ATM surface change
         atm = get_working_atm_surface(ccy)
+        # Use stable ATM hash — id() changes every render if object is recreated
+        _atm_hash = st.session_state.get(f"_atm_hash_{ccy}", 0)
         _caplet_key = (spread_3m1y, spread_1y1y, spread_2y1y, spread_3y1y,
                        spread_4y1y, spread_5y2y, spread_7y3y, spread_10y2y, spread_12y3y,
-                       id(atm) if atm is not None else 0)
+                       _atm_hash)
         _cached_key = st.session_state.get("_caplet_curve_key")
         if _cached_key != _caplet_key or st.session_state.get("caplet_vol_curve_aud") is None:
             caplet_vol_curve = build_caplet_vol_curve(
@@ -13904,7 +13914,10 @@ def main():
                                         _vd["alpha"]=_da
                                     except: pass
                                 _sl.append(f"{_cc2}:{_lbl}")
-                                st.session_state[f"_vol_loaded_{_cc2}"] = True  # authoritative flag
+                                st.session_state[f"_vol_loaded_{_cc2}"] = True
+                                # Bump stable ATM hash so caplet cache invalidates correctly
+                                _h = st.session_state.get(f"_atm_hash_{_cc2}", 0)
+                                st.session_state[f"_atm_hash_{_cc2}"] = _h + 1
                                 # Clear stale vol_editor working copy so get_working_atm_surface
                                 # returns the fresh surface, not a stale draft
                                 if "vol_editor" in st.session_state:
@@ -13931,7 +13944,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107d</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107f</div>
             </div>
             """,
             unsafe_allow_html=True,
