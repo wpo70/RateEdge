@@ -12960,95 +12960,251 @@ def bond_option_tab():
 
 
 def portfolio_tab():
-    st.subheader("Portfolio  Swaptions + Caps/Floors")
+    st.subheader("Portfolio  —  Swaptions + Caps & Floors")
 
     portfolio = st.session_state.get("portfolio", [])
     if not portfolio:
-        st.info("Portfolio is currently empty. Price swaptions or caps/floors to add trades.")
+        st.info("Portfolio is empty. Price swaptions or caps/floors to add trades.")
         return
 
-    df = pd.DataFrame(portfolio)
-    # Sort by expiry (recognise 1m < 3m < 1y etc.) then tenor
-    if "expiry" in df.columns:
-        df["_expiry_sort"] = df["expiry"].apply(lambda e: label_to_years(str(e)))
-        df = df.sort_values(["_expiry_sort", "tenor"]).reset_index(drop=True)
-        df = df.drop(columns=["_expiry_sort"])
-    df_display = df.copy()
-    if "pv" in df_display.columns:
-        df_display["PV (k)"] = (df_display["pv"] / 1e3).round(1)
-    if "pv_bp" in df_display.columns:
-        df_display["PV (bp)"] = df_display["pv_bp"].round(2)
-    if "delta" in df_display.columns:
-        df_display["Delta (k)"] = (df_display["delta"] / 1e3).round(1)
-    if "vega" in df_display.columns:
-        df_display["Vega (k)"] = (df_display["vega"] / 1e3).round(1)
-    if "gamma" in df_display.columns:
-        df_display["Gamma (k)"] = (df_display["gamma"] / 1e3).round(1)
-    if "theta" in df_display.columns:
-        df_display["Theta (k)"] = (df_display["theta"] / 1e3).round(1)
+    _sw_port  = [t for t in portfolio if t.get("instrument_type","Swaption") == "Swaption"]
+    _cf_port  = [t for t in portfolio if t.get("instrument_type") == "Cap/Floor"]
 
-    cols_order = [
-        "instrument_type", "currency", "structure", "expiry", "tenor", "model",
-        "notional_mm", "strike", "forward",
-        "PV (k)", "PV (bp)", "Delta (k)", "Gamma (k)", "Vega (k)", "Theta (k)"
-    ]
-    cols_order = [c for c in cols_order if c in df_display.columns]
-    df_display = df_display[cols_order]
+    ptf_tab1, ptf_tab2, ptf_tab3 = st.tabs(["📊 Swaption Blotter", "🔔 Cap/Floor Blotter", "📋 Composite View"])
 
-    # Height scales with number of rows (35px/row + header), min 200, max 600 — scrollable
-    _tbl_height = min(max(200, len(df_display) * 35 + 38), 600)
-    st.dataframe(df_display, use_container_width=True, height=_tbl_height)
+    # ── TAB 1: Swaption Blotter with Spreads ─────────────────────────
+    with ptf_tab1:
+        if not _sw_port:
+            st.info("No swaptions in portfolio.")
+        else:
+            df_sw = pd.DataFrame(_sw_port)
+            df_sw["_expiry_sort"] = df_sw["expiry"].apply(lambda e: label_to_years(str(e)))
+            df_sw = df_sw.sort_values("_expiry_sort").reset_index(drop=True)
 
-    # Reload / Reprice
-    st.markdown("##### Reload into Swaption Pricer")
-    swaption_rows = df[df.get("instrument_type", pd.Series(dtype=str)) == "Swaption"] if "instrument_type" in df.columns else df
-    row_labels_ptf = [
-        f"{i}: {r.get('label', f"{r.get('expiry','')}x{r.get('tenor','')}")}"
-        for i, r in df.iterrows()
-        if r.get("instrument_type", "Swaption") == "Swaption"
-    ]
-    if row_labels_ptf:
-        reload_sel_ptf = st.selectbox("Select ticket", ["  —  "] + row_labels_ptf, key="ptf_reload_sel")
-        if st.button("🔄 Reload & Reprice", key="ptf_reload_btn") and reload_sel_ptf != "  —  ":
-            row_idx = int(reload_sel_ptf.split(":")[0])
-            row = df.loc[row_idx]
-            EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","📅 Custom Date..."]
-            tenor_options = ["1Y","2Y","3Y","4Y","5Y","6Y","7Y","8Y","9Y","10Y","12Y","15Y","20Y","25Y","30Y"]
-            exp_val = str(row.get("expiry", "5y"))
-            tenor_val = str(row.get("tenor", "5Y"))
-            st.session_state["sw_pending_reload"] = {
-                "expiry": exp_val if exp_val in EXPIRY_PRESETS else "5y",
-                "tenor": tenor_val if tenor_val in tenor_options else "5Y",
-                "structure": str(row.get("structure", "ATM Straddle")),
-                "notional_mm": float(row.get("notional_mm", 100)),
-                "strike": float(row["strike"]) if "strike" in row and not pd.isna(row.get("strike", float("nan"))) else None,
-            }
-            st.rerun()
+            # Net Greeks
+            _net_pv    = sum(float(t.get("pv",0))    for t in _sw_port)
+            _net_delta = sum(float(t.get("delta",0))  for t in _sw_port)
+            _net_vega  = sum(float(t.get("vega",0))   for t in _sw_port)
+            _net_gamma = sum(float(t.get("gamma",0))  for t in _sw_port)
+            _net_theta = sum(float(t.get("theta",0))  for t in _sw_port)
 
-    indices = list(df.index)
-    selection = st.multiselect("Select rows to remove", indices, key="ptf_sel")
+            g1,g2,g3,g4,g5 = st.columns(5)
+            g1.metric("Net PV ($k)", f"{_net_pv/1000:,.1f}")
+            g2.metric("Net Delta ($k)", f"{_net_delta/1000:,.1f}")
+            g3.metric("Net Vega ($k)", f"{_net_vega/1000:,.1f}")
+            g4.metric("Net Gamma ($k)", f"{_net_gamma/1000:,.1f}")
+            g5.metric("Net Theta ($k/day)", f"{_net_theta/1000:,.2f}")
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("Remove selected", key="ptf_rm_sel"):
-            if selection:
-                st.session_state["portfolio"] = [
-                    row for i, row in enumerate(portfolio) if i not in selection
-                ]
+            st.markdown("---")
+
+            # Spread pairs — allow user to select two rows to show spread
+            if len(_sw_port) >= 2:
+                with st.expander("📐 Swaption Spread Calculator", expanded=False):
+                    _sw_labels = [f"{i}: {t.get('label', t.get('expiry','?')+'x'+str(t.get('tenor','?')))}" for i,t in enumerate(_sw_port)]
+                    _sc1, _sc2 = st.columns(2)
+                    with _sc1:
+                        _leg1_sel = st.selectbox("Leg 1 (Buy)", _sw_labels, key="spread_leg1")
+                    with _sc2:
+                        _leg2_sel = st.selectbox("Leg 2 (Sell)", _sw_labels, index=min(1,len(_sw_labels)-1), key="spread_leg2")
+                    _l1i = int(_leg1_sel.split(":")[0])
+                    _l2i = int(_leg2_sel.split(":")[0])
+                    if _l1i != _l2i:
+                        _t1 = _sw_port[_l1i]; _t2 = _sw_port[_l2i]
+                        _spd_pv    = float(_t1.get("pv",0))    - float(_t2.get("pv",0))
+                        _spd_pv_bp = float(_t1.get("pv_bp",0)) - float(_t2.get("pv_bp",0))
+                        _spd_delta = float(_t1.get("delta",0))  - float(_t2.get("delta",0))
+                        _spd_vega  = float(_t1.get("vega",0))   - float(_t2.get("vega",0))
+                        s1,s2,s3,s4 = st.columns(4)
+                        s1.metric("Spread PV ($k)", f"{_spd_pv/1000:,.1f}")
+                        s2.metric("Spread PV (bp)", f"{_spd_pv_bp:.2f}")
+                        s3.metric("Spread Delta ($k)", f"{_spd_delta/1000:,.1f}")
+                        s4.metric("Spread Vega ($k)", f"{_spd_vega/1000:,.1f}")
+                        st.caption(f"Buy: {_t1.get('label','')}   |   Sell: {_t2.get('label','')}")
+
+            # Blotter rows
+            for idx, row in df_sw.iterrows():
+                _struct   = row.get("structure","")
+                _label    = row.get("label", f"{row.get('expiry','?')}x{row.get('tenor','?')}")
+                _pv       = float(row.get("pv",0))
+                _pv_bp    = float(row.get("pv_bp",0))
+                _delta    = float(row.get("delta",0))
+                _vega     = float(row.get("vega",0))
+                _notl     = float(row.get("notional_mm",100))
+                _ccy      = row.get("currency","AUD")
+                _strike   = float(row.get("strike",0))
+                _fwd      = float(row.get("forward",0))
+                _expiry   = row.get("expiry","")
+                _tenor    = row.get("tenor","")
+                _legs     = row.get("legs",[]) if isinstance(row.get("legs",[]), list) else []
+
+                with st.container():
+                    c1,c2,c3,c4,c5,c6,c7 = st.columns([3,1,1,1,1,1,0.6])
+                    c1.markdown(f"**{idx+1}. {_label}**")
+                    c2.metric("PV bp", f"{_pv_bp:.2f}")
+                    c3.metric("PV $k", f"{_pv/1000:,.1f}")
+                    c4.metric("Δ $k", f"{_delta/1000:,.1f}")
+                    c5.metric("Vega $k", f"{_vega/1000:,.1f}")
+                    c6.metric("Notl", f"{_notl:.0f}mm")
+                    with c7:
+                        if st.button("🗑️", key=f"ptf_sw_del_{idx}"):
+                            st.session_state["portfolio"] = [
+                                p for i,p in enumerate(portfolio)
+                                if not (p.get("instrument_type","Swaption")=="Swaption" and p.get("label")==_label)
+                            ]
+                            st.session_state["swaption_portfolio"] = [
+                                p for p in st.session_state["swaption_portfolio"] if p.get("label")!=_label
+                            ]
+                            _save_portfolio(); st.rerun()
+
+                    # Legs for R/R and Ladders
+                    if _struct in ["Risk Reversal","Payer Ladder","Receiver Ladder"] and _legs:
+                        _ldf = pd.DataFrame([{
+                            "Leg": l.get("name",""), "B/S": "Buy" if int(l.get("qty",1))>0 else "Sell",
+                            "Strike (%)": f"{float(l.get('strike',0)):.4f}",
+                            "PV $k": f"{float(l.get('pv',0))/1000:,.1f}",
+                            "Delta $k": f"{float(l.get('delta',0))/1000:,.1f}",
+                        } for l in _legs])
+                        st.dataframe(_ldf, use_container_width=True, hide_index=True)
+
+                    # Quick Tix
+                    if can_quick_tix():
+                        with st.expander(f"📋 Quick Tix", expanded=False):
+                            from datetime import date as _qdate
+                            from dateutil.relativedelta import relativedelta as _qrd
+                            try:
+                                _qtoday = _qdate.today()
+                                _exp_y  = label_to_years(str(_expiry))
+                                _ten_y  = float(str(_tenor).replace("Y","").replace("y",""))
+                                _exp_dt   = _qtoday + _qrd(days=int(_exp_y*365.25))
+                                _start_dt = _exp_dt + _qrd(days=2)
+                                _end_dt   = _start_dt + _qrd(months=int(_ten_y*12))
+                                _rolls = [(_start_dt + _qrd(months=3*(i+1))).strftime('%d-%b-%Y') for i in range(min(4,int(_ten_y*4)))]
+                                _delta_dir = "Pay Fixed" if _delta > 0 else "Rec Fixed"
+                                _tix = f"=== {_ccy} {_struct.upper()} ===\n"
+                                _tix += f"Expiry:      {_exp_dt.strftime('%d-%b-%Y')} ({_expiry})\n"
+                                _tix += f"Swap Start:  {_start_dt.strftime('%d-%b-%Y')}\n"
+                                _tix += f"Swap End:    {_end_dt.strftime('%d-%b-%Y')}\n"
+                                _tix += f"Rolls:       {', '.join(_rolls)}\n"
+                                _tix += f"Fwd Rate:    {_fwd:.4f}%\n"
+                                if _legs and _struct in ["Risk Reversal","Payer Ladder","Receiver Ladder"]:
+                                    for _lg in _legs:
+                                        _s = "BUY " if int(_lg.get("qty",1))>0 else "SELL"
+                                        _tix += f"{_s} {_lg.get('name',''):20s} K={float(_lg.get('strike',0)):.4f}%\n"
+                                else:
+                                    _tix += f"Strike:      {_strike:.4f}%\n"
+                                _tix += f"Premium:     {_pv_bp:.2f} bp  ({_pv/1000:+,.1f}k)\n"
+                                _tix += f"Net Delta:   {_delta/1000:,.1f}k  →  {_delta_dir}\n"
+                                _tix += f"Notional:    {_notl:.0f}mm {_ccy}"
+                                st.code(_tix, language=None)
+                            except Exception as _qe:
+                                st.caption(f"Tix error: {_qe}")
+                    st.markdown("---")
+
+            # Reload into pricer
+            st.markdown("##### Reload into Pricer")
+            _sw_opts = [f"{i}: {t.get('label','?')}" for i,t in enumerate(_sw_port)]
+            _rsel = st.selectbox("Ticket", ["  —  "] + _sw_opts, key="ptf_sw_reload")
+            if st.button("🔄 Reload", key="ptf_sw_reload_btn") and _rsel != "  —  ":
+                _ri = int(_rsel.split(":")[0])
+                _rrow = _sw_port[_ri]
+                _EP = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","📅 Custom Date..."]
+                _TO = ["1Y","2Y","3Y","4Y","5Y","6Y","7Y","8Y","9Y","10Y","12Y","15Y","20Y","25Y","30Y"]
+                _ev = str(_rrow.get("expiry","5y")); _tv = str(_rrow.get("tenor","5Y"))
+                st.session_state["sw_pending_reload"] = {
+                    "expiry": _ev if _ev in _EP else "5y",
+                    "tenor": _tv if _tv in _TO else "5Y",
+                    "structure": str(_rrow.get("structure","ATM Straddle")),
+                    "notional_mm": float(_rrow.get("notional_mm",100)),
+                    "strike": float(_rrow["strike"]) if "strike" in _rrow else None,
+                }
                 st.rerun()
-    with col2:
-        if st.button("Clear ALL", key="ptf_clear_all"):
+
+    # ── TAB 2: Cap/Floor Blotter ──────────────────────────────────────
+    with ptf_tab2:
+        if not _cf_port:
+            st.info("No caps/floors in portfolio.")
+        else:
+            df_cf = pd.DataFrame(_cf_port)
+            _cf_pv    = sum(float(t.get("pv",0))   for t in _cf_port)
+            _cf_delta = sum(float(t.get("delta",0)) for t in _cf_port)
+            _cf_vega  = sum(float(t.get("vega",0))  for t in _cf_port)
+            c1,c2,c3 = st.columns(3)
+            c1.metric("Net PV ($k)", f"{_cf_pv/1000:,.1f}")
+            c2.metric("Net Delta ($k)", f"{_cf_delta/1000:,.1f}")
+            c3.metric("Net Vega ($k)", f"{_cf_vega/1000:,.1f}")
+            st.markdown("---")
+            _cf_cols = ["instrument_type","currency","structure","first_fixing","tenor","notional_mm",
+                        "strike","pv_bp","pv","delta","vega"]
+            _cf_disp = df_cf[[c for c in _cf_cols if c in df_cf.columns]].copy()
+            if "pv" in _cf_disp: _cf_disp["pv"] = (_cf_disp["pv"]/1000).round(1)
+            if "delta" in _cf_disp: _cf_disp["delta"] = (_cf_disp["delta"]/1000).round(1)
+            if "vega" in _cf_disp: _cf_disp["vega"] = (_cf_disp["vega"]/1000).round(1)
+            if "pv_bp" in _cf_disp: _cf_disp["pv_bp"] = _cf_disp["pv_bp"].round(2)
+            st.dataframe(_cf_disp, use_container_width=True)
+            if st.button("🗑️ Clear Cap/Floor", key="ptf_cf_clear"):
+                st.session_state["portfolio"] = [p for p in portfolio if p.get("instrument_type")!="Cap/Floor"]
+                _save_portfolio(); st.rerun()
+
+    # ── TAB 3: Composite View ─────────────────────────────────────────
+    with ptf_tab3:
+        st.markdown("### Combined Portfolio — Swaptions + Caps/Floors")
+
+        _all_pv    = sum(float(t.get("pv",0))    for t in portfolio)
+        _all_delta = sum(float(t.get("delta",0))  for t in portfolio)
+        _all_vega  = sum(float(t.get("vega",0))   for t in portfolio)
+        _all_gamma = sum(float(t.get("gamma",0))  for t in portfolio)
+        _all_theta = sum(float(t.get("theta",0))  for t in portfolio)
+
+        g1,g2,g3,g4,g5 = st.columns(5)
+        g1.metric("Total PV ($k)", f"{_all_pv/1000:,.1f}")
+        g2.metric("Net Delta ($k)", f"{_all_delta/1000:,.1f}")
+        g3.metric("Net Vega ($k)", f"{_all_vega/1000:,.1f}")
+        g4.metric("Net Gamma ($k)", f"{_all_gamma/1000:,.1f}")
+        g5.metric("Net Theta ($k/day)", f"{_all_theta/1000:,.2f}")
+
+        st.markdown("---")
+
+        # By instrument type
+        _sw_pv = sum(float(t.get("pv",0)) for t in _sw_port)
+        _cf_pv = sum(float(t.get("pv",0)) for t in _cf_port)
+        if _sw_port and _cf_port:
+            b1,b2,b3 = st.columns(3)
+            b1.metric("Swaption PV ($k)", f"{_sw_pv/1000:,.1f}")
+            b2.metric("Cap/Floor PV ($k)", f"{_cf_pv/1000:,.1f}")
+            b3.metric("Composite PV ($k)", f"{(_sw_pv+_cf_pv)/1000:,.1f}")
+            st.markdown("---")
+
+        # Full blotter
+        _all_rows = []
+        for t in portfolio:
+            _all_rows.append({
+                "Type": t.get("instrument_type","Swaption"),
+                "CCY": t.get("currency","AUD"),
+                "Structure": t.get("structure",""),
+                "Expiry": t.get("expiry","") or t.get("first_fixing",""),
+                "Tenor": t.get("tenor",""),
+                "Notl (mm)": float(t.get("notional_mm",100)),
+                "Strike (%)": f"{float(t.get('strike',0)):.4f}",
+                "Fwd (%)": f"{float(t.get('forward',0)):.4f}",
+                "PV (bp)": f"{float(t.get('pv_bp',0)):.2f}",
+                "PV ($k)": f"{float(t.get('pv',0))/1000:,.1f}",
+                "Δ ($k)": f"{float(t.get('delta',0))/1000:,.1f}",
+                "Vega ($k)": f"{float(t.get('vega',0))/1000:,.1f}",
+            })
+        _comp_df = pd.DataFrame(_all_rows)
+        _th = min(max(200, len(_comp_df)*35+38), 600)
+        st.dataframe(_comp_df, use_container_width=True, height=_th)
+
+        # Download
+        _csv = _comp_df.to_csv(index=False).encode("utf-8")
+        st.download_button("⬇️ Download CSV", data=_csv,
+                           file_name="RateEdge_portfolio.csv", mime="text/csv", key="ptf_comp_dl")
+
+        # Clear all
+        if st.button("🗑️ Clear All", key="ptf_comp_clear"):
             st.session_state["portfolio"] = []
-            st.rerun()
-    with col3:
-        csv_data = df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "Download CSV",
-            data=csv_data,
-            file_name="RateEdge_portfolio.csv",
-            mime="text/csv",
-            key="ptf_dl",
-        )
+            st.session_state["swaption_portfolio"] = []
+            _save_portfolio(); st.rerun()
 
 
 def home_tab():
@@ -13677,7 +13833,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106e</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106f</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -13820,34 +13976,34 @@ def main():
                         _resend_key = st.secrets.get("RESEND_API_KEY", os.environ.get("RESEND_API_KEY", ""))
                         if _resend_key:
                             import requests as _req
-                            # Email to Will
                             _er = _req.post(
                                 "https://api.resend.com/emails",
                                 headers={"Authorization": f"Bearer {_resend_key}", "Content-Type": "application/json"},
-                                json={"from": "support@rateedge.au", "to": ["wpo@rateedge.au"],
+                                json={"from": "support@rateedge.au",
+                                      "to": ["wpo@rateedge.au", "wpo70@icloud.com"],
+                                      "reply_to": _user_email,
                                       "subject": _subj, "html": _body_html, "text": _body_text},
                                 timeout=10
                             )
                             _sent_email = _er.status_code in (200, 201)
 
-                            # SMS via Twilio
-                            _tw_sid   = st.secrets.get("TWILIO_SID",   os.environ.get("TWILIO_SID",   ""))
-                            _tw_token = st.secrets.get("TWILIO_TOKEN", os.environ.get("TWILIO_TOKEN", ""))
-                            _tw_from  = st.secrets.get("TWILIO_FROM",  os.environ.get("TWILIO_FROM",  "+12602979976"))
-                            if _tw_sid and _tw_token:
-                                import base64 as _b64
-                                _tw_auth = _b64.b64encode(f"{_tw_sid}:{_tw_token}".encode()).decode()
-                                _sr = _req.post(
-                                    f"https://api.twilio.com/2010-04-01/Accounts/{_tw_sid}/Messages.json",
-                                    headers={"Authorization": f"Basic {_tw_auth}"},
-                                    data={"To": "+61478829669", "From": _tw_from, "Body": _sms_body},
-                                    timeout=10
-                                )
-                                _sent_sms = _sr.status_code in (200, 201)
-                            else:
-                                _sent_sms = False
-                        else:
-                            st.warning("RESEND_API_KEY not configured — ticket not sent.")
+                        # SMS via Twilio — uses env vars on Render
+                        _tw_sid   = st.secrets.get("TWILIO_SID",   os.environ.get("TWILIO_SID",   "ACbb0ff7ea8f12c1386d4553977b8d8db7"))
+                        _tw_token = st.secrets.get("TWILIO_TOKEN", os.environ.get("TWILIO_TOKEN", ""))
+                        _tw_from  = st.secrets.get("TWILIO_FROM",  os.environ.get("TWILIO_FROM",  "+12602979976"))
+                        _tw_to    = os.environ.get("TWILIO_TO", "+61478829669")
+                        if _tw_sid and _tw_token:
+                            import requests as _req, base64 as _b64
+                            _tw_auth = _b64.b64encode(f"{_tw_sid}:{_tw_token}".encode()).decode()
+                            _sr = _req.post(
+                                f"https://api.twilio.com/2010-04-01/Accounts/{_tw_sid}/Messages.json",
+                                headers={"Authorization": f"Basic {_tw_auth}"},
+                                data={"To": _tw_to, "From": _tw_from, "Body": _sms_body},
+                                timeout=10
+                            )
+                            _sent_sms = _sr.status_code in (200, 201)
+                        if not _resend_key and not _tw_token:
+                            st.warning("RESEND_API_KEY / TWILIO_TOKEN not configured on Render.")
                     except Exception as _se:
                         st.error(f"Failed to send: {_se}")
 
