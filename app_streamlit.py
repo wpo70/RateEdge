@@ -13862,7 +13862,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106w</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106x</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -13935,8 +13935,8 @@ def main():
                                         st.caption(_rm_email)
                                     with _rc2:
                                         _new_role = st.selectbox(
-                                            "Role", ["admin","user","read_only","trainee"],
-                                            index=["admin","user","read_only","trainee"].index(_rm_role) if _rm_role in ["admin","user","read_only","trainee"] else 2,
+                                            "Role", ["super_admin","admin","user","read_only","trainee"],
+                                            index=["super_admin","admin","user","read_only","trainee"].index(_rm_role) if _rm_role in ["super_admin","admin","user","read_only","trainee"] else 2,
                                             key=f"role_{_rm_email}",
                                             label_visibility="collapsed"
                                         )
@@ -15344,7 +15344,7 @@ def show_login_page():
                                         st.session_state["user_role"] = "super_admin"
                                     else:
                                         _db_role = _role_row[0] if _role_row else "read_only"
-                                        _db_role = _db_role if _db_role in ("super_admin","admin","user","read_only","trainee") else "read_only"
+                                        _db_role = _db_role if _db_role in ("super_admin","super_admin","admin","user","read_only","trainee") else "read_only"
                                         st.session_state["user_role"] = _db_role
                                     _conn.commit()
                                     _conn.close()
