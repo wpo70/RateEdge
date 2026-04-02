@@ -7808,17 +7808,12 @@ def caps_floors_tab(vol_mode: str):
                 eps = 0.0001  # 1bp spread
                 lo = price_strip(strike_val - eps/2, is_cap_flag, leg_name)
                 hi = price_strip(strike_val + eps/2, is_cap_flag, leg_name)
-                scale = 0.01 / eps  # 100bp payout / 1bp spread width
+                scale = 0.01 / eps  # 100bp payout / 1bp spread width = 100
                 pv    = (lo["pv"]    - hi["pv"])    * scale
                 delta = (lo["delta"] - hi["delta"]) * scale
                 vega  = (lo["vega"]  - hi["vega"])  * scale
                 gamma = (lo["gamma"] - hi["gamma"]) * scale
-                # Tag caplets with digital flag
-                caplets = lo["caplets"]
-                for c in caplets:
-                    c["Leg"] = leg_name
-                    c["PV"] = f"${(float(c['PV'].replace('$','').replace(',','')) - float(hi['caplets'][caplets.index(c)]['PV'].replace('$','').replace(',',''))) * scale:,.0f}" if caplets.index(c) < len(hi["caplets"]) else c["PV"]
-                return {"pv": pv, "delta": delta, "vega": vega, "gamma": gamma, "caplets": caplets}
+                return {"pv": pv, "delta": delta, "vega": vega, "gamma": gamma, "caplets": lo["caplets"]}
             
             legs = []
             
@@ -13137,13 +13132,6 @@ def portfolio_tab():
             st.info("No caps/floors in portfolio.")
         else:
             df_cf = pd.DataFrame(_cf_port)
-            _cf_pv    = sum(float(t.get("pv",0))   for t in _cf_port)
-            _cf_delta = sum(float(t.get("delta",0)) for t in _cf_port)
-            _cf_vega  = sum(float(t.get("vega",0))  for t in _cf_port)
-            c1,c2,c3 = st.columns(3)
-            c1.metric("Net PV ($k)", f"{_cf_pv/1000:,.1f}")
-            c2.metric("Net Delta ($k)", f"{_cf_delta/1000:,.1f}")
-            c3.metric("Net Vega ($k)", f"{_cf_vega/1000:,.1f}")
             st.markdown("---")
             _cf_cols = ["instrument_type","currency","structure","first_fixing","tenor","notional_mm",
                         "strike","pv_bp","pv","delta","vega"]
@@ -13160,16 +13148,6 @@ def portfolio_tab():
     elif _ptf_view == "📋 Composite":
         st.markdown("### Combined Portfolio — Swaptions + Caps/Floors")
         st.markdown("---")
-
-        # By instrument type
-        _sw_pv = sum(float(t.get("pv",0)) for t in _sw_port)
-        _cf_pv = sum(float(t.get("pv",0)) for t in _cf_port)
-        if _sw_port and _cf_port:
-            b1,b2,b3 = st.columns(3)
-            b1.metric("Swaption PV ($k)", f"{_sw_pv/1000:,.1f}")
-            b2.metric("Cap/Floor PV ($k)", f"{_cf_pv/1000:,.1f}")
-            b3.metric("Composite PV ($k)", f"{(_sw_pv+_cf_pv)/1000:,.1f}")
-            st.markdown("---")
 
         # Full blotter
         _all_rows = []
@@ -13831,7 +13809,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106p</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106q</div>
             </div>
             """,
             unsafe_allow_html=True,
