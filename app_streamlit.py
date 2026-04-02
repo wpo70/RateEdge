@@ -3344,6 +3344,10 @@ def get_ccy_vol_data(ccy: str):
 
 
 def set_ccy_vol_data(ccy: str, atm, a, b, r, n):
+    # Never overwrite a DB-loaded surface with None or stale data
+    if atm is None and st.session_state.get(f"_vol_loaded_{ccy}"):
+        existing_atm, _, _, _, _ = (st.session_state.get("vol_data", {}).get(ccy, {}).get("atm"), None, None, None, None)
+        atm = existing_atm  # preserve the DB-loaded surface
     st.session_state["vol_data"][ccy] = {"atm": atm, "alpha": a, "beta": b, "rho": r, "nu": n}
     ve = st.session_state["vol_editor"]
     if atm is not None:
@@ -13854,6 +13858,7 @@ def main():
             try:
                 _sc = get_db_connection()
                 if _sc:
+                    _sc.set_session(options={'statement_timeout': '8000'})  # 8s timeout
                     _cur = _sc.cursor()
                     _sl = []
                     for _cy in SUPPORTED_CURRENCIES:
@@ -13897,6 +13902,7 @@ def main():
                                         _vd["alpha"]=_da
                                     except: pass
                                 _sl.append(f"{_cc2}:{_lbl}")
+                                st.session_state[f"_vol_loaded_{_cc2}"] = True  # authoritative flag
                                 # Clear stale vol_editor working copy so get_working_atm_surface
                                 # returns the fresh surface, not a stale draft
                                 if "vol_editor" in st.session_state:
@@ -13923,7 +13929,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107b</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107c</div>
             </div>
             """,
             unsafe_allow_html=True,
