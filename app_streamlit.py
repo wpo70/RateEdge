@@ -12999,20 +12999,6 @@ def portfolio_tab():
             df_sw["_expiry_sort"] = df_sw["expiry"].apply(lambda e: label_to_years(str(e)))
             df_sw = df_sw.sort_values("_expiry_sort").reset_index(drop=True)
 
-            # Net Greeks
-            _net_pv    = sum(float(t.get("pv",0))    for t in _sw_port)
-            _net_delta = sum(float(t.get("delta",0))  for t in _sw_port)
-            _net_vega  = sum(float(t.get("vega",0))   for t in _sw_port)
-            _net_gamma = sum(float(t.get("gamma",0))  for t in _sw_port)
-            _net_theta = sum(float(t.get("theta",0))  for t in _sw_port)
-
-            g1,g2,g3,g4,g5 = st.columns(5)
-            g1.metric("Net PV ($k)", f"{_net_pv/1000:,.1f}")
-            g2.metric("Net Delta ($k)", f"{_net_delta/1000:,.1f}")
-            g3.metric("Net Vega ($k)", f"{_net_vega/1000:,.1f}")
-            g4.metric("Net Gamma ($k)", f"{_net_gamma/1000:,.1f}")
-            g5.metric("Net Theta ($k/day)", f"{_net_theta/1000:,.2f}")
-
             st.markdown("---")
 
             # Spread pairs — allow user to select two rows to show spread
@@ -13173,20 +13159,6 @@ def portfolio_tab():
 
     elif _ptf_view == "📋 Composite":
         st.markdown("### Combined Portfolio — Swaptions + Caps/Floors")
-
-        _all_pv    = sum(float(t.get("pv",0))    for t in portfolio)
-        _all_delta = sum(float(t.get("delta",0))  for t in portfolio)
-        _all_vega  = sum(float(t.get("vega",0))   for t in portfolio)
-        _all_gamma = sum(float(t.get("gamma",0))  for t in portfolio)
-        _all_theta = sum(float(t.get("theta",0))  for t in portfolio)
-
-        g1,g2,g3,g4,g5 = st.columns(5)
-        g1.metric("Total PV ($k)", f"{_all_pv/1000:,.1f}")
-        g2.metric("Net Delta ($k)", f"{_all_delta/1000:,.1f}")
-        g3.metric("Net Vega ($k)", f"{_all_vega/1000:,.1f}")
-        g4.metric("Net Gamma ($k)", f"{_all_gamma/1000:,.1f}")
-        g5.metric("Net Theta ($k/day)", f"{_all_theta/1000:,.2f}")
-
         st.markdown("---")
 
         # By instrument type
@@ -13859,7 +13831,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106o</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106p</div>
             </div>
             """,
             unsafe_allow_html=True,
