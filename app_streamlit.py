@@ -898,6 +898,7 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
         return False
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def list_vol_snapshots(user_id: str, currency: str = None):
     # Normalise: both admin emails share the same snapshots
     _ADMIN_ALIASES = {"wpo70@icloud.com": "wpo@rateedge.au", "wpo@rateedge.au": "wpo@rateedge.au"}
@@ -1569,6 +1570,17 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
     the swaption pricer forward exactly matches the Rate/Vol Matrix.
     freq_override: 0.25 = Q/Q, 0.5 = S/S, None = market convention
     """
+    # Fast session-level cache keyed by curve commit ID (no hashing)
+    try:
+        _cid = st.session_state.get("_curve_commit_ids", {}).get(ccy, 0)
+        _oid = st.session_state.get("_curve_commit_ids", {}).get(f"{ccy}_ois", 0) if ois_curve is not None else -1
+        _ck = (ccy, _cid, _oid, round(expiry, 6), round(tenor, 6), round(freq_override or -1, 6))
+        _fc = st.session_state.setdefault("_fwd_ann_cache", {})
+        if _ck in _fc:
+            return _fc[_ck]
+    except Exception:
+        _ck = None; _fc = {}
+
     if freq_override is not None:
         # T+2 BD for NZD/USD, T+1 BD for AUD (AFMA calendar   —   year frac approx here)
         spot_lag = 2.0 / 252.0 if ccy in ["NZD", "USD"] else 1.0 / 252.0
@@ -1632,7 +1644,13 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
     df_start = _df_proj(curve, swap_start, _sched_freq)
     df_end   = _df_proj(curve, sched[-1][0], _sched_freq)
     fwd = (df_start - df_end) / ann if ann > 0 else 0.0
-    return fwd, ann, sched
+    _result = (fwd, ann, sched)
+    try:
+        if _ck is not None and len(_fc) < 5000:
+            _fc[_ck] = _result
+    except Exception:
+        pass
+    return _result
 
 
 # ============================
@@ -3252,6 +3270,13 @@ def set_basis_curve(ccy: str, basis_type: str, df: pd.DataFrame):
     if ccy not in st.session_state["basis_curves"]:
         st.session_state["basis_curves"][ccy] = {}
     st.session_state["basis_curves"][ccy][basis_type] = df
+    if basis_type == "ois":
+        _cids = st.session_state.setdefault("_curve_commit_ids", {})
+        _cids[f"{ccy}_ois"] = _cids.get(f"{ccy}_ois", 0) + 1
+        # Clear fwd_ann cache for this ccy
+        _fc = st.session_state.get("_fwd_ann_cache", {})
+        for k in [k for k in _fc if k[0] == ccy]:
+            del _fc[k]
 
 
 def parse_tenor_to_years(tenor_str: str) -> float:
@@ -3334,6 +3359,14 @@ def get_ccy_curve(ccy: str) -> Optional[pd.DataFrame]:
 
 def set_ccy_curve(ccy: str, curve_df: pd.DataFrame):
     st.session_state["curves"][ccy] = curve_df
+    # Increment curve commit ID — used to invalidate fwd_ann cache cheaply
+    _cids = st.session_state.setdefault("_curve_commit_ids", {})
+    _cids[ccy] = _cids.get(ccy, 0) + 1
+    # Clear fwd_ann cache for this ccy
+    _fc = st.session_state.get("_fwd_ann_cache", {})
+    keys_to_del = [k for k in _fc if k[0] == ccy]
+    for k in keys_to_del:
+        del _fc[k]
 
 
 def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
@@ -3817,16 +3850,21 @@ def vol_config_tab():
         from datetime import date as _dt_date
         _date_col, _lbl_col = st.columns([2, 6])
         with _date_col:
-            # Get available dates from swap_rates for the date picker
-            _avail_dates = []
-            try:
-                _dc = get_db_connection()
-                if _dc:
-                    _dcur = _dc.cursor()
-                    _dcur.execute("SELECT DISTINCT date FROM swap_rates WHERE currency='AUD' ORDER BY date DESC LIMIT 60")
-                    _avail_dates = [r[0] for r in _dcur.fetchall()]
-                    _dc.close()
-            except: pass
+            # Get available dates — cached in session state, refreshed every 5 min
+            import time as _time_vc
+            _avail_dates = st.session_state.get("_avail_curve_dates_cache", [])
+            _avail_cache_age = st.session_state.get("_avail_curve_dates_ts", 0)
+            if not _avail_dates or (_time_vc.time() - _avail_cache_age > 300):
+                try:
+                    _dc = get_db_connection()
+                    if _dc:
+                        _dcur = _dc.cursor()
+                        _dcur.execute("SELECT DISTINCT date FROM swap_rates WHERE currency='AUD' ORDER BY date DESC LIMIT 60")
+                        _avail_dates = [r[0] for r in _dcur.fetchall()]
+                        _dc.close()
+                        st.session_state["_avail_curve_dates_cache"] = _avail_dates
+                        st.session_state["_avail_curve_dates_ts"] = _time_vc.time()
+                except: pass
             _today = _dt_date.today()
             _latest_db = _avail_dates[0] if _avail_dates else _today
             _default_date = _today if _today >= _latest_db else _latest_db
@@ -4216,12 +4254,19 @@ def vol_config_tab():
         
         with tab_manage:
             st.markdown("#### Saved Snapshots")
-            
             manage_ccy = st.selectbox("Filter by Currency", ["All"] + SUPPORTED_CURRENCIES, key="manage_snap_ccy")
-            
             user_id = st.session_state.get("username", "default")
             filter_ccy = None if manage_ccy == "All" else manage_ccy
-            snapshots = list_vol_snapshots(user_id, filter_ccy)
+            if st.button("🔄 Load Snapshots", key="load_snaps_btn"):
+                st.session_state["_snap_list_cache"] = list_vol_snapshots(user_id, filter_ccy)
+                st.session_state["_snap_list_ccy"] = filter_ccy
+            # Use cached list, refresh if currency changed
+            if st.session_state.get("_snap_list_ccy") != filter_ccy:
+                st.session_state.pop("_snap_list_cache", None)
+            snapshots = st.session_state.get("_snap_list_cache", None)
+            if snapshots is None:
+                st.info("Click Load Snapshots to view saved vol surfaces.")
+                snapshots = []
             
             if not snapshots:
                 st.info("No snapshots saved yet. Create your first snapshot above!")
@@ -7282,7 +7327,8 @@ def caps_floors_tab(vol_mode: str):
                     st.session_state[f"{spr_key}_temp"] = new_val
 
             with col_sabr:
-                st.markdown("<div style='margin-top:-46px;font-size:0.75rem;font-weight:600;color:#64748b;margin-bottom:2px'>SABR Parameters (Caplet Skew)</div>", unsafe_allow_html=True)
+                with st.expander("⚙️ SABR Skew Params", expanded=False):
+                 st.markdown("<div style='font-size:0.75rem;font-weight:600;color:#64748b;margin-bottom:2px'>SABR Parameters (Caplet Skew)</div>", unsafe_allow_html=True)
                 _sh_cols = st.columns([0.5, 0.9, 0.9, 0.9, 0.9])
                 for _lbl, _c in zip(["Tenor","B","r,v","x","Shift"], _sh_cols):
                     _c.markdown(f"<div style='font-size:0.75rem;font-weight:600;color:#64748b;text-align:center'>{_lbl}</div>", unsafe_allow_html=True)
@@ -13793,12 +13839,12 @@ def main():
                     _role_row = _role_cur.fetchone()
                     _role_cur.close()
                     _role_conn.close()
-                    st.session_state["user_role"] = "admin" if user_id in _ADMIN_EMAILS else (
+                    st.session_state["user_role"] = "super_admin" if user_id in _ADMIN_EMAILS else (
                         _role_row[0] if _role_row else "read_only"
                     )
             except Exception:
                 if user_id in _ADMIN_EMAILS:
-                    st.session_state["user_role"] = "admin"
+                    st.session_state["user_role"] = "super_admin"
             try:
                 _auto_loaded = load_all_session_data(user_id)
                 if _auto_loaded > 0:
@@ -13877,7 +13923,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106z</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107b</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -14060,7 +14106,7 @@ def main():
 
         st.markdown("---")
         # User Management (super_admin only)
-        if is_super_admin():
+        if is_admin():
             with st.expander("👥 User Access", expanded=False):
                 st.caption("Manage user roles")
                 if st.button("🔄 Load Users", key="load_users_btn"):
@@ -14191,9 +14237,12 @@ def sod_report_tab():
 
     user_id = st.session_state.get("username", "default")
 
-    # ── Load available snapshots ──────────────────────────────────
-    _snaps_usd = list_vol_snapshots(user_id, "USD") if HAS_POSTGRES else []
-    _snaps_aud = list_vol_snapshots(user_id, "AUD") if HAS_POSTGRES else []
+    # ── Load available snapshots — cached, refresh on button ─────
+    if st.button("🔄 Reload Snapshots", key="sod_reload_snaps") or "sod_snaps_usd" not in st.session_state:
+        st.session_state["sod_snaps_usd"] = list_vol_snapshots(user_id, "USD") if HAS_POSTGRES else []
+        st.session_state["sod_snaps_aud"] = list_vol_snapshots(user_id, "AUD") if HAS_POSTGRES else []
+    _snaps_usd = st.session_state.get("sod_snaps_usd", [])
+    _snaps_aud = st.session_state.get("sod_snaps_aud", [])
 
     if not HAS_POSTGRES:
         st.warning("Database not connected   —   SOD Report requires saved vol snapshots.")
