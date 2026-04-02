@@ -7219,16 +7219,7 @@ def caps_floors_tab(vol_mode: str):
                     cur_val  = st.session_state.get(f"{spr_key}_temp", last_val)
                     tdata  = st.session_state["cfs_table_data"].get(tbl_lbl, {})
                     swpt   = tdata.get("swaption", None)
-                    if swpt is not None:
-                        cfs = swpt + spread
-                        st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs
-                        swpt_str = f"{swpt:.4f}"
-                        cfs_str  = f"{cfs:.4f}"
-                    else:
-                        cfs = None
-                        swpt_str = "  —  "
-                        cfs_str  = "  —  "
-                    st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_label"] = cfs_lbl
+                    new_val = cur_val  # will be overwritten by number_input below
                     rc = st.columns(CW)
                     fs = "font-size:0.80rem;padding-top:6px"
                     rc[0].markdown(f"<div style='{fs}'>{wedge_lbl}</div>", unsafe_allow_html=True)
@@ -7237,10 +7228,21 @@ def caps_floors_tab(vol_mode: str):
                     delta = new_val - last_val
                     dc = "#22c55e" if delta > 0 else "#ef4444" if delta < 0 else "#94a3b8"
                     rc[3].markdown(f"<div style='{fs};text-align:right;color:{dc}'>{delta:+.1f}</div>", unsafe_allow_html=True)
+                    # Use new_val (pending spread) for live CFS display
+                    if swpt is not None:
+                        cfs = swpt + new_val
+                        st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs
+                        swpt_str = f"{swpt:.4f}"
+                        cfs_str  = f"{cfs:.4f}"
+                    else:
+                        cfs = None
+                        swpt_str = "  —  "
+                        cfs_str  = "  —  "
+                    st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_label"] = cfs_lbl
                     rc[5].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{tbl_lbl}</div>", unsafe_allow_html=True)
                     rc[6].markdown(f"<div style='{fs};text-align:right;color:#cbd5e1'>{swpt_str}</div>", unsafe_allow_html=True)
                     rc[7].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{tbl_wedge}</div>", unsafe_allow_html=True)
-                    rc[8].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{spread:.1f}</div>", unsafe_allow_html=True)
+                    rc[8].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{new_val:.1f}</div>", unsafe_allow_html=True)
                     rc[9].markdown(f"<div style='{fs};text-align:right;color:#38bdf8;font-weight:600'>{cfs_str}</div>", unsafe_allow_html=True)
                     rc[10].markdown(f"<div style='{fs};text-align:right;color:#64748b'>{cfs_lbl}</div>", unsafe_allow_html=True)
                     new_spread_values[spr_key] = new_val
@@ -7586,7 +7588,7 @@ def caps_floors_tab(vol_mode: str):
         # Build caplet curve — only rebuild when spreads or ATM surface change
         atm = get_working_atm_surface(ccy)
         _caplet_key = (spread_3m1y, spread_1y1y, spread_2y1y, spread_3y1y,
-                       spread_4y1y, spread_5y2y, spread_7y3y,
+                       spread_4y1y, spread_5y2y, spread_7y3y, spread_10y2y, spread_12y3y,
                        id(atm) if atm is not None else 0)
         _cached_key = st.session_state.get("_caplet_curve_key")
         if _cached_key != _caplet_key or st.session_state.get("caplet_vol_curve_aud") is None:
@@ -7598,7 +7600,9 @@ def caps_floors_tab(vol_mode: str):
                 spread_3y1y=spread_3y1y,
                 spread_4y1y=spread_4y1y,
                 spread_5y2y=spread_5y2y,
-                spread_7y3y=spread_7y3y
+                spread_7y3y=spread_7y3y,
+                spread_10y2y=spread_10y2y,
+                spread_12y3y=spread_12y3y,
             )
             st.session_state["_caplet_curve_key"] = _caplet_key
         else:
@@ -7669,8 +7673,14 @@ def caps_floors_tab(vol_mode: str):
         
     else:  # Surface (Auto)
         atm = get_working_atm_surface(ccy)
-        
-        caplet_vol_curve = build_caplet_vol_curve_from_surface(ccy, atm)
+        _surf_key = id(atm) if atm is not None else 0
+        _cached_surf_key = st.session_state.get(f"_surf_caplet_key_{ccy}")
+        if _cached_surf_key != _surf_key or st.session_state.get(f"_surf_caplet_curve_{ccy}") is None:
+            caplet_vol_curve = build_caplet_vol_curve_from_surface(ccy, atm)
+            st.session_state[f"_surf_caplet_key_{ccy}"] = _surf_key
+            st.session_state[f"_surf_caplet_curve_{ccy}"] = caplet_vol_curve
+        else:
+            caplet_vol_curve = st.session_state[f"_surf_caplet_curve_{ccy}"]
         
         if caplet_vol_curve is None or len(caplet_vol_curve) == 0:
             st.warning("Unable to build caplet vol curve from surface. Falling back to 35bp flat.")
@@ -13849,7 +13859,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106n</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106o</div>
             </div>
             """,
             unsafe_allow_html=True,
