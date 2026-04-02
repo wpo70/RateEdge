@@ -3624,6 +3624,10 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                 set_ccy_vol_data(ccy, atm_df, old_a, old_b, old_r, old_n)
                 set_timestamp("atm", ccy)
                 loaded["atm"] += 1
+                # Clear vol_editor so it reloads from fresh surface
+                if "vol_editor" in st.session_state:
+                    st.session_state["vol_editor"]["working"].pop(ccy, None)
+                    st.session_state["vol_editor"]["base"].pop(ccy, None)
 
         # Load SABR grids
         if load_type in ["sabr", "all"]:
@@ -3727,10 +3731,18 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
 
 
 def get_working_atm_surface(ccy: str) -> Optional[pd.DataFrame]:
+    """Returns working vol editor draft if user has made unpublished edits,
+    otherwise returns the committed surface from vol_data."""
     ve = st.session_state.get("vol_editor", {})
     working = ve.get("working", {})
+    base = ve.get("base", {})
+    # Only use working copy if it differs from base (i.e. user has made edits)
     if ccy in working and isinstance(working[ccy], pd.DataFrame):
-        return working[ccy]
+        if ccy in base and isinstance(base[ccy], pd.DataFrame):
+            # If working == base, it's just a mirror — use committed vol_data
+            if not working[ccy].equals(base[ccy]):
+                return working[ccy]
+        # No base to compare — use committed instead to avoid stale state
     atm, _, _, _, _ = get_ccy_vol_data(ccy)
     return atm
 
@@ -4243,6 +4255,10 @@ def vol_config_tab():
                                     st.session_state["vol_data"][ccy]["beta"] = loaded_snap["beta"]
                                     st.session_state["vol_data"][ccy]["rho"] = loaded_snap["rho"]
                                     st.session_state["vol_data"][ccy]["nu"] = loaded_snap["nu"]
+                                    # Clear vol_editor so it reloads from fresh surface
+                                    if "vol_editor" in st.session_state:
+                                        st.session_state["vol_editor"]["working"].pop(ccy, None)
+                                        st.session_state["vol_editor"]["base"].pop(ccy, None)
                                     
                                     # Update timestamps
                                     if "timestamps" not in st.session_state:
@@ -13805,6 +13821,11 @@ def main():
                                         _vd["alpha"]=_da
                                     except: pass
                                 _sl.append(f"{_cc2}:{_lbl}")
+                                # Clear stale vol_editor working copy so get_working_atm_surface
+                                # returns the fresh surface, not a stale draft
+                                if "vol_editor" in st.session_state:
+                                    st.session_state["vol_editor"]["working"].pop(_cc2, None)
+                                    st.session_state["vol_editor"]["base"].pop(_cc2, None)
                     _cur.close(); _sc.close()
                     if _sl: st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Vols: {', '.join(_sl)}"
             except Exception as _ve:
@@ -13826,7 +13847,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106s</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106u</div>
             </div>
             """,
             unsafe_allow_html=True,
