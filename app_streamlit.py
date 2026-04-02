@@ -13068,30 +13068,6 @@ def portfolio_tab():
 
             st.markdown("---")
 
-            # Spread pairs — allow user to select two rows to show spread
-            if len(_sw_port) >= 2:
-                with st.expander("📐 Swaption Spread Calculator", expanded=False):
-                    _sw_labels = [f"{i}: {t.get('label', t.get('expiry','?')+'x'+str(t.get('tenor','?')))}" for i,t in enumerate(_sw_port)]
-                    _sc1, _sc2 = st.columns(2)
-                    with _sc1:
-                        _leg1_sel = st.selectbox("Leg 1 (Buy)", _sw_labels, key="spread_leg1")
-                    with _sc2:
-                        _leg2_sel = st.selectbox("Leg 2 (Sell)", _sw_labels, index=min(1,len(_sw_labels)-1), key="spread_leg2")
-                    _l1i = int(_leg1_sel.split(":")[0])
-                    _l2i = int(_leg2_sel.split(":")[0])
-                    if _l1i != _l2i:
-                        _t1 = _sw_port[_l1i]; _t2 = _sw_port[_l2i]
-                        _spd_pv    = float(_t1.get("pv",0))    - float(_t2.get("pv",0))
-                        _spd_pv_bp = float(_t1.get("pv_bp",0)) - float(_t2.get("pv_bp",0))
-                        _spd_delta = float(_t1.get("delta",0))  - float(_t2.get("delta",0))
-                        _spd_vega  = float(_t1.get("vega",0))   - float(_t2.get("vega",0))
-                        s1,s2,s3,s4 = st.columns(4)
-                        s1.metric("Spread PV ($k)", f"{_spd_pv/1000:,.1f}")
-                        s2.metric("Spread PV (bp)", f"{_spd_pv_bp:.2f}")
-                        s3.metric("Spread Delta ($k)", f"{_spd_delta/1000:,.1f}")
-                        s4.metric("Spread Vega ($k)", f"{_spd_vega/1000:,.1f}")
-                        st.caption(f"Buy: {_t1.get('label','')}   |   Sell: {_t2.get('label','')}")
-
             # Blotter — fast dataframe view
             _sw_disp_rows = []
             for idx, row in df_sw.iterrows():
@@ -13886,7 +13862,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106v</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106w</div>
             </div>
             """,
             unsafe_allow_html=True,
