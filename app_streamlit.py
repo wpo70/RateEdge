@@ -13812,7 +13812,8 @@ def main():
                                 _sl.append(f"{_cc2}:{_lbl}")
                     _cur.close(); _sc.close()
                     if _sl: st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Vols: {', '.join(_sl)}"
-            except: pass
+            except Exception as _ve:
+                st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Vol load error: {_ve}"
             # Load portfolio scratchpad for this user
             try:
                 _saved_port = _load_portfolio()
@@ -13830,7 +13831,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106i</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106j</div>
             </div>
             """,
             unsafe_allow_html=True,
