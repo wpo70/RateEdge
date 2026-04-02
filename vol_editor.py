@@ -121,28 +121,26 @@ def _init_state(ccy: str, surface: pd.DataFrame) -> None:
     for k in ["working", "base", "history", "redo_stack", "view_mode", "smoothing", "paste_data"]:
         if k not in ed:
             ed[k] = {}
-    
-    # Check for SOD-loaded working state - don't overwrite it
-    _sod_loaded = ed.get("sod_loaded", {}).get(ccy, False)
 
-    # Reset if surface shape changed AND no SOD load pending
-    if ccy in ed["working"] and not _sod_loaded:
-        if ed["working"][ccy].shape != surface.shape:
-            del ed["working"][ccy]
-    
-    if ccy not in ed["working"]:
-        ed["working"][ccy] = surface.copy()
+    # Always update base to the current committed surface
+    # This ensures the editor always starts from the correct loaded surface
+    current_base = ed["base"].get(ccy)
+    if current_base is None or not current_base.equals(surface):
+        # Surface has changed (new load from DB) — reset base AND working
         ed["base"][ccy] = surface.copy()
+        ed["working"][ccy] = surface.copy()
         ed["history"][ccy] = []
         ed["redo_stack"][ccy] = []
         ed["view_mode"][ccy] = "vol"
         ed["smoothing"][ccy] = DEFAULT_SMOOTHING.copy()
         ed["paste_data"][ccy] = ""
-    elif _sod_loaded and ccy in ed.get("base", {}):
-        # SOD was loaded - keep working, just ensure base is set to current surface
-        if "sod_loaded" not in ed:
-            ed["sod_loaded"] = {}
-        ed["sod_loaded"][ccy] = False  # clear flag after first render
+    elif ccy not in ed["working"]:
+        ed["working"][ccy] = surface.copy()
+        ed["history"][ccy] = []
+        ed["redo_stack"][ccy] = []
+        ed["view_mode"][ccy] = "vol"
+        ed["smoothing"][ccy] = DEFAULT_SMOOTHING.copy()
+        ed["paste_data"][ccy] = ""
 
 
 def _push_history(ccy: str) -> None:
