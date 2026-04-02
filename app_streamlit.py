@@ -4602,11 +4602,11 @@ def curves_tab():
         else:
             st.info("Click **▶ Generate Forward Matrix**")
 
-    # ── 📡 Publish to Blotter ──────────────────────────────────────────────────
+    # ── 📡 Publish to Options Whiteboard ──────────────────────────────────────────────────
     st.markdown("---")
     _pb1, _pb2 = st.columns([2, 4])
     with _pb1:
-        if st.button("📡 Publish ATM Vols / Prems / FWDs to Blotter", disabled=is_trainee(),
+        if st.button("📡 Publish ATM Vols / Prems / FWDs to Options Whiteboard", disabled=is_trainee(),
                      key="curves_publish_blotter", type="primary",
                      use_container_width=True):
             if not HAS_POSTGRES:
@@ -6661,7 +6661,7 @@ def swaptions_tab(vol_mode: str):
                 "display_prem_bp": display_prem_bp,
             }
             
-            # Add to portfolio
+            # Add to Trade Blotter
             if premium_type == "Fwd":
                 display_prem_bp = res.get("pv_bp_fwd", res["pv_bp"])
             else:
@@ -6759,7 +6759,7 @@ def swaptions_tab(vol_mode: str):
     if st.session_state["swaption_portfolio"]:
         ph1, ph2 = st.columns([3, 1])
         with ph1:
-            st.markdown("### Swaption Blotter")
+            st.markdown("### Swaption Options Whiteboard")
         with ph2:
             if st.button("🗑️ Clear All", key="sw_clear_portfolio"):
                 st.session_state["swaption_portfolio"] = []
@@ -7090,7 +7090,7 @@ def caps_floors_tab(vol_mode: str):
         offset_map = {"ATM": 0, "10 bp": 10, "25 bp": 25, "50 bp": 50, "100 bp": 100, "Manual": None}
         offset = offset_map[strike_mode]
         if strike_mode == "Manual":
-            strike = st.number_input("Strike (%)", value=round(fwd_pct, 4), format="%.4f", key="cf_strike") / 100.0
+            strike = st.number_input("Strike (%)", value=round(fwd_pct, 4), format="%.4f", key="cf_dig_strike_manual") / 100.0
         else:
             strike = fwd + (offset/10000.0 if cf_type == "Digital Cap" else -offset/10000.0)
             st.info(f"Strike: **{strike*100:.4f}%** ({strike_mode} {'OTM' if offset > 0 else 'ATM'})")
@@ -7363,7 +7363,7 @@ def caps_floors_tab(vol_mode: str):
             st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
             _pub_col1, _pub_col2 = st.columns([2, 3])
             with _pub_col1:
-                if st.button("📌 Publish Wedge Mids to Blotter", key="publish_wedge_mids", use_container_width=True) and require_admin("Publish Mids"):
+                if st.button("📌 Publish Wedge Mids to Options Whiteboard", key="publish_wedge_mids", use_container_width=True) and require_admin("Publish Mids"):
                     if not HAS_POSTGRES:
                         st.error("Database not connected.")
                     else:
@@ -7402,7 +7402,7 @@ def caps_floors_tab(vol_mode: str):
             st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
             _pb2, _pb3 = st.columns([2, 3])
             with _pb2:
-                if st.button("📡 Publish All Mids to Blotter", key="publish_all_mids",
+                if st.button("📡 Publish All Mids to Options Whiteboard", key="publish_all_mids",
                              type="primary", use_container_width=True) and require_admin("Publish All Mids"):
                     if not HAS_POSTGRES:
                         st.error("Database not connected.")
@@ -13001,11 +13001,11 @@ def bond_option_tab():
 
 
 def portfolio_tab():
-    st.subheader("Portfolio  —  Swaptions + Caps & Floors")
+    st.subheader("Trade Blotter  —  Swaptions + Caps & Floors")
 
     portfolio = st.session_state.get("portfolio", [])
     if not portfolio:
-        st.info("Portfolio is empty. Price swaptions or caps/floors to add trades.")
+        st.info("Trade Blotter is empty. Price swaptions or caps/floors to add trades.")
         return
 
     _sw_port  = [t for t in portfolio if t.get("instrument_type","Swaption") == "Swaption"]
@@ -13882,7 +13882,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106l</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106m</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -14151,7 +14151,7 @@ def main():
         "📊 Historical VOL Analysis",
         "📊 Swaptions",
         "🔔 Caps & Floors",
-        "💼 Portfolio",
+        "💼 Trade Blotter",
         "⚛️ RV / Calendar",
         "🔮 Exotics",
         "📏 SOD Report",
