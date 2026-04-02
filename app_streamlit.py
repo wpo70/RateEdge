@@ -6153,25 +6153,16 @@ def swaptions_tab(vol_mode: str):
         st.info(f"ATM Strike: **{fwd_pct:.4f}%**")
         
     elif structure in ["Payer", "Receiver"]:
-        # Strike mode selector
         strike_mode = st.radio("Strike Mode", ["ATM", "10 bp", "25 bp", "50 bp", "100 bp", "Manual"], 
                                horizontal=True, key="sw_strike_mode")
-        
-        # Calculate strike based on mode
         offset_map = {"ATM": 0, "10 bp": 10, "25 bp": 25, "50 bp": 50, "100 bp": 100, "Manual": None}
         offset = offset_map[strike_mode]
-        
         if strike_mode == "Manual":
             strike_pct = st.number_input("Strike (%)", min_value=0.0, max_value=20.0, 
-                                         value=round(fwd_pct, 4), format="%.4f", key="sw_strike_1")
+                                         value=round(fwd_pct, 4), format="%.4f", key="sw_strike_pr")
         else:
-            # For Payer, add offset; for Receiver, subtract offset
-            if structure == "Payer":
-                strike_pct = fwd_pct + offset/100.0
-            else:
-                strike_pct = fwd_pct - offset/100.0
+            strike_pct = fwd_pct + (offset/100.0 if structure == "Payer" else -offset/100.0)
             st.info(f"Strike: **{strike_pct:.4f}%** ({strike_mode} {'OTM' if offset > 0 else ''})")
-        
         moneyness_bp = (strike_pct - fwd_pct) * 100
         st.caption(f"Moneyness: **{moneyness_bp:+.1f} bp**" if abs(moneyness_bp) >= 0.5 else "Moneyness: **ATM**")
         
@@ -6180,55 +6171,37 @@ def swaptions_tab(vol_mode: str):
         col_k1, col_k2 = st.columns(2)
         with col_k1:
             strike_pct = st.number_input("Payer Strike (%)", min_value=0.0, max_value=20.0,
-                                         value=round(fwd_pct + 0.25, 4), format="%.4f", key="sw_strike_1",
+                                         value=round(fwd_pct + 0.25, 4), format="%.4f", key="sw_strike_stg1",
                                          help="Higher strike - OTM payer")
         with col_k2:
             strike_pct_2 = st.number_input("Receiver Strike (%)", min_value=0.0, max_value=20.0,
-                                           value=round(fwd_pct - 0.25, 4), format="%.4f", key="sw_strike_2",
+                                           value=round(fwd_pct - 0.25, 4), format="%.4f", key="sw_strike_stg2",
                                            help="Lower strike - OTM receiver")
         st.caption(f"Width: **{(strike_pct - strike_pct_2)*100:.0f} bp**")
         
     elif structure == "Risk Reversal":
         st.caption("Buy Payer + Sell Receiver (or vice versa) - rate protection")
-        
-        # Strike mode
         rr_strike_mode = st.radio("Strike Mode", 
                                    ["Symmetric (25bp)", "Symmetric (50bp)", "Symmetric (100bp)", "Manual (independent)"], 
                                    horizontal=True, key="sw_rr_mode")
-        
         col_k1, col_k2, col_dir = st.columns([1, 1, 1])
-        
         if "Symmetric" in rr_strike_mode:
-            # Parse offset from mode
-            if "25bp" in rr_strike_mode:
-                offset = 0.25
-            elif "50bp" in rr_strike_mode:
-                offset = 0.50
-            else:
-                offset = 1.00
-            
-            strike_pct = fwd_pct + offset  # Payer strike (cap)
-            strike_pct_2 = fwd_pct - offset  # Receiver strike (floor)
-            
-            with col_k1:
-                st.metric("Payer Strike (%)", f"{strike_pct:.4f}")
-            with col_k2:
-                st.metric("Receiver Strike (%)", f"{strike_pct_2:.4f}")
+            offset = {"25bp": 0.25, "50bp": 0.50, "100bp": 1.00}.get(
+                next((x for x in ["25bp","50bp","100bp"] if x in rr_strike_mode), "25bp"), 0.25)
+            strike_pct = fwd_pct + offset
+            strike_pct_2 = fwd_pct - offset
+            with col_k1: st.metric("Payer Strike (%)", f"{strike_pct:.4f}")
+            with col_k2: st.metric("Receiver Strike (%)", f"{strike_pct_2:.4f}")
         else:
-            # Manual mode - independent strikes
             with col_k1:
                 strike_pct = st.number_input("Payer Strike (%)", min_value=0.0, max_value=20.0,
-                                             value=round(fwd_pct + 0.25, 4), format="%.4f", key="sw_strike_1",
-                                             help="Cap level")
+                                             value=round(fwd_pct + 0.25, 4), format="%.4f", key="sw_strike_rr1")
             with col_k2:
                 strike_pct_2 = st.number_input("Receiver Strike (%)", min_value=0.0, max_value=20.0,
-                                               value=round(fwd_pct - 0.25, 4), format="%.4f", key="sw_strike_2",
-                                               help="Floor level")
-        
+                                               value=round(fwd_pct - 0.25, 4), format="%.4f", key="sw_strike_rr2")
         with col_dir:
             collar_dir = st.radio("Direction", ["Long Payer/Short Rec", "Short Payer/Long Rec"], 
-                                  key="sw_collar_dir", help="Long Payer protects against rising rates")
-        
+                                  key="sw_collar_dir")
         width_bp = (strike_pct - strike_pct_2) * 100
         st.caption(f"Width: **{width_bp:.0f} bp** | Payer +{(strike_pct-fwd_pct)*100:.0f}bp | Receiver {(strike_pct_2-fwd_pct)*100:.0f}bp")
         
@@ -6237,25 +6210,22 @@ def swaptions_tab(vol_mode: str):
         col_k1, col_k2mode, col_k3mode = st.columns(3)
         with col_k1:
             strike_pct = st.number_input("K1 Strike (%)", min_value=0.0, max_value=20.0,
-                                         value=round(fwd_pct + 0.25, 4), format="%.4f", key="sw_strike_1",
-                                         help="Base strike — buy 1x")
+                                         value=round(fwd_pct + 0.25, 4), format="%.4f", key="sw_strike_pl1")
         with col_k2mode:
-            _k2_off_sel = st.radio("K2 offset from K1", ["10bp","25bp","50bp","Manual"], horizontal=True, key="sw_k2_off")
+            _k2_off_sel = st.radio("K2 offset from K1", ["10bp","25bp","50bp","Manual"], horizontal=True, key="sw_k2_off_pl")
             if _k2_off_sel == "Manual":
                 strike_pct_2 = st.number_input("K2 (%)", min_value=0.0, max_value=20.0,
-                                               value=round(strike_pct + 0.25, 4), format="%.4f", key="sw_strike_2")
+                                               value=round(strike_pct + 0.25, 4), format="%.4f", key="sw_strike_pl2")
             else:
-                _k2_bp = {"10bp":0.10,"25bp":0.25,"50bp":0.50}[_k2_off_sel]
-                strike_pct_2 = round(strike_pct + _k2_bp, 4)
+                strike_pct_2 = round(strike_pct + {"10bp":0.10,"25bp":0.25,"50bp":0.50}[_k2_off_sel], 4)
                 st.metric("K2", f"{strike_pct_2:.4f}%")
         with col_k3mode:
-            _k3_off_sel = st.radio("K3 offset from K2", ["10bp","25bp","50bp","Manual"], horizontal=True, key="sw_k3_off")
+            _k3_off_sel = st.radio("K3 offset from K2", ["10bp","25bp","50bp","Manual"], horizontal=True, key="sw_k3_off_pl")
             if _k3_off_sel == "Manual":
                 strike_pct_3 = st.number_input("K3 (%)", min_value=0.0, max_value=20.0,
-                                               value=round(strike_pct_2 + 0.25, 4), format="%.4f", key="sw_strike_3")
+                                               value=round(strike_pct_2 + 0.25, 4), format="%.4f", key="sw_strike_pl3")
             else:
-                _k3_bp = {"10bp":0.10,"25bp":0.25,"50bp":0.50}[_k3_off_sel]
-                strike_pct_3 = round(strike_pct_2 + _k3_bp, 4)
+                strike_pct_3 = round(strike_pct_2 + {"10bp":0.10,"25bp":0.25,"50bp":0.50}[_k3_off_sel], 4)
                 st.metric("K3", f"{strike_pct_3:.4f}%")
         st.caption(f"K1={strike_pct:.4f}% (+{(strike_pct-fwd_pct)*100:.0f}bp) | K2={strike_pct_2:.4f}% | K3={strike_pct_3:.4f}%")
         
@@ -6264,25 +6234,22 @@ def swaptions_tab(vol_mode: str):
         col_k1, col_k2mode, col_k3mode = st.columns(3)
         with col_k1:
             strike_pct = st.number_input("K1 Strike (%)", min_value=0.0, max_value=20.0,
-                                         value=round(fwd_pct - 0.25, 4), format="%.4f", key="sw_strike_1",
-                                         help="Base strike — buy 1x")
+                                         value=round(fwd_pct - 0.25, 4), format="%.4f", key="sw_strike_rl1")
         with col_k2mode:
-            _k2_off_sel = st.radio("K2 offset from K1", ["10bp","25bp","50bp","Manual"], horizontal=True, key="sw_k2_off")
+            _k2_off_sel = st.radio("K2 offset from K1", ["10bp","25bp","50bp","Manual"], horizontal=True, key="sw_k2_off_rl")
             if _k2_off_sel == "Manual":
                 strike_pct_2 = st.number_input("K2 (%)", min_value=0.0, max_value=20.0,
-                                               value=round(strike_pct - 0.25, 4), format="%.4f", key="sw_strike_2")
+                                               value=round(strike_pct - 0.25, 4), format="%.4f", key="sw_strike_rl2")
             else:
-                _k2_bp = {"10bp":0.10,"25bp":0.25,"50bp":0.50}[_k2_off_sel]
-                strike_pct_2 = round(strike_pct - _k2_bp, 4)
+                strike_pct_2 = round(strike_pct - {"10bp":0.10,"25bp":0.25,"50bp":0.50}[_k2_off_sel], 4)
                 st.metric("K2", f"{strike_pct_2:.4f}%")
         with col_k3mode:
-            _k3_off_sel = st.radio("K3 offset from K2", ["10bp","25bp","50bp","Manual"], horizontal=True, key="sw_k3_off")
+            _k3_off_sel = st.radio("K3 offset from K2", ["10bp","25bp","50bp","Manual"], horizontal=True, key="sw_k3_off_rl")
             if _k3_off_sel == "Manual":
                 strike_pct_3 = st.number_input("K3 (%)", min_value=0.0, max_value=20.0,
-                                               value=round(strike_pct_2 - 0.25, 4), format="%.4f", key="sw_strike_3")
+                                               value=round(strike_pct_2 - 0.25, 4), format="%.4f", key="sw_strike_rl3")
             else:
-                _k3_bp = {"10bp":0.10,"25bp":0.25,"50bp":0.50}[_k3_off_sel]
-                strike_pct_3 = round(strike_pct_2 - _k3_bp, 4)
+                strike_pct_3 = round(strike_pct_2 - {"10bp":0.10,"25bp":0.25,"50bp":0.50}[_k3_off_sel], 4)
                 st.metric("K3", f"{strike_pct_3:.4f}%")
         st.caption(f"K1={strike_pct:.4f}% (-{abs((strike_pct-fwd_pct)*100):.0f}bp) | K2={strike_pct_2:.4f}% | K3={strike_pct_3:.4f}%")
 
@@ -13882,7 +13849,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106m</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106n</div>
             </div>
             """,
             unsafe_allow_html=True,
