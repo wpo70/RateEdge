@@ -13021,84 +13021,93 @@ def portfolio_tab():
                         s4.metric("Spread Vega ($k)", f"{_spd_vega/1000:,.1f}")
                         st.caption(f"Buy: {_t1.get('label','')}   |   Sell: {_t2.get('label','')}")
 
-            # Blotter rows
+            # Blotter — fast dataframe view
+            _sw_disp_rows = []
             for idx, row in df_sw.iterrows():
-                _struct   = row.get("structure","")
-                _label    = row.get("label", f"{row.get('expiry','?')}x{row.get('tenor','?')}")
-                _pv       = float(row.get("pv",0))
-                _pv_bp    = float(row.get("pv_bp",0))
-                _delta    = float(row.get("delta",0))
-                _vega     = float(row.get("vega",0))
-                _notl     = float(row.get("notional_mm",100))
-                _ccy      = row.get("currency","AUD")
-                _strike   = float(row.get("strike",0))
-                _fwd      = float(row.get("forward",0))
-                _expiry   = row.get("expiry","")
-                _tenor    = row.get("tenor","")
-                _legs     = row.get("legs",[]) if isinstance(row.get("legs",[]), list) else []
+                _sw_disp_rows.append({
+                    "#": idx+1,
+                    "Structure": row.get("structure",""),
+                    "Expiry": row.get("expiry",""),
+                    "Tenor": row.get("tenor",""),
+                    "Notl (mm)": float(row.get("notional_mm",100)),
+                    "Strike (%)": f"{float(row.get('strike',0)):.4f}",
+                    "Fwd (%)": f"{float(row.get('forward',0)):.4f}",
+                    "PV (bp)": round(float(row.get("pv_bp",0)),2),
+                    "PV ($k)": round(float(row.get("pv",0))/1000,1),
+                    "Δ ($k)": round(float(row.get("delta",0))/1000,1),
+                    "Vega ($k)": round(float(row.get("vega",0))/1000,1),
+                    "CCY": row.get("currency","AUD"),
+                })
+            _sw_disp_df = pd.DataFrame(_sw_disp_rows)
+            _th = min(max(150, len(_sw_disp_df)*35+38), 500)
+            st.dataframe(_sw_disp_df, use_container_width=True, height=_th, hide_index=True)
 
-                with st.container():
-                    c1,c2,c3,c4,c5,c6,c7 = st.columns([3,1,1,1,1,1,0.6])
-                    c1.markdown(f"**{idx+1}. {_label}**")
-                    c2.metric("PV bp", f"{_pv_bp:.2f}")
-                    c3.metric("PV $k", f"{_pv/1000:,.1f}")
-                    c4.metric("Δ $k", f"{_delta/1000:,.1f}")
-                    c5.metric("Vega $k", f"{_vega/1000:,.1f}")
-                    c6.metric("Notl", f"{_notl:.0f}mm")
-                    with c7:
-                        if st.button("🗑️", key=f"ptf_sw_del_{idx}"):
-                            st.session_state["portfolio"] = [
-                                p for i,p in enumerate(portfolio)
-                                if not (p.get("instrument_type","Swaption")=="Swaption" and p.get("label")==_label)
-                            ]
-                            st.session_state["swaption_portfolio"] = [
-                                p for p in st.session_state["swaption_portfolio"] if p.get("label")!=_label
-                            ]
-                            _save_portfolio(); st.rerun()
+            # Single row detail + Quick Tix + delete
+            _sw_sel_opts = [f"{i+1}: {t.get('label', t.get('expiry','?')+'x'+str(t.get('tenor','?')))}" for i,t in enumerate(_sw_port)]
+            _sw_sel = st.selectbox("Select row for detail / Quick Tix / delete", ["  —  "] + _sw_sel_opts, key="ptf_sw_detail_sel")
+            if _sw_sel != "  —  ":
+                _si = int(_sw_sel.split(":")[0]) - 1
+                _srow = _sw_port[_si]
+                _struct = _srow.get("structure","")
+                _legs   = _srow.get("legs",[]) if isinstance(_srow.get("legs",[]),list) else []
+                _label  = _srow.get("label","")
+                _pv_bp  = float(_srow.get("pv_bp",0))
+                _pv     = float(_srow.get("pv",0))
+                _delta  = float(_srow.get("delta",0))
+                _ccy    = _srow.get("currency","AUD")
+                _notl   = float(_srow.get("notional_mm",100))
+                _strike = float(_srow.get("strike",0))
+                _fwd    = float(_srow.get("forward",0))
+                _expiry = _srow.get("expiry","")
+                _tenor  = _srow.get("tenor","")
 
-                    # Legs for R/R and Ladders
-                    if _struct in ["Risk Reversal","Payer Ladder","Receiver Ladder"] and _legs:
-                        _ldf = pd.DataFrame([{
-                            "Leg": l.get("name",""), "B/S": "Buy" if int(l.get("qty",1))>0 else "Sell",
-                            "Strike (%)": f"{float(l.get('strike',0)):.4f}",
-                            "PV $k": f"{float(l.get('pv',0))/1000:,.1f}",
-                            "Delta $k": f"{float(l.get('delta',0))/1000:,.1f}",
-                        } for l in _legs])
-                        st.dataframe(_ldf, use_container_width=True, hide_index=True)
+                _dc1, _dc2 = st.columns([4,1])
+                with _dc2:
+                    if st.button("🗑️ Delete", key="ptf_sw_del_btn"):
+                        st.session_state["portfolio"] = [p for p in portfolio if p.get("label")!=_label or p.get("instrument_type")!="Swaption"]
+                        st.session_state["swaption_portfolio"] = [p for p in st.session_state["swaption_portfolio"] if p.get("label")!=_label]
+                        _save_portfolio(); st.rerun()
 
-                    # Quick Tix
-                    if can_quick_tix():
-                        with st.expander(f"📋 Quick Tix", expanded=False):
-                            from datetime import date as _qdate
-                            from dateutil.relativedelta import relativedelta as _qrd
-                            try:
-                                _qtoday = _qdate.today()
-                                _exp_y  = label_to_years(str(_expiry))
-                                _ten_y  = float(str(_tenor).replace("Y","").replace("y",""))
-                                _exp_dt   = _qtoday + _qrd(days=int(_exp_y*365.25))
-                                _start_dt = _exp_dt + _qrd(days=2)
-                                _end_dt   = _start_dt + _qrd(months=int(_ten_y*12))
-                                _rolls = [(_start_dt + _qrd(months=3*(i+1))).strftime('%d-%b-%Y') for i in range(min(4,int(_ten_y*4)))]
-                                _delta_dir = "Pay Fixed" if _delta > 0 else "Rec Fixed"
-                                _tix = f"=== {_ccy} {_struct.upper()} ===\n"
-                                _tix += f"Expiry:      {_exp_dt.strftime('%d-%b-%Y')} ({_expiry})\n"
-                                _tix += f"Swap Start:  {_start_dt.strftime('%d-%b-%Y')}\n"
-                                _tix += f"Swap End:    {_end_dt.strftime('%d-%b-%Y')}\n"
-                                _tix += f"Rolls:       {', '.join(_rolls)}\n"
-                                _tix += f"Fwd Rate:    {_fwd:.4f}%\n"
-                                if _legs and _struct in ["Risk Reversal","Payer Ladder","Receiver Ladder"]:
-                                    for _lg in _legs:
-                                        _s = "BUY " if int(_lg.get("qty",1))>0 else "SELL"
-                                        _tix += f"{_s} {_lg.get('name',''):20s} K={float(_lg.get('strike',0)):.4f}%\n"
-                                else:
-                                    _tix += f"Strike:      {_strike:.4f}%\n"
-                                _tix += f"Premium:     {_pv_bp:.2f} bp  ({_pv/1000:+,.1f}k)\n"
-                                _tix += f"Net Delta:   {_delta/1000:,.1f}k  →  {_delta_dir}\n"
-                                _tix += f"Notional:    {_notl:.0f}mm {_ccy}"
-                                st.code(_tix, language=None)
-                            except Exception as _qe:
-                                st.caption(f"Tix error: {_qe}")
-                    st.markdown("---")
+                if _struct in ["Risk Reversal","Payer Ladder","Receiver Ladder"] and _legs:
+                    _ldf = pd.DataFrame([{
+                        "Leg": l.get("name",""), "B/S": "Buy" if int(l.get("qty",1))>0 else "Sell",
+                        "Strike (%)": f"{float(l.get('strike',0)):.4f}",
+                        "PV ($k)": f"{float(l.get('pv',0))/1000:,.1f}",
+                        "Delta ($k)": f"{float(l.get('delta',0))/1000:,.1f}",
+                    } for l in _legs])
+                    st.dataframe(_ldf, use_container_width=True, hide_index=True)
+
+                if can_quick_tix():
+                    with st.expander("📋 Quick Tix", expanded=False):
+                        from datetime import date as _qdate
+                        from dateutil.relativedelta import relativedelta as _qrd
+                        try:
+                            _qtoday = _qdate.today()
+                            _exp_y  = label_to_years(str(_expiry))
+                            _ten_y  = float(str(_tenor).replace("Y","").replace("y",""))
+                            _exp_dt   = _qtoday + _qrd(days=int(_exp_y*365.25))
+                            _start_dt = _exp_dt + _qrd(days=2)
+                            _end_dt   = _start_dt + _qrd(months=int(_ten_y*12))
+                            _rolls = [(_start_dt+_qrd(months=3*(i+1))).strftime('%d-%b-%Y') for i in range(min(4,int(_ten_y*4)))]
+                            _delta_dir = "Pay Fixed" if _delta>0 else "Rec Fixed"
+                            _tix = f"=== {_ccy} {_struct.upper()} ===\n"
+                            _tix += f"Expiry:      {_exp_dt.strftime('%d-%b-%Y')} ({_expiry})\n"
+                            _tix += f"Swap Start:  {_start_dt.strftime('%d-%b-%Y')}\n"
+                            _tix += f"Swap End:    {_end_dt.strftime('%d-%b-%Y')}\n"
+                            _tix += f"Rolls:       {', '.join(_rolls)}\n"
+                            _tix += f"Fwd Rate:    {_fwd:.4f}%\n"
+                            if _legs and _struct in ["Risk Reversal","Payer Ladder","Receiver Ladder"]:
+                                for _lg in _legs:
+                                    _s = "BUY " if int(_lg.get("qty",1))>0 else "SELL"
+                                    _tix += f"{_s} {_lg.get('name',''):20s} K={float(_lg.get('strike',0)):.4f}%\n"
+                            else:
+                                _tix += f"Strike:      {_strike:.4f}%\n"
+                            _tix += f"Premium:     {_pv_bp:.2f} bp  ({_pv/1000:+,.1f}k)\n"
+                            _tix += f"Net Delta:   {_delta/1000:,.1f}k  →  {_delta_dir}\n"
+                            _tix += f"Notional:    {_notl:.0f}mm {_ccy}"
+                            st.code(_tix, language=None)
+                        except Exception as _qe:
+                            st.caption(f"Tix error: {_qe}")
 
             # Reload into pricer
             st.markdown("##### Reload into Pricer")
@@ -13833,7 +13842,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106f</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106g</div>
             </div>
             """,
             unsafe_allow_html=True,
