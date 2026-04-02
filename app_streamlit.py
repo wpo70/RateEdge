@@ -14,9 +14,25 @@ from datetime import date, timedelta
 try:
     from zoneinfo import ZoneInfo
     SYDNEY_TZ = ZoneInfo("Australia/Sydney")
+    WELLINGTON_TZ = ZoneInfo("Pacific/Auckland")
+    NEW_YORK_TZ = ZoneInfo("America/New_York")
 except ImportError:
     import pytz
     SYDNEY_TZ = pytz.timezone("Australia/Sydney")
+    WELLINGTON_TZ = pytz.timezone("Pacific/Auckland")
+    NEW_YORK_TZ = pytz.timezone("America/New_York")
+
+# Canonical EOD close times per currency (local time)
+CCY_TZ = {
+    "AUD": SYDNEY_TZ,
+    "NZD": WELLINGTON_TZ,
+    "USD": NEW_YORK_TZ,
+}
+CCY_EOD = {
+    "AUD": (16, 30),   # 4:30pm Sydney
+    "NZD": (17, 0),    # 5:00pm Wellington
+    "USD": (16, 30),   # 4:30pm New York
+}
 from typing import Optional, List, Tuple, Dict
 
 import numpy as np
@@ -2915,6 +2931,42 @@ def _load_portfolio() -> list:
     except Exception:
         return []
 
+def ccy_eod_utc(ccy: str, date_str: str) -> str:
+    """Return ISO UTC timestamp for the canonical EOD close of a currency on a given date.
+    date_str: 'YYYY-MM-DD'
+    Returns: 'YYYY-MM-DD HH:MM:SS+00:00' (UTC)
+    """
+    from datetime import datetime
+    tz = CCY_TZ.get(ccy, SYDNEY_TZ)
+    h, m = CCY_EOD.get(ccy, (16, 30))
+    d = datetime.strptime(date_str, "%Y-%m-%d")
+    local_dt = d.replace(hour=h, minute=m, second=0, tzinfo=tz)
+    utc_dt = local_dt.astimezone(__import__('datetime').timezone.utc)
+    return utc_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def ccy_eod_label(ccy: str, snap_utc) -> str:
+    """Format a UTC snapshot_date as local close time string for display."""
+    try:
+        from datetime import timezone as _dtz
+        tz = CCY_TZ.get(ccy, SYDNEY_TZ)
+        if hasattr(snap_utc, 'replace'):
+            if snap_utc.tzinfo is None:
+                snap_utc = snap_utc.replace(tzinfo=_dtz.utc)
+            local_dt = snap_utc.astimezone(tz)
+            offset_h = local_dt.utcoffset().total_seconds() / 3600
+            tz_labels = {
+                "AUD": "AEDT" if offset_h == 11 else "AEST",
+                "NZD": "NZDT" if offset_h == 13 else "NZST",
+                "USD": "EDT"  if offset_h == -4 else "EST",
+            }
+            tz_lbl = tz_labels.get(ccy, "")
+            return local_dt.strftime(f"%d-%b-%Y %H:%M {tz_lbl}")
+        return str(snap_utc)[:16]
+    except Exception:
+        return str(snap_utc)[:16]
+
+
 def is_admin() -> bool:
     """Admin — full access including SABR calibration, user management, all DB ops."""
     return st.session_state.get("user_role", "read_only") in ("admin", "super_admin")
@@ -4035,17 +4087,7 @@ def vol_config_tab():
                 """)
                 for _row in _scur.fetchall():
                     try:
-                        from datetime import timezone as _tz
-                        _snap_dt = _row[1]
-                        if hasattr(_snap_dt, 'tzinfo'):
-                            if _snap_dt.tzinfo is None:
-                                _snap_dt = _snap_dt.replace(tzinfo=_tz.utc)
-                            _snap_dt = _snap_dt.astimezone(SYDNEY_TZ)
-                            _off_h = _snap_dt.utcoffset().total_seconds() / 3600
-                            _tz_lbl = "AEDT" if _off_h == 11 else "AEST"
-                            _snap_date_str = _snap_dt.strftime(f"%d-%b-%Y %H:%M {_tz_lbl}")
-                        else:
-                            _snap_date_str = str(_row[1])[:16]
+                        _snap_date_str = ccy_eod_label(_row[0], _row[1])
                     except Exception:
                         _snap_date_str = str(_row[1])[:16]
                     _latest_snaps[_row[0]] = {"date": _snap_date_str, "label": _row[2]}
@@ -4067,7 +4109,7 @@ def vol_config_tab():
             _atm_cols = atm.shape[1] if hasattr(atm, 'shape') else "?"
             atm_status = f"✅ {_atm_rows}×{_atm_cols}"
             _snap = _latest_snaps.get(ccy, {})
-            atm_saved   = _snap.get('date', '—') if _snap else '—'
+            atm_saved   = _snap.get('label', '—') if _snap else '—'
             atm_loaded  = get_timestamp_str("atm", ccy)
         else:
             atm_status = "❌ Not loaded"
@@ -4130,7 +4172,12 @@ def vol_config_tab():
             with col1:
                 snap_ccy = st.selectbox("Currency", SUPPORTED_CURRENCIES, key="snap_ccy")
             with col2:
-                snap_label = st.text_input("Label", placeholder="e.g. Pre-FOMC, EOD 2025-01-07", key="snap_label")
+                import pytz as _pytz_sl
+                _syd_tz2 = _pytz_sl.timezone("Australia/Sydney")
+                _now_syd = __import__('datetime').datetime.now(_syd_tz2)
+                _tz_lbl2 = "AEDT" if _now_syd.utcoffset().total_seconds()/3600 == 11 else "AEST"
+                _auto_label = f"EOD {_now_syd.strftime('%d-%b-%Y')} {_tz_lbl2}" if _now_syd.hour >= 16 else f"Intraday {_now_syd.strftime('%d-%b-%Y %H:%M')} {_tz_lbl2}"
+                snap_label = st.text_input("Label", value=_auto_label, placeholder="e.g. EOD 01-Apr-2026 AEDT", key="snap_label")
             
             snap_notes = st.text_area("Notes (optional)", placeholder="Additional context about this snapshot...", key="snap_notes", height=100)
             
@@ -4631,7 +4678,11 @@ def curves_tab():
                                     if _pv2.index.name == "Expiry": _pv2 = _pv2.reset_index()
                                     _prem_json = _Json({"values": _pv2.to_dict(orient="records")})
                                 from datetime import datetime as _dtnow2
-                                _slbl = f"{_pub_ccy} {_dtnow2.now().strftime('%d-%b-%Y %H:%M')}"
+                                import pytz as _pytz_snap
+                                _syd_tz = _pytz_snap.timezone("Australia/Sydney")
+                                _now_local = _dtnow2.now(_syd_tz)
+                                _tz_lbl = "AEDT" if _now_local.utcoffset().total_seconds()/3600 == 11 else "AEST"
+                                _slbl = f"{_pub_ccy} {_now_local.strftime('%d-%b-%Y %H:%M')} {_tz_lbl}"
                                 _sc2 = _snap_conn.cursor()
                                 _sc2.execute("""
                                     INSERT INTO vol_history
@@ -13831,7 +13882,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106j</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106l</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -14094,7 +14145,7 @@ def main():
 
     _tab_names = [
         "🏡 Home",
-        "📋 Vol / Upload",
+        "📋 IRS / Vol Upload",
         "📏 Curves",
         "📈 FWD IRS Analysis",
         "📊 Historical VOL Analysis",
