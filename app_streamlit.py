@@ -13877,7 +13877,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106y</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106z</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -14059,13 +14059,14 @@ def main():
                         st.info(f"📧 Email manually: wpo@rateedge.au\nSubject: {_subj}")
 
         st.markdown("---")
-        # User Management (admin only)
-        if is_admin():
+        # User Management (super_admin only)
+        if is_super_admin():
             with st.expander("👥 User Access", expanded=False):
                 st.caption("Manage user roles")
                 if st.button("🔄 Load Users", key="load_users_btn"):
                     st.session_state["_user_list_loaded"] = True
                 if HAS_POSTGRES and st.session_state.get("_user_list_loaded", False):
+                    _ALL_ROLES = ["super_admin","admin","user","read_only","trainee"]
                     try:
                         _conn = get_db_connection()
                         if _conn:
@@ -14076,9 +14077,10 @@ def main():
                             for _email, _role in _users:
                                 _c1, _c2 = st.columns([3,2])
                                 _c1.caption(_email)
-                                _new_role = _c2.selectbox("", ["admin","read_only","trainee"],
-                                    index=0 if _role=="admin" else 1,
-                                    key=f"role_{_email}", label_visibility="collapsed")
+                                _safe_role = _role if _role in _ALL_ROLES else "read_only"
+                                _new_role = _c2.selectbox("", _ALL_ROLES,
+                                    index=_ALL_ROLES.index(_safe_role),
+                                    key=f"role2_{_email}", label_visibility="collapsed")
                                 if _new_role != _role:
                                     try:
                                         _conn2 = get_db_connection()
