@@ -3735,6 +3735,16 @@ def get_working_atm_surface(ccy: str) -> Optional[pd.DataFrame]:
     return atm
 
 
+def get_published_atm_surface(ccy: str) -> Optional[pd.DataFrame]:
+    """Returns the base (last published/loaded) surface — ignores unpublished vol editor edits."""
+    ve = st.session_state.get("vol_editor", {})
+    base = ve.get("base", {})
+    if ccy in base and isinstance(base[ccy], pd.DataFrame):
+        return base[ccy]
+    atm, _, _, _, _ = get_ccy_vol_data(ccy)
+    return atm
+
+
 def push_vol_history(ccy: str):
     ve = st.session_state["vol_editor"]
     working = ve["working"].get(ccy)
@@ -5894,7 +5904,7 @@ def swaptions_tab(vol_mode: str):
 
         # Alpha comparison table
         _, _a, _b, _r, _n = get_ccy_vol_data(ccy)
-        _atm_surf = get_working_atm_surface(ccy)
+        _atm_surf = get_published_atm_surface(ccy)  # Use published not working draft
 
         # Auto-init default SABR if ATM loaded but SABR missing — once per session
         if _a is None and _atm_surf is not None and not st.session_state.get(f"_sabr_init_{ccy}"):
@@ -5918,45 +5928,52 @@ def swaptions_tab(vol_mode: str):
             _EXPIRIES = ["1m","3m","6m","1y","2y","3y","5y","7y","10y","15y","20y"]
             _TENORS   = ["1Y","2Y","3Y","5Y","7Y","10Y","15Y","20Y","25Y","30Y"]
 
-            # Gate: only run expensive alpha grid on explicit button click
-            _show_alpha = st.checkbox("Show α consistency check", value=False, key="show_alpha_grid")
-            _rows = []
-            _any_stale = False
-            if _show_alpha:
-             for _exp in _EXPIRIES:
-                _row = {"Expiry": _exp}
-                _exp_y = label_to_years(_exp)
-                for _ten in _TENORS:
-                    _ten_y = label_to_years(_ten)
-                    _atm_bp = get_matrix_value(_atm_surf, _exp, _ten_y)
-                    _s = get_sabr_params_from_matrices(_a, _b, _r, _n, _exp, _ten_y)
-                    if _atm_bp is None or _s is None or _exp_y <= 0:
-                        _row[_ten] = "  —  "
-                        continue
-                    try:
-                        _F, _, _ = forward_and_annuity_from_curve(curve, ccy, _exp_y, _ten_y, ois_curve)
-                    except Exception:
-                        _F = 0.05
-                    if _F <= 0:
-                        _F = 0.05
-                    _atm_dec = _atm_bp / 10000.0
-                    _impl_alpha = sabr_implied_alpha_from_atm(_atm_dec, _F, _exp_y, _s["beta"], _s["rho"], _s["nu"])
-                    _stored_alpha = _s["alpha"]
-                    if _stored_alpha > 0:
-                        _pct_diff = (_impl_alpha - _stored_alpha) / _stored_alpha * 100.0
-                        _stale = abs(_pct_diff) > 10.0
-                        if _stale:
-                            _any_stale = True
-                        _row[_ten] = f"{'🔴' if abs(_pct_diff) > 20 else '🟡' if _stale else '🟢'} {_pct_diff:+.1f}%"
-                    else:
-                        _row[_ten] = "  —  "
-                _rows.append(_row)
+            # Gate: only run expensive alpha grid on explicit button click — never on render
+            if st.button("🔍 Check α consistency", key="show_alpha_grid", type="secondary"):
+                st.session_state["_alpha_check_result"] = None  # force recompute
+            _alpha_result = st.session_state.get("_alpha_check_result")
+            if _alpha_result is None and st.session_state.get("_run_alpha_check"):
+                pass  # computed below
+            if st.button("▶ Run α Check", key="run_alpha_check_btn", type="secondary"):
+                _rows = []
+                _any_stale = False
+                # Use committed ATM only — not the vol editor working draft
+                _committed_atm = st.session_state.get("vol_data", {}).get(ccy, {}).get("atm")
+                _check_surf = _committed_atm if _committed_atm is not None else _atm_surf
+                for _exp in _EXPIRIES:
+                    _row = {"Expiry": _exp}
+                    _exp_y = label_to_years(_exp)
+                    for _ten in _TENORS:
+                        _ten_y = label_to_years(_ten)
+                        _atm_bp = get_matrix_value(_check_surf, _exp, _ten_y)
+                        _s = get_sabr_params_from_matrices(_a, _b, _r, _n, _exp, _ten_y)
+                        if _atm_bp is None or _s is None or _exp_y <= 0:
+                            _row[_ten] = "  —  "; continue
+                        try:
+                            _F, _, _ = forward_and_annuity_from_curve(curve, ccy, _exp_y, _ten_y, ois_curve)
+                        except Exception:
+                            _F = 0.05
+                        if _F <= 0: _F = 0.05
+                        _atm_dec = _atm_bp / 10000.0
+                        _impl_alpha = sabr_implied_alpha_from_atm(_atm_dec, _F, _exp_y, _s["beta"], _s["rho"], _s["nu"])
+                        _stored_alpha = _s["alpha"]
+                        if _stored_alpha > 0:
+                            _pct_diff = (_impl_alpha - _stored_alpha) / _stored_alpha * 100.0
+                            _stale = abs(_pct_diff) > 10.0
+                            if _stale: _any_stale = True
+                            _row[_ten] = f"{'🔴' if abs(_pct_diff)>20 else '🟡' if _stale else '🟢'} {_pct_diff:+.1f}%"
+                        else:
+                            _row[_ten] = "  —  "
+                    _rows.append(_row)
+                st.session_state["_alpha_check_result"] = {"rows": _rows, "stale": _any_stale}
 
-            if _show_alpha:
+            _alpha_result = st.session_state.get("_alpha_check_result")
+            if _alpha_result:
+                _rows = _alpha_result["rows"]; _any_stale = _alpha_result["stale"]
                 if _any_stale:
-                    st.warning("⚙️ Stale α detected — cells show implied vs stored α divergence. 🟡 >10%, 🔴 >20%. Consider recalibrating.")
+                    st.warning("⚙️ Stale α — 🟡 >10%, 🔴 >20%. Consider recalibrating.")
                 else:
-                    st.success("✅ α consistent with ATM surface across all cells (within 10%)")
+                    st.success("✅ α consistent with committed ATM surface (within 10%)")
                 if _rows:
                     _alpha_df = pd.DataFrame(_rows).set_index("Expiry")
                     st.dataframe(_alpha_df, use_container_width=True)
@@ -13809,7 +13826,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106r</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106s</div>
             </div>
             """,
             unsafe_allow_html=True,
