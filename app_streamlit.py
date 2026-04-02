@@ -1381,25 +1381,27 @@ def sabr_normal_atm_vol(F: float, T: float, alpha: float, beta: float, rho: floa
 
 def sabr_normal_vol_smile(F: float, K: float, T: float,
                            alpha: float, beta: float, rho: float, nu: float) -> float:
-    """Full Normal SABR smile vol (Hagan et al.). Returns vol in same units as alpha.
-    For ATM (K≈F) reduces to sabr_normal_atm_vol."""
+    """Full Normal SABR smile vol (Antonov et al.). Returns vol in same units as alpha.
+    For ATM (K≈F) reduces to sabr_normal_atm_vol.
+    Formula: σ_N = alpha × (FK)^(β/2) × z/χ(z) × B
+    """
     if T <= 0 or alpha <= 0 or F <= 0 or K <= 0:
         return sabr_normal_atm_vol(F, T, alpha, beta, rho, nu)
     if abs(K - F) < 1e-8:
         return sabr_normal_atm_vol(F, T, alpha, beta, rho, nu)
     try:
         FK = F * K
-        FK_mid = FK ** ((1 - beta) / 2.0)
+        FK_mid = FK ** (beta / 2.0)          # (FK)^(β/2)  — Normal SABR uses multiply
+        FK_mid_inv = FK ** ((1 - beta) / 2.0) # (FK)^((1-β)/2) — for B correction terms
         log_FK = math.log(F / K)
-        z = (nu / alpha) * FK_mid * log_FK
+        z = (nu / alpha) * FK_mid_inv * log_FK
         if abs(z) < 1e-7:
             x_z = 1.0
         else:
             _sq = math.sqrt(1 - 2 * rho * z + z ** 2)
             _denom = math.log((_sq + z - rho) / (1 - rho))
             x_z = z / _denom if abs(_denom) > 1e-10 else 1.0
-        A = alpha / (FK_mid * (1 + (1 - beta) ** 2 / 24 * log_FK ** 2 +
-                                (1 - beta) ** 4 / 1920 * log_FK ** 4))
+        A = alpha * FK_mid  # Normal SABR: α × (FK)^(β/2)
         B = 1 + ((1 - beta) ** 2 / 24 * alpha ** 2 / FK ** (1 - beta) +
                   rho * beta * nu * alpha / (4 * FK ** ((1 - beta) / 2)) +
                   (2 - 3 * rho ** 2) / 24 * nu ** 2) * T
@@ -13929,7 +13931,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107c</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107d</div>
             </div>
             """,
             unsafe_allow_html=True,
