@@ -1547,16 +1547,12 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
                                    tenor: float,
                                    ois_curve: Optional[pd.DataFrame] = None,
                                    freq_override: Optional[float] = None) -> Tuple[float, float, List[Tuple[float, float]]]:
-    # Session-level cache — cleared when curves are committed
-    try:
-        _ch = hash(tuple(curve["ZeroRatePct"].round(5).values)) if curve is not None else 0
-        _oh = hash(tuple(ois_curve["ZeroRatePct"].round(5).values)) if ois_curve is not None else 0
-        _ck = (_ch, _oh, ccy, round(expiry, 5), round(tenor, 5), round(freq_override or -1, 5))
-        _fc = st.session_state.setdefault("_fwd_ann_cache", {})
-        if _ck in _fc:
-            return _fc[_ck]
-    except Exception:
-        _ck = None; _fc = {}
+    """
+    Calculate forward swap rate and annuity.
+    Uses LINEAR zero-rate interpolation (same as fast_forward_rate / matrix) so
+    the swaption pricer forward exactly matches the Rate/Vol Matrix.
+    freq_override: 0.25 = Q/Q, 0.5 = S/S, None = market convention
+    """
     if freq_override is not None:
         # T+2 BD for NZD/USD, T+1 BD for AUD (AFMA calendar   —   year frac approx here)
         spot_lag = 2.0 / 252.0 if ccy in ["NZD", "USD"] else 1.0 / 252.0
@@ -1620,13 +1616,7 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
     df_start = _df_proj(curve, swap_start, _sched_freq)
     df_end   = _df_proj(curve, sched[-1][0], _sched_freq)
     fwd = (df_start - df_end) / ann if ann > 0 else 0.0
-    _result = (fwd, ann, sched)
-    try:
-        if _ck is not None and len(_fc) < 2000:
-            _fc[_ck] = _result
-    except Exception:
-        pass
-    return _result
+    return fwd, ann, sched
 
 
 # ============================
@@ -12970,10 +12960,10 @@ def portfolio_tab():
     _sw_port  = [t for t in portfolio if t.get("instrument_type","Swaption") == "Swaption"]
     _cf_port  = [t for t in portfolio if t.get("instrument_type") == "Cap/Floor"]
 
-    ptf_tab1, ptf_tab2, ptf_tab3 = st.tabs(["📊 Swaption Blotter", "🔔 Cap/Floor Blotter", "📋 Composite View"])
+    _ptf_view = st.radio("View", ["📊 Swaptions", "🔔 Caps/Floors", "📋 Composite"],
+                         horizontal=True, key="ptf_view_sel")
 
-    # ── TAB 1: Swaption Blotter with Spreads ─────────────────────────
-    with ptf_tab1:
+    if _ptf_view == "📊 Swaptions":
         if not _sw_port:
             st.info("No swaptions in portfolio.")
         else:
@@ -13128,8 +13118,7 @@ def portfolio_tab():
                 }
                 st.rerun()
 
-    # ── TAB 2: Cap/Floor Blotter ──────────────────────────────────────
-    with ptf_tab2:
+    elif _ptf_view == "🔔 Caps/Floors":
         if not _cf_port:
             st.info("No caps/floors in portfolio.")
         else:
@@ -13154,8 +13143,7 @@ def portfolio_tab():
                 st.session_state["portfolio"] = [p for p in portfolio if p.get("instrument_type")!="Cap/Floor"]
                 _save_portfolio(); st.rerun()
 
-    # ── TAB 3: Composite View ─────────────────────────────────────────
-    with ptf_tab3:
+    elif _ptf_view == "📋 Composite":
         st.markdown("### Combined Portfolio — Swaptions + Caps/Floors")
 
         _all_pv    = sum(float(t.get("pv",0))    for t in portfolio)
@@ -13842,7 +13830,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106g</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3106i</div>
             </div>
             """,
             unsafe_allow_html=True,
