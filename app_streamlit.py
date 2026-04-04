@@ -10366,7 +10366,7 @@ def _load_vol_snapshots_for_viz(ccy: str, start_date: str, end_date: str) -> lis
                WHERE currency = %s AND atm_vols IS NOT NULL
                  AND snapshot_date::date BETWEEN %s AND %s
                ORDER BY snapshot_date ASC
-               LIMIT 60""",
+               LIMIT 500""",
             (ccy, start_date, end_date)
         )
         rows = cur.fetchall()
@@ -10863,34 +10863,19 @@ def backtesting_tab():
                        f"{snaps[0]['date'].strftime('%Y-%m-%d')} → {snaps[-1]['date'].strftime('%Y-%m-%d')}")
 
             if _vs_mode == "Animated Timeline":
-                # Click-to-track: user clicks on surface, marker jumps to that point
-                _track_exp = st.session_state.get("hviz_track_exp", "2y")
-                _track_ten = st.session_state.get("hviz_track_ten", "5Y")
-                st.caption(f"📍 Tracking: **{_track_exp}×{_track_ten}** — click any point on the surface to move the tracker")
+                _tp1, _tp2 = st.columns(2)
+                with _tp1:
+                    _track_exp = st.selectbox("Track expiry",
+                        ["1m","3m","6m","1y","2y","3y","5y","7y","10y","15y","20y"],
+                        index=4, key="hviz_track_exp")
+                with _tp2:
+                    _track_ten = st.selectbox("Track tenor",
+                        ["1Y","2Y","3Y","5Y","7Y","10Y","15Y","20Y","30Y"],
+                        index=3, key="hviz_track_ten")
                 _fig = _make_vol_surface_fig(snaps, f"{ccy} ATM Vol Surface — bp (animated)",
                                               track_exp=_track_exp, track_ten=_track_ten)
                 if _fig:
-                    _sel = st.plotly_chart(_fig, use_container_width=True,
-                                           on_select="rerun", key="hviz_vol_chart")
-                    # Read click data and update tracker position
-                    if _sel and hasattr(_sel, "selection") and _sel.selection:
-                        _pts = _sel.selection.get("points", [])
-                        if _pts:
-                            _pt = _pts[0]
-                            _clicked_x = _pt.get("x")  # tenor years
-                            _clicked_y = _pt.get("y")  # expiry years
-                            if _clicked_x is not None and _clicked_y is not None:
-                                # Snap to nearest grid labels
-                                _exp_opts = ["1w","2w","1m","3m","6m","9m","1y","18m","2y","3y","4y","5y","6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
-                                _ten_opts = ["1Y","2Y","3Y","4Y","5Y","7Y","10Y","12Y","15Y","20Y","25Y","30Y"]
-                                import numpy as _np2
-                                _exp_yrs = _np2.array([label_to_years(e) for e in _exp_opts])
-                                _ten_yrs = _np2.array([label_to_years(t) for t in _ten_opts])
-                                _best_exp = _exp_opts[int(_np2.argmin(_np2.abs(_exp_yrs - float(_clicked_y))))]
-                                _best_ten = _ten_opts[int(_np2.argmin(_np2.abs(_ten_yrs - float(_clicked_x))))]
-                                st.session_state["hviz_track_exp"] = _best_exp
-                                st.session_state["hviz_track_ten"] = _best_ten
-                                st.rerun()
+                    st.plotly_chart(_fig, use_container_width=True, key="hviz_vol_chart")
                 else:
                     st.warning("Could not build surface — check snapshot data format.")
 
@@ -13965,7 +13950,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107k</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107l</div>
             </div>
             """,
             unsafe_allow_html=True,
