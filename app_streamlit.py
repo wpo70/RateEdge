@@ -10865,7 +10865,7 @@ def backtesting_tab():
             if _vs_mode == "Animated Timeline":
                 _tp1, _tp2 = st.columns(2)
                 with _tp1:
-                    _track_exp = st.selectbox("Track expiry",
+                    _track_exp = st.selectbox("Track Expiry Term",
                         ["1m","3m","6m","1y","2y","3y","5y","7y","10y","15y","20y"],
                         index=4, key="hviz_track_exp")
                 with _tp2:
@@ -13950,7 +13950,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107l</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107m</div>
             </div>
             """,
             unsafe_allow_html=True,
