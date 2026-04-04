@@ -17,10 +17,10 @@ try:
     WELLINGTON_TZ = ZoneInfo("Pacific/Auckland")
     NEW_YORK_TZ = ZoneInfo("America/New_York")
 except ImportError:
-    import pytz
-    SYDNEY_TZ = pytz.timezone("Australia/Sydney")
-    WELLINGTON_TZ = pytz.timezone("Pacific/Auckland")
-    NEW_YORK_TZ = pytz.timezone("America/New_York")
+    from datetime import timezone, timedelta
+    SYDNEY_TZ = timezone(timedelta(hours=11))      # AEDT approx
+    WELLINGTON_TZ = timezone(timedelta(hours=13))  # NZDT approx
+    NEW_YORK_TZ = timezone(timedelta(hours=-4))    # EDT approx
 
 # Canonical EOD close times per currency (local time)
 CCY_TZ = {
@@ -3016,19 +3016,19 @@ def is_trainee() -> bool:
 
 def can_upload_vol() -> bool:
     """Can upload/save vol snapshots to DB."""
-    return st.session_state.get("user_role", "read_only") in ("admin", "user")
+    return st.session_state.get("user_role", "read_only") in ("super_admin", "admin", "user")
 
 def can_edit_wedges() -> bool:
     """Can edit CFS wedge spreads."""
-    return st.session_state.get("user_role", "read_only") in ("admin", "user")
+    return st.session_state.get("user_role", "read_only") in ("super_admin", "admin", "user")
 
 def can_price() -> bool:
     """Can price options."""
-    return st.session_state.get("user_role", "read_only") in ("admin", "user", "read_only")
+    return st.session_state.get("user_role", "read_only") in ("super_admin", "admin", "user", "read_only")
 
 def can_quick_tix() -> bool:
     """Can use Quick Tix copy function."""
-    return st.session_state.get("user_role", "read_only") in ("admin", "user", "read_only")
+    return st.session_state.get("user_role", "read_only") in ("super_admin", "admin", "user", "read_only")
 
 # ── SABR Calibration Reference Data (31-Mar-2026) ──────────────────────────
 # Source: Market vol cube calibration. Per-cell rho and nu from smile data.
@@ -4244,10 +4244,14 @@ def vol_config_tab():
             with col1:
                 snap_ccy = st.selectbox("Currency", SUPPORTED_CURRENCIES, key="snap_ccy")
             with col2:
-                import pytz as _pytz_sl
-                _syd_tz2 = _pytz_sl.timezone("Australia/Sydney")
-                _now_syd = __import__('datetime').datetime.now(_syd_tz2)
-                _tz_lbl2 = "AEDT" if _now_syd.utcoffset().total_seconds()/3600 == 11 else "AEST"
+                from datetime import datetime as _dt_sl, timezone as _tz_sl, timedelta as _td_sl
+                _utc_now = _dt_sl.now(_tz_sl.utc)
+                # Sydney: AEDT=UTC+11 (Oct-Apr), AEST=UTC+10 (Apr-Oct)
+                _month = _utc_now.month
+                _syd_off = 11 if (_month >= 10 or _month <= 4) else 10
+                _syd_tz2 = _tz_sl(timedelta(hours=_syd_off))
+                _now_syd = _utc_now.astimezone(_syd_tz2)
+                _tz_lbl2 = "AEDT" if _syd_off == 11 else "AEST"
                 _auto_label = f"EOD {_now_syd.strftime('%d-%b-%Y')} {_tz_lbl2}" if _now_syd.hour >= 16 else f"Intraday {_now_syd.strftime('%d-%b-%Y %H:%M')} {_tz_lbl2}"
                 snap_label = st.text_input("Label", value=_auto_label, placeholder="e.g. EOD 01-Apr-2026 AEDT", key="snap_label")
             
@@ -4763,10 +4767,11 @@ def curves_tab():
                                     if _pv2.index.name == "Expiry": _pv2 = _pv2.reset_index()
                                     _prem_json = _Json({"values": _pv2.to_dict(orient="records")})
                                 from datetime import datetime as _dtnow2
-                                import pytz as _pytz_snap
-                                _syd_tz = _pytz_snap.timezone("Australia/Sydney")
-                                _now_local = _dtnow2.now(_syd_tz)
-                                _tz_lbl = "AEDT" if _now_local.utcoffset().total_seconds()/3600 == 11 else "AEST"
+                                from datetime import datetime as _dtnow2, timezone as _tz_pub, timedelta as _td_pub
+                                _utc_now2 = _dtnow2.now(_tz_pub.utc)
+                                _syd_off2 = 11 if (_utc_now2.month >= 10 or _utc_now2.month <= 4) else 10
+                                _now_local = _utc_now2.astimezone(_tz_pub(timedelta(hours=_syd_off2)))
+                                _tz_lbl = "AEDT" if _syd_off2 == 11 else "AEST"
                                 _slbl = f"{_pub_ccy} {_now_local.strftime('%d-%b-%Y %H:%M')} {_tz_lbl}"
                                 _sc2 = _snap_conn.cursor()
                                 _sc2.execute("""
@@ -7825,7 +7830,7 @@ def caps_floors_tab(vol_mode: str):
 
     st.markdown("---")
     
-    if st.button(" Price Cap/Floor", key="cf_price", type="primary", disabled=not can_upload_vol()):
+    if st.button(" Price Cap/Floor", key="cf_price", type="primary", disabled=is_trainee()):
         try:
             pv_total = 0.0
             delta_total = 0.0
@@ -13944,7 +13949,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107f</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107i</div>
             </div>
             """,
             unsafe_allow_html=True,
