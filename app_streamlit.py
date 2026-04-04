@@ -4123,8 +4123,8 @@ def vol_config_tab():
     st.markdown("---")
     st.markdown("#### Currently Loaded Status")
     
-    # Show auto-load result if present
-    _auto_msg = st.session_state.pop("_auto_load_msg", None)
+    # Show auto-load result if present (use get not pop - Home tab shows it persistently)
+    _auto_msg = st.session_state.get("_auto_load_msg")
     if _auto_msg:
         st.info(_auto_msg)
 
@@ -6008,16 +6008,11 @@ def swaptions_tab(vol_mode: str):
             _EXPIRIES = ["1m","3m","6m","1y","2y","3y","5y","7y","10y","15y","20y"]
             _TENORS   = ["1Y","2Y","3Y","5Y","7Y","10Y","15Y","20Y","25Y","30Y"]
 
-            # Gate: only run expensive alpha grid on explicit button click — never on render
-            if st.button("🔍 Check α consistency", key="show_alpha_grid", type="secondary"):
-                st.session_state["_alpha_check_result"] = None  # force recompute
-            _alpha_result = st.session_state.get("_alpha_check_result")
-            if _alpha_result is None and st.session_state.get("_run_alpha_check"):
-                pass  # computed below
+
+            # Single button — runs check and caches result
             if st.button("▶ Run α Check", key="run_alpha_check_btn", type="secondary"):
                 _rows = []
                 _any_stale = False
-                # Use committed ATM only — not the vol editor working draft
                 _committed_atm = st.session_state.get("vol_data", {}).get(ccy, {}).get("atm")
                 _check_surf = _committed_atm if _committed_atm is not None else _atm_surf
                 for _exp in _EXPIRIES:
@@ -13320,6 +13315,26 @@ def home_tab():
     accent_color = "#ef4444" if is_dark else "#dc2626"
     card_bg = "#1e293b" if is_dark else "#ffffff"
     border_color = "#334155" if is_dark else "#e2e8f0"
+
+    # Show auto-load status persistently (not popped — stays until next login)
+    _auto_msg = st.session_state.get("_auto_load_msg")
+    if _auto_msg:
+        if "error" in _auto_msg.lower() or "⚠️" in _auto_msg:
+            st.warning(_auto_msg)
+        else:
+            st.success(_auto_msg)
+        # Also show what's actually in vol_data right now
+        for _cy in ["AUD","USD","NZD"]:
+            _vd = st.session_state.get("vol_data",{}).get(_cy,{})
+            _atm = _vd.get("atm")
+            if _atm is not None and hasattr(_atm,"shape"):
+                # Show 1y×1Y value as fingerprint
+                try:
+                    _exp_rows = list(_atm["Expiry"]) if "Expiry" in _atm.columns else []
+                    _1y_idx = _exp_rows.index("1y") if "1y" in _exp_rows else None
+                    _1y_1y = float(_atm.iloc[_1y_idx]["1Y"]) if _1y_idx is not None and "1Y" in _atm.columns else None
+                    st.caption(f"  {_cy} ATM loaded: {_atm.shape[0]}×{_atm.shape[1]-1} | 1y×1Y = {_1y_1y:.2f}bp" if _1y_1y else f"  {_cy} ATM: {_atm.shape}")
+                except: pass
     
     st.markdown(
         f"""
@@ -13926,8 +13941,11 @@ def main():
             # ── Step 2: Load SABR/curves/spreads from user_configs ──
             try:
                 _auto_loaded = load_all_session_data(user_id)
+                # Debug: verify atm survived Step 2
+                _debug_atm = st.session_state.get("vol_data",{}).get("AUD",{}).get("atm")
+                _debug_val = f"{float(_debug_atm[_debug_atm.columns[1]].iloc[6]):.2f}" if _debug_atm is not None and len(_debug_atm) > 6 else "None"
                 if _auto_loaded > 0:
-                    st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Configs: {_auto_loaded}"
+                    st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Configs: {_auto_loaded} | AUD 1y×{list(_debug_atm.columns)[1] if _debug_atm is not None else '?'}={_debug_val}"
             except Exception as _ale:
                 st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Config load error: {_ale}"
             # Load portfolio scratchpad for this user
@@ -13947,7 +13965,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107j</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107k</div>
             </div>
             """,
             unsafe_allow_html=True,
