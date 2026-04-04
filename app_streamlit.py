@@ -6140,7 +6140,13 @@ def swaptions_tab(vol_mode: str):
                 except: pass
             if _parsed and _parsed != _calc_dt:
                 expiry_y = max((_parsed - _sw_date.today()).days / 365.0, 1/365.0)
-                expiry_display = _parsed.strftime("%d/%m/%Y")
+                # Show as approximate term (e.g. "6m (06-Jul-2026)") not raw date
+                _days = (_parsed - _sw_date.today()).days
+                if _days < 21: _term_lbl = f"{_days}d"
+                elif _days < 60: _term_lbl = f"{round(_days/7)}w"
+                elif _days < 335: _term_lbl = f"{round(_days/30)}m"
+                else: _term_lbl = f"{round(_days/365, 1)}y".replace(".0y","y")
+                expiry_display = f"{_term_lbl} ({_parsed.strftime('%d-%b-%Y')})"
         except: pass
     with col_delay:
         DELAY_PRESETS = ["None","1m","2m","3m","6m","9m","1y","18m","2y"]
@@ -10875,7 +10881,8 @@ def backtesting_tab():
                 _fig = _make_vol_surface_fig(snaps, f"{ccy} ATM Vol Surface — bp (animated)",
                                               track_exp=_track_exp, track_ten=_track_ten)
                 if _fig:
-                    st.plotly_chart(_fig, use_container_width=True, key="hviz_vol_chart")
+                    st.plotly_chart(_fig, use_container_width=True,
+                                    key=f"hviz_vol_chart_{_track_exp}_{_track_ten}")
                 else:
                     st.warning("Could not build surface — check snapshot data format.")
 
@@ -13950,7 +13957,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107m</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107n</div>
             </div>
             """,
             unsafe_allow_html=True,
