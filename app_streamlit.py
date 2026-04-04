@@ -13866,16 +13866,12 @@ def main():
             except Exception:
                 if user_id in _ADMIN_EMAILS:
                     st.session_state["user_role"] = "super_admin"
-            try:
-                _auto_loaded = load_all_session_data(user_id)
-                if _auto_loaded > 0:
-                    st.session_state["_auto_load_msg"] = f"✅ Auto-loaded {_auto_loaded} configs from database"
-            except Exception as _ale:
-                st.session_state["_auto_load_msg"] = f"⚠️ Auto-load failed: {_ale}"
+            # ── Step 1: Load ATM vol surfaces from vol_history FIRST ──
+            # Must happen before load_all_session_data so ATM is correct
+            # when SABR params are applied
             try:
                 _sc = get_db_connection()
                 if _sc:
-                    _sc.set_session(options={'statement_timeout': '8000'})  # 8s timeout
                     _cur = _sc.cursor()
                     _sl = []
                     for _cy in SUPPORTED_CURRENCIES:
@@ -13920,18 +13916,20 @@ def main():
                                     except: pass
                                 _sl.append(f"{_cc2}:{_lbl}")
                                 st.session_state[f"_vol_loaded_{_cc2}"] = True
-                                # Bump stable ATM hash so caplet cache invalidates correctly
                                 _h = st.session_state.get(f"_atm_hash_{_cc2}", 0)
                                 st.session_state[f"_atm_hash_{_cc2}"] = _h + 1
-                                # Clear stale vol_editor working copy so get_working_atm_surface
-                                # returns the fresh surface, not a stale draft
-                                if "vol_editor" in st.session_state:
-                                    st.session_state["vol_editor"]["working"].pop(_cc2, None)
-                                    st.session_state["vol_editor"]["base"].pop(_cc2, None)
                     _cur.close(); _sc.close()
-                    if _sl: st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Vols: {', '.join(_sl)}"
+                    if _sl: st.session_state["_auto_load_msg"] = f"✅ Vols: {', '.join(_sl)}"
             except Exception as _ve:
-                st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Vol load error: {_ve}"
+                st.session_state["_auto_load_msg"] = f"⚠️ Vol load error: {_ve}"
+
+            # ── Step 2: Load SABR/curves/spreads from user_configs ──
+            try:
+                _auto_loaded = load_all_session_data(user_id)
+                if _auto_loaded > 0:
+                    st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Configs: {_auto_loaded}"
+            except Exception as _ale:
+                st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Config load error: {_ale}"
             # Load portfolio scratchpad for this user
             try:
                 _saved_port = _load_portfolio()
@@ -13949,7 +13947,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107i</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107j</div>
             </div>
             """,
             unsafe_allow_html=True,
