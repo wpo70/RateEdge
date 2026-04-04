@@ -6716,7 +6716,7 @@ def swaptions_tab(vol_mode: str):
             st.session_state["sw_last_result"] = {
                 "res": res, "label": label, "structure": structure, "legs": legs,
                 "params": {
-                    "Structure": structure, "Expiry": expiry_display,
+                    "Structure": structure, "Expiry Term": expiry_display,
                     "Tenor": swap_tenor, "Forward (%)": f"{fwd_pct:.4f}",
                     "Annuity (PV01)": f"{ann:.4f}", "Discount": f"{eff_disc_rate*100:.3f}% ({disc_source})",
                     "Notional": f"{notional:,.0f}mm"
@@ -13957,7 +13957,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107n</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107o</div>
             </div>
             """,
             unsafe_allow_html=True,
