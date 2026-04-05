@@ -4012,8 +4012,8 @@ def vol_config_tab():
         
         load_type = st.radio(
             "Commit options",
-            ["All", "SOD IRS", "AUD Vol (Manual Load)", "USD & NZD Vol (Manual Load)"],
-            index=1,  # Default to SOD IRS — not All
+            ["SOD IRS", "AUD Vol (Manual Load)", "USD & NZD Vol (Manual Load)", "All"],
+            index=0,  # Default to SOD IRS — not All
             horizontal=True,
             key="load_type_radio"
         )
@@ -4024,7 +4024,7 @@ def vol_config_tab():
 
         # Map selection to load_type
         type_map = {
-            "All": "all",
+            "All": "all", 
             "SOD IRS": "curves",
             "AUD Vol (Manual Load)": "atm_aud",
             "USD & NZD Vol (Manual Load)": "atm_usd_nzd"
@@ -13968,7 +13968,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107t</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107u</div>
             </div>
             """,
             unsafe_allow_html=True,
