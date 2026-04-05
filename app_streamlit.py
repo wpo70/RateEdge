@@ -14029,7 +14029,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108b</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108c</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -14326,32 +14326,18 @@ def main():
         _tab_names += ["📍 Multi-CCY", "📜 Bond Options"]
         _tab_funcs += [lambda: multi_ccy_tab(vol_mode), bond_option_tab]
 
-    # Radio-based tab bar — only the active tab renders, not all 15
-    _tab_icons = [n.split()[0] for n in _tab_names]
-    _tab_labels = [" ".join(n.split()[1:]) for n in _tab_names]
-
-    st.markdown("""
-    <style>
-    div[data-testid="stHorizontalBlock"] > div {flex-wrap: wrap;}
-    div.rateedge-tabbar {display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;border-bottom:2px solid #1e3a5f;padding-bottom:6px;}
-    div.rateedge-tabbar button {background:transparent;border:1px solid #334155;border-radius:6px;
-        color:#94a3b8;padding:4px 10px;font-size:0.82rem;cursor:pointer;}
-    div.rateedge-tabbar button.active {background:#1e3a5f;color:#f1f5f9;border-color:#1e3a5f;}
-    </style>""", unsafe_allow_html=True)
-
+    # Selectbox tab navigation — works at any screen width, never wraps
     _active_tab = st.session_state.get("_active_tab", 0)
-    _cols = st.columns(len(_tab_names))
-    for _ti, (_icon, _lbl) in enumerate(zip(_tab_icons, _tab_labels)):
-        with _cols[_ti]:
-            if st.button(_icon + " " + _lbl, key=f"_tab_btn_{_ti}",
-                         type="primary" if _ti == _active_tab else "secondary",
-                         use_container_width=True):
-                st.session_state["_active_tab"] = _ti
-                st.rerun()
+    _selected = st.selectbox("Navigate", _tab_names, index=_active_tab,
+                             key="main_tab_select", label_visibility="collapsed")
+    _new_tab = _tab_names.index(_selected)
+    if _new_tab != _active_tab:
+        st.session_state["_active_tab"] = _new_tab
+        st.rerun()
 
     st.markdown("---")
-    # Only call the active tab function
-    _tab_funcs[_active_tab]()
+    # Only call the active tab function — massive render speedup
+    _tab_funcs[_new_tab]()
 
 
 def sod_report_tab():
