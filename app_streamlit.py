@@ -6315,13 +6315,11 @@ def swaptions_tab(vol_mode: str):
                 _ois_col_z = next((c for c in ois_curve.columns if "zero" in str(c).lower() or "rate" in str(c).lower()), None)
                 if _ois_col_m is None or _ois_col_z is None:
                     raise ValueError("OIS curve missing MaturityY/ZeroRatePct columns")
+                import numpy as _np_ois
                 ois_xs = ois_curve[_ois_col_m].to_numpy().astype(float)
                 ois_ys = ois_curve[_ois_col_z].to_numpy().astype(float) / 100.0
-                # Discount at option EXPIRY — not swap start.
-                # For midcurve, option expires at expiry_y (not expiry_y+delay_y).
-                # The pricer uses df(expiry_y) = exp(-eff_disc_rate × expiry_y).
                 _disc_t = expiry_y
-                eff_disc_rate = float(np.interp(_disc_t, ois_xs, ois_ys))
+                eff_disc_rate = float(_np_ois.interp(_disc_t, ois_xs, ois_ys))
                 disc_source = "OIS"
                 if is_midcurve:
                     st.caption(f"OIS @ expiry {expiry_y:.2f}Y: {eff_disc_rate*100:.2f}% | swap start {expiry_y+delay_y:.2f}Y")
@@ -14129,7 +14127,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108m</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108n</div>
             </div>
             """,
             unsafe_allow_html=True,
