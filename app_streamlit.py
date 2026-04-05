@@ -6816,6 +6816,8 @@ def swaptions_tab(vol_mode: str):
                 display_prem_bp = res.get("pv_bp_spot", res["pv_bp"])
             entry = dict(instrument_type="Swaption", currency=ccy, structure=structure,
                          expiry=expiry, tenor=swap_tenor, model=vol_mode,
+                         delay=delay_sel if is_midcurve else "None",
+                         is_midcurve=is_midcurve,
                          notional_mm=notional, strike=strike_pct, forward=fwd_pct, pv=res["pv"],
                          pv_bp=display_prem_bp, premium_type=premium_type,
                          delta=res["delta"], gamma=res["gamma"], vega=res["vega"],
@@ -6973,7 +6975,6 @@ def swaptions_tab(vol_mode: str):
                 # Quick Tix
                 if can_quick_tix():
                  with st.expander(f"📋 Quick Tix — {_label[:40]}", expanded=False):
-                    # Build dates
                     from datetime import date as _date
                     from dateutil.relativedelta import relativedelta as _rdelta
                     _today = _date.today()
@@ -6981,25 +6982,44 @@ def swaptions_tab(vol_mode: str):
                         _exp_y  = label_to_years(str(_expiry))
                         _ten_y  = float(str(_tenor).replace("Y","").replace("y",""))
                         _exp_dt = _today + _rdelta(days=int(_exp_y*365.25))
-                        _start_dt = _exp_dt + _rdelta(days=2)  # T+2 start
-                        _end_dt = _start_dt + _rdelta(months=int(_ten_y*12))
-                        # Quarterly roll dates (first 4)
-                        _rolls = []
-                        _r = _start_dt + _rdelta(months=3)
-                        for _ in range(4):
-                            _rolls.append(_r.strftime('%d-%b-%Y'))
-                            _r += _rdelta(months=3)
-                        _rolls_str = ", ".join(_rolls[:4]) + ("..." if _ten_y > 1 else "")
+                        _delay_sel = r.get("delay", "None") if isinstance(r, dict) else "None"
+                        _is_mc = r.get("is_midcurve", False) if isinstance(r, dict) else False
+                        _stored_swap_start = r.get("swap_start","") if isinstance(r, dict) else ""
+                        _stored_swap_end   = r.get("swap_end","") if isinstance(r, dict) else ""
 
-                        # Net delta direction
+                        # Use stored dates if available (correct for midcurves)
+                        # Fall back to calculated only for vanilla
+                        if _stored_swap_start:
+                            _start_str = _stored_swap_start
+                            _end_str   = _stored_swap_end
+                        else:
+                            _delay_y = label_to_years(_delay_sel) if _delay_sel != "None" else 0.0
+                            _start_dt = _exp_dt + _rdelta(days=int(_delay_y*365.25)) + _rdelta(days=1)
+                            _end_dt = _start_dt + _rdelta(months=int(_ten_y*12))
+                            _start_str = _start_dt.strftime('%d-%b-%Y')
+                            _end_str   = _end_dt.strftime('%d-%b-%Y')
+
+                        # Rolls from stored swap_start
+                        try:
+                            from dateutil.parser import parse as _dp
+                            _start_for_rolls = _dp(_start_str)
+                            _rolls = []
+                            _r = _start_for_rolls + _rdelta(months=3)
+                            for _ in range(4):
+                                _rolls.append(_r.strftime('%d-%b-%Y'))
+                                _r += _rdelta(months=3)
+                            _rolls_str = ", ".join(_rolls[:4]) + ("..." if _ten_y > 1 else "")
+                        except Exception:
+                            _rolls_str = "—"
+
                         _net_delta = _delta
                         _delta_dir = "Pay Fixed (hedge = pay fixed IRS)" if _net_delta > 0 else "Rec Fixed (hedge = receive fixed IRS)"
-                        _delta_mm = abs(_net_delta) / 10000  # DV01 → notional approx
 
+                        _mc_line = f"Delay:       {_delay_sel} (midcurve)\n" if _is_mc else ""
                         _tix = f"""=== {_ccy} {_struct.upper()} ===
 Expiry:      {_exp_dt.strftime('%d-%b-%Y')} ({_expiry})
-Swap Start:  {_start_dt.strftime('%d-%b-%Y')}
-Swap End:    {_end_dt.strftime('%d-%b-%Y')}
+{_mc_line}Swap Start:  {_start_str}
+Swap End:    {_end_str}
 Tenor:       {_tenor}
 Rolls:       {_rolls_str}
 Fwd Rate:    {_fwd:.4f}%
@@ -14058,7 +14078,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108f</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108g</div>
             </div>
             """,
             unsafe_allow_html=True,
