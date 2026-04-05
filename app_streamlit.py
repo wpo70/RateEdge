@@ -3778,6 +3778,10 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                         if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
                         if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
                         st.session_state["config_basis"][ccy]["ois"] = ois_df
+                        # Also ensure basis_curves is set (used by save_all_session_data)
+                        if "basis_curves" not in st.session_state: st.session_state["basis_curves"] = {}
+                        if ccy not in st.session_state["basis_curves"]: st.session_state["basis_curves"][ccy] = {}
+                        st.session_state["basis_curves"][ccy]["ois"] = ois_df
                         _ois_found = True
                         loaded["basis"] += 1
                     except:
@@ -14107,7 +14111,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108i</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108j</div>
             </div>
             """,
             unsafe_allow_html=True,
