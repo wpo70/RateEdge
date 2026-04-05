@@ -6553,7 +6553,20 @@ def swaptions_tab(vol_mode: str):
     else:
         atm = get_working_atm_surface(ccy)
         _, a, b, r, n = get_ccy_vol_data(ccy)
-        atm_val = get_matrix_value(atm, expiry, tenor_y) if atm is not None else None
+        # For midcurve: vol at (expiry+delay, tenor) — underlying rate characterised at swap start
+        # For vanilla: vol at (expiry, tenor)
+        _vol_expiry_y = expiry_y + delay_y if is_midcurve else expiry_y
+        _EXPIRY_LABEL_MAP = {1/52:"1w",2/52:"2w",1/12:"1m",3/12:"3m",6/12:"6m",9/12:"9m",
+                             1.0:"1y",1.5:"18m",2.0:"2y",3.0:"3y",4.0:"4y",5.0:"5y",
+                             6.0:"6y",7.0:"7y",8.0:"8y",9.0:"9y",10.0:"10y",12.0:"12y",
+                             15.0:"15y",20.0:"20y",25.0:"25y",30.0:"30y"}
+        # Snap to nearest surface expiry label
+        _vol_expiry_label = min(_EXPIRY_LABEL_MAP, key=lambda k: abs(k - _vol_expiry_y))
+        _vol_expiry_lbl = _EXPIRY_LABEL_MAP[_vol_expiry_label]
+        atm_val = get_matrix_value(atm, _vol_expiry_lbl, tenor_y) if atm is not None else None
+        if atm_val is None:
+            # Fallback to expiry label
+            atm_val = get_matrix_value(atm, expiry, tenor_y) if atm is not None else None
         if atm_val is None:
             st.warning("No ATM vol - using 80bp")
             atm_val = 80.0
@@ -6561,8 +6574,7 @@ def swaptions_tab(vol_mode: str):
             vol = atm_val / 10000.0
             vol_used_display = atm_val
         else:
-            # Only compute SABR vol on render if params already cached — avoid hang
-            sabr = get_sabr_params_from_matrices(a, b, r, n, expiry, tenor_y)
+            sabr = get_sabr_params_from_matrices(a, b, r, n, _vol_expiry_lbl, tenor_y)
             if sabr and sabr.get("alpha", 0) > 0:
                 try:
                     vol = sabr_implied_vol_black(fwd_pct/100.0, strike_pct/100.0, expiry_y,
@@ -6574,7 +6586,10 @@ def swaptions_tab(vol_mode: str):
             else:
                 vol = atm_val / 100.0
                 vol_used_display = vol * 100.0
-        st.caption(f"Vol: {vol_used_display:.1f} {'bp' if vol_mode.startswith('Normal') else '%'}")
+        if is_midcurve:
+            st.caption(f"Vol: {vol_used_display:.1f} {'bp' if vol_mode.startswith('Normal') else '%'} @ ({_vol_expiry_lbl}×{swap_tenor} surface — midcurve)")
+        else:
+            st.caption(f"Vol: {vol_used_display:.1f} {'bp' if vol_mode.startswith('Normal') else '%'}")
 
     # Dates
     from datetime import datetime, timedelta
@@ -6600,10 +6615,11 @@ def swaptions_tab(vol_mode: str):
             return vol_input / 10000.0 if vol_mode.startswith("Normal") else vol_input / 100.0
         else:
             _smile = st.session_state.get("sabr_smile_mode", "Sticky-ATM (alpha-sticky)")
-            sabr = get_sabr_params_from_matrices(a, b, r, n, expiry, tenor_y)
+            # Midcurve: use SABR params at (expiry+delay, tenor) not (expiry, tenor)
+            _sabr_expiry_lbl = _vol_expiry_lbl if is_midcurve else expiry
+            sabr = get_sabr_params_from_matrices(a, b, r, n, _sabr_expiry_lbl, tenor_y)
             if vol_mode.startswith("Normal"):
                 if sabr and sabr.get("alpha", 0) > 0:
-                    # Apply Normal SABR smile for OTM strikes
                     return sabr_normal_vol_smile(
                         fwd_pct/100.0, k_pct/100.0, expiry_y,
                         sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"])
@@ -14042,7 +14058,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108e</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108f</div>
             </div>
             """,
             unsafe_allow_html=True,
