@@ -6297,6 +6297,9 @@ def swaptions_tab(vol_mode: str):
     with col_disc:
         has_ois = ois_curve is not None
         if has_ois:
+            # If OIS just became available, force reset from any stale "Flat" selection
+            if st.session_state.get("sw_disc_method") not in ["OIS", "Flat"]:
+                st.session_state["sw_disc_method"] = "OIS"
             disc_method = st.radio("Discount", ["OIS", "Flat"], horizontal=True, key="sw_disc_method")
         else:
             disc_method = "Flat"
@@ -14111,7 +14114,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108j</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108k</div>
             </div>
             """,
             unsafe_allow_html=True,
