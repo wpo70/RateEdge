@@ -4255,9 +4255,25 @@ def vol_config_tab():
         st.markdown("### 📸 Vol History Snapshots")
         st.caption("Save and manage historical volatility snapshots")
         
-        tab_save, tab_manage = st.tabs(["💾 Save Snapshot", "📅 Manage Snapshots"])
+        _snap_active = st.session_state.get("_snap_tab_active", 0)
+        _sc1, _sc2 = st.columns(2)
+        with _sc1:
+            if st.button("💾 Save Snapshot", key="_snap_tab_0",
+                         type="primary" if _snap_active == 0 else "secondary",
+                         use_container_width=True):
+                st.session_state["_snap_tab_active"] = 0; st.rerun()
+        with _sc2:
+            if st.button("📅 Manage Snapshots", key="_snap_tab_1",
+                         type="primary" if _snap_active == 1 else "secondary",
+                         use_container_width=True):
+                st.session_state["_snap_tab_active"] = 1; st.rerun()
+        st.markdown("---")
+        if _snap_active == 0:
+            tab_save = True; tab_manage = False
+        else:
+            tab_save = False; tab_manage = True
         
-        with tab_save:
+        if tab_save:
             st.markdown("#### Save Current Vol Surface")
             
             col1, col2 = st.columns(2)
@@ -4288,7 +4304,7 @@ def vol_config_tab():
                     else:
                         st.error("Failed to save snapshot. Make sure vol data is loaded.")
         
-        with tab_manage:
+        if tab_manage:
             st.markdown("#### Saved Snapshots")
             manage_ccy = st.selectbox("Filter by Currency", ["All"] + SUPPORTED_CURRENCIES, key="manage_snap_ccy")
             user_id = st.session_state.get("username", "default")
@@ -5048,7 +5064,17 @@ def fwd_analysis_tab():
         _conv_key = st.session_state.get("fwd_conv", "Market (≤3Y Q/Q, ≥4Y S/S)")
         _conv_key = "Market" if "Market" in _conv_key else ("Q/Q (3M BBSW)" if "Q/Q" in _conv_key else "S/S (6M BBSW)")
 
-    _an_tabs = st.tabs(["IRS Spreads", "IRS Butterflies", "Fwd-Fwd Rates (3M)", "6v3 Outright", "6v3 Fwd-Fwd", "6v3 Spreads", "6v3 Butterflies"])
+    _an_tab_names = ["IRS Spreads", "IRS Butterflies", "Fwd-Fwd Rates (3M)", "6v3 Outright", "6v3 Fwd-Fwd", "6v3 Spreads", "6v3 Butterflies"]
+    _an_active = st.session_state.get("_an_active_tab", 0)
+    _an_cols = st.columns(len(_an_tab_names))
+    for _ai, _an in enumerate(_an_tab_names):
+        with _an_cols[_ai]:
+            if st.button(_an, key=f"_an_tab_{_ai}",
+                         type="primary" if _ai == _an_active else "secondary",
+                         use_container_width=True):
+                st.session_state["_an_active_tab"] = _ai
+                st.rerun()
+    st.markdown("---")
 
     def _autosave_fwd_prefs():
         """Persist FWD analysis series lists to DB. Debounced — skips if saved in last 5s."""
@@ -5165,7 +5191,7 @@ def fwd_analysis_tab():
             fig.add_hline(y=series.mean(), line=dict(color=color, dash="dot", width=1), opacity=0.4)
 
     # ── TAB 1: IRS SPREADS ──────────────────────────────────────
-    with _an_tabs[0]:
+    if _an_active == 0:
         st.markdown("#### IRS Curve Spreads")
         # Init active spreads list
         if "irs_sp_list" not in st.session_state:
@@ -5267,7 +5293,7 @@ def fwd_analysis_tab():
             st.info("✅ Spreads saved. No historical swap rate data in DB yet — load via FWD Analysis or swap_rates table.")
 
     # ── TAB 2: IRS BUTTERFLIES ──────────────────────────────────
-    with _an_tabs[1]:
+    if _an_active == 1:
         st.markdown("#### IRS Rate Butterflies")
         if "irs_fl_list" not in st.session_state:
             st.session_state["irs_fl_list"] = []  # DB populates
@@ -5349,7 +5375,7 @@ def fwd_analysis_tab():
         _chart_tools(_fig_fl, _fl_active, "fl", "bp")
 
     # ── TAB 3: FWD-FWD RATES ────────────────────────────────────
-    with _an_tabs[2]:
+    if _an_active == 2:
         st.markdown("#### Forward-Forward Swap Rates")
         if "fvfv_list" not in st.session_state:
             st.session_state["fvfv_list"] = []  # DB populates
@@ -5425,7 +5451,7 @@ def fwd_analysis_tab():
             _fig_layout(_fig_fv, _cut_fv, "Rate (%)")
         st.plotly_chart(_fig_fv, use_container_width=True)
         _chart_tools(_fig_fv, _fv_active, "fv", "%")
-    with _an_tabs[3]:
+    if _an_active == 3:
         st.markdown("#### 6v3 Basis   —   Outright (6M BBSW  →  3M BBSW)")
         _com6v3 = sorted([c for c in _w6.columns if c in _w3.columns and c.endswith("Y")],
                           key=lambda x: int(x[:-1]))
@@ -5472,7 +5498,7 @@ def fwd_analysis_tab():
             _chart_tools(_fig_b6, _b6_series, "b6", "bp")
 
     # ── TAB 5: 6v3 FWD-FWD ─────────────────────────────────────
-    with _an_tabs[4]:
+    if _an_active == 4:
         st.markdown("#### 6v3 Forward-Forward Basis")
         st.caption("Fwd-fwd 6M BBSW  →  fwd-fwd 3M BBSW for same start/tenor")
         if "fv6_list" not in st.session_state:
@@ -5550,7 +5576,7 @@ def fwd_analysis_tab():
         _fig_layout(_fig_fv6, _cut_fv6, "6v3 Fwd-Fwd Basis (bp)")
         st.plotly_chart(_fig_fv6, use_container_width=True)
         _chart_tools(_fig_fv6, _fv6_active, "fv6", "bp")
-    with _an_tabs[5]:
+    if _an_active == 5:
         st.markdown("#### 6v3 Basis Spreads")
         _com6v3_sp = sorted([c for c in _w6.columns if c in _w3.columns and c.endswith("Y")],
                               key=lambda x: int(x[:-1]))
@@ -5633,7 +5659,7 @@ def fwd_analysis_tab():
             _chart_tools(_fig_bsp, _bsp_active, "bsp", "bp")
 
     # ── TAB 7: 6v3 BUTTERFLIES ──────────────────────────────────
-    with _an_tabs[6]:
+    if _an_active == 6:
         st.markdown("#### 6v3 Basis Butterflies")
         st.caption("Fly = 6v3(body)  →  0.5≈[6v3(wing1) + 6v3(wing2)]")
         _com6v3_bfly = sorted([c for c in _w6.columns if c in _w3.columns and c.endswith("Y")],
@@ -6108,11 +6134,19 @@ def swaptions_tab(vol_mode: str):
                                     _updated += 1
                         _old_atm, _, _b2, _r2, _n2 = get_ccy_vol_data(ccy)
                         set_ccy_vol_data(ccy, _old_atm, _new_alpha, _b2, _r2, _n2)
-                        # Auto-save to DB
+                        # Save only alpha — not full session
                         if HAS_POSTGRES:
                             try:
                                 _uid = st.session_state.get("username", "default")
-                                save_all_session_data(_uid)
+                                _a_records = []
+                                _a_save = _new_alpha.copy()
+                                if "Expiry" not in _a_save.columns: _a_save = _a_save.reset_index()
+                                for _, _row in _a_save.iterrows():
+                                    _rec = {"Expiry": _row.get("Expiry","")}
+                                    for _col in _a_save.columns:
+                                        if _col != "Expiry": _rec[_col] = _row[_col]
+                                    _a_records.append(_rec)
+                                save_user_config(_uid, "sabr_alpha", ccy, {"values": _a_records})
                             except Exception:
                                 pass
                         st.success(f"✅ Alpha recalibrated   —   {_updated} cells updated. ~, ρ,ν, × unchanged.")
@@ -8248,12 +8282,22 @@ def exotics_tab(vol_mode: str):
                 _save_exotics_config()
                 st.rerun()
 
-    sub = st.tabs(["📋 Spread / Curve Options", "📊 CMS Products", "🔒 Bermudan / Callable", "🔢 Digital Ladder", "🔄 Zero Coupon Swap"])
+    _ex_tab_names = ["📋 Spread / Curve Options", "📊 CMS Products", "🔒 Bermudan / Callable", "🔢 Digital Ladder", "🔄 Zero Coupon Swap"]
+    _ex_active = st.session_state.get("_ex_active_tab", 0)
+    _ex_cols = st.columns(len(_ex_tab_names))
+    for _ei, _en in enumerate(_ex_tab_names):
+        with _ex_cols[_ei]:
+            if st.button(_en, key=f"_ex_tab_{_ei}",
+                         type="primary" if _ei == _ex_active else "secondary",
+                         use_container_width=True):
+                st.session_state["_ex_active_tab"] = _ei
+                st.rerun()
+    st.markdown("---")
 
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     # TAB 1   —   SPREAD / CURVE OPTIONS
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
-    with sub[0]:
+    if _ex_active == 0:
         st.markdown("### Curve Spread Options")
         st.caption("Option on the spread between two swap rates   —   steepener/flattener. Bachelier (Normal) model.")
 
@@ -8519,7 +8563,7 @@ def exotics_tab(vol_mode: str):
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     # TAB 2   —   CMS PRODUCTS
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
-    with sub[1]:
+    if _ex_active == 1:
         st.markdown("### CMS Products")
         st.caption("CMS caplets/floorlets/swaplets   —   floating rate is the prevailing CMS swap rate, not BBSW. "
                    "Hagan linear swap rate (LSR) convexity adjustment + Bachelier pricing.")
@@ -8846,7 +8890,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     # TAB 3   —   BERMUDAN / CALLABLE (Hull-White 1F trinomial tree)
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
-    with sub[2]:
+    if _ex_active == 2:
         st.markdown("### Bermudan Swaption / Callable Swap")
         st.caption("Hull-White 1F trinomial tree, calibrated to co-terminal swaptions from ATM surface.")
 
@@ -9180,7 +9224,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     # TAB 4   —   DIGITAL LADDER (existing)
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
-    with sub[3]:
+    if _ex_active == 3:
         st.markdown("### Digital Ladder")
 
         col_not, col_exp, col_tenor = st.columns(3)
@@ -9234,7 +9278,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
             st.dataframe(df, use_container_width=True)
 
 
-    with sub[4]:
+    if _ex_active == 4:
         st.markdown("### Zero Coupon Swap")
         st.caption(
             "**Notional = Ending (Maturity) Amount**   —   market convention. "
@@ -10020,11 +10064,18 @@ def vol_surface_editor_tab():
                     _old_atm_rc, _, _, _, _ = get_ccy_vol_data(_rc_ccy)
                     set_ccy_vol_data(_rc_ccy, _old_atm_rc, _new_a, _new_b, _new_r, _new_n)
                     _prog.empty()
-                    # Auto-save SABR to DB
+                    # Save only SABR params — not full session
                     if HAS_POSTGRES:
                         try:
-                            save_all_session_data(st.session_state.get("username", "default"))
+                            _uid_rc = st.session_state.get("username", "default")
+                            for _pm_rc, _df_rc in [("alpha",_new_a),("beta",_new_b),("rho",_new_r),("nu",_new_n)]:
+                                if _df_rc is not None:
+                                    _rc_save = _df_rc.copy()
+                                    if "Expiry" not in _rc_save.columns: _rc_save = _rc_save.reset_index()
+                                    _rc_recs = [{"Expiry": r.get("Expiry","")} | {c: r[c] for c in _rc_save.columns if c != "Expiry"} for _, r in _rc_save.iterrows()]
+                                    save_user_config(_uid_rc, f"sabr_{_pm_rc}", _rc_ccy, {"values": _rc_recs})
                         except Exception:
+                            pass
                             pass
                     st.success(f"✅ Full SABR calibration complete. {_n_cells - _errors} cells updated, {_errors} skipped.")
                     if _errors > 0:
@@ -11209,18 +11260,28 @@ def rv_tab():
     has_hist  = len(df_rates) > 10 or has_hist_vols
     st.markdown("---")
 
-    rv_tabs = st.tabs([
+    _rv_tab_names = [
         "📊 Vol Surface RV",
         "📈 Curve RV & Spread Analysis",
         "💡 Swaption Trade Ideas",
         "💡 Cap/Floor Trade Ideas",
         "🔮 What-If Scenarios",
-    ])
+    ]
+    _rv_active = st.session_state.get("_rv_active_tab", 0)
+    _rv_cols = st.columns(len(_rv_tab_names))
+    for _ri, _rn in enumerate(_rv_tab_names):
+        with _rv_cols[_ri]:
+            if st.button(_rn, key=f"_rv_tab_{_ri}",
+                         type="primary" if _ri == _rv_active else "secondary",
+                         use_container_width=True):
+                st.session_state["_rv_active_tab"] = _ri
+                st.rerun()
+    st.markdown("---")
 
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     # TAB 1   —   VOL SURFACE RV
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
-    with rv_tabs[0]:
+    if _rv_active == 0:
         st.markdown("### Vol Surface Richness / Cheapness")
 
         if atm is None:
@@ -11317,7 +11378,7 @@ def rv_tab():
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     # TAB 2   —   CURVE RV & SPREAD ANALYSIS
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
-    with rv_tabs[1]:
+    if _rv_active == 1:
         st.markdown("### Curve Shape & Forward Spread RV")
 
         if curve is None:
@@ -11613,7 +11674,7 @@ def rv_tab():
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     # TAB 3   —   SWAPTION TRADE IDEAS
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
-    with rv_tabs[2]:
+    if _rv_active == 2:
         st.markdown("### Swaption RV Trade Recommendations")
         st.caption("Gamma/vega-optimised ideas from current vol surface + curve.")
 
@@ -12222,7 +12283,7 @@ def rv_tab():
                     st.plotly_chart(_fig_pnl, use_container_width=True)
                 else:
                     st.info("Generate ideas above to see P&L estimates.")
-    with rv_tabs[3]:
+    if _rv_active == 3:
         st.markdown("### Cap/Floor RV Trade Recommendations")
         st.caption("Forward BBSW path vs caplet vol   —   find richness/cheapness by strike and maturity.")
 
@@ -12363,7 +12424,7 @@ def rv_tab():
 
 
 
-    with rv_tabs[4]:
+    if _rv_active == 4:
         st.markdown("### 🔮 What-If Scenarios")
         st.caption("Stress-test and scenario analysis using 2+ months of AUD vol history.")
 
@@ -13968,7 +14029,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107u</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108a</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -14265,10 +14326,32 @@ def main():
         _tab_names += ["📍 Multi-CCY", "📜 Bond Options"]
         _tab_funcs += [lambda: multi_ccy_tab(vol_mode), bond_option_tab]
 
-    tabs = st.tabs(_tab_names)
-    for _ti, _tf in enumerate(_tab_funcs):
-        with tabs[_ti]:
-            _tf()
+    # Radio-based tab bar — only the active tab renders, not all 15
+    _tab_icons = [n.split()[0] for n in _tab_names]
+    _tab_labels = [" ".join(n.split()[1:]) for n in _tab_names]
+
+    st.markdown("""
+    <style>
+    div[data-testid="stHorizontalBlock"] > div {flex-wrap: wrap;}
+    div.rateedge-tabbar {display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;border-bottom:2px solid #1e3a5f;padding-bottom:6px;}
+    div.rateedge-tabbar button {background:transparent;border:1px solid #334155;border-radius:6px;
+        color:#94a3b8;padding:4px 10px;font-size:0.82rem;cursor:pointer;}
+    div.rateedge-tabbar button.active {background:#1e3a5f;color:#f1f5f9;border-color:#1e3a5f;}
+    </style>""", unsafe_allow_html=True)
+
+    _active_tab = st.session_state.get("_active_tab", 0)
+    _cols = st.columns(len(_tab_names))
+    for _ti, (_icon, _lbl) in enumerate(zip(_tab_icons, _tab_labels)):
+        with _cols[_ti]:
+            if st.button(_icon + " " + _lbl, key=f"_tab_btn_{_ti}",
+                         type="primary" if _ti == _active_tab else "secondary",
+                         use_container_width=True):
+                st.session_state["_active_tab"] = _ti
+                st.rerun()
+
+    st.markdown("---")
+    # Only call the active tab function
+    _tab_funcs[_active_tab]()
 
 
 def sod_report_tab():
