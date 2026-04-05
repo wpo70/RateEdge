@@ -4012,22 +4012,22 @@ def vol_config_tab():
         
         load_type = st.radio(
             "Commit options",
-            ["All", "SOD IRS", "AUD Vol", "USD & NZD Vol"],
+            ["All", "SOD IRS", "AUD Vol (Manual Load)", "USD & NZD Vol (Manual Load)"],
             index=1,  # Default to SOD IRS — not All
             horizontal=True,
             key="load_type_radio"
         )
         
         # Warn if user is about to overwrite DB-loaded vol surface
-        if load_type in ["All", "AUD Vol", "USD & NZD Vol"]:
+        if load_type in ["All", "AUD Vol (Manual Load)", "USD & NZD Vol (Manual Load)"]:
             st.warning("⚠️ This will overwrite the vol surface loaded from DB with data from your Excel file. Use **SOD IRS** if you only want to commit curves.")
 
         # Map selection to load_type
         type_map = {
             "All": "all",
             "SOD IRS": "curves",
-            "AUD Vol": "atm_aud",
-            "USD & NZD Vol": "atm_usd_nzd"
+            "AUD Vol (Manual Load)": "atm_aud",
+            "USD & NZD Vol (Manual Load)": "atm_usd_nzd"
         }
         
         if st.button(" Commit Selected Data", key="commit_btn", type="primary", disabled=not can_upload_vol()):
@@ -13968,7 +13968,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107s</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107t</div>
             </div>
             """,
             unsafe_allow_html=True,
