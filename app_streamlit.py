@@ -14029,7 +14029,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108c</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108d</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -14326,18 +14326,11 @@ def main():
         _tab_names += ["📍 Multi-CCY", "📜 Bond Options"]
         _tab_funcs += [lambda: multi_ccy_tab(vol_mode), bond_option_tab]
 
-    # Selectbox tab navigation — works at any screen width, never wraps
-    _active_tab = st.session_state.get("_active_tab", 0)
-    _selected = st.selectbox("Navigate", _tab_names, index=_active_tab,
-                             key="main_tab_select", label_visibility="collapsed")
-    _new_tab = _tab_names.index(_selected)
-    if _new_tab != _active_tab:
-        st.session_state["_active_tab"] = _new_tab
-        st.rerun()
-
-    st.markdown("---")
-    # Only call the active tab function — massive render speedup
-    _tab_funcs[_new_tab]()
+    # Tab navigation — visual tabs, single dispatch per render
+    tabs = st.tabs(_tab_names)
+    for _ti, _tf in enumerate(_tab_funcs):
+        with tabs[_ti]:
+            _tf()
 
 
 def sod_report_tab():
