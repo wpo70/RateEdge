@@ -6958,125 +6958,100 @@ def swaptions_tab(vol_mode: str):
         df["_expiry_sort"] = df["expiry"].apply(lambda e: label_to_years(str(e)))
         df = df.sort_values("_expiry_sort").reset_index(drop=True)
 
-        # ── Per-row display with legs breakdown ──────────────────────
+        # Header
+        _hc = st.columns([0.4, 2.0, 0.7, 0.8, 0.7, 0.9, 0.9, 0.9, 0.9, 0.5, 0.5])
+        for _h, _col in zip(["#","Structure","Expiry","Tenor","Notl","Strike %","Fwd %","PV (bp)","PV ($k)","",""], _hc):
+            _col.markdown(f"<small style='color:#94a3b8'>{_h}</small>", unsafe_allow_html=True)
+        st.markdown("<hr style='margin:2px 0;border-color:#1e3050'>", unsafe_allow_html=True)
+
         for idx, row in df.iterrows():
-            _struct = row.get("structure", "")
             _label  = row.get("label", f"{row.get('expiry','')}x{row.get('tenor','')}")
-            _pv     = float(row.get("pv", 0))
-            _pv_bp  = float(row.get("pv_bp", 0))
-            _delta  = float(row.get("delta", 0))
-            _notl   = float(row.get("notional_mm", 100))
-            _ccy    = row.get("currency", "AUD")
-            _strike = float(row.get("strike", 0))
-            _fwd    = float(row.get("forward", 0))
-            _expiry = row.get("expiry", "")
-            _tenor  = row.get("tenor", "")
-            _legs   = row.get("legs", [])
-            _exp_date = row.get("expiry_date", "")
+            _expiry = row.get("expiry","")
+            _tenor  = str(row.get("tenor",""))
+            _struct = row.get("structure","")
+            _legs   = row.get("legs",[]) if isinstance(row.get("legs",[]),list) else []
 
-            with st.container():
-                c1, c2, c3, c4, c5, c6 = st.columns([3, 1.2, 1.2, 1.2, 1.2, 0.8])
-                with c1: st.markdown(f"**{idx+1}. {_label}**")
-                with c2: st.metric("PV (bp)", f"{_pv_bp:.2f}")
-                with c3: st.metric("PV ($k)", f"{_pv/1000:,.1f}")
-                with c4: st.metric("Delta ($k)", f"{_delta/1000:,.1f}")
-                with c5: st.metric("Notional", f"{_notl:.0f}mm")
-                with c6:
-                    if st.button("🗑️", key=f"sw_del_{idx}_{_label[:8]}", help="Remove"):
-                        st.session_state["swaption_portfolio"].pop(idx)
-                        st.session_state["portfolio"] = [p for p in st.session_state["portfolio"]
-                                                          if p.get("label") != _label or
-                                                          p.get("expiry") != _expiry]
-                        _save_portfolio()
-                        st.rerun()
+            _rc = st.columns([0.4, 2.0, 0.7, 0.8, 0.7, 0.9, 0.9, 0.9, 0.9, 0.5, 0.5])
+            _rc[0].write(f"{idx+1}")
+            _rc[1].write(_struct)
+            _rc[2].write(_expiry)
+            _rc[3].write(_tenor)
+            _rc[4].write(f"{float(row.get('notional_mm',100)):.0f}mm")
+            _rc[5].write(f"{float(row.get('strike',0)):.4f}")
+            _rc[6].write(f"{float(row.get('forward',0)):.4f}")
+            _rc[7].write(f"{float(row.get('pv_bp',0)):.2f}")
+            _rc[8].write(f"{float(row.get('pv',0))/1000:,.1f}")
 
-                # Legs breakdown for R/R and Ladders
-                if _struct in ["Risk Reversal", "Payer Ladder", "Receiver Ladder"] and _legs:
-                    _leg_rows = []
-                    for _lg in _legs:
-                        _qty = int(_lg.get("qty", 1))
-                        _side = "Long" if _qty > 0 else "Short"
-                        _leg_rows.append({
-                            "Leg": _lg.get("name", ""),
-                            "B/S": _side,
-                            "Strike (%)": f"{float(_lg.get('strike',0)):.4f}",
-                            "PV ($k)": f"{float(_lg.get('pv',0))/1000:,.1f}",
-                            "PV (bp)": f"{float(_lg.get('pv_bp',0)):.2f}",
-                            "Delta ($k)": f"{float(_lg.get('delta',0))/1000:,.1f}",
-                        })
-                    st.dataframe(pd.DataFrame(_leg_rows), use_container_width=True, hide_index=True)
+            if can_quick_tix() and _rc[9].button("📋", key=f"sw_tix_{idx}", help="Quick Tix"):
+                st.session_state["_sw_tix_open"] = idx if st.session_state.get("_sw_tix_open") != idx else -1
 
-                # Quick Tix
-                if can_quick_tix():
-                 with st.expander(f"📋 Quick Tix — {_label[:40]}", expanded=False):
-                    from datetime import date as _date
-                    from dateutil.relativedelta import relativedelta as _rdelta
-                    _today = _date.today()
-                    try:
-                        _exp_y  = label_to_years(str(_expiry))
-                        _ten_y  = float(str(_tenor).replace("Y","").replace("y",""))
-                        _exp_dt = _today + _rdelta(days=int(_exp_y*365.25))
+            if _rc[10].button("🗑️", key=f"sw_del_{idx}", help="Remove"):
+                st.session_state["swaption_portfolio"].pop(idx)
+                st.session_state["portfolio"] = [p for p in st.session_state["portfolio"]
+                                                  if p.get("label") != _label or p.get("expiry") != _expiry]
+                st.session_state.pop("_sw_tix_open", None)
+                _save_portfolio(); st.rerun()
 
-                        # r is a pandas Series — use [] not .get()
-                        def _rget(key, default=""):
-                            try: return r[key] if r[key] is not None and str(r[key]) not in ("","nan","None") else default
-                            except: return default
+            # Inline Quick Tix
+            if can_quick_tix() and st.session_state.get("_sw_tix_open") == idx:
+                from dateutil.relativedelta import relativedelta as _qrd2
+                from datetime import date as _qd2
+                try:
+                    _qtoday2 = _qd2.today()
+                    _exp_y2 = label_to_years(str(_expiry))
+                    _exp_dt2 = _qtoday2 + _qrd2(days=int(_exp_y2*365.25))
 
-                        _delay_sel = _rget("delay", "None")
-                        _is_mc = bool(_rget("is_midcurve", False))
-                        _stored_swap_start = _rget("swap_start", "")
-                        _stored_swap_end   = _rget("swap_end", "")
-
-                        if _stored_swap_start:
-                            _start_str = _stored_swap_start
-                            _end_str   = _stored_swap_end
-                        else:
-                            _delay_y = label_to_years(_delay_sel) if _delay_sel not in ("None","") else 0.0
-                            _start_dt = _exp_dt + _rdelta(days=int(_delay_y*365.25)) + _rdelta(days=1)
-                            _end_dt = _start_dt + _rdelta(months=int(_ten_y*12))
-                            _start_str = _start_dt.strftime('%d-%b-%Y')
-                            _end_str   = _end_dt.strftime('%d-%b-%Y')
-
+                    def _rg2(key, default=""):
                         try:
-                            from dateutil.parser import parse as _dp
-                            _start_for_rolls = _dp(_start_str)
-                            _rolls = []
-                            _r = _start_for_rolls + _rdelta(months=3)
-                            for _ in range(4):
-                                _rolls.append(_r.strftime('%d-%b-%Y'))
-                                _r += _rdelta(months=3)
-                            _rolls_str = ", ".join(_rolls[:4]) + ("..." if _ten_y > 1 else "")
-                        except Exception:
-                            _rolls_str = "—"
+                            v = row[key]
+                            return v if v is not None and str(v) not in ("","nan","None") else default
+                        except: return default
 
-                        _net_delta = _delta
-                        _delta_dir = "Pay Fixed (hedge = pay fixed IRS)" if _net_delta > 0 else "Rec Fixed (hedge = receive fixed IRS)"
-                        _mc_line = f"Delay:       {_delay_sel} (midcurve)\n" if _is_mc else ""
-                        _tix = f"""=== {_ccy} {_struct.upper()} ===
-Expiry:      {_exp_dt.strftime('%d-%b-%Y')} ({_expiry})
-{_mc_line}Swap Start:  {_start_str}
-Swap End:    {_end_str}
-Tenor:       {_tenor}
-Rolls:       {_rolls_str}
-Fwd Rate:    {_fwd:.4f}%
-"""
-                        if _legs and _struct in ["Risk Reversal", "Payer Ladder", "Receiver Ladder"]:
-                            for _lg in _legs:
-                                _s = "BUY" if int(_lg.get("qty",1)) > 0 else "SELL"
-                                _tix += f"{_s} {_lg.get('name',''):20s} K={float(_lg.get('strike',0)):.4f}%\n"
-                        else:
-                            _tix += f"Strike:      {_strike:.4f}%\n"
+                    _is_mc2 = bool(_rg2("is_midcurve", False))
+                    _delay2 = _rg2("delay","None")
+                    _ss = _rg2("swap_start","")
+                    _se = _rg2("swap_end","")
 
-                        _tix += f"""Premium:     {_pv_bp:.2f} bp ({'+' if _pv>=0 else ''}{_pv/1000:,.1f}k)
-Net Delta:   {_net_delta/1000:,.1f}k  →  {_delta_dir}
-Notional:    {_notl:.0f}mm {_ccy}"""
+                    if _ss:
+                        _ss_str, _se_str = _ss, _se
+                    else:
+                        _dy2 = label_to_years(_delay2) if _delay2 not in ("None","") else 0.0
+                        _sd2 = _exp_dt2 + _qrd2(days=int(_dy2*365.25)+1)
+                        _ten_y2 = float(_tenor.replace("Y","").replace("y","")) if _tenor and _tenor[-1].upper()=="Y" else 5.0
+                        _ed2 = _sd2 + _qrd2(months=int(_ten_y2*12))
+                        _ss_str = _sd2.strftime('%d-%b-%Y'); _se_str = _ed2.strftime('%d-%b-%Y')
 
-                        st.code(_tix, language=None)
-                        st.caption("Copy ↑ and paste into chat/IB/email")
-                    except Exception as _te:
-                        st.caption(f"Could not build tix: {_te}")
+                    try:
+                        from dateutil.parser import parse as _dp2
+                        _sf2 = _dp2(_ss_str)
+                        _ten_y3 = float(_tenor.replace("Y","").replace("y","")) if _tenor and _tenor[-1].upper()=="Y" else 5.0
+                        _rolls2 = [(_sf2+_qrd2(months=3*(i+1))).strftime('%d-%b-%Y') for i in range(min(4,int(_ten_y3*4)))]
+                        _rolls2_str = ", ".join(_rolls2) + "..."
+                    except: _rolls2_str = "—"
 
-                st.markdown("---")
+                    _ddir2 = "Pay Fixed" if float(row.get("delta",0))>0 else "Rec Fixed"
+                    _mc_ln2 = f"Delay:       {_delay2} (midcurve)\n" if _is_mc2 else ""
+                    _tix2  = f"=== {row.get('currency','AUD')} {_struct.upper()} ===\n"
+                    _tix2 += f"Expiry:      {_exp_dt2.strftime('%d-%b-%Y')} ({_expiry})\n"
+                    _tix2 += _mc_ln2
+                    _tix2 += f"Swap Start:  {_ss_str}\n"
+                    _tix2 += f"Swap End:    {_se_str}\n"
+                    _tix2 += f"Tenor:       {_tenor}\n"
+                    _tix2 += f"Rolls:       {_rolls2_str}\n"
+                    _tix2 += f"Fwd Rate:    {float(row.get('forward',0)):.4f}%\n"
+                    if _legs and _struct in ["Risk Reversal","Payer Ladder","Receiver Ladder"]:
+                        for _lg2 in _legs:
+                            _s2 = "BUY " if int(_lg2.get("qty",1))>0 else "SELL"
+                            _tix2 += f"{_s2} {_lg2.get('name',''):20s} K={float(_lg2.get('strike',0)):.4f}%\n"
+                    else:
+                        _tix2 += f"Strike:      {float(row.get('strike',0)):.4f}%\n"
+                    _tix2 += f"Premium:     {float(row.get('pv_bp',0)):.2f} bp  ({float(row.get('pv',0))/1000:+,.1f}k)\n"
+                    _tix2 += f"Net Delta:   {float(row.get('delta',0))/1000:,.1f}k  →  {_ddir2}\n"
+                    _tix2 += f"Notional:    {float(row.get('notional_mm',100)):.0f}mm {row.get('currency','AUD')}"
+                    st.code(_tix2, language=None)
+                except Exception as _qe2:
+                    st.caption(f"Tix error: {_qe2}")
+
 
         # Reload into Pricer
         st.markdown("##### Reload into Pricer")
@@ -7084,22 +7059,24 @@ Notional:    {_notl:.0f}mm {_ccy}"""
             f"{i}: {r.get('label', str(r.get('expiry','?')) + 'x' + str(r.get('tenor','?')))}"
             for i, r in df.iterrows()
         ]
-        reload_sel = st.selectbox("Select ticket", ["  —  "] + row_labels, key="sw_reload_sel")
-        if st.button("🔄 Reload & Reprice", key="sw_reload_btn") and reload_sel != "  —  ":
+        reload_sel = st.selectbox("Select ticket", ["  —  "] + row_labels, key="sw_reload_blot2")
+        if st.button("🔄 Reload & Reprice", key="sw_reload_btn2") and reload_sel != "  —  ":
             row_idx = int(reload_sel.split(":")[0])
             row = df.loc[row_idx]
             EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","📅 Custom Date..."]
             tenor_options = ["1Y","2Y","3Y","4Y","5Y","6Y","7Y","8Y","9Y","10Y","12Y","15Y","20Y","25Y","30Y"]
+            import re as _re_sw2
             exp_val = str(row.get("expiry", "5y"))
-            tenor_val = str(row.get("tenor", "5Y"))
+            tenor_val = _re_sw2.sub(r'^\d+[mMwW]', '', str(row.get("tenor","5Y"))).strip() or "5Y"
             st.session_state["sw_pending_reload"] = {
                 "expiry": exp_val if exp_val in EXPIRY_PRESETS else "5y",
                 "tenor": tenor_val if tenor_val in tenor_options else "5Y",
                 "structure": str(row.get("structure", "ATM Straddle")),
                 "notional_mm": float(row.get("notional_mm", 100)),
-                "strike": float(row["strike"]) if "strike" in row and not pd.isna(row.get("strike", float("nan"))) else None,
+                "strike": float(row["strike"]) if "strike" in row and not pd.isna(row["strike"]) else None,
             }
             st.rerun()
+
 
 
 def caps_floors_tab(vol_mode: str):
@@ -13946,11 +13923,21 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
                 sqrt_t = math.sqrt(max(exp_y, 0.001))
 
                 # ATM straddle FORWARD premium (bp of notional)
-                # spot_prem = 2*N'(0)*sigma*sqrt(T)*annuity
-                # fwd_prem  = spot_prem / df(expiry)  [market convention: OIS discounted]
-                xs_c = curve["MaturityY"].to_numpy().astype(float)
-                ys_c = curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
-                df_expiry = math.exp(-float(np.interp(exp_y, xs_c, ys_c)) * exp_y)
+                # fwd_prem = spot_prem / df(expiry) — use OIS for discounting (matches pricer)
+                if ois_curve is not None:
+                    try:
+                        import numpy as _npm
+                        xs_o = ois_curve["MaturityY"].to_numpy().astype(float)
+                        ys_o = ois_curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
+                        df_expiry = math.exp(-float(_npm.interp(exp_y, xs_o, ys_o)) * exp_y)
+                    except Exception:
+                        xs_c = curve["MaturityY"].to_numpy().astype(float)
+                        ys_c = curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
+                        df_expiry = math.exp(-float(np.interp(exp_y, xs_c, ys_c)) * exp_y)
+                else:
+                    xs_c = curve["MaturityY"].to_numpy().astype(float)
+                    ys_c = curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
+                    df_expiry = math.exp(-float(np.interp(exp_y, xs_c, ys_c)) * exp_y)
                 spot_prem_bp = 2 * 0.3989 * sigma_n * sqrt_t * ann * 10000
                 fwd_prem_bp = spot_prem_bp / df_expiry if df_expiry > 0 else spot_prem_bp
                 prow[tenor] = round(fwd_prem_bp, 2)
@@ -14127,7 +14114,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108n</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108o</div>
             </div>
             """,
             unsafe_allow_html=True,
