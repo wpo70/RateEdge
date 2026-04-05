@@ -4013,11 +4013,15 @@ def vol_config_tab():
         load_type = st.radio(
             "Commit options",
             ["All", "SOD IRS", "AUD Vol", "USD & NZD Vol"],
-            index=0,
+            index=1,  # Default to SOD IRS — not All
             horizontal=True,
             key="load_type_radio"
         )
         
+        # Warn if user is about to overwrite DB-loaded vol surface
+        if load_type in ["All", "AUD Vol", "USD & NZD Vol"]:
+            st.warning("⚠️ This will overwrite the vol surface loaded from DB with data from your Excel file. Use **SOD IRS** if you only want to commit curves.")
+
         # Map selection to load_type
         type_map = {
             "All": "all",
@@ -13964,7 +13968,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107r</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107s</div>
             </div>
             """,
             unsafe_allow_html=True,
