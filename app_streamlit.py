@@ -13315,23 +13315,6 @@ def home_tab():
             st.warning(_auto_msg)
         else:
             st.success(_auto_msg)
-
-    # DEBUG: show exactly what ATM surface is loaded (super_admin only)
-    if is_super_admin():
-        for _cy in ["AUD","USD","NZD"]:
-            _vd = st.session_state.get("vol_data",{}).get(_cy,{})
-            _atm = _vd.get("atm")
-            if _atm is not None and hasattr(_atm,"shape"):
-                try:
-                    _exp_rows = list(_atm["Expiry"]) if "Expiry" in _atm.columns else []
-                    _1y_idx = _exp_rows.index("1y") if "1y" in _exp_rows else None
-                    _1y_1y = float(_atm.iloc[_1y_idx]["1Y"]) if _1y_idx is not None and "1Y" in _atm.columns else None
-                    _flag = st.session_state.get(f"_vol_loaded_{_cy}", False)
-                    st.info(f"🔬 {_cy} ATM: {_atm.shape[0]}×{_atm.shape[1]-1} | 1y×1Y = {_1y_1y:.2f}bp | loaded_flag={_flag}")
-                except Exception as _de:
-                    st.info(f"🔬 {_cy} ATM shape={_atm.shape} err={_de}")
-        else:
-            st.warning("🔬 DEBUG — vol_data has no AUD ATM")
     
     st.markdown(
         f"""
@@ -13962,7 +13945,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107p</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107q</div>
             </div>
             """,
             unsafe_allow_html=True,
