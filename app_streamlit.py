@@ -6270,8 +6270,11 @@ def swaptions_tab(vol_mode: str):
             disc_method = st.radio("Discount", ["OIS", "Flat"], horizontal=True, key="sw_disc_method")
         else:
             disc_method = "Flat"
-            st.caption(" No OIS curve")
-        
+            if is_midcurve:
+                st.warning("⚠️ No AONIA/OIS curve — commit AONIA from Excel for correct midcurve discounting")
+            else:
+                st.caption("⚠️ No OIS curve — commit AONIA from Excel")
+
         if disc_method == "Flat" or ois_curve is None:
             flat_rate = st.number_input("Rate (%)", min_value=0.0, max_value=20.0, value=4.0, key="sw_disc_flat")
             eff_disc_rate = flat_rate / 100.0
@@ -6284,11 +6287,17 @@ def swaptions_tab(vol_mode: str):
                     raise ValueError("OIS curve missing MaturityY/ZeroRatePct columns")
                 ois_xs = ois_curve[_ois_col_m].to_numpy().astype(float)
                 ois_ys = ois_curve[_ois_col_z].to_numpy().astype(float) / 100.0
-                _disc_t = expiry_y + delay_y if is_midcurve else expiry_y
+                # Discount at option EXPIRY — not swap start.
+                # For midcurve, option expires at expiry_y (not expiry_y+delay_y).
+                # The pricer uses df(expiry_y) = exp(-eff_disc_rate × expiry_y).
+                _disc_t = expiry_y
                 eff_disc_rate = float(np.interp(_disc_t, ois_xs, ois_ys))
                 disc_source = "OIS"
-                st.caption(f"OIS rate: {eff_disc_rate*100:.2f}% @ {_disc_t:.2f}Y")
-            except Exception:
+                if is_midcurve:
+                    st.caption(f"OIS @ expiry {expiry_y:.2f}Y: {eff_disc_rate*100:.2f}% | swap start {expiry_y+delay_y:.2f}Y")
+                else:
+                    st.caption(f"OIS rate: {eff_disc_rate*100:.2f}% @ {_disc_t:.2f}Y")
+            except Exception as _de:
                 eff_disc_rate = 0.035
                 disc_source = "Flat (fallback)"
 
@@ -6571,7 +6580,10 @@ def swaptions_tab(vol_mode: str):
     from datetime import datetime, timedelta
     today = datetime.now()
     expiry_date = today + timedelta(days=int(expiry_y * 365))
-    swap_start = expiry_date + timedelta(days=1)
+    if is_midcurve:
+        swap_start = expiry_date + timedelta(days=int(delay_y * 365))
+    else:
+        swap_start = expiry_date + timedelta(days=1)
     swap_end = swap_start + timedelta(days=int(tenor_y * 365))
     
     # Roll convention
@@ -6796,7 +6808,8 @@ def swaptions_tab(vol_mode: str):
                                 "pv": l[3].get("pv",0), "pv_bp": l[3].get("pv_bp",0),
                                 "delta": l[3].get("delta",0)} for l in legs],
                          expiry_date=expiry_date.strftime('%d-%b-%Y') if 'expiry_date' in dir() else "",
-                         swap_start=expiry_date.strftime('%d-%b-%Y') if 'expiry_date' in dir() else "",
+                         swap_start=swap_start.strftime('%d-%b-%Y') if 'swap_start' in dir() else "",
+                         swap_end=swap_end.strftime('%d-%b-%Y') if 'swap_end' in dir() else "",
                          )
             st.session_state["swaption_portfolio"].append(entry)
             st.session_state["portfolio"].append(entry)
@@ -14029,7 +14042,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108d</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108e</div>
             </div>
             """,
             unsafe_allow_html=True,
