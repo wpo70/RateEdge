@@ -6282,9 +6282,6 @@ def swaptions_tab(vol_mode: str):
         is_midcurve = False
 
     fwd_pct = fwd * 100
-    # Midcurve label suffix
-    if is_midcurve:
-        expiry_display = f"{expiry_display}→{delay_sel}"
     # Safety defaults in case col blocks don't execute
     eff_disc_rate = 0.035
     disc_source = "Flat (default)"
@@ -6650,17 +6647,20 @@ def swaptions_tab(vol_mode: str):
             _smile = st.session_state.get("sabr_smile_mode", "Sticky-ATM (alpha-sticky)")
             # Midcurve: use SABR params at (expiry+delay, tenor) not (expiry, tenor)
             _sabr_expiry_lbl = _vol_expiry_lbl if is_midcurve else expiry
+            # For midcurve, evaluate SABR smile at T=swap_start (expiry+delay)
+            # so ATM vol matches surface at (expiry+delay, tenor) exactly
+            _T_sabr = expiry_y + delay_y if is_midcurve else expiry_y
             sabr = get_sabr_params_from_matrices(a, b, r, n, _sabr_expiry_lbl, tenor_y)
             if vol_mode.startswith("Normal"):
                 if sabr and sabr.get("alpha", 0) > 0:
                     return sabr_normal_vol_smile(
-                        fwd_pct/100.0, k_pct/100.0, expiry_y,
+                        fwd_pct/100.0, k_pct/100.0, _T_sabr,
                         sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"])
                 else:
                     return atm_val / 10000.0
             else:
                 if sabr and sabr.get("alpha", 0) > 0:
-                    return sabr_implied_vol_black(fwd_pct/100.0, k_pct/100.0, expiry_y,
+                    return sabr_implied_vol_black(fwd_pct/100.0, k_pct/100.0, _T_sabr,
                                                    sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"])
                 else:
                     return atm_val / 100.0
@@ -7018,24 +7018,27 @@ def swaptions_tab(vol_mode: str):
                         _exp_y  = label_to_years(str(_expiry))
                         _ten_y  = float(str(_tenor).replace("Y","").replace("y",""))
                         _exp_dt = _today + _rdelta(days=int(_exp_y*365.25))
-                        _delay_sel = r.get("delay", "None") if isinstance(r, dict) else "None"
-                        _is_mc = r.get("is_midcurve", False) if isinstance(r, dict) else False
-                        _stored_swap_start = r.get("swap_start","") if isinstance(r, dict) else ""
-                        _stored_swap_end   = r.get("swap_end","") if isinstance(r, dict) else ""
 
-                        # Use stored dates if available (correct for midcurves)
-                        # Fall back to calculated only for vanilla
+                        # r is a pandas Series — use [] not .get()
+                        def _rget(key, default=""):
+                            try: return r[key] if r[key] is not None and str(r[key]) not in ("","nan","None") else default
+                            except: return default
+
+                        _delay_sel = _rget("delay", "None")
+                        _is_mc = bool(_rget("is_midcurve", False))
+                        _stored_swap_start = _rget("swap_start", "")
+                        _stored_swap_end   = _rget("swap_end", "")
+
                         if _stored_swap_start:
                             _start_str = _stored_swap_start
                             _end_str   = _stored_swap_end
                         else:
-                            _delay_y = label_to_years(_delay_sel) if _delay_sel != "None" else 0.0
+                            _delay_y = label_to_years(_delay_sel) if _delay_sel not in ("None","") else 0.0
                             _start_dt = _exp_dt + _rdelta(days=int(_delay_y*365.25)) + _rdelta(days=1)
                             _end_dt = _start_dt + _rdelta(months=int(_ten_y*12))
                             _start_str = _start_dt.strftime('%d-%b-%Y')
                             _end_str   = _end_dt.strftime('%d-%b-%Y')
 
-                        # Rolls from stored swap_start
                         try:
                             from dateutil.parser import parse as _dp
                             _start_for_rolls = _dp(_start_str)
@@ -7050,7 +7053,6 @@ def swaptions_tab(vol_mode: str):
 
                         _net_delta = _delta
                         _delta_dir = "Pay Fixed (hedge = pay fixed IRS)" if _net_delta > 0 else "Rec Fixed (hedge = receive fixed IRS)"
-
                         _mc_line = f"Delay:       {_delay_sel} (midcurve)\n" if _is_mc else ""
                         _tix = f"""=== {_ccy} {_struct.upper()} ===
 Expiry:      {_exp_dt.strftime('%d-%b-%Y')} ({_expiry})
@@ -14114,7 +14116,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108k</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108l</div>
             </div>
             """,
             unsafe_allow_html=True,
