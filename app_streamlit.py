@@ -6796,11 +6796,14 @@ def swaptions_tab(vol_mode: str):
                 display_prem_bp = res.get("pv_bp_fwd", res["pv_bp"])
             else:
                 display_prem_bp = res.get("pv_bp_spot", res["pv_bp"])
+            # Tenor label: for midcurve show "delay+tenor" e.g. "2m5Y"
+            _tenor_display = f"{delay_sel}{swap_tenor}" if is_midcurve else swap_tenor
+
             st.session_state["sw_last_result"] = {
                 "res": res, "label": label, "structure": structure, "legs": legs,
                 "params": {
                     "Structure": structure, "Expiry Term": expiry_display,
-                    "Tenor": swap_tenor, "Forward (%)": f"{fwd_pct:.4f}",
+                    "Tenor": _tenor_display, "Forward (%)": f"{fwd_pct:.4f}",
                     "Annuity (PV01)": f"{ann:.4f}", "Discount": f"{eff_disc_rate*100:.3f}% ({disc_source})",
                     "Notional": f"{notional:,.0f}mm"
                 },
@@ -6815,7 +6818,7 @@ def swaptions_tab(vol_mode: str):
             else:
                 display_prem_bp = res.get("pv_bp_spot", res["pv_bp"])
             entry = dict(instrument_type="Swaption", currency=ccy, structure=structure,
-                         expiry=expiry, tenor=swap_tenor, model=vol_mode,
+                         expiry=expiry, tenor=_tenor_display, model=vol_mode,
                          delay=delay_sel if is_midcurve else "None",
                          is_midcurve=is_midcurve,
                          notional_mm=notional, strike=strike_pct, forward=fwd_pct, pv=res["pv"],
@@ -6910,7 +6913,7 @@ def swaptions_tab(vol_mode: str):
     if st.session_state["swaption_portfolio"]:
         ph1, ph2 = st.columns([3, 1])
         with ph1:
-            st.markdown("### Swaption Options Whiteboard")
+            st.markdown("### Swaptions Trade Blotter")
         with ph2:
             if st.button("🗑️ Clear All", key="sw_clear_portfolio"):
                 st.session_state["swaption_portfolio"] = []
@@ -14078,7 +14081,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108g</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108h</div>
             </div>
             """,
             unsafe_allow_html=True,
