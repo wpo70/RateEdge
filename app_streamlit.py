@@ -3357,6 +3357,14 @@ def set_ccy_vol_data(ccy: str, atm, a, b, r, n):
     if atm is not None:
         _h = st.session_state.get(f"_atm_hash_{ccy}", 0)
         st.session_state[f"_atm_hash_{ccy}"] = _h + 1
+        # Clear ALL ATM-derived caches
+        st.session_state.get("atm_prem_matrix", {}).pop(ccy, None)
+        st.session_state.pop("caplet_vol_curve_aud", None)
+        st.session_state.pop("_caplet_curve_key", None)
+        st.session_state.pop(f"_surf_caplet_key_{ccy}", None)
+        st.session_state.pop(f"_surf_caplet_curve_{ccy}", None)
+        st.session_state.pop("_atm_cfs_cache_key", None)
+        st.session_state.pop("_atm_cfs_rows_cache", None)
     ve = st.session_state["vol_editor"]
     if atm is not None:
         ve["base"][ccy] = atm.copy()
@@ -3973,10 +3981,18 @@ def vol_config_tab():
 
         with col_db3:
             if st.button("🔄 Reload Vols from DB", key="reload_vols_btn", type="secondary"):
-                # Clear cached vol data and reload from vol_history
                 for _ccy in ["AUD","NZD","USD"]:
                     st.session_state.get("vol_data", {}).pop(_ccy, None)
                     st.session_state.pop(f"_sabr_init_{_ccy}", None)
+                    st.session_state.pop(f"_vol_loaded_{_ccy}", None)
+                    st.session_state.get("atm_prem_matrix", {}).pop(_ccy, None)
+                    st.session_state.pop(f"_surf_caplet_key_{_ccy}", None)
+                    st.session_state.pop(f"_surf_caplet_curve_{_ccy}", None)
+                st.session_state.pop("caplet_vol_curve_aud", None)
+                st.session_state.pop("_caplet_curve_key", None)
+                st.session_state.pop("_atm_cfs_cache_key", None)
+                st.session_state.pop("_atm_cfs_rows_cache", None)
+                st.session_state.pop("_latest_vol_snaps_cache", None)
                 st.session_state["db_auto_loaded"] = False
                 st.rerun()
     
@@ -4322,6 +4338,7 @@ def vol_config_tab():
                                         st.session_state["vol_editor"]["base"].pop(ccy, None)
                                     _h = st.session_state.get(f"_atm_hash_{ccy}", 0)
                                     st.session_state[f"_atm_hash_{ccy}"] = _h + 1
+                                    st.session_state.get("atm_prem_matrix", {}).pop(ccy, None)
                                     
                                     # Update timestamps
                                     if "timestamps" not in st.session_state:
@@ -13913,6 +13930,8 @@ def main():
                                 st.session_state[f"_vol_loaded_{_cc2}"] = True
                                 _h = st.session_state.get(f"_atm_hash_{_cc2}", 0)
                                 st.session_state[f"_atm_hash_{_cc2}"] = _h + 1
+                                # Clear stale ATM matrix — must regenerate with new surface
+                                st.session_state.get("atm_prem_matrix", {}).pop(_cc2, None)
                     _cur.close(); _sc.close()
                     if _sl: st.session_state["_auto_load_msg"] = f"✅ Vols: {', '.join(_sl)}"
             except Exception as _ve:
@@ -13945,7 +13964,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107q</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3107r</div>
             </div>
             """,
             unsafe_allow_html=True,
