@@ -6329,7 +6329,7 @@ def swaptions_tab(vol_mode: str):
                     st.caption(f"OIS rate: {eff_disc_rate*100:.2f}% @ {_disc_t:.2f}Y")
             except Exception as _de:
                 eff_disc_rate = 0.035
-                disc_source = "Flat (fallback)"
+                disc_source = f"Flat (OIS error: {_de})"
 
     # Strike inputs - varies by structure
     st.markdown("---")
@@ -13304,95 +13304,105 @@ def portfolio_tab():
             df_sw["_expiry_sort"] = df_sw["expiry"].apply(lambda e: label_to_years(str(e)))
             df_sw = df_sw.sort_values("_expiry_sort").reset_index(drop=True)
 
-            st.markdown("---")
+            # Header row
+            _hc = st.columns([0.4, 1.8, 0.7, 0.8, 0.7, 0.9, 0.9, 0.9, 0.9, 0.9, 0.5, 0.5])
+            for _h, _col in zip(["#","Structure","Expiry","Tenor","Notl","Strike %","Fwd %","PV (bp)","PV ($k)","Δ ($k)","",""], _hc):
+                _col.markdown(f"<small style='color:#94a3b8'>{_h}</small>", unsafe_allow_html=True)
+            st.markdown("<hr style='margin:2px 0;border-color:#1e3050'>", unsafe_allow_html=True)
 
-            # Blotter — fast dataframe view
-            _sw_disp_rows = []
             for idx, row in df_sw.iterrows():
-                _sw_disp_rows.append({
-                    "#": idx+1,
-                    "Structure": row.get("structure",""),
-                    "Expiry": row.get("expiry",""),
-                    "Tenor": row.get("tenor",""),
-                    "Notl (mm)": float(row.get("notional_mm",100)),
-                    "Strike (%)": f"{float(row.get('strike',0)):.4f}",
-                    "Fwd (%)": f"{float(row.get('forward',0)):.4f}",
-                    "PV (bp)": round(float(row.get("pv_bp",0)),2),
-                    "PV ($k)": round(float(row.get("pv",0))/1000,1),
-                    "Δ ($k)": round(float(row.get("delta",0))/1000,1),
-                    "Vega ($k)": round(float(row.get("vega",0))/1000,1),
-                    "CCY": row.get("currency","AUD"),
-                })
-            _sw_disp_df = pd.DataFrame(_sw_disp_rows)
-            _th = min(max(150, len(_sw_disp_df)*35+38), 500)
-            st.dataframe(_sw_disp_df, use_container_width=True, height=_th, hide_index=True)
+                _cols = st.columns([0.4, 1.8, 0.7, 0.8, 0.7, 0.9, 0.9, 0.9, 0.9, 0.9, 0.5, 0.5])
+                _cols[0].write(f"{idx+1}")
+                _cols[1].write(row.get("structure",""))
+                _cols[2].write(row.get("expiry",""))
+                _cols[3].write(row.get("tenor",""))
+                _cols[4].write(f"{float(row.get('notional_mm',100)):.0f}mm")
+                _cols[5].write(f"{float(row.get('strike',0)):.4f}")
+                _cols[6].write(f"{float(row.get('forward',0)):.4f}")
+                _cols[7].write(f"{float(row.get('pv_bp',0)):.2f}")
+                _cols[8].write(f"{float(row.get('pv',0))/1000:,.1f}")
+                _cols[9].write(f"{float(row.get('delta',0))/1000:,.1f}")
 
-            # Single row detail + Quick Tix + delete
-            _sw_sel_opts = [f"{i+1}: {t.get('label', t.get('expiry','?')+'x'+str(t.get('tenor','?')))}" for i,t in enumerate(_sw_port)]
-            _sw_sel = st.selectbox("Select row for detail / Quick Tix / delete", ["  —  "] + _sw_sel_opts, key="ptf_sw_detail_sel")
-            if _sw_sel != "  —  ":
-                _si = int(_sw_sel.split(":")[0]) - 1
-                _srow = _sw_port[_si]
-                _struct = _srow.get("structure","")
-                _legs   = _srow.get("legs",[]) if isinstance(_srow.get("legs",[]),list) else []
-                _label  = _srow.get("label","")
-                _pv_bp  = float(_srow.get("pv_bp",0))
-                _pv     = float(_srow.get("pv",0))
-                _delta  = float(_srow.get("delta",0))
-                _ccy    = _srow.get("currency","AUD")
-                _notl   = float(_srow.get("notional_mm",100))
-                _strike = float(_srow.get("strike",0))
-                _fwd    = float(_srow.get("forward",0))
-                _expiry = _srow.get("expiry","")
-                _tenor  = _srow.get("tenor","")
+                _label = row.get("label","")
+                _key_base = f"ptf_{idx}"
 
-                _dc1, _dc2 = st.columns([4,1])
-                with _dc2:
-                    if st.button("🗑️ Delete", key="ptf_sw_del_btn"):
-                        st.session_state["portfolio"] = [p for p in portfolio if p.get("label")!=_label or p.get("instrument_type")!="Swaption"]
-                        st.session_state["swaption_portfolio"] = [p for p in st.session_state["swaption_portfolio"] if p.get("label")!=_label]
-                        _save_portfolio(); st.rerun()
+                if can_quick_tix() and _cols[10].button("📋", key=f"{_key_base}_tix", help="Quick Tix"):
+                    st.session_state["_ptf_tix_open"] = idx if st.session_state.get("_ptf_tix_open") != idx else -1
 
-                if _struct in ["Risk Reversal","Payer Ladder","Receiver Ladder"] and _legs:
-                    _ldf = pd.DataFrame([{
-                        "Leg": l.get("name",""), "B/S": "Buy" if int(l.get("qty",1))>0 else "Sell",
-                        "Strike (%)": f"{float(l.get('strike',0)):.4f}",
-                        "PV ($k)": f"{float(l.get('pv',0))/1000:,.1f}",
-                        "Delta ($k)": f"{float(l.get('delta',0))/1000:,.1f}",
-                    } for l in _legs])
-                    st.dataframe(_ldf, use_container_width=True, hide_index=True)
+                if _cols[11].button("🗑️", key=f"{_key_base}_del", help="Delete"):
+                    st.session_state["portfolio"] = [p for p in portfolio if p.get("label") != _label or p.get("instrument_type") != "Swaption"]
+                    st.session_state["swaption_portfolio"] = [p for p in st.session_state["swaption_portfolio"] if p.get("label") != _label]
+                    st.session_state.pop("_ptf_tix_open", None)
+                    _save_portfolio(); st.rerun()
 
-                if can_quick_tix():
-                    with st.expander("📋 Quick Tix", expanded=False):
-                        from datetime import date as _qdate
-                        from dateutil.relativedelta import relativedelta as _qrd
+                # Quick Tix inline
+                if can_quick_tix() and st.session_state.get("_ptf_tix_open") == idx:
+                    from dateutil.relativedelta import relativedelta as _qrd
+                    from datetime import date as _qdate
+                    try:
+                        _qtoday = _qdate.today()
+                        _expiry = row.get("expiry","")
+                        _tenor  = str(row.get("tenor",""))
+                        _exp_y  = label_to_years(str(_expiry))
+                        _exp_dt = _qtoday + _qrd(days=int(_exp_y*365.25))
+
+                        def _rget(key, default=""):
+                            try:
+                                v = row[key]
+                                return v if v is not None and str(v) not in ("","nan","None") else default
+                            except: return default
+
+                        _is_mc = bool(_rget("is_midcurve", False))
+                        _delay_sel = _rget("delay", "None")
+                        _stored_start = _rget("swap_start", "")
+                        _stored_end   = _rget("swap_end", "")
+
+                        # Use stored dates (set correctly at price time)
+                        if _stored_start:
+                            _start_str = _stored_start
+                            _end_str   = _stored_end
+                        else:
+                            _delay_y = label_to_years(_delay_sel) if _delay_sel not in ("None","") else 0.0
+                            _start_dt = _exp_dt + _qrd(days=int(_delay_y*365.25)+1)
+                            _end_y = float(_tenor.replace("Y","").replace("y","").replace("m","")) if _tenor[-1].upper()=="Y" else float(_tenor[:-1])/12
+                            _end_dt = _start_dt + _qrd(months=int(_end_y*12))
+                            _start_str = _start_dt.strftime('%d-%b-%Y')
+                            _end_str   = _end_dt.strftime('%d-%b-%Y')
+
                         try:
-                            _qtoday = _qdate.today()
-                            _exp_y  = label_to_years(str(_expiry))
-                            _ten_y  = float(str(_tenor).replace("Y","").replace("y",""))
-                            _exp_dt   = _qtoday + _qrd(days=int(_exp_y*365.25))
-                            _start_dt = _exp_dt + _qrd(days=2)
-                            _end_dt   = _start_dt + _qrd(months=int(_ten_y*12))
-                            _rolls = [(_start_dt+_qrd(months=3*(i+1))).strftime('%d-%b-%Y') for i in range(min(4,int(_ten_y*4)))]
-                            _delta_dir = "Pay Fixed" if _delta>0 else "Rec Fixed"
-                            _tix = f"=== {_ccy} {_struct.upper()} ===\n"
-                            _tix += f"Expiry:      {_exp_dt.strftime('%d-%b-%Y')} ({_expiry})\n"
-                            _tix += f"Swap Start:  {_start_dt.strftime('%d-%b-%Y')}\n"
-                            _tix += f"Swap End:    {_end_dt.strftime('%d-%b-%Y')}\n"
-                            _tix += f"Rolls:       {', '.join(_rolls)}\n"
-                            _tix += f"Fwd Rate:    {_fwd:.4f}%\n"
-                            if _legs and _struct in ["Risk Reversal","Payer Ladder","Receiver Ladder"]:
-                                for _lg in _legs:
-                                    _s = "BUY " if int(_lg.get("qty",1))>0 else "SELL"
-                                    _tix += f"{_s} {_lg.get('name',''):20s} K={float(_lg.get('strike',0)):.4f}%\n"
-                            else:
-                                _tix += f"Strike:      {_strike:.4f}%\n"
-                            _tix += f"Premium:     {_pv_bp:.2f} bp  ({_pv/1000:+,.1f}k)\n"
-                            _tix += f"Net Delta:   {_delta/1000:,.1f}k  →  {_delta_dir}\n"
-                            _tix += f"Notional:    {_notl:.0f}mm {_ccy}"
-                            st.code(_tix, language=None)
-                        except Exception as _qe:
-                            st.caption(f"Tix error: {_qe}")
+                            from dateutil.parser import parse as _dp
+                            _sf = _dp(_start_str)
+                            _end_y2 = float(_tenor.replace("Y","").replace("y","")) if _tenor[-1].upper()=="Y" else float(_tenor[:-1])/12
+                            _rolls = [(_sf+_qrd(months=3*(i+1))).strftime('%d-%b-%Y') for i in range(min(4,int(_end_y2*4)))]
+                            _rolls_str = ", ".join(_rolls) + ("..." if _end_y2 > 1 else "")
+                        except: _rolls_str = "—"
+
+                        _delta_dir = "Pay Fixed" if float(row.get("delta",0))>0 else "Rec Fixed"
+                        _mc_line = f"Delay:       {_delay_sel} (midcurve)\n" if _is_mc else ""
+                        _legs = row.get("legs",[]) if isinstance(row.get("legs",[]),list) else []
+                        _struct = row.get("structure","")
+                        _tix  = f"=== {row.get('currency','AUD')} {_struct.upper()} ===\n"
+                        _tix += f"Expiry:      {_exp_dt.strftime('%d-%b-%Y')} ({_expiry})\n"
+                        _tix += _mc_line
+                        _tix += f"Swap Start:  {_start_str}\n"
+                        _tix += f"Swap End:    {_end_str}\n"
+                        _tix += f"Tenor:       {_tenor}\n"
+                        _tix += f"Rolls:       {_rolls_str}\n"
+                        _tix += f"Fwd Rate:    {float(row.get('forward',0)):.4f}%\n"
+                        if _legs and _struct in ["Risk Reversal","Payer Ladder","Receiver Ladder"]:
+                            for _lg in _legs:
+                                _s = "BUY " if int(_lg.get("qty",1))>0 else "SELL"
+                                _tix += f"{_s} {_lg.get('name',''):20s} K={float(_lg.get('strike',0)):.4f}%\n"
+                        else:
+                            _tix += f"Strike:      {float(row.get('strike',0)):.4f}%\n"
+                        _tix += f"Premium:     {float(row.get('pv_bp',0)):.2f} bp  ({float(row.get('pv',0))/1000:+,.1f}k)\n"
+                        _tix += f"Net Delta:   {float(row.get('delta',0))/1000:,.1f}k  →  {_delta_dir}\n"
+                        _tix += f"Notional:    {float(row.get('notional_mm',100)):.0f}mm {row.get('currency','AUD')}"
+                        st.code(_tix, language=None)
+                    except Exception as _qe:
+                        st.caption(f"Tix error: {_qe}")
+
+                st.markdown("<hr style='margin:2px 0;border-color:#0f1e30'>", unsafe_allow_html=True)
 
             # Reload into pricer
             st.markdown("##### Reload into Pricer")
@@ -13404,9 +13414,12 @@ def portfolio_tab():
                 _EP = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","📅 Custom Date..."]
                 _TO = ["1Y","2Y","3Y","4Y","5Y","6Y","7Y","8Y","9Y","10Y","12Y","15Y","20Y","25Y","30Y"]
                 _ev = str(_rrow.get("expiry","5y")); _tv = str(_rrow.get("tenor","5Y"))
+                # Strip delay prefix for tenor reload e.g. "3m5Y" → "5Y"
+                import re as _re_ptf
+                _tv_clean = _re_ptf.sub(r'^\d+[mMwW]', '', _tv).strip() or _tv
                 st.session_state["sw_pending_reload"] = {
                     "expiry": _ev if _ev in _EP else "5y",
-                    "tenor": _tv if _tv in _TO else "5Y",
+                    "tenor": _tv_clean if _tv_clean in _TO else "5Y",
                     "structure": str(_rrow.get("structure","ATM Straddle")),
                     "notional_mm": float(_rrow.get("notional_mm",100)),
                     "strike": float(_rrow["strike"]) if "strike" in _rrow else None,
@@ -14116,7 +14129,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108l</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108m</div>
             </div>
             """,
             unsafe_allow_html=True,
