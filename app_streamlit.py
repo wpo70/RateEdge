@@ -3767,18 +3767,24 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                 except:
                     pass
             
-            # OIS curve (if exists)
-            ois_name = f"OIS_{ccy}"
-            if ois_name in xl.sheet_names:
-                raw_ois = pd.read_excel(xl, sheet_name=ois_name, usecols=[0, 1])
-                try:
-                    ois_df = load_curve_flexible(raw_ois, ois_name)
-                    set_basis_curve(ccy, "ois", ois_df)
-                    if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
-                    if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
-                    st.session_state["config_basis"][ccy]["ois"] = ois_df
-                except:
-                    pass
+            # OIS curve (if exists) — try multiple sheet name formats
+            _ois_found = False
+            for ois_name in [f"OIS_{ccy}", f"OIS {ccy}", f"AONIA_{ccy}", "AONIA", f"ois_{ccy}"]:
+                if ois_name in xl.sheet_names:
+                    raw_ois = pd.read_excel(xl, sheet_name=ois_name, usecols=[0, 1])
+                    try:
+                        ois_df = load_curve_flexible(raw_ois, ois_name)
+                        set_basis_curve(ccy, "ois", ois_df)
+                        if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
+                        if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
+                        st.session_state["config_basis"][ccy]["ois"] = ois_df
+                        _ois_found = True
+                        loaded["basis"] += 1
+                    except:
+                        pass
+                    break
+            if not _ois_found and ccy == "AUD":
+                st.session_state[f"_ois_missing_{ccy}"] = True
     
     return loaded
 
@@ -4042,6 +4048,26 @@ def vol_config_tab():
                 msgs.append(f"SABR Grids: {loaded['sabr']} currencies")
             if loaded["curves"] > 0:
                 msgs.append(f"Curves: {loaded['curves']} currencies")
+            if loaded.get("basis", 0) > 0:
+                msgs.append(f"Basis/OIS: {loaded['basis']} curves")
+
+            # Check OIS status
+            _ois_loaded = st.session_state.get("config_basis", {}).get("AUD", {}).get("ois") is not None
+            if not _ois_loaded and selected_type in ["curves", "all"]:
+                # Show what sheets ARE in the Excel to diagnose
+                try:
+                    import io as _io
+                    _xl2 = pd.ExcelFile(upload)
+                    _ois_sheets = [s for s in _xl2.sheet_names if "ois" in s.lower() or "aonia" in s.lower() or "OIS" in s]
+                    if _ois_sheets:
+                        st.warning(f"⚠️ OIS sheet found ({_ois_sheets}) but failed to parse — check column format (MaturityY, ZeroRatePct)")
+                    else:
+                        st.warning(f"⚠️ No OIS/AONIA sheet in Excel. Sheets found: {_xl2.sheet_names}. Add sheet named 'OIS_AUD'.")
+                except Exception:
+                    st.warning("⚠️ OIS/AONIA curve not loaded — check Excel has OIS_AUD sheet")
+            elif _ois_loaded:
+                _ois_df = st.session_state["config_basis"]["AUD"]["ois"]
+                msgs.append(f"AONIA ✅ ({len(_ois_df)} pts)")
             
             if msgs:
                 _cdebug = []
@@ -14081,7 +14107,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108h</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108i</div>
             </div>
             """,
             unsafe_allow_html=True,
