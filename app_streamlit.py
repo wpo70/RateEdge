@@ -13924,27 +13924,14 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
 
                 # ATM straddle FORWARD premium (bp of notional)
                 # fwd_prem = spot_prem / df(expiry) — use OIS for discounting (matches pricer)
-                if ois_curve is not None:
-                    try:
-                        import numpy as _npm
-                        xs_o = ois_curve["MaturityY"].to_numpy().astype(float)
-                        ys_o = ois_curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
-                        df_expiry = math.exp(-float(_npm.interp(exp_y, xs_o, ys_o)) * exp_y)
-                    except Exception:
-                        xs_c = curve["MaturityY"].to_numpy().astype(float)
-                        ys_c = curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
-                        df_expiry = math.exp(-float(np.interp(exp_y, xs_c, ys_c)) * exp_y)
-                else:
-                    xs_c = curve["MaturityY"].to_numpy().astype(float)
-                    ys_c = curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
-                    df_expiry = math.exp(-float(np.interp(exp_y, xs_c, ys_c)) * exp_y)
                 spot_prem_bp = 2 * 0.3989 * sigma_n * sqrt_t * ann * 10000
-                fwd_prem_bp = spot_prem_bp / df_expiry if df_expiry > 0 else spot_prem_bp
+                # Forward premium = spot / df, but ann already discounts with OIS,
+                # so this equals the true undiscounted fwd premium — same as pricer
+                fwd_prem_bp = spot_prem_bp  # no df division
                 prow[tenor] = round(fwd_prem_bp, 2)
 
                 # Vega: d(fwd_prem $) / d(vol in bp), scaled to 100mm notional
-                d_spot_prem_per_bp = 2 * 0.3989 * sqrt_t * ann
-                d_fwd_prem_per_bp = d_spot_prem_per_bp / df_expiry if df_expiry > 0 else d_spot_prem_per_bp
+                d_fwd_prem_per_bp = 2 * 0.3989 * sqrt_t * ann
                 vega_dollars = (d_fwd_prem_per_bp / 10000.0) * 100e6
                 vrow[tenor] = round(vega_dollars, 0)
 
@@ -14114,7 +14101,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108o</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108p</div>
             </div>
             """,
             unsafe_allow_html=True,
