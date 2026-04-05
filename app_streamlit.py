@@ -6185,7 +6185,7 @@ def swaptions_tab(vol_mode: str):
         from datetime import date as _sw_date
         _calc_dt = modified_following(_sw_date.today() + __import__('datetime').timedelta(days=int(expiry_y * 365.25)))
         _default_dt_str = _calc_dt.strftime("%d/%m/%Y")
-        _custom_dt_str = st.text_input("Expiry Date (DD/MM/YY)", value=_default_dt_str, key="sw_expiry_date_override")
+        _custom_dt_str = st.text_input("Expiry Date (DD/MM/YY)", value=_default_dt_str, key=f"sw_expiry_date_{expiry}")
         try:
             from datetime import datetime as _swdt
             _formats = ["%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d"]
@@ -14029,7 +14029,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108a</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108b</div>
             </div>
             """,
             unsafe_allow_html=True,
