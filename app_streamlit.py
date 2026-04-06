@@ -1638,7 +1638,7 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         z = float(np.interp(t, xs, ys))
         return math.exp(-z * t)
 
-    disc_curve = ois_curve if ois_curve is not None else _proj_curve
+    disc_curve = _proj_curve
 
     # Determine effective frequency from schedule (periods per year → years per period)
     _n_periods = len(sched)
@@ -7172,16 +7172,18 @@ def caps_floors_tab(vol_mode: str):
     _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
     ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
     if curve is not None:
-        # Forward swap rate: first_fixing start, full tenor length
-        # e.g. 3m x 5Y = fwd starting in 3m for 5Y (NOT 4.75Y)
-        fwd, _, _ = forward_and_annuity_from_curve(curve, ccy, first_fixing_y, tenor_y, ois_curve)
-        
-        # Build QUARTERLY cap schedule   —   MUST use same 1/252 base as bootstrap
-        # so pricer T values exactly match the bootstrapped vol curve anchor points.
-        # Skip caplets where T_fix <= first_fixing_y (those fixings are "known").
-        base = 1.0 / 252.0
-        cap_start = base
-        cap_end   = tenor_y + base
+        # ATM forward: swap from first_fixing to final_maturity
+        # cap_dur = tenor_y - first_fixing_y (actual cap duration, not full tenor from today)
+        cap_dur = max(tenor_y - first_fixing_y, 0.25)
+        fwd, _, _ = forward_and_annuity_from_curve(curve, ccy, first_fixing_y, cap_dur, ois_curve)
+
+        if tenor_y <= first_fixing_y:
+            st.error(f"Final maturity ({tenor_y:.1f}Y) must be greater than first fixing ({first_fixing_y:.1f}Y)")
+            return
+
+        # Build QUARTERLY cap schedule from first_fixing to final_maturity
+        cap_start = first_fixing_y
+        cap_end   = tenor_y
         sched = []
         t = cap_start
         while t < cap_end - 1e-8:
@@ -7202,7 +7204,7 @@ def caps_floors_tab(vol_mode: str):
     # Use proper calendar months for first fixing
     first_fixing_date = today + relativedelta(months=int(first_fixing_y * 12))
     final_maturity = today + relativedelta(months=int(tenor_y * 12))
-    num_caplets = sum(1 for T_i, _ in sched if T_i > first_fixing_y + 1.0/252.0)
+    num_caplets = len(sched)
     
     st.markdown(f"""
     <div style="background: rgba(30,41,59,0.5); border-radius: 8px; padding: 12px; margin: 10px 0;">
@@ -8010,10 +8012,6 @@ def caps_floors_tab(vol_mode: str):
                 caplets = []
                 
                 for i, (T_i, accrual) in enumerate(sched):
-                    # Skip caplets in the "known" period (at or before first fixing)
-                    if T_i <= first_fixing_y + 1.0 / 252.0:
-                        continue
-                    
                     # Get caplet-specific vol from term structure
                     caplet_vol_bp = get_caplet_vol_for_fixing(caplet_vol_curve, T_i)
                     if caplet_vol_bp is None:
@@ -8028,16 +8026,12 @@ def caps_floors_tab(vol_mode: str):
                     # Get discount rate from OIS curve
                     disc_rate = interpolate_zero(ois_curve, T_i)
                     
-                    # Calculate individual forward for THIS caplet period (3m)
+                    # Individual caplet forward: 3m rate starting at T_i - 0.25
                     period_start = max(T_i - 0.25, 0.001)
-                    period_tenor = 0.25
-                    F_i, _, _ = forward_and_annuity_from_curve(curve, ccy, period_start, period_tenor, ois_curve)
+                    F_i, _, _ = forward_and_annuity_from_curve(curve, ccy, period_start, 0.25, ois_curve)
                     
-                    # For ATM (strike_val == fwd), use F_i as strike to ensure F=K for each caplet
-                    if abs(strike_val - fwd) < 0.0001:  # ATM straddle
-                        caplet_strike = F_i
-                    else:
-                        caplet_strike = strike_val
+                    # ATM: each caplet struck at its own forward rate
+                    caplet_strike = F_i if abs(strike_val - fwd) < 0.0001 else strike_val
                     
                     if model == "Black":
                         res = black_caplet(notional * 1e6, accrual, F_i, caplet_strike, sigma, T_i, disc_rate, is_cap=is_cap_flag)
@@ -14179,7 +14173,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604j</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604n</div>
             </div>
             """,
             unsafe_allow_html=True,
