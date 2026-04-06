@@ -3162,7 +3162,7 @@ def init_session():
     if "sw_pending_reload" not in st.session_state:
         st.session_state["sw_pending_reload"] = None
     if "swaption_portfolio" not in st.session_state:
-        st.session_state["swaption_portfolio"] = _load_portfolio()
+        st.session_state["swaption_portfolio"] = []  # always start clean each session
     if "portfolio" not in st.session_state:
         st.session_state["portfolio"] = list(st.session_state["swaption_portfolio"])
     if "vol_data" not in st.session_state:
@@ -3365,12 +3365,9 @@ def set_ccy_vol_data(ccy: str, atm, a, b, r, n):
         st.session_state.pop(f"_surf_caplet_curve_{ccy}", None)
         st.session_state.pop("_atm_cfs_cache_key", None)
         st.session_state.pop("_atm_cfs_rows_cache", None)
-    ve = st.session_state["vol_editor"]
-    if atm is not None:
-        ve["base"][ccy] = atm.copy()
-        ve["working"][ccy] = atm.copy()
-        ve["history"][ccy] = []
-        ve["future"][ccy] = []
+    # One surface per session — everything reads from vol_data["atm"]
+    # vol_editor syncs from vol_data["atm"] when it opens, not here
+    st.session_state["vol_data"][ccy] = {"atm": atm, "alpha": a, "beta": b, "rho": r, "nu": n}
 
 
 def get_ccy_curve(ccy: str) -> Optional[pd.DataFrame]:
@@ -3794,28 +3791,14 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
 
 
 def get_working_atm_surface(ccy: str) -> Optional[pd.DataFrame]:
-    """Returns working vol editor draft if user has made unpublished edits,
-    otherwise returns the committed surface from vol_data."""
-    ve = st.session_state.get("vol_editor", {})
-    working = ve.get("working", {})
-    base = ve.get("base", {})
-    # Only use working copy if it differs from base (i.e. user has made edits)
-    if ccy in working and isinstance(working[ccy], pd.DataFrame):
-        if ccy in base and isinstance(base[ccy], pd.DataFrame):
-            # If working == base, it's just a mirror — use committed vol_data
-            if not working[ccy].equals(base[ccy]):
-                return working[ccy]
-        # No base to compare — use committed instead to avoid stale state
+    """Single vol surface per session — always reads from vol_data['atm'].
+    The vol editor writes back to vol_data['atm'] only when user explicitly publishes."""
     atm, _, _, _, _ = get_ccy_vol_data(ccy)
     return atm
 
 
 def get_published_atm_surface(ccy: str) -> Optional[pd.DataFrame]:
-    """Returns the base (last published/loaded) surface — ignores unpublished vol editor edits."""
-    ve = st.session_state.get("vol_editor", {})
-    base = ve.get("base", {})
-    if ccy in base and isinstance(base[ccy], pd.DataFrame):
-        return base[ccy]
+    """Same as get_working_atm_surface — one surface only."""
     atm, _, _, _, _ = get_ccy_vol_data(ccy)
     return atm
 
@@ -6586,7 +6569,7 @@ def swaptions_tab(vol_mode: str):
         _, a, b, r, n = get_ccy_vol_data(ccy)
         # For midcurve: vol at (expiry+delay, tenor) — underlying rate characterised at swap start
         # For vanilla: vol at (expiry, tenor)
-        _vol_expiry_y = expiry_y + delay_y if is_midcurve else expiry_y
+        _vol_expiry_y = expiry_y  # vol surface indexed by option expiry always
         _EXPIRY_LABEL_MAP = {1/52:"1w",2/52:"2w",1/12:"1m",3/12:"3m",6/12:"6m",9/12:"9m",
                              1.0:"1y",1.5:"18m",2.0:"2y",3.0:"3y",4.0:"4y",5.0:"5y",
                              6.0:"6y",7.0:"7y",8.0:"8y",9.0:"9y",10.0:"10y",12.0:"12y",
@@ -6973,7 +6956,7 @@ def swaptions_tab(vol_mode: str):
             _struct = row.get("structure","")
             _legs   = row.get("legs",[]) if isinstance(row.get("legs",[]),list) else []
 
-            _status_key = f"_sw_status_{idx}"
+            _status_key = f"_sw_status_{_label}_{_expiry}_{_tenor}"
             _cur_status = st.session_state.get(_status_key, "—")
             _bg = _STATUS_COLOURS.get(_cur_status, "white")
 
@@ -8248,7 +8231,7 @@ def caps_floors_tab(vol_mode: str):
         st.markdown("---")
         _ph1, _ph2 = st.columns([3, 1])
         with _ph1:
-            st.markdown("### Cap/Floor Blotter")
+            st.markdown("### Cap/Floor Trade Blotter")
         with _ph2:
             if st.button("🗑️ Clear All", key="cf_clear_portfolio"):
                 st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", []) if t.get("instrument_type") != "Cap/Floor"]
@@ -8257,30 +8240,56 @@ def caps_floors_tab(vol_mode: str):
         _df = pd.DataFrame(_cf_port)
         _df["_sort"] = _df["expiry"].apply(lambda e: label_to_years(str(e)))
         _df = _df.sort_values("_sort").reset_index(drop=True)
-        _df_disp = _df.drop(columns=["_sort"]).copy()
-        for _col in ["pv", "delta", "vega", "gamma"]:
-            if _col in _df_disp.columns:
-                _df_disp[_col] = (_df_disp[_col] / 1e3).round(1)
-        if "pv_bp" in _df_disp.columns:
-            _df_disp["pv_bp"] = _df_disp["pv_bp"].round(4)
-        _df_disp.rename(columns={
-            "pv": "PV (k)", "pv_bp": "PV (bp)",
-            "delta": "Delta (k)", "vega": "Vega (k)",
-            "gamma": "Gamma (k)", "instrument_type": "Type",
-        }, inplace=True)
-        _show_cols = [c for c in ["Type","currency","structure","expiry","tenor","strike","forward","notional_mm","PV (bp)","PV (k)","Delta (k)","Vega (k)","Gamma (k)","model"] if c in _df_disp.columns]
-        st.dataframe(_df_disp[_show_cols], use_container_width=True, hide_index=True)
 
-        # Net greeks
-        _net_pv   = sum(t.get("pv", 0) for t in _cf_port)
-        _net_delt = sum(t.get("delta", 0) for t in _cf_port)
-        _net_vega = sum(t.get("vega", 0) for t in _cf_port)
-        _net_bp   = sum(t.get("pv_bp", 0) for t in _cf_port)
-        _nc1, _nc2, _nc3, _nc4 = st.columns(4)
-        _nc1.metric("Net PV (bp)", f"{_net_bp:.2f}")
-        _nc2.metric("Net PV ($)", f"${_net_pv:,.0f}")
-        _nc3.metric("Net Delta ($)", f"${_net_delt:,.0f}")
-        _nc4.metric("Net Vega ($)", f"${_net_vega:,.0f}")
+        _CF_STATUS_COLOURS = {
+            "TP Trade":     "rgba(220,255,220,0.95)",
+            "Away Trade":   "rgba(255,210,210,0.95)",
+            "Direct Trade": "rgba(255,235,195,0.95)",
+        }
+        _CF_STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade", "Clear Trade"]
+
+        st.markdown(
+            "<div style='display:grid;grid-template-columns:28px 160px 58px 68px 58px 78px 78px 78px 78px 150px 36px;"
+            "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
+            "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
+            "<span>#</span><span>Structure</span><span>Expiry</span><span>Tenor</span>"
+            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>PV(bp)</span>"
+            "<span>PV($k)</span><span>Status</span><span></span></div>",
+            unsafe_allow_html=True)
+
+        for _cidx, _crow in _df.iterrows():
+            _cl  = _crow.get("label", f"{_crow.get('expiry','')}x{_crow.get('tenor','')}")
+            _cex = _crow.get("expiry",""); _cten = str(_crow.get("tenor",""))
+            _cst = _crow.get("structure","")
+            _cf_sk = f"_cf_status_{_cl}_{_cex}_{_cten}"
+            _cf_cur = st.session_state.get(_cf_sk, "—")
+            _cf_bg  = _CF_STATUS_COLOURS.get(_cf_cur, "white")
+            _crc = st.columns([0.28, 1.5, 0.58, 0.68, 0.58, 0.78, 0.78, 0.78, 0.78, 1.5, 0.36])
+            for _ci2, _val2 in enumerate([
+                f"{_cidx+1}", _cst, _cex, _cten,
+                f"{float(_crow.get('notional_mm',100)):.0f}mm",
+                f"{float(_crow.get('strike',0)):.4f}",
+                f"{float(_crow.get('forward',0)):.4f}",
+                f"{float(_crow.get('pv_bp',0)):.2f}",
+                f"{float(_crow.get('pv',0))/1000:,.1f}",
+            ]):
+                _crc[_ci2].markdown(
+                    f"<div style='background:{_cf_bg};padding:5px 3px;font-size:12px;color:#1e293b;"
+                    f"border-bottom:1px solid #e2e8f0'>{_val2}</div>", unsafe_allow_html=True)
+            _cf_new = _crc[9].selectbox("", _CF_STATUS_OPTS,
+                index=_CF_STATUS_OPTS.index(_cf_cur) if _cf_cur in _CF_STATUS_OPTS else 0,
+                key=f"cf_status_{_cidx}", label_visibility="collapsed")
+            if _cf_new == "Clear Trade":
+                st.session_state[_cf_sk] = "—"
+                st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", [])
+                                                  if not (t.get("instrument_type")=="Cap/Floor" and t.get("label")==_cl)]
+                st.rerun()
+            elif _cf_new != _cf_cur:
+                st.session_state[_cf_sk] = _cf_new; st.rerun()
+            if _crc[10].button("🗑️", key=f"cf_del_{_cidx}", help="Remove"):
+                st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", [])
+                                                  if not (t.get("instrument_type")=="Cap/Floor" and t.get("label")==_cl)]
+                st.rerun()
 
 
 def exotics_tab(vol_mode: str):
@@ -14135,7 +14144,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604c</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604f</div>
             </div>
             """,
             unsafe_allow_html=True,
