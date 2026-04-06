@@ -4231,8 +4231,12 @@ def vol_config_tab():
             _atm_cols = atm.shape[1] if hasattr(atm, 'shape') else "?"
             atm_status = f"✅ {_atm_rows}×{_atm_cols}"
             _snap = _latest_snaps.get(ccy, {})
-            atm_saved   = _snap.get('label', '—') if _snap else '—'
-            atm_loaded  = get_timestamp_str("atm", ccy)
+            atm_saved  = _snap.get('label', '—') if _snap else '—'
+            _ts = get_timestamp_str("atm", ccy)
+            # Fallback: if timestamp not set but vol IS in session (loaded on login)
+            if _ts == "Not loaded" and st.session_state.get(f"_vol_loaded_{ccy}"):
+                _ts = "Loaded (login)"
+            atm_loaded = _ts
         else:
             atm_status = "❌ Not loaded"
             atm_saved = '—'; atm_loaded = '—'
@@ -14130,7 +14134,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604a</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604b</div>
             </div>
             """,
             unsafe_allow_html=True,
