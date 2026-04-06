@@ -758,6 +758,7 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
 
                 st.session_state["_aud_zc_qq"] = _rebuild_zero(_par_qq_full2, all_qq=True)
                 st.session_state["_aud_zc_ss"] = _rebuild_zero(_par_ss_full2, all_qq=False)
+                _build_aud_proj_curve()
                 loaded += 1
         except Exception as _pex:
             pass
@@ -1601,8 +1602,14 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         return 0.0, 0.0, []
 
     # IRS for projection, OIS for annuity discounting (dual-curve)
-    # AUD: use 3M BBSW curve for Q/Q, 6M BBSW curve for S/S
     basis_6v3 = get_basis_curve(ccy, "6v3") if ccy == "AUD" else None
+
+    # AUD: use pre-built proj curve from bootstrapped QQ/SS zeros (same as forward matrix)
+    # Built once in set_ccy_curve/_build_aud_proj_curve — never rebuilt per-call
+    if ccy == "AUD" and st.session_state.get("_aud_proj_curve") is not None:
+        _proj_curve = st.session_state["_aud_proj_curve"]
+    else:
+        _proj_curve = curve
 
     def _df_proj(crv: pd.DataFrame, t: float, freq: float) -> float:
         """Projection discount factor with convention-aware basis adjustment for AUD."""
@@ -1631,7 +1638,7 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         z = float(np.interp(t, xs, ys))
         return math.exp(-z * t)
 
-    disc_curve = ois_curve if ois_curve is not None else curve
+    disc_curve = ois_curve if ois_curve is not None else _proj_curve
 
     # Determine effective frequency from schedule (periods per year → years per period)
     _n_periods = len(sched)
@@ -1643,8 +1650,8 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         ann += _df_disc(disc_curve, T_i) * accrual
 
     swap_start = sched[0][0] - sched[0][1]
-    df_start = _df_proj(curve, swap_start, _sched_freq)
-    df_end   = _df_proj(curve, sched[-1][0], _sched_freq)
+    df_start = _df_proj(_proj_curve, swap_start, _sched_freq)
+    df_end   = _df_proj(_proj_curve, sched[-1][0], _sched_freq)
     fwd = (df_start - df_end) / ann if ann > 0 else 0.0
     _result = (fwd, ann, sched)
     try:
@@ -3384,6 +3391,30 @@ def set_ccy_curve(ccy: str, curve_df: pd.DataFrame):
     keys_to_del = [k for k in _fc if k[0] == ccy]
     for k in keys_to_del:
         del _fc[k]
+    # For AUD: build blended proj curve from bootstrapped QQ/SS zeros
+    # This is built ONCE here so forward_and_annuity_from_curve can read it cheaply
+    if ccy == "AUD":
+        _build_aud_proj_curve()
+
+
+def _build_aud_proj_curve():
+    """Build and cache _aud_proj_curve from _aud_zc_qq/_aud_zc_ss.
+    Called once on curve commit — NOT inside forward_and_annuity_from_curve."""
+    _zc_qq = st.session_state.get("_aud_zc_qq")
+    _zc_ss = st.session_state.get("_aud_zc_ss")
+    if not _zc_qq or not _zc_ss:
+        return
+    _rows = []
+    for _m, _z in sorted(_zc_qq.items()):
+        if _m <= 3.25:
+            _rows.append({"MaturityY": float(_m), "ZeroRatePct": float(_z)})
+    for _m, _z in sorted(_zc_ss.items()):
+        if _m >= 3.5:
+            _rows.append({"MaturityY": float(_m), "ZeroRatePct": float(_z)})
+    if len(_rows) >= 10:
+        st.session_state["_aud_proj_curve"] = pd.DataFrame(_rows)
+        # Also clear fwd_ann cache so next pricing uses new curve
+        st.session_state.get("_fwd_ann_cache", {}).clear()
 
 
 def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
@@ -3599,6 +3630,7 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
 
                 _st.session_state["_aud_zc_qq"] = _build_pure_zero(_par_qq_full, all_qq=True)
                 _st.session_state["_aud_zc_ss"] = _build_pure_zero(_par_ss_full, all_qq=False)
+                _build_aud_proj_curve()
             except Exception as _zce:
                 pass
             # Bootstrap sanity check: flag any par rate >100bp from its neighbour.
@@ -14136,13 +14168,7 @@ def main():
                     st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Configs: {_auto_loaded} | AUD 1y×{list(_debug_atm.columns)[1] if _debug_atm is not None else '?'}={_debug_val}"
             except Exception as _ale:
                 st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Config load error: {_ale}"
-            # Load portfolio scratchpad for this user
-            try:
-                _saved_port = _load_portfolio()
-                if _saved_port:
-                    st.session_state["portfolio"] = _saved_port
-                    st.session_state["swaption_portfolio"] = [t for t in _saved_port if t.get("instrument_type","Swaption") == "Swaption"]
-            except: pass
+            # Portfolio always starts empty each session — scratch pad only
             st.session_state["db_auto_loaded"] = True
 
     # Sidebar for settings
@@ -14153,7 +14179,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604g</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604j</div>
             </div>
             """,
             unsafe_allow_html=True,
