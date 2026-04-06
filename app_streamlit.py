@@ -6196,6 +6196,9 @@ def swaptions_tab(vol_mode: str):
     with col_model:
         model_choice = st.selectbox("Model", ["Normal", "Black"], index=0, key="sw_model")
     with col_prem:
+        # Force Fwd as default — reset any stale "Spot" from old session state
+        if st.session_state.get("sw_prem_type") not in ["Fwd", "Spot"]:
+            st.session_state["sw_prem_type"] = "Fwd"
         premium_type = st.selectbox("Premium", ["Fwd", "Spot"], index=0, key="sw_prem_type")
     
     # For backwards compatibility
@@ -6581,15 +6584,13 @@ def swaptions_tab(vol_mode: str):
     else:
         atm = get_working_atm_surface(ccy)
         _, a, b, r, n = get_ccy_vol_data(ccy)
-        # For midcurve: vol at (expiry+delay, tenor) — underlying rate characterised at swap start
-        # For vanilla: vol at (expiry, tenor)
-        _vol_expiry_y = expiry_y + delay_y if is_midcurve else expiry_y
+        # Vol always read at OPTION EXPIRY — vol surface indexed by option life, not swap start
+        # For midcurve only the forward (swap triangle) and annuity differ from vanilla
         _EXPIRY_LABEL_MAP = {1/52:"1w",2/52:"2w",1/12:"1m",3/12:"3m",6/12:"6m",9/12:"9m",
                              1.0:"1y",1.5:"18m",2.0:"2y",3.0:"3y",4.0:"4y",5.0:"5y",
                              6.0:"6y",7.0:"7y",8.0:"8y",9.0:"9y",10.0:"10y",12.0:"12y",
                              15.0:"15y",20.0:"20y",25.0:"25y",30.0:"30y"}
-        # Snap to nearest surface expiry label
-        _vol_expiry_label = min(_EXPIRY_LABEL_MAP, key=lambda k: abs(k - _vol_expiry_y))
+        _vol_expiry_label = min(_EXPIRY_LABEL_MAP, key=lambda k: abs(k - expiry_y))
         _vol_expiry_lbl = _EXPIRY_LABEL_MAP[_vol_expiry_label]
         atm_val = get_matrix_value(atm, _vol_expiry_lbl, tenor_y) if atm is not None else None
         if atm_val is None:
@@ -6644,10 +6645,8 @@ def swaptions_tab(vol_mode: str):
         else:
             _smile = st.session_state.get("sabr_smile_mode", "Sticky-ATM (alpha-sticky)")
             # Midcurve: use SABR params at (expiry+delay, tenor) not (expiry, tenor)
-            _sabr_expiry_lbl = _vol_expiry_lbl if is_midcurve else expiry
-            # For midcurve, evaluate SABR smile at T=swap_start (expiry+delay)
-            # so ATM vol matches surface at (expiry+delay, tenor) exactly
-            _T_sabr = expiry_y + delay_y if is_midcurve else expiry_y
+            _sabr_expiry_lbl = expiry  # always use option expiry label for surface lookup
+            _T_sabr = expiry_y          # T = option lifetime always
             sabr = get_sabr_params_from_matrices(a, b, r, n, _sabr_expiry_lbl, tenor_y)
             if vol_mode.startswith("Normal"):
                 if sabr and sabr.get("alpha", 0) > 0:
@@ -6958,11 +6957,22 @@ def swaptions_tab(vol_mode: str):
         df["_expiry_sort"] = df["expiry"].apply(lambda e: label_to_years(str(e)))
         df = df.sort_values("_expiry_sort").reset_index(drop=True)
 
-        # Header
-        _hc = st.columns([0.4, 2.0, 0.7, 0.8, 0.7, 0.9, 0.9, 0.9, 0.9, 0.5, 0.5])
-        for _h, _col in zip(["#","Structure","Expiry","Tenor","Notl","Strike %","Fwd %","PV (bp)","PV ($k)","",""], _hc):
-            _col.markdown(f"<small style='color:#94a3b8'>{_h}</small>", unsafe_allow_html=True)
-        st.markdown("<hr style='margin:2px 0;border-color:#1e3050'>", unsafe_allow_html=True)
+        _STATUS_COLOURS = {
+            "TP Trade":     "rgba(220,255,220,0.95)",   # pale green
+            "Away Trade":   "rgba(255,220,220,0.95)",   # pale red
+            "Direct Trade": "rgba(255,235,200,0.95)",   # pale orange
+        }
+        _STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade", "Clear Trade"]
+
+        # Header row
+        st.markdown(
+            "<div style='display:grid;grid-template-columns:30px 220px 60px 70px 60px 80px 80px 80px 80px 160px 40px 40px;"
+            "gap:4px;background:#f0f2f6;padding:4px 8px;border-radius:4px 4px 0 0;"
+            "font-size:11px;font-weight:600;color:#333;border-bottom:2px solid #ddd'>"
+            "<span>#</span><span>Structure</span><span>Expiry</span><span>Tenor</span>"
+            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>PV(bp)</span>"
+            "<span>PV($k)</span><span>Status</span><span></span><span></span></div>",
+            unsafe_allow_html=True)
 
         for idx, row in df.iterrows():
             _label  = row.get("label", f"{row.get('expiry','')}x{row.get('tenor','')}")
@@ -6971,21 +6981,41 @@ def swaptions_tab(vol_mode: str):
             _struct = row.get("structure","")
             _legs   = row.get("legs",[]) if isinstance(row.get("legs",[]),list) else []
 
-            _rc = st.columns([0.4, 2.0, 0.7, 0.8, 0.7, 0.9, 0.9, 0.9, 0.9, 0.5, 0.5])
-            _rc[0].write(f"{idx+1}")
-            _rc[1].write(_struct)
-            _rc[2].write(_expiry)
-            _rc[3].write(_tenor)
-            _rc[4].write(f"{float(row.get('notional_mm',100)):.0f}mm")
-            _rc[5].write(f"{float(row.get('strike',0)):.4f}")
-            _rc[6].write(f"{float(row.get('forward',0)):.4f}")
-            _rc[7].write(f"{float(row.get('pv_bp',0)):.2f}")
-            _rc[8].write(f"{float(row.get('pv',0))/1000:,.1f}")
+            # Get current status and background colour
+            _status_key = f"_sw_status_{idx}"
+            _cur_status = st.session_state.get(_status_key, "—")
+            _bg = _STATUS_COLOURS.get(_cur_status, "white")
 
-            if can_quick_tix() and _rc[9].button("📋", key=f"sw_tix_{idx}", help="Quick Tix"):
+            _rc = st.columns([0.3, 2.0, 0.6, 0.7, 0.6, 0.85, 0.85, 0.85, 0.85, 1.5, 0.45, 0.45])
+            _rc[0].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{idx+1}</div>", unsafe_allow_html=True)
+            _rc[1].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{_struct}</div>", unsafe_allow_html=True)
+            _rc[2].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{_expiry}</div>", unsafe_allow_html=True)
+            _rc[3].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{_tenor}</div>", unsafe_allow_html=True)
+            _rc[4].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{float(row.get('notional_mm',100)):.0f}mm</div>", unsafe_allow_html=True)
+            _rc[5].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{float(row.get('strike',0)):.4f}</div>", unsafe_allow_html=True)
+            _rc[6].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{float(row.get('forward',0)):.4f}</div>", unsafe_allow_html=True)
+            _rc[7].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{float(row.get('pv_bp',0)):.2f}</div>", unsafe_allow_html=True)
+            _rc[8].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{float(row.get('pv',0))/1000:,.1f}</div>", unsafe_allow_html=True)
+
+            # Status dropdown
+            _new_status = _rc[9].selectbox("", _STATUS_OPTS,
+                index=_STATUS_OPTS.index(_cur_status) if _cur_status in _STATUS_OPTS else 0,
+                key=f"sw_status_{idx}", label_visibility="collapsed")
+            if _new_status == "Clear Trade":
+                st.session_state[_status_key] = "—"
+                st.session_state["swaption_portfolio"].pop(idx)
+                st.session_state["portfolio"] = [p for p in st.session_state["portfolio"]
+                                                  if p.get("label") != _label or p.get("expiry") != _expiry]
+                st.session_state.pop("_sw_tix_open", None)
+                _save_portfolio(); st.rerun()
+            elif _new_status != _cur_status:
+                st.session_state[_status_key] = _new_status
+                st.rerun()
+
+            if can_quick_tix() and _rc[10].button("📋", key=f"sw_tix_{idx}", help="Quick Tix"):
                 st.session_state["_sw_tix_open"] = idx if st.session_state.get("_sw_tix_open") != idx else -1
 
-            if _rc[10].button("🗑️", key=f"sw_del_{idx}", help="Remove"):
+            if _rc[11].button("🗑️", key=f"sw_del_{idx}", help="Remove"):
                 st.session_state["swaption_portfolio"].pop(idx)
                 st.session_state["portfolio"] = [p for p in st.session_state["portfolio"]
                                                   if p.get("label") != _label or p.get("expiry") != _expiry]
@@ -14101,7 +14131,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3108p</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3109a</div>
             </div>
             """,
             unsafe_allow_html=True,
