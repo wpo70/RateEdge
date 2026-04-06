@@ -1569,58 +1569,30 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
                                    freq_override: Optional[float] = None) -> Tuple[float, float, List[Tuple[float, float]]]:
     """
     Calculate forward swap rate and annuity.
-    AUD: uses _aud_zc_qq/_aud_zc_ss directly — identical calculation to forward matrix.
+    Uses LINEAR zero-rate interpolation (same as fast_forward_rate / matrix) so
+    the swaption pricer forward exactly matches the Rate/Vol Matrix.
+    freq_override: 0.25 = Q/Q, 0.5 = S/S, None = market convention
     """
-    # Fast session-level cache
+    # Fast session-level cache keyed by curve commit ID (no hashing)
     try:
         _cid = st.session_state.get("_curve_commit_ids", {}).get(ccy, 0)
-        _ck = (ccy, _cid, round(expiry, 6), round(tenor, 6), round(freq_override or -1, 6))
+        _oid = st.session_state.get("_curve_commit_ids", {}).get(f"{ccy}_ois", 0) if ois_curve is not None else -1
+        _ck = (ccy, _cid, _oid, round(expiry, 6), round(tenor, 6), round(freq_override or -1, 6))
         _fc = st.session_state.setdefault("_fwd_ann_cache", {})
         if _ck in _fc:
             return _fc[_ck]
     except Exception:
         _ck = None; _fc = {}
 
-    # AUD: replicate _fwd_from_zc exactly — same zeros, same schedule, same annuity
-    if ccy == "AUD":
-        _zc_qq = st.session_state.get("_aud_zc_qq")
-        _zc_ss = st.session_state.get("_aud_zc_ss")
-        if _zc_qq and _zc_ss:
-            # Zero curve by tenor (same as matrix), freq by override or tenor convention
-            zc   = _zc_qq if tenor <= 3.0 else _zc_ss
-            freq = freq_override if freq_override is not None else (0.25 if tenor <= 3.0 else 0.5)
-            SPOT_M = 1.0 / 252.0
-            xs = np.array(sorted(zc.keys()))
-            ys = np.array([zc[k] / 100.0 for k in xs])
-            def _dfz(t): return math.exp(-float(np.interp(t, xs, ys)) * t)
-            t_s = expiry + SPOT_M; t_e = t_s + tenor
-            times = []; t = t_s + freq
-            while t <= t_e + 1e-9:
-                times.append(min(t, t_e)); t += freq
-            if not times:
-                _result = (0.0, 0.0, [])
-            else:
-                prev = t_s; ann = 0.0; sched_out = []
-                for ti in times:
-                    accrual = ti - prev
-                    ann += _dfz(ti) * accrual
-                    sched_out.append((ti, accrual))
-                    prev = ti
-                fwd = (_dfz(t_s) - _dfz(t_e)) / ann if ann > 0 else 0.0
-                _result = (fwd, ann, sched_out)
-            try:
-                if _ck is not None and len(_fc) < 5000:
-                    _fc[_ck] = _result
-            except Exception:
-                pass
-            return _result
-
-    # NZD / USD / fallback path — date-based schedule
     if freq_override is not None:
+        # T+2 BD for NZD/USD, T+1 BD for AUD (AFMA calendar   —   year frac approx here)
         spot_lag = 2.0 / 252.0 if ccy in ["NZD", "USD"] else 1.0 / 252.0
         sched = build_generic_schedule(expiry, tenor, freq=freq_override, spot_lag=spot_lag * 252)
+    elif ccy == "AUD":
+        sched = build_aud_schedule(expiry, tenor)
     elif ccy == "NZD":
-        sched = build_generic_schedule(expiry, tenor, freq=0.25 if tenor <= 2.0 else 0.5, spot_lag=2.0)
+        freq_nzd = 0.25 if tenor <= 2.0 else 0.5
+        sched = build_generic_schedule(expiry, tenor, freq=freq_nzd, spot_lag=2.0)
     elif ccy == "USD":
         sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=2.0)
     else:
@@ -1629,20 +1601,58 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
     if not sched:
         return 0.0, 0.0, []
 
-    _proj_curve = curve
+    # IRS for projection, OIS for annuity discounting (dual-curve)
+    basis_6v3 = get_basis_curve(ccy, "6v3") if ccy == "AUD" else None
 
-    def _df_proj(t):
-        xs = _proj_curve["MaturityY"].to_numpy().astype(float)
-        ys = _proj_curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
-        return math.exp(-float(np.interp(t, xs, ys)) * t)
+    # AUD: use pre-built proj curve from bootstrapped QQ/SS zeros (same as forward matrix)
+    # Built once in set_ccy_curve/_build_aud_proj_curve — never rebuilt per-call
+    if ccy == "AUD" and st.session_state.get("_aud_proj_curve") is not None:
+        _proj_curve = st.session_state["_aud_proj_curve"]
+    else:
+        _proj_curve = curve
 
+    def _df_proj(crv: pd.DataFrame, t: float, freq: float) -> float:
+        """Projection discount factor with convention-aware basis adjustment for AUD."""
+        xs = crv["MaturityY"].to_numpy().astype(float)
+        ys = crv["ZeroRatePct"].to_numpy().astype(float) / 100.0
+        z = float(np.interp(t, xs, ys))
+        if ccy == "AUD" and basis_6v3 is not None and not basis_6v3.empty:
+            try:
+                # Handle different column name formats
+                _b6_cols = basis_6v3.columns.tolist()
+                _mat_col = next((c for c in _b6_cols if "matur" in c.lower() or "tenor" in c.lower() or c in ("MaturityY","Tenor","tenor_years")), _b6_cols[0])
+                _bp_col  = next((c for c in _b6_cols if "basis" in c.lower() or "bp" in c.lower() or "spread" in c.lower()), _b6_cols[1])
+                bx = basis_6v3[_mat_col].to_numpy().astype(float)
+                by = basis_6v3[_bp_col].to_numpy().astype(float) / 10000.0
+                if freq == 0.25 and t > 3.0:
+                    z = z - float(np.interp(t, bx, by))
+                elif freq == 0.5 and t <= 3.0:
+                    z = z + float(np.interp(t, bx, by))
+            except Exception:
+                pass
+        return math.exp(-z * t)
+
+    def _df_disc(crv: pd.DataFrame, t: float) -> float:
+        xs = crv["MaturityY"].to_numpy().astype(float)
+        ys = crv["ZeroRatePct"].to_numpy().astype(float) / 100.0
+        z = float(np.interp(t, xs, ys))
+        return math.exp(-z * t)
+
+    disc_curve = ois_curve if ois_curve is not None else _proj_curve
+
+    # Determine effective frequency from schedule (periods per year → years per period)
     _n_periods = len(sched)
     _total_time = sched[-1][0] - (sched[0][0] - sched[0][1]) if sched else 0.5
-    _sched_freq = round(_total_time / _n_periods * 4) / 4 if _n_periods > 0 else 0.5
+    _sched_freq = round(_total_time / _n_periods * 4) / 4 if _n_periods > 0 else 0.5  # round to nearest 0.25
 
-    ann = sum(_df_proj(T_i) * accrual for T_i, accrual in sched)
+    ann = 0.0
+    for T_i, accrual in sched:
+        ann += _df_disc(disc_curve, T_i) * accrual
+
     swap_start = sched[0][0] - sched[0][1]
-    fwd = (_df_proj(swap_start) - _df_proj(sched[-1][0])) / ann if ann > 0 else 0.0
+    df_start = _df_proj(_proj_curve, swap_start, _sched_freq)
+    df_end   = _df_proj(_proj_curve, sched[-1][0], _sched_freq)
+    fwd = (df_start - df_end) / ann if ann > 0 else 0.0
     _result = (fwd, ann, sched)
     try:
         if _ck is not None and len(_fc) < 5000:
@@ -1687,8 +1697,7 @@ def black_swaption_vanilla(ticket: SwaptionTicket) -> dict:
     delta = delta_ratio * ticket.notional
     delta_dv01 = delta_ratio * bpv
     pv_bp_spot = pv / (ticket.notional * 0.0001) if ticket.notional > 0 else 0.0
-    # Forward premium: ann * price_rate * 10000 / df — matches matrix formula exactly
-    pv_bp_fwd = annuity * price_rate * 10000 / df if (df > 0 and ticket.notional > 0) else pv_bp_spot
+    pv_bp_fwd  = annuity * price_rate * 10000 / df if (df > 0 and ticket.notional > 0) else pv_bp_spot
     pv_bp = pv_bp_fwd
     vega  = df * annuity * ticket.notional * F * phi(d1) * math.sqrt(T) * 0.0001
     gamma = df * annuity * ticket.notional * phi(d1) / (F * sigma * math.sqrt(T)) * 0.0001
@@ -1727,8 +1736,7 @@ def bachelier_swaption_vanilla(ticket: SwaptionTicket) -> dict:
     delta = delta_ratio * ticket.notional
     delta_dv01 = delta_ratio * bpv
     pv_bp_spot = pv / (ticket.notional * 0.0001) if ticket.notional > 0 else 0.0
-    # Forward premium: ann * price_rate * 10000 / df — matches matrix formula exactly
-    pv_bp_fwd = annuity * price_rate * 10000 / df if (df > 0 and ticket.notional > 0) else pv_bp_spot
+    pv_bp_fwd  = annuity * price_rate * 10000 / df if (df > 0 and ticket.notional > 0) else pv_bp_spot
     pv_bp = pv_bp_fwd
     vega  = df * annuity * ticket.notional * math.sqrt(T) * phi * 0.0001
     gamma = df * annuity * ticket.notional * phi / (sigma_n * math.sqrt(T)) * 0.0001
@@ -7163,18 +7171,16 @@ def caps_floors_tab(vol_mode: str):
     _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
     ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
     if curve is not None:
-        # ATM forward: swap from first_fixing to final_maturity
-        # cap_dur = tenor_y - first_fixing_y (actual cap duration, not full tenor from today)
-        cap_dur = max(tenor_y - first_fixing_y, 0.25)
-        fwd, _, _ = forward_and_annuity_from_curve(curve, ccy, first_fixing_y, cap_dur, ois_curve)
-
-        if tenor_y <= first_fixing_y:
-            st.error(f"Final maturity ({tenor_y:.1f}Y) must be greater than first fixing ({first_fixing_y:.1f}Y)")
-            return
-
-        # Build QUARTERLY cap schedule from first_fixing to final_maturity
-        cap_start = first_fixing_y
-        cap_end   = tenor_y
+        # Forward swap rate: first_fixing start, full tenor length
+        # e.g. 3m x 5Y = fwd starting in 3m for 5Y (NOT 4.75Y)
+        fwd, _, _ = forward_and_annuity_from_curve(curve, ccy, first_fixing_y, tenor_y, ois_curve)
+        
+        # Build QUARTERLY cap schedule   —   MUST use same 1/252 base as bootstrap
+        # so pricer T values exactly match the bootstrapped vol curve anchor points.
+        # Skip caplets where T_fix <= first_fixing_y (those fixings are "known").
+        base = 1.0 / 252.0
+        cap_start = base
+        cap_end   = tenor_y + base
         sched = []
         t = cap_start
         while t < cap_end - 1e-8:
@@ -7195,7 +7201,7 @@ def caps_floors_tab(vol_mode: str):
     # Use proper calendar months for first fixing
     first_fixing_date = today + relativedelta(months=int(first_fixing_y * 12))
     final_maturity = today + relativedelta(months=int(tenor_y * 12))
-    num_caplets = len(sched)
+    num_caplets = sum(1 for T_i, _ in sched if T_i > first_fixing_y + 1.0/252.0)
     
     st.markdown(f"""
     <div style="background: rgba(30,41,59,0.5); border-radius: 8px; padding: 12px; margin: 10px 0;">
@@ -7573,15 +7579,7 @@ def caps_floors_tab(vol_mode: str):
                             _, ann, _ = forward_and_annuity_from_curve(curve, ccy, exp_y, tenor, ois_curve)
                             sigma_n = vol_bp / 10000.0
                             sqrt_t  = math.sqrt(max(exp_y, 0.001))
-                            _df_cfs = 1.0
-                            if ois_curve is not None:
-                                try:
-                                    _ocx = ois_curve[ois_curve.columns[0]].to_numpy().astype(float)
-                                    _ocy = ois_curve[ois_curve.columns[1]].to_numpy().astype(float) / 100.0
-                                    _df_cfs = math.exp(-float(np.interp(exp_y, _ocx, _ocy)) * exp_y)
-                                except: pass
-                            spot_bp = 2 * 0.3989 * sigma_n * sqrt_t * ann * 10000
-                            premium_bp = spot_bp / _df_cfs if _df_cfs > 0 else spot_bp
+                            premium_bp = 2 * 0.3989 * sigma_n * sqrt_t * ann * 10000
                             st.session_state["cfs_table_data"][lbl] = {
                                 "swaption": round(premium_bp, 4),
                                 "cfs_label": cfs_lbl,
@@ -8011,6 +8009,10 @@ def caps_floors_tab(vol_mode: str):
                 caplets = []
                 
                 for i, (T_i, accrual) in enumerate(sched):
+                    # Skip caplets in the "known" period (at or before first fixing)
+                    if T_i <= first_fixing_y + 1.0 / 252.0:
+                        continue
+                    
                     # Get caplet-specific vol from term structure
                     caplet_vol_bp = get_caplet_vol_for_fixing(caplet_vol_curve, T_i)
                     if caplet_vol_bp is None:
@@ -8025,12 +8027,16 @@ def caps_floors_tab(vol_mode: str):
                     # Get discount rate from OIS curve
                     disc_rate = interpolate_zero(ois_curve, T_i)
                     
-                    # Individual caplet forward: 3m rate starting at T_i - 0.25
+                    # Calculate individual forward for THIS caplet period (3m)
                     period_start = max(T_i - 0.25, 0.001)
-                    F_i, _, _ = forward_and_annuity_from_curve(curve, ccy, period_start, 0.25, ois_curve)
+                    period_tenor = 0.25
+                    F_i, _, _ = forward_and_annuity_from_curve(curve, ccy, period_start, period_tenor, ois_curve)
                     
-                    # ATM: each caplet struck at its own forward rate
-                    caplet_strike = F_i if abs(strike_val - fwd) < 0.0001 else strike_val
+                    # For ATM (strike_val == fwd), use F_i as strike to ensure F=K for each caplet
+                    if abs(strike_val - fwd) < 0.0001:  # ATM straddle
+                        caplet_strike = F_i
+                    else:
+                        caplet_strike = strike_val
                     
                     if model == "Black":
                         res = black_caplet(notional * 1e6, accrual, F_i, caplet_strike, sigma, T_i, disc_rate, is_cap=is_cap_flag)
@@ -13987,13 +13993,27 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
                 sigma_n = vol_bp / 10000.0
                 sqrt_t = math.sqrt(max(exp_y, 0.001))
 
-                # ATM straddle premium (bp) — same formula as pricer: ann * N2 * sigma * sqrt(T) * 10000
-                prem_bp = 2 * 0.3989 * sigma_n * sqrt_t * ann * 10000
-                prow[tenor] = round(prem_bp, 2)
+                # OIS df at expiry — converts spot premium to forward premium
+                # Fwd = Spot / df(expiry).  For 3m: df≈0.99 (+1%).  For 10y: df≈0.61 (+64%).
+                if ois_curve is not None:
+                    try:
+                        _ox = ois_curve[ois_curve.columns[0]].to_numpy().astype(float)
+                        _oy = ois_curve[ois_curve.columns[1]].to_numpy().astype(float) / 100.0
+                        _r  = float(np.interp(exp_y, _ox, _oy))
+                        df_exp = math.exp(-_r * exp_y)
+                    except Exception:
+                        df_exp = math.exp(-0.04 * exp_y)
+                else:
+                    df_exp = math.exp(-0.04 * exp_y)
 
-                # Vega: d(prem $) / d(vol in bp), scaled to 100mm notional
-                d_prem_per_bp = 2 * 0.3989 * sqrt_t * ann
-                vega_dollars = (d_prem_per_bp / 10000.0) * 100e6
+                # ATM straddle FORWARD premium (bp of notional) — matches BBG Prem=Fwd, OIS
+                spot_prem_bp = 2 * 0.3989 * sigma_n * sqrt_t * ann * 10000
+                fwd_prem_bp  = spot_prem_bp / df_exp if df_exp > 0 else spot_prem_bp
+                prow[tenor] = round(fwd_prem_bp, 2)
+
+                # Vega: d(fwd_prem $) / d(vol in bp), scaled to 100mm notional
+                d_fwd_prem_per_bp = 2 * 0.3989 * sqrt_t * ann / df_exp
+                vega_dollars = (d_fwd_prem_per_bp / 10000.0) * 100e6
                 vrow[tenor] = round(vega_dollars, 0)
 
             except:
@@ -14158,7 +14178,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604p</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604r</div>
             </div>
             """,
             unsafe_allow_html=True,
