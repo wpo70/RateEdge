@@ -1684,10 +1684,11 @@ def black_swaption_vanilla(ticket: SwaptionTicket) -> dict:
 
     pv = df * annuity * ticket.notional * price_rate
     bpv = df * annuity * ticket.notional * 0.0001
-    delta = delta_ratio * ticket.notional   # notional-equivalent swap hedge
-    delta_dv01 = delta_ratio * bpv          # dollar DV01
+    delta = delta_ratio * ticket.notional
+    delta_dv01 = delta_ratio * bpv
     pv_bp_spot = pv / (ticket.notional * 0.0001) if ticket.notional > 0 else 0.0
-    pv_bp_fwd  = pv_bp_spot / df if df > 0 else pv_bp_spot
+    # Forward premium: ann * price_rate * 10000 / df — matches matrix formula exactly
+    pv_bp_fwd = annuity * price_rate * 10000 / df if (df > 0 and ticket.notional > 0) else pv_bp_spot
     pv_bp = pv_bp_fwd
     vega  = df * annuity * ticket.notional * F * phi(d1) * math.sqrt(T) * 0.0001
     gamma = df * annuity * ticket.notional * phi(d1) / (F * sigma * math.sqrt(T)) * 0.0001
@@ -1723,12 +1724,12 @@ def bachelier_swaption_vanilla(ticket: SwaptionTicket) -> dict:
 
     pv = df * annuity * ticket.notional * price_rate
     bpv = df * annuity * ticket.notional * 0.0001
-    delta = delta_ratio * ticket.notional   # notional-equivalent swap hedge
-    delta_dv01 = delta_ratio * bpv          # dollar DV01
-    # pv_bp = premium in bp of notional (spot). Fwd = divide by df.
+    delta = delta_ratio * ticket.notional
+    delta_dv01 = delta_ratio * bpv
     pv_bp_spot = pv / (ticket.notional * 0.0001) if ticket.notional > 0 else 0.0
-    pv_bp_fwd  = pv_bp_spot / df if df > 0 else pv_bp_spot
-    pv_bp = pv_bp_fwd  # default to fwd (market convention)
+    # Forward premium: ann * price_rate * 10000 / df — matches matrix formula exactly
+    pv_bp_fwd = annuity * price_rate * 10000 / df if (df > 0 and ticket.notional > 0) else pv_bp_spot
+    pv_bp = pv_bp_fwd
     vega  = df * annuity * ticket.notional * math.sqrt(T) * phi * 0.0001
     gamma = df * annuity * ticket.notional * phi / (sigma_n * math.sqrt(T)) * 0.0001
     theta = -0.5 * df * annuity * ticket.notional * sigma_n * phi / math.sqrt(T) / 365.0
@@ -7572,7 +7573,15 @@ def caps_floors_tab(vol_mode: str):
                             _, ann, _ = forward_and_annuity_from_curve(curve, ccy, exp_y, tenor, ois_curve)
                             sigma_n = vol_bp / 10000.0
                             sqrt_t  = math.sqrt(max(exp_y, 0.001))
-                            premium_bp = 2 * 0.3989 * sigma_n * sqrt_t * ann * 10000
+                            _df_cfs = 1.0
+                            if ois_curve is not None:
+                                try:
+                                    _ocx = ois_curve[ois_curve.columns[0]].to_numpy().astype(float)
+                                    _ocy = ois_curve[ois_curve.columns[1]].to_numpy().astype(float) / 100.0
+                                    _df_cfs = math.exp(-float(np.interp(exp_y, _ocx, _ocy)) * exp_y)
+                                except: pass
+                            spot_bp = 2 * 0.3989 * sigma_n * sqrt_t * ann * 10000
+                            premium_bp = spot_bp / _df_cfs if _df_cfs > 0 else spot_bp
                             st.session_state["cfs_table_data"][lbl] = {
                                 "swaption": round(premium_bp, 4),
                                 "cfs_label": cfs_lbl,
@@ -14163,7 +14172,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604o</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604p</div>
             </div>
             """,
             unsafe_allow_html=True,
