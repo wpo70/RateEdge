@@ -3162,9 +3162,9 @@ def init_session():
     if "sw_pending_reload" not in st.session_state:
         st.session_state["sw_pending_reload"] = None
     if "swaption_portfolio" not in st.session_state:
-        st.session_state["swaption_portfolio"] = []   # always start clean — broker scratch pad
+        st.session_state["swaption_portfolio"] = _load_portfolio()
     if "portfolio" not in st.session_state:
-        st.session_state["portfolio"] = []
+        st.session_state["portfolio"] = list(st.session_state["swaption_portfolio"])
     if "vol_data" not in st.session_state:
         st.session_state["vol_data"] = {}
     if "curves" not in st.session_state:
@@ -6185,7 +6185,7 @@ def swaptions_tab(vol_mode: str):
                 st.caption("Updates ~ to match current ATM surface. ~, ρ,ν, × remain locked. Run daily at session start in Sticky-ATM mode.")
 
     # Row 1: Structure Type and Model
-    col_struct, col_model, col_prem = st.columns([2, 1, 1])
+    col_struct, col_model = st.columns([2, 1])
     with col_struct:
         structure = st.selectbox(
             "Structure",
@@ -6195,12 +6195,8 @@ def swaptions_tab(vol_mode: str):
         )
     with col_model:
         model_choice = st.selectbox("Model", ["Normal", "Black"], index=0, key="sw_model")
-    with col_prem:
-        # Force Fwd as default — reset any stale "Spot" from old session state
-        if st.session_state.get("sw_prem_type") not in ["Fwd", "Spot"]:
-            st.session_state["sw_prem_type"] = "Fwd"
-        premium_type = st.selectbox("Premium", ["Fwd", "Spot"], index=0, key="sw_prem_type")
-    
+    premium_type = "Fwd"  # always forward premium — market convention
+
     # For backwards compatibility
     side = structure
 
@@ -6584,13 +6580,15 @@ def swaptions_tab(vol_mode: str):
     else:
         atm = get_working_atm_surface(ccy)
         _, a, b, r, n = get_ccy_vol_data(ccy)
-        # Vol always read at OPTION EXPIRY — vol surface indexed by option life, not swap start
-        # For midcurve only the forward (swap triangle) and annuity differ from vanilla
+        # For midcurve: vol at (expiry+delay, tenor) — underlying rate characterised at swap start
+        # For vanilla: vol at (expiry, tenor)
+        _vol_expiry_y = expiry_y + delay_y if is_midcurve else expiry_y
         _EXPIRY_LABEL_MAP = {1/52:"1w",2/52:"2w",1/12:"1m",3/12:"3m",6/12:"6m",9/12:"9m",
                              1.0:"1y",1.5:"18m",2.0:"2y",3.0:"3y",4.0:"4y",5.0:"5y",
                              6.0:"6y",7.0:"7y",8.0:"8y",9.0:"9y",10.0:"10y",12.0:"12y",
                              15.0:"15y",20.0:"20y",25.0:"25y",30.0:"30y"}
-        _vol_expiry_label = min(_EXPIRY_LABEL_MAP, key=lambda k: abs(k - expiry_y))
+        # Snap to nearest surface expiry label
+        _vol_expiry_label = min(_EXPIRY_LABEL_MAP, key=lambda k: abs(k - _vol_expiry_y))
         _vol_expiry_lbl = _EXPIRY_LABEL_MAP[_vol_expiry_label]
         atm_val = get_matrix_value(atm, _vol_expiry_lbl, tenor_y) if atm is not None else None
         if atm_val is None:
@@ -6645,8 +6643,10 @@ def swaptions_tab(vol_mode: str):
         else:
             _smile = st.session_state.get("sabr_smile_mode", "Sticky-ATM (alpha-sticky)")
             # Midcurve: use SABR params at (expiry+delay, tenor) not (expiry, tenor)
-            _sabr_expiry_lbl = expiry  # always use option expiry label for surface lookup
-            _T_sabr = expiry_y          # T = option lifetime always
+            _sabr_expiry_lbl = _vol_expiry_lbl if is_midcurve else expiry
+            # For midcurve, evaluate SABR smile at T=swap_start (expiry+delay)
+            # so ATM vol matches surface at (expiry+delay, tenor) exactly
+            _T_sabr = expiry_y + delay_y if is_midcurve else expiry_y
             sabr = get_sabr_params_from_matrices(a, b, r, n, _sabr_expiry_lbl, tenor_y)
             if vol_mode.startswith("Normal"):
                 if sabr and sabr.get("alpha", 0) > 0:
@@ -6820,12 +6820,9 @@ def swaptions_tab(vol_mode: str):
             
             st.success(f" Priced: **{label}** | PV = ${res['pv']:,.0f} ({res.get('pv_bp_fwd', res['pv_bp']):.2f} bp fwd)")
         
-            # Store results in session state
+            # Store results in session state — always forward premium
             moneyness_bp = (strike_pct - fwd_pct) * 100 if structure in ["Payer", "Receiver"] else 0
-            if premium_type == "Fwd":
-                display_prem_bp = res.get("pv_bp_fwd", res["pv_bp"])
-            else:
-                display_prem_bp = res.get("pv_bp_spot", res["pv_bp"])
+            display_prem_bp = res.get("pv_bp_fwd", res["pv_bp"])
             # Tenor label: for midcurve show "delay+tenor" e.g. "2m5Y"
             _tenor_display = f"{delay_sel}{swap_tenor}" if is_midcurve else swap_tenor
 
@@ -6838,15 +6835,12 @@ def swaptions_tab(vol_mode: str):
                     "Notional": f"{notional:,.0f}mm"
                 },
                 "notional": notional,
-                "premium_type": premium_type,
+                "premium_type": "Fwd",
                 "display_prem_bp": display_prem_bp,
             }
             
-            # Add to Trade Blotter
-            if premium_type == "Fwd":
-                display_prem_bp = res.get("pv_bp_fwd", res["pv_bp"])
-            else:
-                display_prem_bp = res.get("pv_bp_spot", res["pv_bp"])
+            # Add to Trade Blotter — always forward premium
+            display_prem_bp = res.get("pv_bp_fwd", res["pv_bp"])
             entry = dict(instrument_type="Swaption", currency=ccy, structure=structure,
                          expiry=expiry, tenor=_tenor_display, model=vol_mode,
                          delay=delay_sel if is_midcurve else "None",
@@ -6902,15 +6896,9 @@ def swaptions_tab(vol_mode: str):
         
         with col_greeks:
             st.markdown("##### Valuation")
-            stored_prem_type = r.get("premium_type", "Fwd")
             display_prem_bp = r.get("display_prem_bp", res.get("pv_bp", 0))
-
-            if stored_prem_type == "Fwd":
-                st.metric("Premium (bp)   —   Fwd", f"{display_prem_bp:.2f}",
-                          help="Forward premium in bp: df cancels in PV/BPV = market convention")
-            else:
-                st.metric("Premium (bp)   —   Spot", f"{display_prem_bp:.2f}",
-                          help="Spot premium: PV/BPV ≈ df_expiry")
+            st.metric("Premium (bp) — Fwd", f"{display_prem_bp:.2f}",
+                      help="Forward premium in bp (market convention: BBG Prem=Fwd, OIS discounting)")
             st.metric("Total PV", f"${res['pv']:,.0f}")
             
             st.markdown("##### Greeks (Net)")
@@ -6957,22 +6945,11 @@ def swaptions_tab(vol_mode: str):
         df["_expiry_sort"] = df["expiry"].apply(lambda e: label_to_years(str(e)))
         df = df.sort_values("_expiry_sort").reset_index(drop=True)
 
-        _STATUS_COLOURS = {
-            "TP Trade":     "rgba(220,255,220,0.95)",   # pale green
-            "Away Trade":   "rgba(255,220,220,0.95)",   # pale red
-            "Direct Trade": "rgba(255,235,200,0.95)",   # pale orange
-        }
-        _STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade", "Clear Trade"]
-
-        # Header row
-        st.markdown(
-            "<div style='display:grid;grid-template-columns:30px 220px 60px 70px 60px 80px 80px 80px 80px 160px 40px 40px;"
-            "gap:4px;background:#f0f2f6;padding:4px 8px;border-radius:4px 4px 0 0;"
-            "font-size:11px;font-weight:600;color:#333;border-bottom:2px solid #ddd'>"
-            "<span>#</span><span>Structure</span><span>Expiry</span><span>Tenor</span>"
-            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>PV(bp)</span>"
-            "<span>PV($k)</span><span>Status</span><span></span><span></span></div>",
-            unsafe_allow_html=True)
+        # Header
+        _hc = st.columns([0.4, 2.0, 0.7, 0.8, 0.7, 0.9, 0.9, 0.9, 0.9, 0.5, 0.5])
+        for _h, _col in zip(["#","Structure","Expiry","Tenor","Notl","Strike %","Fwd %","PV (bp)","PV ($k)","",""], _hc):
+            _col.markdown(f"<small style='color:#94a3b8'>{_h}</small>", unsafe_allow_html=True)
+        st.markdown("<hr style='margin:2px 0;border-color:#1e3050'>", unsafe_allow_html=True)
 
         for idx, row in df.iterrows():
             _label  = row.get("label", f"{row.get('expiry','')}x{row.get('tenor','')}")
@@ -6981,41 +6958,21 @@ def swaptions_tab(vol_mode: str):
             _struct = row.get("structure","")
             _legs   = row.get("legs",[]) if isinstance(row.get("legs",[]),list) else []
 
-            # Get current status and background colour
-            _status_key = f"_sw_status_{idx}"
-            _cur_status = st.session_state.get(_status_key, "—")
-            _bg = _STATUS_COLOURS.get(_cur_status, "white")
+            _rc = st.columns([0.4, 2.0, 0.7, 0.8, 0.7, 0.9, 0.9, 0.9, 0.9, 0.5, 0.5])
+            _rc[0].write(f"{idx+1}")
+            _rc[1].write(_struct)
+            _rc[2].write(_expiry)
+            _rc[3].write(_tenor)
+            _rc[4].write(f"{float(row.get('notional_mm',100)):.0f}mm")
+            _rc[5].write(f"{float(row.get('strike',0)):.4f}")
+            _rc[6].write(f"{float(row.get('forward',0)):.4f}")
+            _rc[7].write(f"{float(row.get('pv_bp',0)):.2f}")
+            _rc[8].write(f"{float(row.get('pv',0))/1000:,.1f}")
 
-            _rc = st.columns([0.3, 2.0, 0.6, 0.7, 0.6, 0.85, 0.85, 0.85, 0.85, 1.5, 0.45, 0.45])
-            _rc[0].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{idx+1}</div>", unsafe_allow_html=True)
-            _rc[1].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{_struct}</div>", unsafe_allow_html=True)
-            _rc[2].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{_expiry}</div>", unsafe_allow_html=True)
-            _rc[3].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{_tenor}</div>", unsafe_allow_html=True)
-            _rc[4].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{float(row.get('notional_mm',100)):.0f}mm</div>", unsafe_allow_html=True)
-            _rc[5].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{float(row.get('strike',0)):.4f}</div>", unsafe_allow_html=True)
-            _rc[6].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{float(row.get('forward',0)):.4f}</div>", unsafe_allow_html=True)
-            _rc[7].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{float(row.get('pv_bp',0)):.2f}</div>", unsafe_allow_html=True)
-            _rc[8].markdown(f"<div style='background:{_bg};padding:6px 2px;font-size:12px;color:#222'>{float(row.get('pv',0))/1000:,.1f}</div>", unsafe_allow_html=True)
-
-            # Status dropdown
-            _new_status = _rc[9].selectbox("", _STATUS_OPTS,
-                index=_STATUS_OPTS.index(_cur_status) if _cur_status in _STATUS_OPTS else 0,
-                key=f"sw_status_{idx}", label_visibility="collapsed")
-            if _new_status == "Clear Trade":
-                st.session_state[_status_key] = "—"
-                st.session_state["swaption_portfolio"].pop(idx)
-                st.session_state["portfolio"] = [p for p in st.session_state["portfolio"]
-                                                  if p.get("label") != _label or p.get("expiry") != _expiry]
-                st.session_state.pop("_sw_tix_open", None)
-                _save_portfolio(); st.rerun()
-            elif _new_status != _cur_status:
-                st.session_state[_status_key] = _new_status
-                st.rerun()
-
-            if can_quick_tix() and _rc[10].button("📋", key=f"sw_tix_{idx}", help="Quick Tix"):
+            if can_quick_tix() and _rc[9].button("📋", key=f"sw_tix_{idx}", help="Quick Tix"):
                 st.session_state["_sw_tix_open"] = idx if st.session_state.get("_sw_tix_open") != idx else -1
 
-            if _rc[11].button("🗑️", key=f"sw_del_{idx}", help="Remove"):
+            if _rc[10].button("🗑️", key=f"sw_del_{idx}", help="Remove"):
                 st.session_state["swaption_portfolio"].pop(idx)
                 st.session_state["portfolio"] = [p for p in st.session_state["portfolio"]
                                                   if p.get("label") != _label or p.get("expiry") != _expiry]
@@ -13952,16 +13909,26 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
                 sigma_n = vol_bp / 10000.0
                 sqrt_t = math.sqrt(max(exp_y, 0.001))
 
-                # ATM straddle FORWARD premium (bp of notional)
-                # fwd_prem = spot_prem / df(expiry) — use OIS for discounting (matches pricer)
+                # OIS df at expiry — converts spot premium to forward premium
+                # Fwd = Spot / df(expiry).  For 3m: df≈0.99 (+1%).  For 10y: df≈0.61 (+64%).
+                if ois_curve is not None:
+                    try:
+                        _ox = ois_curve[ois_curve.columns[0]].to_numpy().astype(float)
+                        _oy = ois_curve[ois_curve.columns[1]].to_numpy().astype(float) / 100.0
+                        _r  = float(np.interp(exp_y, _ox, _oy))
+                        df_exp = math.exp(-_r * exp_y)
+                    except Exception:
+                        df_exp = math.exp(-0.04 * exp_y)
+                else:
+                    df_exp = math.exp(-0.04 * exp_y)
+
+                # ATM straddle FORWARD premium (bp of notional) — matches BBG Prem=Fwd, OIS
                 spot_prem_bp = 2 * 0.3989 * sigma_n * sqrt_t * ann * 10000
-                # Forward premium = spot / df, but ann already discounts with OIS,
-                # so this equals the true undiscounted fwd premium — same as pricer
-                fwd_prem_bp = spot_prem_bp  # no df division
+                fwd_prem_bp  = spot_prem_bp / df_exp if df_exp > 0 else spot_prem_bp
                 prow[tenor] = round(fwd_prem_bp, 2)
 
                 # Vega: d(fwd_prem $) / d(vol in bp), scaled to 100mm notional
-                d_fwd_prem_per_bp = 2 * 0.3989 * sqrt_t * ann
+                d_fwd_prem_per_bp = 2 * 0.3989 * sqrt_t * ann / df_exp
                 vega_dollars = (d_fwd_prem_per_bp / 10000.0) * 100e6
                 vrow[tenor] = round(vega_dollars, 0)
 
@@ -14095,6 +14062,7 @@ def main():
                                     except: pass
                                 _sl.append(f"{_cc2}:{_lbl}")
                                 st.session_state[f"_vol_loaded_{_cc2}"] = True
+                                set_timestamp("atm", _cc2)  # mark as loaded for status display
                                 _h = st.session_state.get(f"_atm_hash_{_cc2}", 0)
                                 st.session_state[f"_atm_hash_{_cc2}"] = _h + 1
                                 # Clear stale ATM matrix — must regenerate with new surface
@@ -14131,7 +14099,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3109a</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3109c</div>
             </div>
             """,
             unsafe_allow_html=True,
