@@ -1569,30 +1569,58 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
                                    freq_override: Optional[float] = None) -> Tuple[float, float, List[Tuple[float, float]]]:
     """
     Calculate forward swap rate and annuity.
-    Uses LINEAR zero-rate interpolation (same as fast_forward_rate / matrix) so
-    the swaption pricer forward exactly matches the Rate/Vol Matrix.
-    freq_override: 0.25 = Q/Q, 0.5 = S/S, None = market convention
+    AUD: uses _aud_zc_qq/_aud_zc_ss directly — identical calculation to forward matrix.
     """
-    # Fast session-level cache keyed by curve commit ID (no hashing)
+    # Fast session-level cache
     try:
         _cid = st.session_state.get("_curve_commit_ids", {}).get(ccy, 0)
-        _oid = st.session_state.get("_curve_commit_ids", {}).get(f"{ccy}_ois", 0) if ois_curve is not None else -1
-        _ck = (ccy, _cid, _oid, round(expiry, 6), round(tenor, 6), round(freq_override or -1, 6))
+        _ck = (ccy, _cid, round(expiry, 6), round(tenor, 6), round(freq_override or -1, 6))
         _fc = st.session_state.setdefault("_fwd_ann_cache", {})
         if _ck in _fc:
             return _fc[_ck]
     except Exception:
         _ck = None; _fc = {}
 
+    # AUD: replicate _fwd_from_zc exactly — same zeros, same schedule, same annuity
+    if ccy == "AUD":
+        _zc_qq = st.session_state.get("_aud_zc_qq")
+        _zc_ss = st.session_state.get("_aud_zc_ss")
+        if _zc_qq and _zc_ss:
+            # Zero curve by tenor (same as matrix), freq by override or tenor convention
+            zc   = _zc_qq if tenor <= 3.0 else _zc_ss
+            freq = freq_override if freq_override is not None else (0.25 if tenor <= 3.0 else 0.5)
+            SPOT_M = 1.0 / 252.0
+            xs = np.array(sorted(zc.keys()))
+            ys = np.array([zc[k] / 100.0 for k in xs])
+            def _dfz(t): return math.exp(-float(np.interp(t, xs, ys)) * t)
+            t_s = expiry + SPOT_M; t_e = t_s + tenor
+            times = []; t = t_s + freq
+            while t <= t_e + 1e-9:
+                times.append(min(t, t_e)); t += freq
+            if not times:
+                _result = (0.0, 0.0, [])
+            else:
+                prev = t_s; ann = 0.0; sched_out = []
+                for ti in times:
+                    accrual = ti - prev
+                    ann += _dfz(ti) * accrual
+                    sched_out.append((ti, accrual))
+                    prev = ti
+                fwd = (_dfz(t_s) - _dfz(t_e)) / ann if ann > 0 else 0.0
+                _result = (fwd, ann, sched_out)
+            try:
+                if _ck is not None and len(_fc) < 5000:
+                    _fc[_ck] = _result
+            except Exception:
+                pass
+            return _result
+
+    # NZD / USD / fallback path — date-based schedule
     if freq_override is not None:
-        # T+2 BD for NZD/USD, T+1 BD for AUD (AFMA calendar   —   year frac approx here)
         spot_lag = 2.0 / 252.0 if ccy in ["NZD", "USD"] else 1.0 / 252.0
         sched = build_generic_schedule(expiry, tenor, freq=freq_override, spot_lag=spot_lag * 252)
-    elif ccy == "AUD":
-        sched = build_aud_schedule(expiry, tenor)
     elif ccy == "NZD":
-        freq_nzd = 0.25 if tenor <= 2.0 else 0.5
-        sched = build_generic_schedule(expiry, tenor, freq=freq_nzd, spot_lag=2.0)
+        sched = build_generic_schedule(expiry, tenor, freq=0.25 if tenor <= 2.0 else 0.5, spot_lag=2.0)
     elif ccy == "USD":
         sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=2.0)
     else:
@@ -1601,58 +1629,20 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
     if not sched:
         return 0.0, 0.0, []
 
-    # IRS for projection, OIS for annuity discounting (dual-curve)
-    basis_6v3 = get_basis_curve(ccy, "6v3") if ccy == "AUD" else None
+    _proj_curve = curve
 
-    # AUD: use pre-built proj curve from bootstrapped QQ/SS zeros (same as forward matrix)
-    # Built once in set_ccy_curve/_build_aud_proj_curve — never rebuilt per-call
-    if ccy == "AUD" and st.session_state.get("_aud_proj_curve") is not None:
-        _proj_curve = st.session_state["_aud_proj_curve"]
-    else:
-        _proj_curve = curve
+    def _df_proj(t):
+        xs = _proj_curve["MaturityY"].to_numpy().astype(float)
+        ys = _proj_curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
+        return math.exp(-float(np.interp(t, xs, ys)) * t)
 
-    def _df_proj(crv: pd.DataFrame, t: float, freq: float) -> float:
-        """Projection discount factor with convention-aware basis adjustment for AUD."""
-        xs = crv["MaturityY"].to_numpy().astype(float)
-        ys = crv["ZeroRatePct"].to_numpy().astype(float) / 100.0
-        z = float(np.interp(t, xs, ys))
-        if ccy == "AUD" and basis_6v3 is not None and not basis_6v3.empty:
-            try:
-                # Handle different column name formats
-                _b6_cols = basis_6v3.columns.tolist()
-                _mat_col = next((c for c in _b6_cols if "matur" in c.lower() or "tenor" in c.lower() or c in ("MaturityY","Tenor","tenor_years")), _b6_cols[0])
-                _bp_col  = next((c for c in _b6_cols if "basis" in c.lower() or "bp" in c.lower() or "spread" in c.lower()), _b6_cols[1])
-                bx = basis_6v3[_mat_col].to_numpy().astype(float)
-                by = basis_6v3[_bp_col].to_numpy().astype(float) / 10000.0
-                if freq == 0.25 and t > 3.0:
-                    z = z - float(np.interp(t, bx, by))
-                elif freq == 0.5 and t <= 3.0:
-                    z = z + float(np.interp(t, bx, by))
-            except Exception:
-                pass
-        return math.exp(-z * t)
-
-    def _df_disc(crv: pd.DataFrame, t: float) -> float:
-        xs = crv["MaturityY"].to_numpy().astype(float)
-        ys = crv["ZeroRatePct"].to_numpy().astype(float) / 100.0
-        z = float(np.interp(t, xs, ys))
-        return math.exp(-z * t)
-
-    disc_curve = _proj_curve
-
-    # Determine effective frequency from schedule (periods per year → years per period)
     _n_periods = len(sched)
     _total_time = sched[-1][0] - (sched[0][0] - sched[0][1]) if sched else 0.5
-    _sched_freq = round(_total_time / _n_periods * 4) / 4 if _n_periods > 0 else 0.5  # round to nearest 0.25
+    _sched_freq = round(_total_time / _n_periods * 4) / 4 if _n_periods > 0 else 0.5
 
-    ann = 0.0
-    for T_i, accrual in sched:
-        ann += _df_disc(disc_curve, T_i) * accrual
-
+    ann = sum(_df_proj(T_i) * accrual for T_i, accrual in sched)
     swap_start = sched[0][0] - sched[0][1]
-    df_start = _df_proj(_proj_curve, swap_start, _sched_freq)
-    df_end   = _df_proj(_proj_curve, sched[-1][0], _sched_freq)
-    fwd = (df_start - df_end) / ann if ann > 0 else 0.0
+    fwd = (_df_proj(swap_start) - _df_proj(sched[-1][0])) / ann if ann > 0 else 0.0
     _result = (fwd, ann, sched)
     try:
         if _ck is not None and len(_fc) < 5000:
@@ -14173,7 +14163,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604n</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604o</div>
             </div>
             """,
             unsafe_allow_html=True,
