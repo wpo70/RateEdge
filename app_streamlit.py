@@ -6945,11 +6945,22 @@ def swaptions_tab(vol_mode: str):
         df["_expiry_sort"] = df["expiry"].apply(lambda e: label_to_years(str(e)))
         df = df.sort_values("_expiry_sort").reset_index(drop=True)
 
-        # Header
-        _hc = st.columns([0.4, 2.0, 0.7, 0.8, 0.7, 0.9, 0.9, 0.9, 0.9, 0.5, 0.5])
-        for _h, _col in zip(["#","Structure","Expiry","Tenor","Notl","Strike %","Fwd %","PV (bp)","PV ($k)","",""], _hc):
-            _col.markdown(f"<small style='color:#94a3b8'>{_h}</small>", unsafe_allow_html=True)
-        st.markdown("<hr style='margin:2px 0;border-color:#1e3050'>", unsafe_allow_html=True)
+        _STATUS_COLOURS = {
+            "TP Trade":     "rgba(220,255,220,0.95)",
+            "Away Trade":   "rgba(255,210,210,0.95)",
+            "Direct Trade": "rgba(255,235,195,0.95)",
+        }
+        _STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade", "Clear Trade"]
+
+        # Header row — light grey background
+        st.markdown(
+            "<div style='display:grid;grid-template-columns:28px 200px 58px 68px 58px 78px 78px 78px 78px 150px 36px 36px;"
+            "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
+            "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
+            "<span>#</span><span>Structure</span><span>Expiry</span><span>Tenor</span>"
+            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>PV(bp)</span>"
+            "<span>PV($k)</span><span>Status</span><span></span><span></span></div>",
+            unsafe_allow_html=True)
 
         for idx, row in df.iterrows():
             _label  = row.get("label", f"{row.get('expiry','')}x{row.get('tenor','')}")
@@ -6958,21 +6969,41 @@ def swaptions_tab(vol_mode: str):
             _struct = row.get("structure","")
             _legs   = row.get("legs",[]) if isinstance(row.get("legs",[]),list) else []
 
-            _rc = st.columns([0.4, 2.0, 0.7, 0.8, 0.7, 0.9, 0.9, 0.9, 0.9, 0.5, 0.5])
-            _rc[0].write(f"{idx+1}")
-            _rc[1].write(_struct)
-            _rc[2].write(_expiry)
-            _rc[3].write(_tenor)
-            _rc[4].write(f"{float(row.get('notional_mm',100)):.0f}mm")
-            _rc[5].write(f"{float(row.get('strike',0)):.4f}")
-            _rc[6].write(f"{float(row.get('forward',0)):.4f}")
-            _rc[7].write(f"{float(row.get('pv_bp',0)):.2f}")
-            _rc[8].write(f"{float(row.get('pv',0))/1000:,.1f}")
+            _status_key = f"_sw_status_{idx}"
+            _cur_status = st.session_state.get(_status_key, "—")
+            _bg = _STATUS_COLOURS.get(_cur_status, "white")
 
-            if can_quick_tix() and _rc[9].button("📋", key=f"sw_tix_{idx}", help="Quick Tix"):
+            _rc = st.columns([0.28, 1.9, 0.58, 0.68, 0.58, 0.78, 0.78, 0.78, 0.78, 1.5, 0.36, 0.36])
+            for _ci, _val in enumerate([
+                f"{idx+1}", _struct, _expiry, _tenor,
+                f"{float(row.get('notional_mm',100)):.0f}mm",
+                f"{float(row.get('strike',0)):.4f}",
+                f"{float(row.get('forward',0)):.4f}",
+                f"{float(row.get('pv_bp',0)):.2f}",
+                f"{float(row.get('pv',0))/1000:,.1f}",
+            ]):
+                _rc[_ci].markdown(
+                    f"<div style='background:{_bg};padding:5px 3px;font-size:12px;color:#1e293b;"
+                    f"border-bottom:1px solid #e2e8f0'>{_val}</div>", unsafe_allow_html=True)
+
+            _new_status = _rc[9].selectbox("", _STATUS_OPTS,
+                index=_STATUS_OPTS.index(_cur_status) if _cur_status in _STATUS_OPTS else 0,
+                key=f"sw_status_{idx}", label_visibility="collapsed")
+            if _new_status == "Clear Trade":
+                st.session_state[_status_key] = "—"
+                st.session_state["swaption_portfolio"].pop(idx)
+                st.session_state["portfolio"] = [p for p in st.session_state["portfolio"]
+                                                  if p.get("label") != _label or p.get("expiry") != _expiry]
+                st.session_state.pop("_sw_tix_open", None)
+                _save_portfolio(); st.rerun()
+            elif _new_status != _cur_status:
+                st.session_state[_status_key] = _new_status
+                st.rerun()
+
+            if can_quick_tix() and _rc[10].button("📋", key=f"sw_tix_{idx}", help="Quick Tix"):
                 st.session_state["_sw_tix_open"] = idx if st.session_state.get("_sw_tix_open") != idx else -1
 
-            if _rc[10].button("🗑️", key=f"sw_del_{idx}", help="Remove"):
+            if _rc[11].button("🗑️", key=f"sw_del_{idx}", help="Remove"):
                 st.session_state["swaption_portfolio"].pop(idx)
                 st.session_state["portfolio"] = [p for p in st.session_state["portfolio"]
                                                   if p.get("label") != _label or p.get("expiry") != _expiry]
@@ -14099,7 +14130,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v3109c</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604a</div>
             </div>
             """,
             unsafe_allow_html=True,
