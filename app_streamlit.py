@@ -3162,9 +3162,9 @@ def init_session():
     if "sw_pending_reload" not in st.session_state:
         st.session_state["sw_pending_reload"] = None
     if "swaption_portfolio" not in st.session_state:
-        st.session_state["swaption_portfolio"] = _load_portfolio()
+        st.session_state["swaption_portfolio"] = []   # always start clean — broker scratch pad
     if "portfolio" not in st.session_state:
-        st.session_state["portfolio"] = list(st.session_state["swaption_portfolio"])
+        st.session_state["portfolio"] = []
     if "vol_data" not in st.session_state:
         st.session_state["vol_data"] = {}
     if "curves" not in st.session_state:
