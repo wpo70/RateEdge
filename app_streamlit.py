@@ -10956,13 +10956,13 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)",
                 _tt_idx = np.argmin(np.abs(np.array(_ten_arr) - _tt_y))
                 _track_z = float(z[_te_idx, _tt_idx])
                 _track_traces = [go.Scatter3d(
-                    x=[_tt_y], y=[_te_y], z=[_track_z + 2],
+                    x=[_tt_y], y=[_te_y], z=[_track_z + 3],
                     mode="markers+text",
-                    marker=dict(size=8, color="#FFD700", symbol="diamond",
-                                line=dict(color="#ffffff", width=1)),
-                    text=[f"{track_exp}×{track_ten}<br>{_track_z:.1f}bp"],
+                    marker=dict(size=10, color="#FFD700", symbol="diamond",
+                                line=dict(color="#ffffff", width=2)),
+                    text=[f"  {track_exp}×{track_ten}  {_track_z:.1f}bp"],
                     textposition="top center",
-                    textfont=dict(color="#FFD700", size=11, family="Arial Bold"),
+                    textfont=dict(color="#FFD700", size=13, family="Arial Black"),
                     showlegend=False,
                     hovertemplate=f"<b>{track_exp}×{track_ten}</b><br>{_track_z:.1f} bp<extra></extra>",
                 )]
@@ -11337,7 +11337,7 @@ def backtesting_tab():
                 with _tp1:
                     _track_exp = st.selectbox("Track Expiry Term",
                         ["1m","3m","6m","1y","2y","3y","5y","7y","10y","15y","20y"],
-                        index=4, key="hviz_track_exp")
+                        index=3, key="hviz_track_exp")
                 with _tp2:
                     _track_ten = st.selectbox("Track tenor",
                         ["1Y","2Y","3Y","5Y","7Y","10Y","15Y","20Y","30Y"],
