@@ -3556,11 +3556,8 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
         except Exception:
             pass
 
-        # Seed with OIS discount factors (short-end anchor)
+        # Pure IRS bootstrap — do NOT seed with OIS (contaminates projection curve)
         dfs: dict = {0.0: 1.0}
-        for t, r in sorted(ois_rates.items()):
-            if not math.isnan(r):
-                dfs[t] = math.exp(-r / 100.0 * t)
 
         def _df(t: float) -> float:
             """Log-linear interpolation of current discount factor curve."""
