@@ -14426,7 +14426,17 @@ def main():
                     st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Configs: {_auto_loaded} | AUD 1y×{list(_debug_atm.columns)[1] if _debug_atm is not None else '?'}={_debug_val}"
             except Exception as _ale:
                 st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Config load error: {_ale}"
-            # Portfolio always starts empty each session — scratch pad only
+            # Load Trade Blotter from DB once per login — guarded by db_auto_loaded flag
+            # Only runs on first render after login, never on reruns
+            if not st.session_state.get("_portfolio_loaded", False):
+                try:
+                    _saved_port = _load_portfolio()
+                    if _saved_port:
+                        st.session_state["portfolio"] = _saved_port
+                        st.session_state["swaption_portfolio"] = [t for t in _saved_port if t.get("instrument_type","Swaption") == "Swaption"]
+                    st.session_state["_portfolio_loaded"] = True
+                except Exception:
+                    pass
             st.session_state["db_auto_loaded"] = True
 
     # Sidebar for settings
@@ -14437,7 +14447,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604s</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0704w</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -14489,6 +14499,7 @@ def main():
                 st.session_state["authenticated"] = False
                 st.session_state["username"] = None
                 st.session_state["db_auto_loaded"] = False
+                st.session_state["_portfolio_loaded"] = False
                 st.rerun()
 
             # ── Super Admin: User Role Management ────────────────────
