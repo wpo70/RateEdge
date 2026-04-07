@@ -3416,6 +3416,47 @@ def _build_aud_proj_curve():
         st.session_state.get("_fwd_ann_cache", {}).clear()
 
 
+def build_aud_ois_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
+    """
+    Build AUD OIS (AONIA) zero curve from BBG_Feed ADSO tickers.
+    Uses exact ticker matching to get correct maturities — the OIS_AUD sheet
+    has wrong maturity labels (6,7,8,9,10 instead of 7,10,15,20,25) causing
+    ~7bp error in long-expiry swaption premiums.
+    Returns DataFrame(MaturityY, ZeroRatePct) or None on failure.
+    """
+    if "BBG_Feed" not in xl.sheet_names:
+        return None
+    try:
+        raw = pd.read_excel(xl, sheet_name="BBG_Feed", header=None)
+        # Map exact ADSO ticker prefix → maturity (years)
+        ADSO_EXACT = {
+            "ADSO1Z":1/52, "ADSOA":1/12, "ADSOB":2/12, "ADSOC":3/12,
+            "ADSOD":4/12, "ADSOE":5/12, "ADSOF":6/12, "ADSOI":9/12,
+            "ADSO1 ":1.0, "ADSO2 ":2.0, "ADSO3 ":3.0, "ADSO4 ":4.0,
+            "ADSO5 ":5.0, "ADSO7 ":7.0, "ADSO10":10.0,
+            "ADSO15":15.0, "ADSO20":20.0, "ADSO25":25.0, "ADSO30":30.0,
+        }
+        ois_pts: dict = {}
+        for _, r in raw.iterrows():
+            ticker = str(r.iloc[1]).strip() if len(r) > 1 else ""
+            for prefix, mat in ADSO_EXACT.items():
+                if ticker.startswith(prefix):
+                    try:
+                        mid = float(r.iloc[4])
+                        if mid > 0:
+                            ois_pts[mat] = mid
+                    except Exception:
+                        pass
+                    break
+        if len(ois_pts) < 5:
+            return None
+        xs = sorted(ois_pts)
+        df_out = pd.DataFrame({"MaturityY": xs, "ZeroRatePct": [ois_pts[t] for t in xs]})
+        return df_out
+    except Exception:
+        return None
+
+
 def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
     """
     Bootstrap AUD zero curve from BBG_Feed par swap rates.
@@ -3795,26 +3836,43 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                 except:
                     pass
             
-            # OIS curve (if exists) — try multiple sheet name formats
+            # OIS curve — for AUD, build from BBG_Feed ADSO tickers (correct maturities)
+            # OIS_AUD sheet has wrong maturity labels at 6-12Y causing ~7bp premium error
             _ois_found = False
-            for ois_name in [f"OIS_{ccy}", f"OIS {ccy}", f"AONIA_{ccy}", "AONIA", f"ois_{ccy}"]:
-                if ois_name in xl.sheet_names:
-                    raw_ois = pd.read_excel(xl, sheet_name=ois_name, usecols=[0, 1])
-                    try:
-                        ois_df = load_curve_flexible(raw_ois, ois_name)
+            if ccy == "AUD" and "BBG_Feed" in xl.sheet_names:
+                try:
+                    ois_df = build_aud_ois_from_bbg_feed(xl)
+                    if ois_df is not None and len(ois_df) >= 8:
                         set_basis_curve(ccy, "ois", ois_df)
                         if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
                         if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
                         st.session_state["config_basis"][ccy]["ois"] = ois_df
-                        # Also ensure basis_curves is set (used by save_all_session_data)
                         if "basis_curves" not in st.session_state: st.session_state["basis_curves"] = {}
                         if ccy not in st.session_state["basis_curves"]: st.session_state["basis_curves"][ccy] = {}
                         st.session_state["basis_curves"][ccy]["ois"] = ois_df
                         _ois_found = True
                         loaded["basis"] += 1
-                    except:
-                        pass
-                    break
+                except Exception:
+                    pass
+
+            if not _ois_found:
+                for ois_name in [f"OIS_{ccy}", f"OIS {ccy}", f"AONIA_{ccy}", "AONIA", f"ois_{ccy}"]:
+                    if ois_name in xl.sheet_names:
+                        raw_ois = pd.read_excel(xl, sheet_name=ois_name, usecols=[0, 1])
+                        try:
+                            ois_df = load_curve_flexible(raw_ois, ois_name)
+                            set_basis_curve(ccy, "ois", ois_df)
+                            if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
+                            if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
+                            st.session_state["config_basis"][ccy]["ois"] = ois_df
+                            if "basis_curves" not in st.session_state: st.session_state["basis_curves"] = {}
+                            if ccy not in st.session_state["basis_curves"]: st.session_state["basis_curves"][ccy] = {}
+                            st.session_state["basis_curves"][ccy]["ois"] = ois_df
+                            _ois_found = True
+                            loaded["basis"] += 1
+                        except:
+                            pass
+                        break
             if not _ois_found and ccy == "AUD":
                 st.session_state[f"_ois_missing_{ccy}"] = True
     
@@ -14178,7 +14236,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604r</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0604s</div>
             </div>
             """,
             unsafe_allow_html=True,
