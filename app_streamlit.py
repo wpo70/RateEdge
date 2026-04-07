@@ -2464,19 +2464,26 @@ def apply_rateedge_theme(theme_name: str):
         [data-testid="stSidebar"] .stMarkdown {{
             color: {text} !important;
         }}
-        /* Sidebar collapse/expand button - make arrows visible */
+        /* Sidebar collapse/expand button - always visible */
         [data-testid="stSidebar"] button[kind="header"],
         [data-testid="collapsedControl"] {{
             color: {sidebar_arrow} !important;
+            background-color: {accent} !important;
+            border-radius: 4px !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+            display: block !important;
         }}
         [data-testid="stSidebar"] svg,
         [data-testid="collapsedControl"] svg {{
-            fill: {sidebar_arrow} !important;
-            stroke: {sidebar_arrow} !important;
+            fill: white !important;
+            stroke: white !important;
+            opacity: 1 !important;
+            visibility: visible !important;
         }}
         button[kind="headerNoPadding"] svg {{
-            fill: {sidebar_arrow} !important;
-            stroke: {sidebar_arrow} !important;
+            fill: white !important;
+            stroke: white !important;
         }}
         /* Collapsed sidebar button */
         .css-1rs6os {{
