@@ -894,7 +894,7 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
         except Exception:
             atm_prems_json = None
 
-        # Insert into vol_history table
+        # Insert into vol_history table — always save as 'shared' so all users can load
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO vol_history 
@@ -902,7 +902,7 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (
-            user_id, 
+            'shared', 
             currency, 
             datetime.now(),
             label,
@@ -943,14 +943,14 @@ def list_vol_snapshots(user_id: str, currency: str = None):
             cur.execute("""
                 SELECT id, currency, snapshot_date, label, notes, created_at
                 FROM vol_history
-                WHERE user_id = %s AND currency = %s
+                WHERE (user_id = %s OR user_id = 'shared') AND currency = %s
                 ORDER BY snapshot_date DESC
             """, (user_id, currency))
         else:
             cur.execute("""
                 SELECT id, currency, snapshot_date, label, notes, created_at
                 FROM vol_history
-                WHERE user_id = %s
+                WHERE (user_id = %s OR user_id = 'shared') OR user_id = 'shared'
                 ORDER BY snapshot_date DESC
             """, (user_id,))
         
@@ -4867,14 +4867,14 @@ def curves_tab():
                 fig.add_trace(go.Scatter(x=curve_c["MaturityY"], y=curve_c["ZeroRatePct"],
                     mode="lines+markers", name="IRS Par", line=dict(color="#22c55e", width=2)))
         if _show_irs:
-            # Use blended curve (correct QQ/SS zero rates), extend to 40Y/50Y from _aud_zc_ss
-            _zx = list(curve_c["MaturityY"].astype(float))
-            _zy = list(curve_c["ZeroRatePct"].astype(float))
-            if ccy == "AUD":
-                _zc_ss = st.session_state.get("_aud_zc_ss") or {}
-                for _et in [40.0, 50.0]:
-                    if _et in _zc_ss and _et not in _zx:
-                        _zx.append(_et); _zy.append(_zc_ss[_et])
+            # Display bootstrapped zeros from _aud_proj_curve (not par rates from Curves_AUD)
+            if ccy == "AUD" and st.session_state.get("_aud_proj_curve") is not None:
+                _proj = st.session_state["_aud_proj_curve"]
+                _zx = list(_proj["MaturityY"].astype(float))
+                _zy = list(_proj["ZeroRatePct"].astype(float))
+            else:
+                _zx = list(curve_c["MaturityY"].astype(float))
+                _zy = list(curve_c["ZeroRatePct"].astype(float))
             _pairs = sorted(zip(_zx, _zy))
             fig.add_trace(go.Scatter(
                 x=[p[0] for p in _pairs], y=[p[1] for p in _pairs],
@@ -4920,7 +4920,10 @@ def curves_tab():
                 _par_table = curve_c
             _cols_to_show.append(("IRS Par Rates (%)", _par_table))
         if _show_irs:
-            _cols_to_show.append(("IRS Zero Curve (%)", curve_c))
+            if ccy == "AUD" and st.session_state.get("_aud_proj_curve") is not None:
+                _cols_to_show.append(("IRS Zero Curve (%)", st.session_state["_aud_proj_curve"]))
+            else:
+                _cols_to_show.append(("IRS Zero Curve (%)", curve_c))
         if _show_ois and oisc is not None and not oisc.empty:
             _cols_to_show.append(("OIS Curve (%)", oisc))
         if _show_b6 and b6c is not None and not b6c.empty:
@@ -5109,7 +5112,7 @@ def curves_tab():
                                     INSERT INTO vol_history
                                     (user_id, currency, snapshot_date, label, atm_vols, atm_prems, notes)
                                     VALUES (%s,%s,NOW(),%s,%s,%s,%s)
-                                """, (_snap_uid, _pub_ccy, _slbl, _atm_json, _prem_json, "Published from Curves tab"))
+                                """, ('shared', _pub_ccy, _slbl, _atm_json, _prem_json, "Published from Curves tab"))
                                 _snap_conn.commit()
                                 _sc2.close()
                             _snap_conn.close()
@@ -11483,7 +11486,7 @@ def _load_rv_vols_from_db(ccy: str = "AUD", limit: int = 60) -> pd.DataFrame:
         cur = conn.cursor()
         cur.execute(
             """SELECT snapshot_date, label, atm_vols FROM vol_history
-               WHERE user_id = %s AND currency = %s AND atm_vols IS NOT NULL
+               WHERE (user_id = %s OR user_id = 'shared') AND currency = %s AND atm_vols IS NOT NULL
                ORDER BY snapshot_date DESC LIMIT %s""",
             (get_db_url() and "wpo70@icloud.com", ccy, limit)
         )
@@ -14408,7 +14411,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0704x</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804c</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -14725,11 +14728,12 @@ def sod_report_tab():
     user_id = st.session_state.get("username", "default")
 
     # ── Load available snapshots — cached, refresh on button ─────
-    if st.button("🔄 Reload Snapshots", key="sod_reload_snaps") or "sod_snaps_usd" not in st.session_state:
-        st.session_state["sod_snaps_usd"] = list_vol_snapshots(user_id, "USD") if HAS_POSTGRES else []
-        st.session_state["sod_snaps_aud"] = list_vol_snapshots(user_id, "AUD") if HAS_POSTGRES else []
-    _snaps_usd = st.session_state.get("sod_snaps_usd", [])
-    _snaps_aud = st.session_state.get("sod_snaps_aud", [])
+    if st.button("🔄 Reload Snapshots", key="sod_reload_snaps"):
+        st.session_state.pop("sod_snaps_usd", None)
+        st.session_state.pop("sod_snaps_aud", None)
+    # Always query fresh - no caching
+    _snaps_usd = list_vol_snapshots(user_id, "USD") if HAS_POSTGRES else []
+    _snaps_aud = list_vol_snapshots(user_id, "AUD") if HAS_POSTGRES else []
 
     if not HAS_POSTGRES:
         st.warning("Database not connected   —   SOD Report requires saved vol snapshots.")
