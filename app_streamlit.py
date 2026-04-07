@@ -1632,9 +1632,25 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
     # IRS for projection, OIS for annuity discounting (dual-curve)
     basis_6v3 = get_basis_curve(ccy, "6v3") if ccy == "AUD" else None
 
-    # AUD: use pre-built proj curve from bootstrapped QQ/SS zeros (same as forward matrix)
-    # Built once in set_ccy_curve/_build_aud_proj_curve — never rebuilt per-call
-    if ccy == "AUD" and st.session_state.get("_aud_proj_curve") is not None:
+    # AUD: select projection curve by tenor for consistency with forward matrix
+    # tenor <=3Y (Q/Q): use QQ-full extended curve (smooth, basis-adjusted to 30Y)
+    # tenor  >3Y (S/S): use SS curve (seeded at QQ junction, SS par rates 4Y+)
+    if ccy == "AUD":
+        _zc_qq_full = st.session_state.get("_aud_zc_qq_full")
+        _aud_ss = st.session_state.get("_aud_zc_ss")
+        if tenor <= 3.0 and _zc_qq_full and len(_zc_qq_full) >= 10:
+            _xs = np.array(sorted(_zc_qq_full.keys()))
+            _ys = np.array([_zc_qq_full[k] for k in _xs])
+            _proj_curve = pd.DataFrame({"MaturityY": _xs, "ZeroRatePct": _ys})
+        elif tenor > 3.0 and _aud_ss and len(_aud_ss) >= 10:
+            _xs = np.array(sorted(_aud_ss.keys()))
+            _ys = np.array([_aud_ss[k] for k in _xs])
+            _proj_curve = pd.DataFrame({"MaturityY": _xs, "ZeroRatePct": _ys})
+        elif st.session_state.get("_aud_proj_curve") is not None:
+            _proj_curve = st.session_state["_aud_proj_curve"]
+        else:
+            _proj_curve = curve
+    elif st.session_state.get("_aud_proj_curve") is not None and ccy == "AUD":
         _proj_curve = st.session_state["_aud_proj_curve"]
     else:
         _proj_curve = curve
@@ -3457,14 +3473,35 @@ def _set_aud_dual_proj_curves(curve_df: pd.DataFrame):
         st.session_state["_aud_zc_qq"] = zc_qq
         st.session_state["_aud_zc_ss"] = zc_ss
 
-        # Step 4: Build blended proj curve — QQ<=3.25Y, SS>=3.5Y
-        rows = []
-        for m, z in sorted(zc_qq.items()):
-            if m <= 3.25: rows.append({"MaturityY": float(m), "ZeroRatePct": float(z)})
-        for m, z in sorted(zc_ss.items()):
-            if m >= 3.5: rows.append({"MaturityY": float(m), "ZeroRatePct": float(z)})
-        if len(rows) >= 10:
-            st.session_state["_aud_proj_curve"] = pd.DataFrame(rows)
+        # Step 4: Build QQ-full extended curve (smooth, used for matrix + pricer proj curve)
+        par_ss_loc = st.session_state.get("_aud_par_ss", {})
+        _bx_loc = _by_loc = None
+        try:
+            _basis_df_loc = st.session_state.get("config_basis", {}).get("AUD", {}).get("6v3")
+            if _basis_df_loc is not None and not _basis_df_loc.empty:
+                _bx_loc = _basis_df_loc["MaturityY"].to_numpy().astype(float)
+                _by_loc = _basis_df_loc["BasisBp"].to_numpy().astype(float)
+        except Exception:
+            pass
+
+        if par_ss_loc and _bx_loc is not None:
+            pqq_long_loc = {t: r - float(np.interp(t, _bx_loc, _by_loc))/100.0
+                            for t, r in par_ss_loc.items() if t <= 30}
+            _, dfs_qq_loc = _bootstrap(par_qq, 0.25)
+            seed_loc = {t: d for t, d in dfs_qq_loc.items() if t <= 3.1}
+            zc_qq_long, _ = _bootstrap(pqq_long_loc, 0.25, seed_dfs=seed_loc)
+            zc_qq_full_merged = {**zc_qq, **{m: z for m, z in zc_qq_long.items() if m >= 4}}
+        else:
+            zc_qq_full_merged = dict(zc_qq)
+
+        st.session_state["_aud_zc_qq_full"] = zc_qq_full_merged
+
+        # Proj curve for swaption pricer: QQ-full for short tenors, SS for long tenors
+        # Use SS curve as _aud_proj_curve — it is seeded smoothly from QQ at junction
+        rows_ss = [{"MaturityY": float(m), "ZeroRatePct": float(z)}
+                   for m, z in sorted(zc_ss.items())]
+        if len(rows_ss) >= 10:
+            st.session_state["_aud_proj_curve"] = pd.DataFrame(rows_ss)
         else:
             st.session_state["_aud_proj_curve"] = curve_df.copy()
 
@@ -6098,9 +6135,10 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
     aud_zc_qq = aud_zc_ss = None
     if ccy == "AUD":
         _zc_qq_full = st.session_state.get("_aud_zc_qq_full")
+        _zc_ss = st.session_state.get("_aud_zc_ss")
         if _zc_qq_full is not None and len(_zc_qq_full) >= 10:
-            aud_zc_qq = _zc_qq_full
-            aud_zc_ss = _zc_qq_full  # same smooth curve, freq differs
+            aud_zc_qq = _zc_qq_full   # QQ-full: smooth, extended with SS-basis
+            aud_zc_ss = _zc_ss if _zc_ss else _zc_qq_full  # SS: seeded bootstrap
         else:
             # Fallback to blended proj curve
             _proj = st.session_state.get("_aud_proj_curve")
@@ -11823,7 +11861,7 @@ def rv_tab():
 
             # Fwd rates — use same pure QQ/SS zero curves as the forward matrix
             # This ensures RV signals use identical rates to what's quoted in the matrix
-            _rv_zc_qq = st.session_state.get("_aud_zc_qq")
+            _rv_zc_qq = st.session_state.get("_aud_zc_qq_full") or st.session_state.get("_aud_zc_qq")
             _rv_zc_ss = st.session_state.get("_aud_zc_ss")
 
             def _fwd_rate(t1, t2):
