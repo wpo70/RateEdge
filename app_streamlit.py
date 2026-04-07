@@ -4868,11 +4868,16 @@ def curves_tab():
                 fig.add_trace(go.Scatter(x=curve_c["MaturityY"], y=curve_c["ZeroRatePct"],
                     mode="lines+markers", name="IRS Par", line=dict(color="#22c55e", width=2)))
         if _show_irs:
-            # Display bootstrapped zeros from _aud_proj_curve (not par rates from Curves_AUD)
+            # Display bootstrapped zeros from _aud_proj_curve, extended to 40/50Y from _aud_zc_ss
             if ccy == "AUD" and st.session_state.get("_aud_proj_curve") is not None:
                 _proj = st.session_state["_aud_proj_curve"]
                 _zx = list(_proj["MaturityY"].astype(float))
                 _zy = list(_proj["ZeroRatePct"].astype(float))
+                # Extend to 40Y/50Y using SS zeros
+                _zc_ss_ext = st.session_state.get("_aud_zc_ss") or {}
+                for _et in [40.0, 50.0]:
+                    if _et in _zc_ss_ext and _et not in _zx:
+                        _zx.append(_et); _zy.append(_zc_ss_ext[_et])
             else:
                 _zx = list(curve_c["MaturityY"].astype(float))
                 _zy = list(curve_c["ZeroRatePct"].astype(float))
@@ -4922,7 +4927,16 @@ def curves_tab():
             _cols_to_show.append(("IRS Par Rates (%)", _par_table))
         if _show_irs:
             if ccy == "AUD" and st.session_state.get("_aud_proj_curve") is not None:
-                _cols_to_show.append(("IRS Zero Curve (%)", st.session_state["_aud_proj_curve"]))
+                _proj_disp = st.session_state["_aud_proj_curve"].copy()
+                # Extend to 40/50Y from _aud_zc_ss, deduplicated
+                _zc_ss_t = st.session_state.get("_aud_zc_ss") or {}
+                _existing = set(_proj_disp["MaturityY"].astype(float).tolist())
+                import pandas as _pd2
+                _extra = [{"MaturityY": _et, "ZeroRatePct": _zc_ss_t[_et]}
+                          for _et in [40.0, 50.0] if _et in _zc_ss_t and _et not in _existing]
+                if _extra:
+                    _proj_disp = _pd2.concat([_proj_disp, _pd2.DataFrame(_extra)], ignore_index=True)
+                _cols_to_show.append(("IRS Zero Curve (%)", _proj_disp))
             else:
                 _cols_to_show.append(("IRS Zero Curve (%)", curve_c))
         if _show_ois and oisc is not None and not oisc.empty:
@@ -10824,7 +10838,7 @@ _EXPIRY_YEARS_MAP = {
     "15y": 15.0, "20y": 20.0, "25y": 25.0, "30y": 30.0,
 }
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)
 def _load_vol_snapshots_for_viz(ccy: str, start_date: str, end_date: str) -> list:
     """Load vol snapshots from vol_history within date range. Returns list of dicts."""
     if not HAS_POSTGRES:
@@ -14410,7 +14424,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804k</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804m</div>
             </div>
             """,
             unsafe_allow_html=True,
