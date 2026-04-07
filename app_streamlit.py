@@ -775,8 +775,13 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                 _zc_qq2, _dfs_qq2 = _boot_clean2(_par_qq, 0.25)
                 _seed_ss2 = {_t:_d for _t,_d in _dfs_qq2.items() if _t<=3.1}
                 _zc_ss2, _ = _boot_clean2(_par_ss, 0.5, seed_dfs=_seed_ss2)
+                # Build full QQ extended curve for smooth matrix
+                _pqq_long2 = {_t: _r - _b2(_t)/100.0 for _t,_r in _par_ss.items() if _t<=30}
+                _zc_qqf2, _ = _boot_clean2(_pqq_long2, 0.25, seed_dfs={_t:_d for _t,_d in _dfs_qq2.items() if _t<=3.1})
+                _zc_qq_merged2 = {**_zc_qq2, **{_m:_z for _m,_z in _zc_qqf2.items() if _m>=4}}
                 st.session_state["_aud_zc_qq"] = _zc_qq2
                 st.session_state["_aud_zc_ss"] = _zc_ss2
+                st.session_state["_aud_zc_qq_full"] = _zc_qq_merged2
                 _rows2=[{"MaturityY":float(_m),"ZeroRatePct":float(_z)} for _m,_z in sorted(_zc_qq2.items()) if _m<=3.25]
                 _rows2+=[{"MaturityY":float(_m),"ZeroRatePct":float(_z)} for _m,_z in sorted(_zc_ss2.items()) if _m>=3.5]
                 if len(_rows2)>=10:
@@ -3787,9 +3792,20 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
                 # Step 2: Bootstrap SS seeded with QQ DFs at junction
                 _seed_ss = {_t: _d for _t, _d in _dfs_qq.items() if _t <= 3.1}
                 _zc_ss_clean, _ = _bootstrap_clean(par_ss, 0.5, seed_dfs=_seed_ss)
+                # Step 3: Build full QQ curve (extended with SS-basis) for smooth single-curve fwd matrix
+                # pqq_long = SS par rates adjusted down by 6v3 basis = QQ-equivalent par rates
+                _pqq_long = {}
+                if _bx is not None:
+                    for _t, _r in par_ss.items():
+                        if _t <= 30:
+                            _pqq_long[_t] = _r - _basis_at(_t) / 100.0
+                _zc_qq_full, _ = _bootstrap_clean(_pqq_long, 0.25, seed_dfs={_t:_d for _t,_d in _dfs_qq.items() if _t<=3.1})
+                # Merge: short end from pure QQ, long end from QQ-full
+                _zc_qq_merged = {**_zc_qq_clean, **{_m:_z for _m,_z in _zc_qq_full.items() if _m>=4}}
 
                 _st.session_state["_aud_zc_qq"] = _zc_qq_clean
                 _st.session_state["_aud_zc_ss"] = _zc_ss_clean
+                _st.session_state["_aud_zc_qq_full"] = _zc_qq_merged
 
                 # Build blended proj curve: QQ<=3.25Y, SS>=3.5Y
                 _rows_p = []
@@ -6076,17 +6092,23 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
         ois_x = np.array(ois_tuple[0])
         ois_y = np.array(ois_tuple[1]) / 100.0
 
-    # AUD: load blended proj curve for DF lookups, separate QQ/SS only for coupon freq
+    # AUD: use single smooth QQ-full curve for all DF lookups (avoids junction spike)
+    # QQ-full = QQ par rates (0.5-3Y) extended with SS-basis rates (4-30Y), bootstrapped Q/Q
+    # This is stored in _aud_zc_qq_full. SS only affects coupon frequency in _fwd_from_zc.
     aud_zc_qq = aud_zc_ss = None
     if ccy == "AUD":
-        # Use blended proj curve (QQ<=3.25Y + SS>=3.5Y) for all DF calculations
-        # This has full maturity coverage. QQ/SS dicts only used for coupon frequency choice.
-        _proj = st.session_state.get("_aud_proj_curve")
-        if _proj is not None and len(_proj) >= 10:
-            _px = _proj["MaturityY"].to_numpy().astype(float)
-            _py = _proj["ZeroRatePct"].to_numpy().astype(float)
-            aud_zc_qq = {m: float(np.interp(m, _px, _py)) for m in list(_px) + [0.25,0.5,0.75,1,1.5,2,3,4,5,6,7,8,9,10,12,15,20,25,30]}
-            aud_zc_ss = aud_zc_qq  # same DFs, only freq differs in _fwd_from_zc
+        _zc_qq_full = st.session_state.get("_aud_zc_qq_full")
+        if _zc_qq_full is not None and len(_zc_qq_full) >= 10:
+            aud_zc_qq = _zc_qq_full
+            aud_zc_ss = _zc_qq_full  # same smooth curve, freq differs
+        else:
+            # Fallback to blended proj curve
+            _proj = st.session_state.get("_aud_proj_curve")
+            if _proj is not None and len(_proj) >= 10:
+                _px = _proj["MaturityY"].to_numpy().astype(float)
+                _py = _proj["ZeroRatePct"].to_numpy().astype(float)
+                aud_zc_qq = {m: float(np.interp(m, _px, _py)) for m in list(_px) + [0.25,0.5,0.75,1,1.5,2,3,4,5,6,7,8,9,10,12,15,20,25,30]}
+                aud_zc_ss = aud_zc_qq
 
     SPOT_M = 1.0 / 252.0
 
