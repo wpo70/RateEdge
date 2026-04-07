@@ -2453,15 +2453,14 @@ def apply_rateedge_theme(theme_name: str):
         [data-testid="stHeader"] {{
             background: transparent;
         }}
-        /* Sticky tab bar */
-        [data-testid="stTabs"] > div:first-child {{
+        /* Sticky tab bar — target the tab list wrapper */
+        .stTabs [role="tablist"] {{
             position: sticky !important;
             top: 0 !important;
-            z-index: 999 !important;
+            z-index: 9999 !important;
             background-color: {bg} !important;
-            padding-top: 0.25rem !important;
-            padding-bottom: 0.1rem !important;
-            margin-top: -0.5rem !important;
+            padding: 4px 0 2px 0 !important;
+            margin: 0 !important;
         }}
         /* Reduce top padding of main content */
         .block-container {{
