@@ -10947,13 +10947,14 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)") 
             continue
         lbl = snap["label"] if snap["label"] else snap["date"].strftime("%Y-%m-%d")
         dates.append(lbl)
-        # Build hover text: "3m5y = 92.3bp" (tenor=X, expiry=Y, z shape=n_expiry×n_tenor)
-        _hover = []
+        # Build hover using customdata for reliable 3D surface hover
+        import numpy as _np2
+        _customdata = []
         for ei, el in enumerate(exp_labels):
             _row = []
             for ti, tl in enumerate(tenor_labels):
-                _row.append(f"{el}{tl.lower()}<br>{z[ei,ti]:.1f}bp")
-            _hover.append(_row)
+                _row.append(f"{el} x {tl}  {z[ei,ti]:.1f}bp")
+            _customdata.append(_row)
         frames.append(go.Frame(
             data=[go.Surface(
                 x=tenor_x, y=expiry_y, z=z.tolist(),
@@ -10961,8 +10962,8 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)") 
                 cmin=50, cmax=130,
                 showscale=True,
                 colorbar=dict(title="bp", thickness=12, len=0.6),
-                hovertext=_hover,
-                hovertemplate="<b>%{hovertext}</b><extra></extra>",
+                customdata=_customdata,
+                hovertemplate="%{customdata}<extra></extra>",
                 hoverlabel=dict(bgcolor="#1e293b", bordercolor="#FFD700",
                                font=dict(color="#FFD700", size=14, family="Arial Black")),
             )],
@@ -14419,7 +14420,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804q</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804r</div>
             </div>
             """,
             unsafe_allow_html=True,
