@@ -10838,7 +10838,6 @@ _EXPIRY_YEARS_MAP = {
     "15y": 15.0, "20y": 20.0, "25y": 25.0, "30y": 30.0,
 }
 
-@st.cache_data(ttl=120, show_spinner=False)
 def _load_vol_snapshots_for_viz(ccy: str, start_date: str, end_date: str) -> list:
     """Load vol snapshots from vol_history within date range. Returns list of dicts."""
     if not HAS_POSTGRES:
@@ -14424,7 +14423,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804l</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804n</div>
             </div>
             """,
             unsafe_allow_html=True,
