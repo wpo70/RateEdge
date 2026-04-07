@@ -4847,12 +4847,7 @@ def curves_tab():
                     _par_x = list(par_rates["Tenor"].apply(
                         lambda x: float(x[:-1]) if str(x).endswith("Y") else float(str(x)[:-1])/12))
                     _par_y = list(par_rates["Par Rate (%)"])
-                    # Supplement with 40Y/50Y from _aud_par_ss (uploaded SS par rates)
-                    _par_ss_ext = st.session_state.get("_aud_par_ss", {})
-                    for _et in [40.0, 50.0]:
-                        if _et in _par_ss_ext and _et not in _par_x:
-                            _par_x.append(_et); _par_y.append(_par_ss_ext[_et])
-                    # Also check curve_c for 40Y/50Y par (col "ZeroRatePct" = par on Curves_AUD)
+                    # Add 40Y/50Y from Curves_AUD (single source, no duplicates)
                     for _, _cr in curve_c.iterrows():
                         _m = float(_cr["MaturityY"])
                         if _m in [40.0, 50.0] and _m not in _par_x:
@@ -4917,7 +4912,8 @@ def curves_tab():
                 _extra_rows = []
                 for _et in [40.0, 50.0]:
                     _tk = f"{int(_et)}Y"
-                    if _tk not in _existing_tenors and _et in _par_ss_full:
+                    _tk2 = f"{_et}Y"  # Also check "40.0Y" format from curve_c
+                    if _tk not in _existing_tenors and _tk2 not in _existing_tenors and _et in _par_ss_full:
                         _extra_rows.append({"Tenor": _tk, "Par Rate (%)": round(_par_ss_full[_et], 4), "Conv": "S/S"})
                 if _extra_rows:
                     import pandas as _pd2
@@ -14423,7 +14419,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804n</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804p</div>
             </div>
             """,
             unsafe_allow_html=True,
