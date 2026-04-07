@@ -2464,26 +2464,31 @@ def apply_rateedge_theme(theme_name: str):
         [data-testid="stSidebar"] .stMarkdown {{
             color: {text} !important;
         }}
-        /* Sidebar collapse/expand button - always visible */
-        [data-testid="stSidebar"] button[kind="header"],
-        [data-testid="collapsedControl"] {{
-            color: {sidebar_arrow} !important;
+        /* Sidebar expand button - always visible regardless of Streamlit version */
+        [data-testid="collapsedControl"],
+        [data-testid="stSidebarCollapsedControl"],
+        button[data-testid="baseButton-headerNoPadding"],
+        section[data-testid="stSidebarCollapsedControl"] {{
             background-color: {accent} !important;
-            border-radius: 4px !important;
+            border-radius: 0 6px 6px 0 !important;
             opacity: 1 !important;
             visibility: visible !important;
-            display: block !important;
+            display: flex !important;
+            width: 28px !important;
+            min-height: 48px !important;
+            align-items: center !important;
+            justify-content: center !important;
+            position: fixed !important;
+            left: 0 !important;
+            top: 50% !important;
+            z-index: 9999 !important;
         }}
-        [data-testid="stSidebar"] svg,
-        [data-testid="collapsedControl"] svg {{
+        [data-testid="collapsedControl"] svg,
+        [data-testid="stSidebarCollapsedControl"] svg,
+        button[data-testid="baseButton-headerNoPadding"] svg {{
             fill: white !important;
             stroke: white !important;
             opacity: 1 !important;
-            visibility: visible !important;
-        }}
-        button[kind="headerNoPadding"] svg {{
-            fill: white !important;
-            stroke: white !important;
         }}
         /* Collapsed sidebar button */
         .css-1rs6os {{
