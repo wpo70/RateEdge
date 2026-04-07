@@ -2464,31 +2464,13 @@ def apply_rateedge_theme(theme_name: str):
         [data-testid="stSidebar"] .stMarkdown {{
             color: {text} !important;
         }}
-        /* Sidebar expand button - always visible regardless of Streamlit version */
-        [data-testid="collapsedControl"],
-        [data-testid="stSidebarCollapsedControl"],
-        button[data-testid="baseButton-headerNoPadding"],
-        section[data-testid="stSidebarCollapsedControl"] {{
-            background-color: {accent} !important;
-            border-radius: 0 6px 6px 0 !important;
-            opacity: 1 !important;
-            visibility: visible !important;
-            display: flex !important;
-            width: 28px !important;
-            min-height: 48px !important;
-            align-items: center !important;
-            justify-content: center !important;
-            position: fixed !important;
-            left: 0 !important;
-            top: 50% !important;
-            z-index: 9999 !important;
-        }}
+        /* Sidebar expand/collapse button - make arrow bright red and visible */
         [data-testid="collapsedControl"] svg,
-        [data-testid="stSidebarCollapsedControl"] svg,
-        button[data-testid="baseButton-headerNoPadding"] svg {{
-            fill: white !important;
-            stroke: white !important;
-            opacity: 1 !important;
+        [data-testid="stSidebar"] button svg {{
+            fill: {accent} !important;
+            stroke: {accent} !important;
+            width: 24px !important;
+            height: 24px !important;
         }}
         /* Collapsed sidebar button */
         .css-1rs6os {{
