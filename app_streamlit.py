@@ -719,7 +719,8 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
 
                 def _rebuild_zero(par_inputs, all_qq):
                     _dfs2 = {0.0: 1.0}
-                    # Do NOT seed with OIS — IRS projection curve bootstraps from par rates only
+                    for _t2, _r2 in sorted(_ois_rates_rebuild.items()):
+                        _dfs2[_t2] = math.exp(-_r2 / 100.0 * _t2)
                     def _dfi2(t):
                         _ts2 = sorted(_dfs2.keys()); _dfv2 = [_dfs2[x] for x in _ts2]
                         if t <= _ts2[0]: return _dfv2[0]
@@ -3558,8 +3559,11 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
         except Exception:
             pass
 
-        # Pure IRS bootstrap — do NOT seed with OIS (contaminates projection curve)
+        # Seed with OIS discount factors (short-end anchor)
         dfs: dict = {0.0: 1.0}
+        for t, r in sorted(ois_rates.items()):
+            if not math.isnan(r):
+                dfs[t] = math.exp(-r / 100.0 * t)
 
         def _df(t: float) -> float:
             """Log-linear interpolation of current discount factor curve."""
@@ -3641,7 +3645,8 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
                 def _build_pure_zero(par_inputs, all_qq):
                     """Bootstrap a zero curve from par_inputs {tenor: rate_pct}, all at same freq."""
                     _dfs = {0.0: 1.0}
-                    # Do NOT seed with OIS — IRS projection curve bootstraps from par rates only
+                    for _t, _r in sorted(ois_rates.items()):
+                        _dfs[_t] = math.exp(-_r / 100.0 * _t)
                     def _dfi(t):
                         _ts = sorted(_dfs.keys()); _dfv = [_dfs[x] for x in _ts]
                         if t <= _ts[0]: return _dfv[0]
