@@ -8040,7 +8040,7 @@ def caps_floors_tab(vol_mode: str):
                             _bx = _b6v3["MaturityY"].to_numpy().astype(float) if _b6v3 is not None else None
                             _by = _b6v3["BasisBp"].to_numpy().astype(float) if _b6v3 is not None else None
                             # Use pure QQ zero curve for AUD cap strikes (caps are Q/Q)
-                            _zc_qq_local = st.session_state.get("_aud_zc_qq")
+                            _zc_qq_local = st.session_state.get("_aud_zc_qq_full") or st.session_state.get("_aud_zc_qq")
                             if ccy == "AUD" and _zc_qq_local:
                                 import numpy as _np2
                                 _zqx = _np2.array(sorted(_zc_qq_local.keys()))
