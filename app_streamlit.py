@@ -2453,6 +2453,20 @@ def apply_rateedge_theme(theme_name: str):
         [data-testid="stHeader"] {{
             background: transparent;
         }}
+        /* Sticky tab bar */
+        [data-testid="stTabs"] > div:first-child {{
+            position: sticky !important;
+            top: 0 !important;
+            z-index: 999 !important;
+            background-color: {bg} !important;
+            padding-top: 0.25rem !important;
+            padding-bottom: 0.1rem !important;
+            margin-top: -0.5rem !important;
+        }}
+        /* Reduce top padding of main content */
+        .block-container {{
+            padding-top: 0.5rem !important;
+        }}
         /* Sidebar */
         [data-testid="stSidebar"] {{
             background-color: {card};
@@ -7033,15 +7047,15 @@ def swaptions_tab(vol_mode: str):
             "Away Trade":   "rgba(255,210,210,0.95)",
             "Direct Trade": "rgba(255,235,195,0.95)",
         }
-        _STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade", "Clear Trade"]
+        _STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade"]
 
         # Header row — light grey background
         st.markdown(
-            "<div style='display:grid;grid-template-columns:28px 200px 58px 68px 58px 78px 78px 78px 78px 150px 36px 36px;"
+            "<div style='display:grid;grid-template-columns:3.0% 20.3% 6.2% 7.3% 6.2% 8.3% 8.3% 8.3% 8.3% 16.0% 3.8% 3.8%;"
             "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
             "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
             "<span>#</span><span>Structure</span><span>Expiry</span><span>Tenor</span>"
-            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>PV(bp)</span>"
+            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Premium(bp)</span>"
             "<span>PV($k)</span><span>Status</span><span></span><span></span></div>",
             unsafe_allow_html=True)
 
@@ -8342,14 +8356,14 @@ def caps_floors_tab(vol_mode: str):
             "Away Trade":   "rgba(255,210,210,0.95)",
             "Direct Trade": "rgba(255,235,195,0.95)",
         }
-        _CF_STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade", "Clear Trade"]
+        _CF_STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade"]
 
         st.markdown(
             "<div style='display:grid;grid-template-columns:28px 160px 58px 68px 58px 78px 78px 78px 78px 150px 36px;"
             "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
             "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
             "<span>#</span><span>Structure</span><span>Expiry</span><span>Tenor</span>"
-            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>PV(bp)</span>"
+            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Premium(bp)</span>"
             "<span>PV($k)</span><span>Status</span><span></span></div>",
             unsafe_allow_html=True)
 
