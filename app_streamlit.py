@@ -10918,8 +10918,7 @@ def _build_vol_surface_arrays(snap: dict):
     z = df.values[valid, :]  # shape: (n_expiry, n_tenor)
     return tenor_x, expiry_y, expiry_labels, tenor_cols, z
 
-def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)",
-                          track_exp: str = None, track_ten: str = None):
+def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)") -> Optional[go.Figure]:
     """Build animated Plotly 3D surface figure from list of snapshots."""
     import plotly.graph_objects as go
 
@@ -10942,33 +10941,6 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)",
             for ti, tl in enumerate(tenor_labels):
                 _row.append(f"{el}{tl.lower()}<br>{z[ei,ti]:.1f}bp")
             _hover.append(_row)
-        # Build tracking point if requested
-        _track_traces = []
-        if track_exp and track_ten:
-            try:
-                from scipy.interpolate import interp1d as _i1d
-                _te_y = label_to_years(track_exp)
-                _tt_y = label_to_years(track_ten)
-                # Find vol at tracking point via interpolation
-                _exp_arr = expiry_y  # already in years
-                _ten_arr = tenor_x
-                _te_idx = np.argmin(np.abs(np.array(_exp_arr) - _te_y))
-                _tt_idx = np.argmin(np.abs(np.array(_ten_arr) - _tt_y))
-                _track_z = float(z[_te_idx, _tt_idx])
-                _track_traces = [go.Scatter3d(
-                    x=[_tt_y], y=[_te_y], z=[_track_z + 3],
-                    mode="markers+text",
-                    marker=dict(size=10, color="#FFD700", symbol="diamond",
-                                line=dict(color="#ffffff", width=2)),
-                    text=[f"  {track_exp}×{track_ten}  {_track_z:.1f}bp"],
-                    textposition="top center",
-                    textfont=dict(color="#FFD700", size=13, family="Arial Black"),
-                    showlegend=False,
-                    hovertemplate=f"<b>{track_exp}×{track_ten}</b><br>{_track_z:.1f} bp<extra></extra>",
-                )]
-            except Exception:
-                _track_traces = []
-
         frames.append(go.Frame(
             data=[go.Surface(
                 x=tenor_x, y=expiry_y, z=z.tolist(),
@@ -10978,8 +10950,9 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)",
                 colorbar=dict(title="bp", thickness=12, len=0.6),
                 hovertext=_hover,
                 hovertemplate="<b>%{hovertext}</b><extra></extra>",
-                hoverlabel=dict(bgcolor="#1e3a5f", font=dict(color="#f1f5f9", size=13, family="Arial")),
-            )] + _track_traces,
+                hoverlabel=dict(bgcolor="#1e293b", bordercolor="#FFD700",
+                               font=dict(color="#FFD700", size=14, family="Arial Black")),
+            )],
             name=lbl,
         ))
 
@@ -11333,20 +11306,9 @@ def backtesting_tab():
                        f"{snaps[0]['date'].strftime('%Y-%m-%d')} → {snaps[-1]['date'].strftime('%Y-%m-%d')}")
 
             if _vs_mode == "Animated Timeline":
-                _tp1, _tp2 = st.columns(2)
-                with _tp1:
-                    _track_exp = st.selectbox("Track Expiry Term",
-                        ["1m","3m","6m","1y","2y","3y","5y","7y","10y","15y","20y"],
-                        index=3, key="hviz_track_exp")
-                with _tp2:
-                    _track_ten = st.selectbox("Track tenor",
-                        ["1Y","2Y","3Y","5Y","7Y","10Y","15Y","20Y","30Y"],
-                        index=3, key="hviz_track_ten")
-                _fig = _make_vol_surface_fig(snaps, f"{ccy} ATM Vol Surface — bp (animated)",
-                                              track_exp=_track_exp, track_ten=_track_ten)
+                _fig = _make_vol_surface_fig(snaps, f"{ccy} ATM Vol Surface — bp (animated)")
                 if _fig:
-                    st.plotly_chart(_fig, use_container_width=True,
-                                    key=f"hviz_vol_chart_{_track_exp}_{_track_ten}")
+                    st.plotly_chart(_fig, use_container_width=True, key="hviz_vol_chart")
                 else:
                     st.warning("Could not build surface — check snapshot data format.")
 
@@ -11355,8 +11317,7 @@ def backtesting_tab():
                 _sel_idx = st.selectbox("Select snapshot", range(len(_snap_labels)),
                                          format_func=lambda i: _snap_labels[i],
                                          key="hviz_single_sel")
-                _fig = _make_vol_surface_fig([snaps[_sel_idx]],
-                                              f"{ccy} ATM Vol — {snaps[_sel_idx]['date'].strftime('%Y-%m-%d')}")
+                _fig = _make_vol_surface_fig([snaps[_sel_idx]], f"{ccy} ATM Vol — {snaps[_sel_idx]['date'].strftime('%Y-%m-%d')}")
                 if _fig:
                     st.plotly_chart(_fig, use_container_width=True)
 
@@ -14447,7 +14408,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0704w</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0704x</div>
             </div>
             """,
             unsafe_allow_html=True,
