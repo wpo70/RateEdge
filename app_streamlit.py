@@ -943,16 +943,16 @@ def list_vol_snapshots(user_id: str, currency: str = None):
             cur.execute("""
                 SELECT id, currency, snapshot_date, label, notes, created_at
                 FROM vol_history
-                WHERE (user_id = %s OR user_id = 'shared') AND currency = %s
+                WHERE (user_id = %s OR user_id = %s OR user_id = 'shared') AND currency = %s
                 ORDER BY snapshot_date DESC
-            """, (user_id, currency))
+            """, ('wpo@rateedge.au', 'wpo70@icloud.com', currency))
         else:
             cur.execute("""
                 SELECT id, currency, snapshot_date, label, notes, created_at
                 FROM vol_history
-                WHERE (user_id = %s OR user_id = 'shared')
+                WHERE (user_id = %s OR user_id = %s OR user_id = 'shared')
                 ORDER BY snapshot_date DESC
-            """, (user_id,))
+            """, ('wpo@rateedge.au', 'wpo70@icloud.com',))
         
         snapshots = cur.fetchall()
         cur.close()
@@ -4465,9 +4465,9 @@ def vol_config_tab():
                 _scur.execute("""
                     SELECT DISTINCT ON (currency) currency, snapshot_date, label
                     FROM vol_history
-                    WHERE user_id = %s OR user_id = 'shared'
+                    WHERE (user_id = %s OR user_id = %s OR user_id = 'shared')
                     ORDER BY currency, snapshot_date DESC
-                """, (st.session_state.get("username","wpo@rateedge.au"),))
+                """, ('wpo@rateedge.au', 'wpo70@icloud.com',))
                 for _row in _scur.fetchall():
                     try:
                         _snap_date_str = ccy_eod_label(_row[0], _row[1])
@@ -10838,11 +10838,10 @@ def _load_vol_snapshots_for_viz(ccy: str, start_date: str, end_date: str) -> lis
             """SELECT id, snapshot_date, label, atm_vols
                FROM vol_history
                WHERE currency = %s AND atm_vols IS NOT NULL
-                 AND (user_id = %s OR user_id = 'shared')
                  AND snapshot_date::date BETWEEN %s AND %s
                ORDER BY snapshot_date ASC
                LIMIT 500""",
-            (ccy, st.session_state.get("username","wpo@rateedge.au"), start_date, end_date)
+            (ccy, start_date, end_date)
         )
         rows = cur.fetchall()
         conn.close()
@@ -11488,9 +11487,9 @@ def _load_rv_vols_from_db(ccy: str = "AUD", limit: int = 60) -> pd.DataFrame:
         cur = conn.cursor()
         cur.execute(
             """SELECT snapshot_date, label, atm_vols FROM vol_history
-               WHERE (user_id = %s OR user_id = 'shared') AND currency = %s AND atm_vols IS NOT NULL
+               WHERE (user_id = %s OR user_id = %s OR user_id = 'shared') AND currency = %s AND atm_vols IS NOT NULL
                ORDER BY snapshot_date DESC LIMIT %s""",
-            (st.session_state.get("username", "wpo@rateedge.au"), ccy, limit)
+            ('wpo@rateedge.au', 'wpo70@icloud.com', ccy, limit)
         )
         rows = cur.fetchall()
         conn.close()
@@ -11534,9 +11533,8 @@ def _load_rv_vols_snapshots_list(ccy: str = "AUD") -> list:
         cur.execute(
             """SELECT id, snapshot_date, label FROM vol_history
                WHERE currency = %s AND atm_vols IS NOT NULL
-               AND (user_id = %s OR user_id = 'shared')
                ORDER BY snapshot_date DESC LIMIT 90""",
-            (ccy, st.session_state.get("username","wpo@rateedge.au"))
+            (ccy,)
         )
         rows = cur.fetchall()
         conn.close()
@@ -14335,9 +14333,9 @@ def main():
                         _cur.execute("""
                             SELECT id FROM vol_history
                             WHERE currency=%s AND atm_vols IS NOT NULL
-                            AND (user_id = %s OR user_id = 'shared')
+                            AND (user_id = %s OR user_id = %s OR user_id = 'shared')
                             ORDER BY snapshot_date DESC LIMIT 1
-                        """, (_cy, user_id))
+                        """, (_cy, 'wpo@rateedge.au', 'wpo70@icloud.com'))
                         _row = _cur.fetchone()
                         if _row:
                             _cur2 = _sc.cursor()
@@ -14412,7 +14410,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804h</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804k</div>
             </div>
             """,
             unsafe_allow_html=True,
