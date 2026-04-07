@@ -1650,8 +1650,6 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
             _proj_curve = st.session_state["_aud_proj_curve"]
         else:
             _proj_curve = curve
-    elif st.session_state.get("_aud_proj_curve") is not None and ccy == "AUD":
-        _proj_curve = st.session_state["_aud_proj_curve"]
     else:
         _proj_curve = curve
 
@@ -1660,20 +1658,7 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         xs = crv["MaturityY"].to_numpy().astype(float)
         ys = crv["ZeroRatePct"].to_numpy().astype(float) / 100.0
         z = float(np.interp(t, xs, ys))
-        if ccy == "AUD" and basis_6v3 is not None and not basis_6v3.empty:
-            try:
-                # Handle different column name formats
-                _b6_cols = basis_6v3.columns.tolist()
-                _mat_col = next((c for c in _b6_cols if "matur" in c.lower() or "tenor" in c.lower() or c in ("MaturityY","Tenor","tenor_years")), _b6_cols[0])
-                _bp_col  = next((c for c in _b6_cols if "basis" in c.lower() or "bp" in c.lower() or "spread" in c.lower()), _b6_cols[1])
-                bx = basis_6v3[_mat_col].to_numpy().astype(float)
-                by = basis_6v3[_bp_col].to_numpy().astype(float) / 10000.0
-                if freq == 0.25 and t > 3.0:
-                    z = z - float(np.interp(t, bx, by))
-                elif freq == 0.5 and t <= 3.0:
-                    z = z + float(np.interp(t, bx, by))
-            except Exception:
-                pass
+        # Basis already incorporated in QQ-full and SS projection curves - no double adjustment
         return math.exp(-z * t)
 
     def _df_disc(crv: pd.DataFrame, t: float) -> float:
