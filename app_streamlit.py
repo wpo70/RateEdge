@@ -950,7 +950,7 @@ def list_vol_snapshots(user_id: str, currency: str = None):
             cur.execute("""
                 SELECT id, currency, snapshot_date, label, notes, created_at
                 FROM vol_history
-                WHERE (user_id = %s OR user_id = 'shared') OR user_id = 'shared'
+                WHERE (user_id = %s OR user_id = 'shared')
                 ORDER BY snapshot_date DESC
             """, (user_id,))
         
@@ -4465,8 +4465,9 @@ def vol_config_tab():
                 _scur.execute("""
                     SELECT DISTINCT ON (currency) currency, snapshot_date, label
                     FROM vol_history
+                    WHERE user_id = %s OR user_id = 'shared'
                     ORDER BY currency, snapshot_date DESC
-                """)
+                """, (st.session_state.get("username","wpo@rateedge.au"),))
                 for _row in _scur.fetchall():
                     try:
                         _snap_date_str = ccy_eod_label(_row[0], _row[1])
@@ -10837,10 +10838,11 @@ def _load_vol_snapshots_for_viz(ccy: str, start_date: str, end_date: str) -> lis
             """SELECT id, snapshot_date, label, atm_vols
                FROM vol_history
                WHERE currency = %s AND atm_vols IS NOT NULL
+                 AND (user_id = %s OR user_id = 'shared')
                  AND snapshot_date::date BETWEEN %s AND %s
                ORDER BY snapshot_date ASC
                LIMIT 500""",
-            (ccy, start_date, end_date)
+            (ccy, st.session_state.get("username","wpo@rateedge.au"), start_date, end_date)
         )
         rows = cur.fetchall()
         conn.close()
@@ -11488,7 +11490,7 @@ def _load_rv_vols_from_db(ccy: str = "AUD", limit: int = 60) -> pd.DataFrame:
             """SELECT snapshot_date, label, atm_vols FROM vol_history
                WHERE (user_id = %s OR user_id = 'shared') AND currency = %s AND atm_vols IS NOT NULL
                ORDER BY snapshot_date DESC LIMIT %s""",
-            (get_db_url() and "wpo70@icloud.com", ccy, limit)
+            (st.session_state.get("username", "wpo@rateedge.au"), ccy, limit)
         )
         rows = cur.fetchall()
         conn.close()
@@ -11532,8 +11534,9 @@ def _load_rv_vols_snapshots_list(ccy: str = "AUD") -> list:
         cur.execute(
             """SELECT id, snapshot_date, label FROM vol_history
                WHERE currency = %s AND atm_vols IS NOT NULL
+               AND (user_id = %s OR user_id = 'shared')
                ORDER BY snapshot_date DESC LIMIT 90""",
-            (ccy,)
+            (ccy, st.session_state.get("username","wpo@rateedge.au"))
         )
         rows = cur.fetchall()
         conn.close()
@@ -14328,12 +14331,34 @@ def main():
                     _cur = _sc.cursor()
                     _sl = []
                     for _cy in SUPPORTED_CURRENCIES:
-                        _cur.execute("""
-                            SELECT id FROM vol_history 
-                            WHERE currency=%s AND atm_vols IS NOT NULL
-                            AND user_id IN ('wpo@rateedge.au','wpo70@icloud.com')
-                            ORDER BY snapshot_date DESC LIMIT 1
-                        """, (_cy,))
+                        # AUD: latest snapshot (SOD, EOD or intraday)
+                        # USD: latest record where time = 16:30 NYC close
+                        # All: include shared records
+                        if _cy == "USD":
+                            _cur.execute("""
+                                SELECT id FROM vol_history
+                                WHERE currency=%s AND atm_vols IS NOT NULL
+                                AND (user_id = %s OR user_id = 'shared')
+                                AND EXTRACT(HOUR FROM snapshot_date) = 16
+                                AND EXTRACT(MINUTE FROM snapshot_date) = 30
+                                ORDER BY snapshot_date DESC LIMIT 1
+                            """, (_cy, user_id))
+                            _row = _cur.fetchone()
+                            if not _row:
+                                # Fallback: any USD snapshot
+                                _cur.execute("""
+                                    SELECT id FROM vol_history
+                                    WHERE currency=%s AND atm_vols IS NOT NULL
+                                    AND (user_id = %s OR user_id = 'shared')
+                                    ORDER BY snapshot_date DESC LIMIT 1
+                                """, (_cy, user_id))
+                        else:
+                            _cur.execute("""
+                                SELECT id FROM vol_history
+                                WHERE currency=%s AND atm_vols IS NOT NULL
+                                AND (user_id = %s OR user_id = 'shared')
+                                ORDER BY snapshot_date DESC LIMIT 1
+                            """, (_cy, user_id))
                         _row = _cur.fetchone()
                         if _row:
                             _cur2 = _sc.cursor()
@@ -14383,13 +14408,10 @@ def main():
             # ── Step 2: Load SABR/curves/spreads from user_configs ──
             try:
                 _auto_loaded = load_all_session_data(user_id)
-                # Debug: verify atm survived Step 2
-                _debug_atm = st.session_state.get("vol_data",{}).get("AUD",{}).get("atm")
-                _debug_val = f"{float(_debug_atm[_debug_atm.columns[1]].iloc[6]):.2f}" if _debug_atm is not None and len(_debug_atm) > 6 else "None"
                 if _auto_loaded > 0:
-                    st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Configs: {_auto_loaded} | AUD 1y×{list(_debug_atm.columns)[1] if _debug_atm is not None else '?'}={_debug_val}"
+                    st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Configs: {_auto_loaded}"
             except Exception as _ale:
-                st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Config load error: {_ale}"
+                pass
             # Load Trade Blotter from DB once per login — guarded by db_auto_loaded flag
             # Only runs on first render after login, never on reruns
             if not st.session_state.get("_portfolio_loaded", False):
@@ -14411,7 +14433,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804c</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804g</div>
             </div>
             """,
             unsafe_allow_html=True,
