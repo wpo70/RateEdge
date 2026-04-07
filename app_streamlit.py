@@ -11238,7 +11238,7 @@ def backtesting_tab():
                                      key="hviz_vol_mode")
 
         if st.button("🔄 Load Vol Snapshots", key="hviz_load_vol"):
-            _load_vol_snapshots_for_viz.clear()
+            getattr(_load_vol_snapshots_for_viz, "clear", lambda: None)()
             st.session_state["hviz_snaps_loaded"] = True
 
         snaps = _load_vol_snapshots_for_viz(ccy, str(_vs_start), str(_vs_end))
@@ -11312,7 +11312,7 @@ def backtesting_tab():
                             _cur.close()
                             _conn.close()
                             st.success(f"✅ Seeded {_seeded} AUD snapshots. Reload to view.")
-                            _load_vol_snapshots_for_viz.clear()
+                            getattr(_load_vol_snapshots_for_viz, "clear", lambda: None)()
                             st.rerun()
         else:
             st.caption(f"Found **{len(snaps)}** snapshots  ·  "
@@ -14419,7 +14419,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804p</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804q</div>
             </div>
             """,
             unsafe_allow_html=True,
