@@ -2454,22 +2454,7 @@ def apply_rateedge_theme(theme_name: str):
         [data-testid="stHeader"] {{
             background: transparent;
         }}
-        /* Fixed tab bar — stays at top of viewport when scrolling */
-        [data-baseweb="tab-list"] {{
-            position: fixed !important;
-            top: 0 !important;
-            left: 0 !important;
-            right: 0 !important;
-            z-index: 9999 !important;
-            background-color: {bg} !important;
-            padding: 4px 12px 2px 12px !important;
-            border-bottom: 1px solid {border} !important;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
-        }}
-        /* Push main content down so it doesn't hide under fixed bar */
-        .block-container {{
-            padding-top: 3.5rem !important;
-        }}
+
         /* Sidebar */
         [data-testid="stSidebar"] {{
             background-color: {card};
