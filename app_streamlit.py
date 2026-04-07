@@ -751,14 +751,37 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                             _zc2[_m2] = -math.log(_d2) / _m2 * 100
                     return _zc2
 
-                _par_qq_full2 = dict(_par_qq)
-                for _t2, _r2 in _par_ss.items(): _par_qq_full2[_t2] = _r2 - _b2(_t2) / 100.0
-                _par_ss_full2 = dict(_par_ss)
-                for _t2, _r2 in _par_qq.items(): _par_ss_full2[_t2] = _r2 + _b2(_t2) / 100.0
+                # Clean bootstrap: pure QQ only, pure SS seeded with QQ DFs at junction
+                def _boot_clean2(par_dict, freq, seed_dfs=None):
+                    _dfs2 = {0.0: 1.0, _SPOT2: 1.0}
+                    if seed_dfs: _dfs2.update(seed_dfs)
+                    def _dfi2c(t):
+                        _ts2 = sorted(_dfs2.keys()); _dfv2 = [_dfs2[x] for x in _ts2]
+                        if t <= _ts2[0]: return 1.0
+                        if t >= _ts2[-1]:
+                            _z2 = -math.log(max(_dfv2[-1],1e-10))/_ts2[-1]; return math.exp(-_z2*t)
+                        return math.exp(float(np.interp(t,_ts2,np.log(np.maximum(_dfv2,1e-10)))))
+                    for _T2 in sorted(par_dict):
+                        _c2 = par_dict[_T2]/100.0; _te2 = _T2+_SPOT2
+                        _tm2=[]; _ti2=_SPOT2+freq
+                        while _ti2<=_te2+1e-9: _tm2.append(round(min(_ti2,_te2),8)); _ti2+=freq
+                        if not _tm2: continue
+                        _an2 = sum(_dfi2c(_ti2)*freq for _ti2 in _tm2[:-1])
+                        _df2 = (1.0-_c2*_an2)/(1.0+_c2*freq)
+                        if _df2>0: _dfs2[_te2]=_df2
+                    _M2=[0.25,0.5,0.75,1,1.5,2,3,4,5,6,7,8,9,10,12,15,20,25,30,40,50]
+                    return {_m2:-math.log(_dfi2c(_m2))/_m2*100 for _m2 in _M2 if _dfi2c(_m2)>0}, _dfs2
 
-                st.session_state["_aud_zc_qq"] = _rebuild_zero(_par_qq_full2, all_qq=True)
-                st.session_state["_aud_zc_ss"] = _rebuild_zero(_par_ss_full2, all_qq=False)
-                _build_aud_proj_curve()
+                _zc_qq2, _dfs_qq2 = _boot_clean2(_par_qq, 0.25)
+                _seed_ss2 = {_t:_d for _t,_d in _dfs_qq2.items() if _t<=3.1}
+                _zc_ss2, _ = _boot_clean2(_par_ss, 0.5, seed_dfs=_seed_ss2)
+                st.session_state["_aud_zc_qq"] = _zc_qq2
+                st.session_state["_aud_zc_ss"] = _zc_ss2
+                _rows2=[{"MaturityY":float(_m),"ZeroRatePct":float(_z)} for _m,_z in sorted(_zc_qq2.items()) if _m<=3.25]
+                _rows2+=[{"MaturityY":float(_m),"ZeroRatePct":float(_z)} for _m,_z in sorted(_zc_ss2.items()) if _m>=3.5]
+                if len(_rows2)>=10:
+                    st.session_state["_aud_proj_curve"]=pd.DataFrame(_rows2)
+                    st.session_state.get("_fwd_ann_cache",{}).clear()
                 loaded += 1
         except Exception as _pex:
             pass
@@ -3464,23 +3487,9 @@ def set_ccy_curve(ccy: str, curve_df: pd.DataFrame):
 
 
 def _build_aud_proj_curve():
-    """Build and cache _aud_proj_curve from _aud_zc_qq/_aud_zc_ss.
-    Called once on curve commit — NOT inside forward_and_annuity_from_curve."""
-    _zc_qq = st.session_state.get("_aud_zc_qq")
-    _zc_ss = st.session_state.get("_aud_zc_ss")
-    if not _zc_qq or not _zc_ss:
-        return
-    _rows = []
-    for _m, _z in sorted(_zc_qq.items()):
-        if _m <= 3.25:
-            _rows.append({"MaturityY": float(_m), "ZeroRatePct": float(_z)})
-    for _m, _z in sorted(_zc_ss.items()):
-        if _m >= 3.5:
-            _rows.append({"MaturityY": float(_m), "ZeroRatePct": float(_z)})
-    if len(_rows) >= 10:
-        st.session_state["_aud_proj_curve"] = pd.DataFrame(_rows)
-        # Also clear fwd_ann cache so next pricing uses new curve
-        st.session_state.get("_fwd_ann_cache", {}).clear()
+    """DEPRECATED — _aud_proj_curve is now built directly in bootstrap and DB reload paths.
+    Kept as no-op to avoid breaking any call sites."""
+    pass
 
 
 def build_aud_ois_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
@@ -3728,16 +3737,54 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
                             _zc[_m] = -math.log(_d) / _m * 100
                     return _zc
 
-                # Pure QQ par inputs: <=3Y direct, >=4Y = SS - basis
-                _par_qq_full = dict(par_qq)
-                for _t, _r in par_ss.items(): _par_qq_full[_t] = _r - _basis_at(_t) / 100.0
-                # Pure SS par inputs: >=4Y direct, <=3Y = QQ + basis
-                _par_ss_full = dict(par_ss)
-                for _t, _r in par_qq.items(): _par_ss_full[_t] = _r + _basis_at(_t) / 100.0
+                # Correct dual curve bootstrap:
+                # QQ: pure QQ par rates only (0.5-3Y), Q/Q frequency, df(0)=1
+                # SS: pure SS par rates only (4-30Y), S/S frequency, seeded with QQ DFs at junction
+                # No extension of QQ to long tenors or SS to short tenors — avoids inflation of 4Y+ zeros
 
-                _st.session_state["_aud_zc_qq"] = _build_pure_zero(_par_qq_full, all_qq=True)
-                _st.session_state["_aud_zc_ss"] = _build_pure_zero(_par_ss_full, all_qq=False)
-                _build_aud_proj_curve()
+                def _bootstrap_clean(par_dict, freq, seed_dfs=None):
+                    _dfs = {0.0: 1.0, SPOT: 1.0}
+                    if seed_dfs:
+                        _dfs.update(seed_dfs)
+                    def _dfi_c(t):
+                        _ts = sorted(_dfs.keys()); _dfv = [_dfs[x] for x in _ts]
+                        if t <= _ts[0]: return 1.0
+                        if t >= _ts[-1]:
+                            _z = -math.log(max(_dfv[-1], 1e-10)) / _ts[-1]; return math.exp(-_z * t)
+                        return math.exp(float(np.interp(t, _ts, np.log(np.maximum(_dfv, 1e-10)))))
+                    for _T in sorted(par_dict):
+                        _c = par_dict[_T] / 100.0; _te = _T + SPOT
+                        _times = []; _ti = SPOT + freq
+                        while _ti <= _te + 1e-9: _times.append(round(min(_ti, _te), 8)); _ti += freq
+                        if not _times: continue
+                        _ann = sum(_dfi_c(_ti) * freq for _ti in _times[:-1])
+                        _df_end = (1.0 - _c * _ann) / (1.0 + _c * freq)
+                        if _df_end > 0: _dfs[_te] = _df_end
+                    _MATS = [0.25,0.5,0.75,1,1.5,2,3,4,5,6,7,8,9,10,12,15,20,25,30,40,50]
+                    _zc_out = {}
+                    for _m in _MATS:
+                        _d = _dfi_c(_m)
+                        if _d > 0 and not math.isnan(_d): _zc_out[_m] = -math.log(_d) / _m * 100
+                    return _zc_out, _dfs
+
+                # Step 1: Bootstrap QQ from QQ par rates only
+                _zc_qq_clean, _dfs_qq = _bootstrap_clean(par_qq, 0.25)
+                # Step 2: Bootstrap SS seeded with QQ DFs at junction
+                _seed_ss = {_t: _d for _t, _d in _dfs_qq.items() if _t <= 3.1}
+                _zc_ss_clean, _ = _bootstrap_clean(par_ss, 0.5, seed_dfs=_seed_ss)
+
+                _st.session_state["_aud_zc_qq"] = _zc_qq_clean
+                _st.session_state["_aud_zc_ss"] = _zc_ss_clean
+
+                # Build blended proj curve: QQ<=3.25Y, SS>=3.5Y
+                _rows_p = []
+                for _m, _z in sorted(_zc_qq_clean.items()):
+                    if _m <= 3.25: _rows_p.append({"MaturityY": float(_m), "ZeroRatePct": float(_z)})
+                for _m, _z in sorted(_zc_ss_clean.items()):
+                    if _m >= 3.5: _rows_p.append({"MaturityY": float(_m), "ZeroRatePct": float(_z)})
+                if len(_rows_p) >= 10:
+                    _st.session_state["_aud_proj_curve"] = pd.DataFrame(_rows_p)
+                    _st.session_state.get("_fwd_ann_cache", {}).clear()
             except Exception as _zce:
                 pass
             # Bootstrap sanity check: flag any par rate >100bp from its neighbour.
@@ -14618,8 +14665,8 @@ def main():
         vol_export_tab,
     ]
     if _show_hidden:
-        _tab_names += ["📍 Multi-CCY", "📜 Bond Options"]
-        _tab_funcs += [lambda: multi_ccy_tab(vol_mode), bond_option_tab]
+        _tab_names += ["📍 Multi-CCY"]
+        _tab_funcs += [lambda: multi_ccy_tab(vol_mode)]
 
     # Tab navigation — visual tabs, single dispatch per render
     tabs = st.tabs(_tab_names)
