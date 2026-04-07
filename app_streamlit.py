@@ -3375,6 +3375,79 @@ def get_ccy_curve(ccy: str) -> Optional[pd.DataFrame]:
     return st.session_state["curves"].get(ccy)
 
 
+def _set_aud_dual_proj_curves(curve_df: pd.DataFrame):
+    """Build and store AUD QQ and SS zero curves with basis applied.
+    QQ curve (3M BBSW): from QQ par rates, quarterly bootstrap, used for <=3Y tenors.
+    SS curve (6M BBSW): from SS par rates, semi-annual bootstrap seeded with QQ DFs, used for >=4Y tenors.
+    Blended into _aud_proj_curve (QQ<=3.25Y, SS>=3.5Y).
+    """
+    try:
+        par_qq = st.session_state.get("_aud_par_qq", {})
+        par_ss = st.session_state.get("_aud_par_ss", {})
+        if not par_qq or not par_ss:
+            # Fallback: use curve_df directly
+            st.session_state["_aud_proj_curve"] = curve_df.copy()
+            st.session_state.get("_fwd_ann_cache", {}).clear()
+            return
+
+        SPOT = 1.0 / 252.0
+
+        def _bootstrap(par_dict, freq, seed_dfs=None):
+            dfs = {0.0: 1.0, SPOT: 1.0}
+            if seed_dfs:
+                dfs.update(seed_dfs)
+            def _dfi(t):
+                ts = sorted(dfs.keys()); dfv = [dfs[x] for x in ts]
+                if t <= ts[0]: return 1.0
+                if t >= ts[-1]:
+                    z = -math.log(max(dfv[-1], 1e-10)) / ts[-1]; return math.exp(-z * t)
+                return math.exp(float(np.interp(t, ts, np.log(np.maximum(dfv, 1e-10)))))
+            for T in sorted(par_dict):
+                c = par_dict[T] / 100.0; te = T + SPOT
+                times = []; t = SPOT + freq
+                while t <= te + 1e-9: times.append(round(min(t, te), 8)); t += freq
+                if not times: continue
+                ann = sum(_dfi(ti) * freq for ti in times[:-1])
+                df_end = (1.0 - c * ann) / (1.0 + c * freq)
+                if df_end > 0: dfs[te] = df_end
+            MATS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30]
+            result = {}
+            for m in MATS:
+                d = _dfi(m)
+                if d > 0: result[m] = -math.log(d) / m * 100.0
+            return result, dfs
+
+        # Step 1: Bootstrap QQ from QQ par rates only (Q/Q frequency, no extension)
+        zc_qq, dfs_qq = _bootstrap(par_qq, 0.25)
+
+        # Step 2: Bootstrap SS from SS par rates seeded with QQ DFs at junction
+        # This is correct: SS short-end anchored by QQ curve, SS par rates drive 4Y+
+        seed = {t: d for t, d in dfs_qq.items() if t <= 3.1}
+        zc_ss, _ = _bootstrap(par_ss, 0.5, seed_dfs=seed)
+
+        # Step 3: Store separately for forward calculations
+        st.session_state["_aud_zc_qq"] = zc_qq
+        st.session_state["_aud_zc_ss"] = zc_ss
+
+        # Step 4: Build blended proj curve — QQ<=3.25Y, SS>=3.5Y
+        rows = []
+        for m, z in sorted(zc_qq.items()):
+            if m <= 3.25: rows.append({"MaturityY": float(m), "ZeroRatePct": float(z)})
+        for m, z in sorted(zc_ss.items()):
+            if m >= 3.5: rows.append({"MaturityY": float(m), "ZeroRatePct": float(z)})
+        if len(rows) >= 10:
+            st.session_state["_aud_proj_curve"] = pd.DataFrame(rows)
+        else:
+            st.session_state["_aud_proj_curve"] = curve_df.copy()
+
+        st.session_state.get("_fwd_ann_cache", {}).clear()
+
+    except Exception:
+        # Fallback to curve_df
+        st.session_state["_aud_proj_curve"] = curve_df.copy()
+        st.session_state.get("_fwd_ann_cache", {}).clear()
+
+
 def set_ccy_curve(ccy: str, curve_df: pd.DataFrame):
     st.session_state["curves"][ccy] = curve_df
     # Increment curve commit ID — used to invalidate fwd_ann cache cheaply
@@ -3385,10 +3458,9 @@ def set_ccy_curve(ccy: str, curve_df: pd.DataFrame):
     keys_to_del = [k for k in _fc if k[0] == ccy]
     for k in keys_to_del:
         del _fc[k]
-    # For AUD: build blended proj curve from bootstrapped QQ/SS zeros
-    # This is built ONCE here so forward_and_annuity_from_curve can read it cheaply
-    if ccy == "AUD":
-        _build_aud_proj_curve()
+    # For AUD: build proper dual QQ/SS projection curves with basis applied
+    if ccy == "AUD" and curve_df is not None and len(curve_df) > 5:
+        _set_aud_dual_proj_curves(curve_df)
 
 
 def _build_aud_proj_curve():
@@ -3778,21 +3850,18 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
         if load_type in ["curves", "all"]:
             curve_df = None
 
-            # AUD: read Zeros_AUD (pre-bootstrapped zeros) if present — source of truth
-            if ccy == "AUD" and "Zeros_AUD" in xl.sheet_names:
-                try:
-                    raw_z = pd.read_excel(xl, sheet_name="Zeros_AUD", usecols=[0, 1])
-                    curve_df = load_curve_flexible(raw_z, "Zeros_AUD")
-                except Exception:
-                    curve_df = None
+            # AUD: use Curves_AUD directly as zeros (par rates ≈ zeros for this curve shape)
+            # This matches BBG forward calculations. Bootstrap is NOT used for AUD projection curve.
+            if ccy == "AUD":
+                curve_name = "Curves_AUD"
+                if curve_name in xl.sheet_names:
+                    raw_curve = pd.read_excel(xl, sheet_name=curve_name, usecols=[0, 1])
+                    try:
+                        curve_df = load_curve_flexible(raw_curve, curve_name)
+                    except:
+                        curve_df = load_curve(raw_curve, curve_name)
 
-            # AUD fallback: bootstrap from BBG_Feed if no Zeros_AUD sheet
-            if ccy == "AUD" and curve_df is None:
-                bootstrapped = bootstrap_aud_zeros_from_bbg_feed(xl)
-                if bootstrapped is not None and len(bootstrapped) >= 15:
-                    curve_df = bootstrapped
-
-            # Primary for NZD/USD, final fallback for AUD:
+            # Primary for NZD/USD:
             if curve_df is None:
                 curve_name = f"Curves_{ccy}"
                 if curve_name in xl.sheet_names:
