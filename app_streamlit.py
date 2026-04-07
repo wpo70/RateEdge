@@ -6061,11 +6061,17 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
         ois_x = np.array(ois_tuple[0])
         ois_y = np.array(ois_tuple[1]) / 100.0
 
-    # AUD: load pure QQ and SS zero curves built during bootstrap
+    # AUD: load blended proj curve for DF lookups, separate QQ/SS only for coupon freq
     aud_zc_qq = aud_zc_ss = None
     if ccy == "AUD":
-        aud_zc_qq = st.session_state.get("_aud_zc_qq")
-        aud_zc_ss = st.session_state.get("_aud_zc_ss")
+        # Use blended proj curve (QQ<=3.25Y + SS>=3.5Y) for all DF calculations
+        # This has full maturity coverage. QQ/SS dicts only used for coupon frequency choice.
+        _proj = st.session_state.get("_aud_proj_curve")
+        if _proj is not None and len(_proj) >= 10:
+            _px = _proj["MaturityY"].to_numpy().astype(float)
+            _py = _proj["ZeroRatePct"].to_numpy().astype(float)
+            aud_zc_qq = {m: float(np.interp(m, _px, _py)) for m in list(_px) + [0.25,0.5,0.75,1,1.5,2,3,4,5,6,7,8,9,10,12,15,20,25,30]}
+            aud_zc_ss = aud_zc_qq  # same DFs, only freq differs in _fwd_from_zc
 
     SPOT_M = 1.0 / 252.0
 
