@@ -3791,14 +3791,21 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
         if load_type in ["curves", "all"]:
             curve_df = None
 
-            # AUD: bootstrap from BBG_Feed par rates (live rates → correct zeros)
-            if ccy == "AUD":
+            # AUD: read Zeros_AUD (pre-bootstrapped zeros) if present — source of truth
+            if ccy == "AUD" and "Zeros_AUD" in xl.sheet_names:
+                try:
+                    raw_z = pd.read_excel(xl, sheet_name="Zeros_AUD", usecols=[0, 1])
+                    curve_df = load_curve_flexible(raw_z, "Zeros_AUD")
+                except Exception:
+                    curve_df = None
+
+            # AUD fallback: bootstrap from BBG_Feed if no Zeros_AUD sheet
+            if ccy == "AUD" and curve_df is None:
                 bootstrapped = bootstrap_aud_zeros_from_bbg_feed(xl)
                 if bootstrapped is not None and len(bootstrapped) >= 15:
                     curve_df = bootstrapped
 
-            # Fallback for AUD (if bootstrap fails) and primary for NZD/USD:
-            # always read directly from Curves_{CCY} sheet
+            # Primary for NZD/USD, final fallback for AUD:
             if curve_df is None:
                 curve_name = f"Curves_{ccy}"
                 if curve_name in xl.sheet_names:
@@ -3844,10 +3851,27 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                 except:
                     pass
             
-            # OIS curve — for AUD, build from BBG_Feed ADSO tickers (correct maturities)
-            # OIS_AUD sheet has wrong maturity labels at 6-12Y causing ~7bp premium error
+            # OIS curve — read Zeros_OIS_AUD if present (clean, clipped to 30Y)
             _ois_found = False
-            if ccy == "AUD" and "BBG_Feed" in xl.sheet_names:
+            if ccy == "AUD" and "Zeros_OIS_AUD" in xl.sheet_names:
+                try:
+                    raw_ois_z = pd.read_excel(xl, sheet_name="Zeros_OIS_AUD", usecols=[0, 1])
+                    ois_df = load_curve_flexible(raw_ois_z, "Zeros_OIS_AUD")
+                    if ois_df is not None and len(ois_df) >= 8:
+                        set_basis_curve(ccy, "ois", ois_df)
+                        if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
+                        if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
+                        st.session_state["config_basis"][ccy]["ois"] = ois_df
+                        if "basis_curves" not in st.session_state: st.session_state["basis_curves"] = {}
+                        if ccy not in st.session_state["basis_curves"]: st.session_state["basis_curves"][ccy] = {}
+                        st.session_state["basis_curves"][ccy]["ois"] = ois_df
+                        _ois_found = True
+                        loaded["basis"] += 1
+                except Exception:
+                    pass
+
+            # OIS fallback — build from BBG_Feed ADSO tickers
+            if not _ois_found and ccy == "AUD" and "BBG_Feed" in xl.sheet_names:
                 try:
                     ois_df = build_aud_ois_from_bbg_feed(xl)
                     if ois_df is not None and len(ois_df) >= 8:
