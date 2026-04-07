@@ -3526,6 +3526,21 @@ def build_aud_ois_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
                     break
         if len(ois_pts) < 5:
             return None
+
+        # Add 40Y and 50Y OIS by label (no ADSO ticker, value in col E)
+        for _, row in raw.iterrows():
+            lbl = str(row.iloc[0]).strip().lower()
+            if 'ois 40' in lbl or 'ois40' in lbl:
+                try:
+                    v = float(row.iloc[4])
+                    if v > 0: ois_pts[40.0] = v
+                except: pass
+            if 'ois 50' in lbl or 'ois50' in lbl:
+                try:
+                    v = float(row.iloc[4])
+                    if v > 0: ois_pts[50.0] = v
+                except: pass
+
         xs = sorted(ois_pts)
         df_out = pd.DataFrame({"MaturityY": xs, "ZeroRatePct": [ois_pts[t] for t in xs]})
         return df_out
