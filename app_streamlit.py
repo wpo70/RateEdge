@@ -10925,9 +10925,17 @@ def _load_vol_snapshots_for_viz(ccy: str, start_date: str, end_date: str) -> lis
                 continue
             try:
                 df = pd.DataFrame(atm_vols["values"])
-                if "Expiry" in df.columns:
-                    df = df.set_index("Expiry")
-                df.index = df.index.str.lower().str.strip()
+                # Handle any case variant of the Expiry column
+                for _ecol in ["Expiry", "expiry", "EXPIRY"]:
+                    if _ecol in df.columns:
+                        df = df.set_index(_ecol)
+                        break
+                # If still not set as string index, try resetting
+                if not hasattr(df.index, 'str') or df.index.dtype != object:
+                    if "expiry" in [c.lower() for c in df.columns]:
+                        _col = [c for c in df.columns if c.lower() == "expiry"][0]
+                        df = df.set_index(_col)
+                df.index = df.index.astype(str).str.lower().str.strip()
                 df = df.apply(pd.to_numeric, errors="coerce")
                 results.append({
                     "id":    row_id,
@@ -11365,22 +11373,38 @@ def backtesting_tab():
                                                 float(_running.loc[_e, _t]) + _mv, 1.0)
                                         except Exception:
                                             pass
-                                _recs = (_running.reset_index()
-                                         .rename(columns={"index": "Expiry"})
-                                         .to_dict(orient="records"))
+                                # Build clean JSON-safe records
+                                _rf = _running.reset_index()
+                                if _rf.columns[0] != "Expiry":
+                                    _rf = _rf.rename(columns={_rf.columns[0]: "Expiry"})
+                                # Convert all values to float or string — no NaN/Timestamp
+                                _recs = []
+                                for _, _rrow in _rf.iterrows():
+                                    _rec = {"Expiry": str(_rrow.iloc[0])}
+                                    for _col in _rf.columns[1:]:
+                                        try:
+                                            _v = float(_rrow[_col])
+                                            _rec[str(_col)] = 0.0 if (_v != _v) else round(_v, 4)  # replace NaN with 0
+                                        except Exception:
+                                            pass
+                                    _recs.append(_rec)
+                                if not _recs:
+                                    continue
                                 _lbl = f"AUD EOD {_day.strftime('%Y-%m-%d')} [SEEDED]"
-                                _uid = st.session_state.get("username", "default")
+                                _uid = "shared"  # always save as shared
                                 try:
+                                    import json as _json
+                                    _payload = _json.dumps({"values": _recs})  # validate JSON first
                                     _cur.execute(
                                         """INSERT INTO vol_history
                                            (user_id, currency, snapshot_date, label, atm_vols, notes)
-                                           VALUES (%s,%s,%s,%s,%s,%s)
+                                           VALUES (%s,%s,%s,%s,%s::jsonb,%s)
                                            ON CONFLICT DO NOTHING""",
                                         (_uid, "AUD", _day, _lbl,
-                                         Json({"values": _recs}),
+                                         _payload,
                                          "Seeded backfill for historical viz"))
                                     _seeded += 1
-                                except Exception:
+                                except Exception as _se:
                                     pass
                             _conn.commit()
                             _cur.close()
