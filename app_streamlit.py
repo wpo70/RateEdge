@@ -559,11 +559,31 @@ def save_all_session_data(user_id: str):
                         bc_save = bc_save.reset_index()
                     _save(f"basis_{basis_type}", ccy, {"values": bc_save.to_dict(orient="records")})
 
-        # AUD par rates — needed to rebuild QQ/SS zero curves after DB load
+        # AUD: save all 5 curves to DB so cold reload is fully self-contained
+        # PAR (qq+ss), OIS zeros, bootstrapped zeros (qq/ss/qq_full), 6v3 basis, 3v1 basis
         _par_qq = st.session_state.get("_aud_par_qq", {})
         _par_ss = st.session_state.get("_aud_par_ss", {})
         if _par_qq and _par_ss:
-            _save("aud_par_rates", "AUD", {"par_qq": _par_qq, "par_ss": _par_ss})
+            def _basis_df_to_dict(df):
+                if df is None or df.empty: return {}
+                try: return {str(float(r["MaturityY"])): float(r["BasisBp"]) for _, r in df.iterrows()}
+                except Exception: return {}
+            def _zc_dict_clean(d):
+                if not d: return {}
+                return {str(float(k)): float(v) for k, v in d.items()}
+            _cb = st.session_state.get("config_basis", {}).get("AUD", {})
+            _ois_zc = st.session_state.get("_aud_zc_qq", {})  # OIS seeds embedded in bootstrap
+            _aud_db_payload = {
+                "par_qq":     _par_qq,
+                "par_ss":     _par_ss,
+                "basis_6v3":  _basis_df_to_dict(_cb.get("6v3")),
+                "basis_3v1":  _basis_df_to_dict(_cb.get("3v1")),
+                "ois_zeros":  _basis_df_to_dict(_cb.get("ois")),
+                "zc_qq":      _zc_dict_clean(st.session_state.get("_aud_zc_qq")),
+                "zc_ss":      _zc_dict_clean(st.session_state.get("_aud_zc_ss")),
+                "zc_qq_full": _zc_dict_clean(st.session_state.get("_aud_zc_qq_full")),
+            }
+            _save("aud_par_rates", "AUD", _aud_db_payload)
 
         # CFS spreads — save all 9 wedge spread values
         _cf_spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
@@ -679,7 +699,7 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                 except:
                     pass
 
-    # AUD: restore par rates and rebuild zero curves from aud_par_rates in user_configs
+    # AUD: restore all 5 curves from DB — PAR, OIS, ZERO (qq/ss/qq_full), 6v3, 3v1
     if "aud_par_rates" in configs and "AUD" in configs["aud_par_rates"]:
         try:
             _pdata = configs["aud_par_rates"]["AUD"]["data"]
@@ -689,106 +709,99 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                 st.session_state["_aud_par_qq"] = _par_qq
                 st.session_state["_aud_par_ss"] = _par_ss
 
-                # Rebuild _irs_par_rates["AUD"] so IRS Par chart shows real par rates
+                # PAR display table
                 _par_rows = []
                 for _t, _r in sorted(_par_qq.items()): _par_rows.append({"Tenor": f"{_t}Y", "Par Rate (%)": _r, "Conv": "Q/Q"})
                 for _t, _r in sorted(_par_ss.items()): _par_rows.append({"Tenor": f"{_t}Y", "Par Rate (%)": _r, "Conv": "S/S"})
                 if "_irs_par_rates" not in st.session_state: st.session_state["_irs_par_rates"] = {}
                 st.session_state["_irs_par_rates"]["AUD"] = pd.DataFrame(_par_rows)
 
-                # Rebuild pure QQ and SS zero curves using OIS from session state
-                _ois_df = st.session_state.get("config_basis", {}).get("AUD", {}).get("ois")
-                _basis_df = st.session_state.get("config_basis", {}).get("AUD", {}).get("6v3")
+                def _db_dict_to_zc(d):
+                    if not d: return {}
+                    return {float(k): float(v) for k, v in d.items()}
 
-                _ois_rates_rebuild = {}
-                if _ois_df is not None and not _ois_df.empty:
-                    for _, _row in _ois_df.iterrows():
-                        _t_ois = float(_row["MaturityY"])
-                        if _t_ois <= 3.01:  # only seed OIS up to 3Y
-                            _ois_rates_rebuild[_t_ois] = float(_row["ZeroRatePct"])
+                def _db_dict_to_basis_df(d, col="BasisBp"):
+                    if not d: return None
+                    rows = sorted([(float(k), float(v)) for k, v in d.items()])
+                    return pd.DataFrame({"MaturityY": [r[0] for r in rows], col: [r[1] for r in rows]})
 
-                _bx2 = _by2 = None
-                if _basis_df is not None and not _basis_df.empty:
-                    _bx2 = _basis_df["MaturityY"].to_numpy().astype(float)
-                    _by2 = _basis_df["BasisBp"].to_numpy().astype(float)
-                def _b2(t):
-                    if _bx2 is None: return 0.0
-                    return float(np.interp(t, _bx2, _by2))
+                # Restore bootstrapped zero curves directly — no re-bootstrap needed
+                _zc_qq_db     = _db_dict_to_zc(_pdata.get("zc_qq", {}))
+                _zc_ss_db     = _db_dict_to_zc(_pdata.get("zc_ss", {}))
+                _zc_qq_full_db= _db_dict_to_zc(_pdata.get("zc_qq_full", {}))
 
-                _SPOT2 = 1.0 / 252.0
+                # Restore basis curves to config_basis and basis_curves
+                _b6v3_df = _db_dict_to_basis_df(_pdata.get("basis_6v3", {}))
+                _b3v1_df = _db_dict_to_basis_df(_pdata.get("basis_3v1", {}))
+                _ois_df  = _db_dict_to_basis_df(_pdata.get("ois_zeros", {}), col="BasisBp")
 
-                def _rebuild_zero(par_inputs, all_qq):
-                    _dfs2 = {0.0: 1.0}
-                    for _t2, _r2 in sorted(_ois_rates_rebuild.items()):
-                        _dfs2[_t2] = math.exp(-_r2 / 100.0 * _t2)
-                    def _dfi2(t):
-                        _ts2 = sorted(_dfs2.keys()); _dfv2 = [_dfs2[x] for x in _ts2]
-                        if t <= _ts2[0]: return _dfv2[0]
-                        if t >= _ts2[-1]:
-                            _z2 = -math.log(_dfv2[-1]) / _ts2[-1]; return math.exp(-_z2 * t)
-                        for _i2 in range(len(_ts2) - 1):
-                            if _ts2[_i2] <= t <= _ts2[_i2+1]:
-                                _w2 = (t - _ts2[_i2]) / (_ts2[_i2+1] - _ts2[_i2])
-                                return math.exp((1-_w2)*math.log(_dfv2[_i2]) + _w2*math.log(_dfv2[_i2+1]))
-                        return _dfv2[-1]
-                    _freq2 = 0.25 if all_qq else 0.50
-                    for _tenor2 in sorted(par_inputs.keys()):
-                        _c2 = par_inputs[_tenor2] / 100.0
-                        _swap_end2 = _SPOT2 + _tenor2
-                        _times2 = []; _t2i = _SPOT2 + _freq2
-                        while _t2i <= _swap_end2 + 1e-9:
-                            _times2.append(round(min(_t2i, _swap_end2), 8)); _t2i += _freq2
-                        if not _times2: continue
-                        _ann2 = sum(_dfi2(_ti2) * _freq2 for _ti2 in _times2[:-1])
-                        _df_end2 = (_dfi2(_SPOT2) - _c2 * _ann2) / (1.0 + _c2 * _freq2)
-                        if _df_end2 > 0 and not math.isnan(_df_end2):
-                            _dfs2[_swap_end2] = _df_end2
-                    _MATS2 = [0.25,0.5,0.75,1.0,1.5,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,12.0,15.0,20.0,25.0,30.0,40.0,50.0]
-                    _zc2 = {}
-                    for _m2 in _MATS2:
-                        _d2 = _dfi2(_m2)
-                        if _d2 > 0 and not math.isnan(_d2):
-                            _zc2[_m2] = -math.log(_d2) / _m2 * 100
-                    return _zc2
+                for _store in ["config_basis", "basis_curves"]:
+                    st.session_state.setdefault(_store, {}).setdefault("AUD", {})
+                if _b6v3_df is not None:
+                    st.session_state["config_basis"]["AUD"]["6v3"] = _b6v3_df
+                    st.session_state["basis_curves"]["AUD"]["6v3"] = _b6v3_df
+                if _b3v1_df is not None:
+                    st.session_state["config_basis"]["AUD"]["3v1"] = _b3v1_df
+                    st.session_state["basis_curves"]["AUD"]["3v1"] = _b3v1_df
+                if _ois_df is not None:
+                    # OIS stored with BasisBp col = ZeroRatePct for ois entries
+                    _ois_zc_df = _ois_df.rename(columns={"BasisBp": "ZeroRatePct"})
+                    st.session_state["config_basis"]["AUD"]["ois"] = _ois_zc_df
+                    st.session_state["basis_curves"]["AUD"]["ois"] = _ois_zc_df
 
-                # Clean bootstrap: pure QQ only, pure SS seeded with QQ DFs at junction
-                def _boot_clean2(par_dict, freq, seed_dfs=None):
-                    _dfs2 = {0.0: 1.0, _SPOT2: 1.0}
-                    if seed_dfs: _dfs2.update(seed_dfs)
-                    def _dfi2c(t):
-                        _ts2 = sorted(_dfs2.keys()); _dfv2 = [_dfs2[x] for x in _ts2]
-                        if t <= _ts2[0]: return 1.0
-                        if t >= _ts2[-1]:
-                            _z2 = -math.log(max(_dfv2[-1],1e-10))/_ts2[-1]; return math.exp(-_z2*t)
-                        return math.exp(float(np.interp(t,_ts2,np.log(np.maximum(_dfv2,1e-10)))))
-                    for _T2 in sorted(par_dict):
-                        _c2 = par_dict[_T2]/100.0; _te2 = _T2+_SPOT2
-                        _tm2=[]; _ti2=_SPOT2+freq
-                        while _ti2<=_te2+1e-9: _tm2.append(round(min(_ti2,_te2),8)); _ti2+=freq
-                        if not _tm2: continue
-                        _an2 = sum(_dfi2c(_ti2)*freq for _ti2 in _tm2[:-1])
-                        _df2 = (1.0-_c2*_an2)/(1.0+_c2*freq)
-                        if _df2>0: _dfs2[_te2]=_df2
-                    _M2=[0.25,0.5,0.75,1,1.5,2,3,4,5,6,7,8,9,10,12,15,20,25,30,40,50]
-                    return {_m2:-math.log(_dfi2c(_m2))/_m2*100 for _m2 in _M2 if _dfi2c(_m2)>0}, _dfs2
+                if _zc_qq_db and _zc_ss_db and _zc_qq_full_db:
+                    # Fast path: zeros saved, restore directly
+                    st.session_state["_aud_zc_qq"]      = _zc_qq_db
+                    st.session_state["_aud_zc_ss"]      = _zc_ss_db
+                    st.session_state["_aud_zc_qq_full"] = _zc_qq_full_db
+                else:
+                    # Legacy path: re-bootstrap from par rates + basis (old DB records)
+                    _SPOT2 = 1.0 / 252.0
+                    _bx2 = _by2 = None
+                    if _b6v3_df is not None:
+                        _bx2 = _b6v3_df["MaturityY"].to_numpy().astype(float)
+                        _by2 = _b6v3_df["BasisBp"].to_numpy().astype(float)
+                    def _b2(t):
+                        if _bx2 is None: return 0.0
+                        return float(np.interp(t, _bx2, _by2))
+                    def _boot_clean2(par_dict, freq, seed_dfs=None):
+                        _dfs2 = {0.0: 1.0, _SPOT2: 1.0}
+                        if seed_dfs: _dfs2.update(seed_dfs)
+                        def _dfi2c(t):
+                            _ts2 = sorted(_dfs2.keys()); _dfv2 = [_dfs2[x] for x in _ts2]
+                            if t <= _ts2[0]: return 1.0
+                            if t >= _ts2[-1]:
+                                _z2 = -math.log(max(_dfv2[-1],1e-10))/_ts2[-1]; return math.exp(-_z2*t)
+                            return math.exp(float(np.interp(t,_ts2,np.log(np.maximum(_dfv2,1e-10)))))
+                        for _T2 in sorted(par_dict):
+                            _c2 = par_dict[_T2]/100.0; _te2 = _T2+_SPOT2
+                            _tm2=[]; _ti2=_SPOT2+freq
+                            while _ti2<=_te2+1e-9: _tm2.append(round(min(_ti2,_te2),8)); _ti2+=freq
+                            if not _tm2: continue
+                            _an2 = sum(_dfi2c(_ti2)*freq for _ti2 in _tm2[:-1])
+                            _df2 = (1.0-_c2*_an2)/(1.0+_c2*freq)
+                            if _df2>0: _dfs2[_te2]=_df2
+                        _M2=[0.25,0.5,0.75,1,1.5,2,3,4,5,6,7,8,9,10,12,15,20,25,30,40,50]
+                        return {_m2:-math.log(_dfi2c(_m2))/_m2*100 for _m2 in _M2 if _dfi2c(_m2)>0}, _dfs2
+                    _zc_qq_db, _dfs_qq2   = _boot_clean2(_par_qq, 0.25)
+                    _seed_ss2             = {_t:_d for _t,_d in _dfs_qq2.items() if _t<=3.1}
+                    _zc_ss_db, _          = _boot_clean2(_par_ss, 0.5, seed_dfs=_seed_ss2)
+                    _pqq_long2            = {_t:_r-_b2(_t)/100.0 for _t,_r in _par_ss.items() if _t<=30}
+                    _zc_qqf2, _           = _boot_clean2(_pqq_long2, 0.25, seed_dfs={_t:_d for _t,_d in _dfs_qq2.items() if _t<=3.1})
+                    _zc_qq_full_db        = {**_zc_qq_db, **{_m:_z for _m,_z in _zc_qqf2.items() if _m>=4}}
+                    st.session_state["_aud_zc_qq"]      = _zc_qq_db
+                    st.session_state["_aud_zc_ss"]      = _zc_ss_db
+                    st.session_state["_aud_zc_qq_full"] = _zc_qq_full_db
 
-                _zc_qq2, _dfs_qq2 = _boot_clean2(_par_qq, 0.25)
-                _seed_ss2 = {_t:_d for _t,_d in _dfs_qq2.items() if _t<=3.1}
-                _zc_ss2, _ = _boot_clean2(_par_ss, 0.5, seed_dfs=_seed_ss2)
-                # Build full QQ extended curve for smooth matrix
-                _pqq_long2 = {_t: _r - _b2(_t)/100.0 for _t,_r in _par_ss.items() if _t<=30}
-                _zc_qqf2, _ = _boot_clean2(_pqq_long2, 0.25, seed_dfs={_t:_d for _t,_d in _dfs_qq2.items() if _t<=3.1})
-                _zc_qq_merged2 = {**_zc_qq2, **{_m:_z for _m,_z in _zc_qqf2.items() if _m>=4}}
-                st.session_state["_aud_zc_qq"] = _zc_qq2
-                st.session_state["_aud_zc_ss"] = _zc_ss2
-                st.session_state["_aud_zc_qq_full"] = _zc_qq_merged2
-                _rows2=[{"MaturityY":float(_m),"ZeroRatePct":float(_z)} for _m,_z in sorted(_zc_qq2.items()) if _m<=3.25]
-                _rows2+=[{"MaturityY":float(_m),"ZeroRatePct":float(_z)} for _m,_z in sorted(_zc_ss2.items()) if _m>=3.5]
-                if len(_rows2)>=10:
-                    st.session_state["_aud_proj_curve"]=pd.DataFrame(_rows2)
-                    st.session_state.get("_fwd_ann_cache",{}).clear()
+                # Build blended proj curve: QQ<=3.25Y, SS>=3.5Y
+                _rows2  = [{"MaturityY": float(_m), "ZeroRatePct": float(_z)} for _m,_z in sorted(_zc_qq_db.items()) if _m<=3.25]
+                _rows2 += [{"MaturityY": float(_m), "ZeroRatePct": float(_z)} for _m,_z in sorted(_zc_ss_db.items()) if _m>=3.5]
+                if len(_rows2) >= 10:
+                    st.session_state["_aud_proj_curve"] = pd.DataFrame(_rows2)
+                st.session_state.get("_fwd_ann_cache", {}).clear()
                 loaded += 1
         except Exception as _pex:
+            pass
             pass
 
     # Restore CFS wedge spreads
