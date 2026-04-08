@@ -14978,6 +14978,12 @@ def sod_report_tab():
 
     _atm1 = _norm(_atm1)
     _atm2 = _norm(_atm2)
+    # Normalise index to lowercase so AUD/USD expiry labels match
+    if _atm1 is not None: _atm1.index = _atm1.index.str.lower().str.strip()
+    if _atm2 is not None: _atm2.index = _atm2.index.str.lower().str.strip()
+    # Normalise columns to uppercase for tenor matching
+    if _atm1 is not None: _atm1.columns = [str(c).upper() for c in _atm1.columns]
+    if _atm2 is not None: _atm2.columns = [str(c).upper() for c in _atm2.columns]
 
     # ── USD Vol Change Matrix ─────────────────────────────────────
     st.markdown("### 🇺🇸 USD Vol Changes   —   Overnight (T-1 close vs T-2 close)")
@@ -15061,6 +15067,9 @@ def sod_report_tab():
         _aud_data = load_vol_snapshot(_aud_snap["id"])
         if _aud_data:
             _aud_atm = _norm(_aud_data.get("atm"))
+            if _aud_atm is not None:
+                _aud_atm.index = _aud_atm.index.str.lower().str.strip()
+                _aud_atm.columns = [str(c).upper() for c in _aud_atm.columns]
 
     # ── Implied AUD Vol Open ──────────────────────────────────────
     st.markdown("---")
