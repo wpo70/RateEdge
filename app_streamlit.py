@@ -15083,8 +15083,8 @@ def sod_report_tab():
     _atm1 = _norm(_atm1)
     _atm2 = _norm(_atm2)
     # Normalise index to lowercase so AUD/USD expiry labels match
-    if _atm1 is not None: _atm1.index = _atm1.index.str.lower().str.strip()
-    if _atm2 is not None: _atm2.index = _atm2.index.str.lower().str.strip()
+    if _atm1 is not None: _atm1.index = _atm1.index.astype(str).str.lower().str.strip()
+    if _atm2 is not None: _atm2.index = _atm2.index.astype(str).str.lower().str.strip()
     # Normalise columns to uppercase for tenor matching
     if _atm1 is not None: _atm1.columns = [str(c).upper() for c in _atm1.columns]
     if _atm2 is not None: _atm2.columns = [str(c).upper() for c in _atm2.columns]
