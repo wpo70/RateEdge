@@ -5257,7 +5257,6 @@ def curves_tab():
                 else:
                     with st.spinner("Calculating..."):
                         pm, vm = calculate_atm_premium_matrix(ccy, _mc, atm_vols, _mb)
-                        # Store vol with Expiry as index to match prem/vega format
                         st.session_state["atm_prem_matrix"][ccy] = {"vol": atm_vols, "prem": pm, "vega": vm}
                     st.rerun()
 
@@ -5266,16 +5265,13 @@ def curves_tab():
                 _adf = {"ATM Vol (bp)": _ad["vol"],
                         "Forward Premium (bp)": _ad["prem"],
                         "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
-                # Ensure Expiry is index not column before numeric conversion
-                if "Expiry" in _adf.columns:
-                    _adf = _adf.set_index("Expiry")
-                _adf = _adf.apply(pd.to_numeric, errors="coerce")
-                _anc = list(_adf.columns)
+                _anc  = [c for c in _adf.columns if c != "Expiry"]
+                _afmt = {c: "{:.2f}" for c in _anc}
                 if show_atm_hm:
-                    st.dataframe(_adf.style.format("{:.2f}", na_rep="—").background_gradient("RdYlGn_r", axis=None, subset=_anc),
+                    st.dataframe(_adf.style.format(_afmt).background_gradient("RdYlGn_r", axis=None, subset=_anc),
                                  use_container_width=True, height=820)
                 else:
-                    st.dataframe(_adf.style.format("{:.2f}", na_rep="—"), use_container_width=True, height=820)
+                    st.dataframe(_adf.style.format(_afmt), use_container_width=True, height=820)
             else:
                 st.info("Click **▶ Generate ATM Matrix**")
 
@@ -10927,9 +10923,7 @@ def _expiry_to_years(lbl: str) -> float:
         return 0
 
 def _load_vol_snapshots_for_viz(ccy: str, start_date: str, end_date: str) -> list:
-    """Load vol snapshots from vol_history within date range. Returns list of dicts.
-    Catches snapshots saved under any user_id (shared, admin emails, legacy IDs).
-    """
+    """Load vol snapshots from vol_history within date range. Returns list of dicts."""
     if not HAS_POSTGRES:
         return []
     try:
@@ -10940,11 +10934,7 @@ def _load_vol_snapshots_for_viz(ccy: str, start_date: str, end_date: str) -> lis
         cur.execute(
             """SELECT id, snapshot_date, label, atm_vols
                FROM vol_history
-               WHERE (user_id = 'shared'
-                   OR user_id = 'wpo@rateedge.au'
-                   OR user_id = 'wpo70@icloud.com'
-                   OR user_id = 'default')
-                 AND currency = %s AND atm_vols IS NOT NULL
+               WHERE currency = %s AND atm_vols IS NOT NULL
                  AND snapshot_date::date BETWEEN %s AND %s
                ORDER BY snapshot_date ASC
                LIMIT 500""",
@@ -14431,8 +14421,8 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
         prem_rows.append(prow)
         vega_rows.append(vrow)
 
-    prem_df = pd.DataFrame(prem_rows).set_index("Expiry").apply(pd.to_numeric, errors="coerce")
-    vega_df = pd.DataFrame(vega_rows).set_index("Expiry").apply(pd.to_numeric, errors="coerce")
+    prem_df = pd.DataFrame(prem_rows).set_index("Expiry")
+    vega_df = pd.DataFrame(vega_rows).set_index("Expiry")
     return prem_df, vega_df
 
 
