@@ -5263,7 +5263,8 @@ def curves_tab():
                         "Forward Premium (bp)": _ad["prem"],
                         "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
                 _anc  = [c for c in _adf.columns if c != "Expiry"]
-                _afmt = {c: "{:.2f}" for c in _anc}
+                _safe_fmt = lambda x: f"{x:.2f}" if isinstance(x, (int, float)) and x == x else ""
+                _afmt = {c: _safe_fmt for c in _anc}
                 if show_atm_hm:
                     st.dataframe(_adf.style.format(_afmt).background_gradient("RdYlGn_r", axis=None, subset=_anc),
                                  use_container_width=True, height=820)
