@@ -1313,14 +1313,16 @@ def get_matrix_value(mat: Optional[pd.DataFrame],
     if mat is None or mat.empty:
         return None
 
-    # Normalise: if Expiry is the index, reset it to a column
+    # Normalise: work on a copy so we never mutate the stored surface
     if mat.index.name is not None and str(mat.index.name).lower() == "expiry":
         mat = mat.reset_index().rename(columns={mat.index.name: "Expiry"})
     elif "Expiry" not in mat.columns:
-        for _ec in ["expiry", "EXPIRY"]:
-            if _ec in mat.columns:
-                mat = mat.rename(columns={_ec: "Expiry"})
-                break
+        _col_match = next((c for c in mat.columns if c.lower() == "expiry"), None)
+        if _col_match:
+            mat = mat.rename(columns={_col_match: "Expiry"})
+        elif mat.index.dtype == object:
+            # Index contains expiry labels — reset without name check
+            mat = mat.reset_index().rename(columns={"index": "Expiry"})
 
     _tcols = [c for c in mat.columns if c != "Expiry"]
     if not _tcols:
@@ -10902,7 +10904,24 @@ _EXPIRY_YEARS_MAP = {
     "1y": 1.0, "18m": 1.5, "2y": 2.0, "3y": 3.0, "4y": 4.0, "5y": 5.0,
     "6y": 6.0, "7y": 7.0, "8y": 8.0, "9y": 9.0, "10y": 10.0, "12y": 12.0,
     "15y": 15.0, "20y": 20.0, "25y": 25.0, "30y": 30.0,
+    # BBG format aliases
+    "1mo": 1/12, "3mo": 3/12, "6mo": 0.5, "9mo": 0.75,
+    "1yr": 1.0, "2yr": 2.0, "3yr": 3.0, "4yr": 4.0, "5yr": 5.0,
+    "6yr": 6.0, "7yr": 7.0, "8yr": 8.0, "9yr": 9.0, "10yr": 10.0,
+    "12yr": 12.0, "15yr": 15.0, "20yr": 20.0, "25yr": 25.0, "30yr": 30.0,
 }
+
+def _expiry_to_years(lbl: str) -> float:
+    """Convert any expiry label format to years. Returns 0 if unrecognised."""
+    s = str(lbl).lower().strip()
+    if s in _EXPIRY_YEARS_MAP:
+        return _EXPIRY_YEARS_MAP[s]
+    # Try label_to_years as fallback
+    try:
+        v = label_to_years(s)
+        return v if v > 0 else 0
+    except Exception:
+        return 0
 
 def _load_vol_snapshots_for_viz(ccy: str, start_date: str, end_date: str) -> list:
     """Load vol snapshots from vol_history within date range. Returns list of dicts.
@@ -11007,7 +11026,7 @@ def _build_vol_surface_arrays(snap: dict):
             tenor_x.append(float(str(t).replace("Y","").replace("y","")))
         except Exception:
             tenor_x.append(0)
-    expiry_y = [_EXPIRY_YEARS_MAP.get(str(e).lower().strip(), 0) for e in df.index]
+    expiry_y = [_expiry_to_years(e) for e in df.index]
     # Filter rows with valid expiry mapping
     valid = [i for i, v in enumerate(expiry_y) if v > 0]
     expiry_y = [expiry_y[i] for i in valid]
