@@ -5265,7 +5265,7 @@ def curves_tab():
                 _adf = {"ATM Vol (bp)": _ad["vol"],
                         "Forward Premium (bp)": _ad["prem"],
                         "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
-                _anc  = [c for c in _adf.columns if c != "Expiry"]
+                _anc  = [c for c in _adf.columns if c.lower() != "expiry"]
                 # Ensure all numeric cols are float to avoid Python 3.14 format errors
                 _adf_disp = _adf.copy()
                 for _c in _anc:
