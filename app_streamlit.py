@@ -5230,7 +5230,7 @@ def curves_tab():
             _aa1, _aa2, _aa3, _aa4 = st.columns([3, 1, 3, 3])
             with _aa1:
                 if has_atm:
-                    _av = st.radio("View", ["ATM Vol (bp)", "Forward Premium (bp)", "Vega ($/1bp 100mm)"],
+                    _av = st.radio("View", ["ATM Vol (bp)", "Forward Premium (bp)", "Vega ($/1bp 1mm)"],
                                    horizontal=False, key="atm_view_toggle")
             with _aa2:
                 show_atm_hm = st.checkbox("Heatmap", value=False, key="show_atm_heatmap")
@@ -5242,7 +5242,7 @@ def curves_tab():
                     _ad = st.session_state["atm_prem_matrix"][ccy]
                     _adf0 = {"ATM Vol (bp)": _ad["vol"],
                              "Forward Premium (bp)": _ad["prem"],
-                             "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
+                             "Vega ($/1bp 1mm)": _ad["vega"]}.get(_av, _ad["vol"])
                 st.download_button("⬇ Download",
                                    _adf0.to_csv() if has_atm else "",
                                    f"{ccy}_atm_matrix.csv", key="dl_atm",
@@ -5264,7 +5264,7 @@ def curves_tab():
                 _ad = st.session_state["atm_prem_matrix"][ccy]
                 _adf = {"ATM Vol (bp)": _ad["vol"],
                         "Forward Premium (bp)": _ad["prem"],
-                        "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
+                        "Vega ($/1bp 1mm)": _ad["vega"]}.get(_av, _ad["vol"])
                 # Set Expiry as index (left column) — handle both "Expiry" and "expiry"
                 _adf_disp = _adf.copy()
                 for _ec in ["Expiry", "expiry"]:
@@ -5283,7 +5283,56 @@ def curves_tab():
             else:
                 st.info("Click **▶ Generate ATM Matrix**")
 
+            # ── Ratio Calculator ─────────────────────────────────────────────
+            if has_atm:
+                st.markdown("---")
+                st.markdown("#### 📐 Ratio Calculator — Vega Neutral / Premium Neutral / BP Vol")
+                st.caption("Click a cell in the matrix to load it into Leg 1 or Leg 2. Ratio = Leg 1 ÷ Leg 2.")
 
+                _ad2 = st.session_state["atm_prem_matrix"][ccy]
+                _grid_opts = ["ATM Vol (bp)", "Forward Premium (bp)", "Vega ($/1bp 1mm)"]
+                _grid_keys = ["vol", "prem", "vega"]
+
+                _rc1, _rc2, _rc3 = st.columns(3)
+                with _rc1:
+                    _ratio_grid = st.selectbox("Grid", _grid_opts, key="ratio_grid_sel")
+                _ratio_df_raw = _ad2[_grid_keys[_grid_opts.index(_ratio_grid)]]
+
+                # Build expiry/tenor selector
+                _ratio_df = _ratio_df_raw.copy()
+                if hasattr(_ratio_df.index, 'name') and _ratio_df.index.name and _ratio_df.index.name.lower() == "expiry":
+                    _ratio_exp = list(_ratio_df.index)
+                elif any(c.lower() == "expiry" for c in _ratio_df.columns):
+                    _ec = next(c for c in _ratio_df.columns if c.lower() == "expiry")
+                    _ratio_df = _ratio_df.set_index(_ec)
+                    _ratio_exp = list(_ratio_df.index)
+                else:
+                    _ratio_exp = list(_ratio_df.index)
+                _ratio_ten = list(_ratio_df.columns)
+
+                _rc_l1a, _rc_l1b, _rc_l2a, _rc_l2b = st.columns(4)
+                with _rc_l1a:
+                    _leg1_exp = st.selectbox("Leg 1 Expiry", _ratio_exp, key="ratio_l1_exp")
+                with _rc_l1b:
+                    _leg1_ten = st.selectbox("Leg 1 Tenor", _ratio_ten, key="ratio_l1_ten")
+                with _rc_l2a:
+                    _leg2_exp = st.selectbox("Leg 2 Expiry", _ratio_exp, key="ratio_l2_exp")
+                with _rc_l2b:
+                    _leg2_ten = st.selectbox("Leg 2 Tenor", _ratio_ten, key="ratio_l2_ten")
+
+                try:
+                    _v1 = float(_ratio_df.loc[_leg1_exp, _leg1_ten])
+                    _v2 = float(_ratio_df.loc[_leg2_exp, _leg2_ten])
+                    _ratio = _v1 / _v2 if _v2 != 0 else float("nan")
+                    _rv1, _rv2, _rv3 = st.columns(3)
+                    with _rv1:
+                        st.metric(f"Leg 1  {_leg1_exp}×{_leg1_ten}", f"{_v1:.2f}")
+                    with _rv2:
+                        st.metric(f"Leg 2  {_leg2_exp}×{_leg2_ten}", f"{_v2:.2f}")
+                    with _rv3:
+                        st.metric("Ratio (Leg1 ÷ Leg2)", f"{_ratio:.4f}" if not (str(_ratio) == "nan") else "—")
+                except Exception:
+                    st.info("Select valid expiry/tenor combinations.")
 
 
 def check_swap_rates_sanity(rates_dict: dict, floating_rate: str, ccy: str) -> list:
@@ -14423,8 +14472,8 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
 
                 # Vega: d(fwd_prem $) / d(vol in bp), scaled to 100mm notional
                 d_fwd_prem_per_bp = 2 * 0.3989 * sqrt_t * ann / df_exp
-                vega_dollars = (d_fwd_prem_per_bp / 10000.0) * 100e6
-                vrow[tenor] = round(vega_dollars, 0)
+                vega_dollars = (d_fwd_prem_per_bp / 10000.0) * 1e6  # $/1bp per 1mm notional
+                vrow[tenor] = round(vega_dollars, 2)
 
             except:
                 prow[tenor] = None
