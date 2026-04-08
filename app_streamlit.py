@@ -5257,23 +5257,20 @@ def curves_tab():
                 else:
                     with st.spinner("Calculating..."):
                         pm, vm = calculate_atm_premium_matrix(ccy, _mc, atm_vols, _mb)
-                        st.session_state["atm_prem_matrix"][ccy] = {"vol": atm_vols, "prem": pm, "vega": vm}
+                        # Store vol with Expiry as index to match prem/vega format
+                        _vol_indexed = atm_vols.set_index("Expiry") if "Expiry" in atm_vols.columns else atm_vols
+                        st.session_state["atm_prem_matrix"][ccy] = {"vol": _vol_indexed, "prem": pm, "vega": vm}
                     st.rerun()
 
             if has_atm:
                 _ad = st.session_state["atm_prem_matrix"][ccy]
-                _adf_raw = {"ATM Vol (bp)": _ad["vol"],
-                            "Forward Premium (bp)": _ad["prem"],
-                            "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
-                # Normalise: set Expiry as index for display
-                if _adf_raw is not None and not _adf_raw.empty:
-                    if "Expiry" in _adf_raw.columns:
-                        _adf = _adf_raw.set_index("Expiry")
-                    else:
-                        _adf = _adf_raw
-                else:
-                    _adf = _adf_raw
-                _anc = [c for c in _adf.columns]
+                _adf = {"ATM Vol (bp)": _ad["vol"],
+                        "Forward Premium (bp)": _ad["prem"],
+                        "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
+                # All three stored with Expiry as index
+                if _adf is not None and "Expiry" in _adf.columns:
+                    _adf = _adf.set_index("Expiry")
+                _anc = list(_adf.columns)
                 _safe_fmt = lambda x: f"{x:.2f}" if isinstance(x, (int, float)) and x == x else ""
                 _afmt = {c: _safe_fmt for c in _anc}
                 if show_atm_hm:
@@ -14429,8 +14426,8 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
         prem_rows.append(prow)
         vega_rows.append(vrow)
 
-    prem_df = pd.DataFrame(prem_rows)
-    vega_df = pd.DataFrame(vega_rows)
+    prem_df = pd.DataFrame(prem_rows).set_index("Expiry")
+    vega_df = pd.DataFrame(vega_rows).set_index("Expiry")
     return prem_df, vega_df
 
 
@@ -15148,12 +15145,10 @@ def sod_report_tab():
     _usd_prem_chg = pd.DataFrame()
     if not _usd_prem_t1.empty and not _usd_prem_t2.empty:
         # prem_df has Expiry as column — set index for alignment
-        _pt1 = _usd_prem_t1.set_index("Expiry") if "Expiry" in _usd_prem_t1.columns else _usd_prem_t1
-        _pt2 = _usd_prem_t2.set_index("Expiry") if "Expiry" in _usd_prem_t2.columns else _usd_prem_t2
-        _pc_exp = [e for e in _pt1.index if e in _pt2.index]
-        _pc_ten = [c for c in _pt1.columns if c in _pt2.columns]
+        _pc_exp = [e for e in _usd_prem_t1.index if e in _usd_prem_t2.index]
+        _pc_ten = [c for c in _usd_prem_t1.columns if c in _usd_prem_t2.columns]
         if _pc_exp and _pc_ten:
-            _usd_prem_chg = _pt1.loc[_pc_exp, _pc_ten].apply(pd.to_numeric, errors="coerce") -                             _pt2.loc[_pc_exp, _pc_ten].apply(pd.to_numeric, errors="coerce")
+            _usd_prem_chg = _usd_prem_t1.loc[_pc_exp, _pc_ten].apply(pd.to_numeric, errors="coerce") -                             _usd_prem_t2.loc[_pc_exp, _pc_ten].apply(pd.to_numeric, errors="coerce")
 
     # Display vol change
     st.markdown("**Vol Change (bp)**")
