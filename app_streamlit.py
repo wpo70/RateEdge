@@ -1313,6 +1313,15 @@ def get_matrix_value(mat: Optional[pd.DataFrame],
     if mat is None or mat.empty:
         return None
 
+    # Normalise: if Expiry is the index, reset it to a column
+    if mat.index.name is not None and str(mat.index.name).lower() == "expiry":
+        mat = mat.reset_index().rename(columns={mat.index.name: "Expiry"})
+    elif "Expiry" not in mat.columns:
+        for _ec in ["expiry", "EXPIRY"]:
+            if _ec in mat.columns:
+                mat = mat.rename(columns={_ec: "Expiry"})
+                break
+
     _tcols = [c for c in mat.columns if c != "Expiry"]
     if not _tcols:
         return None
