@@ -5258,28 +5258,31 @@ def curves_tab():
                     with st.spinner("Calculating..."):
                         pm, vm = calculate_atm_premium_matrix(ccy, _mc, atm_vols, _mb)
                         # Store vol with Expiry as index to match prem/vega format
-                        _vol_indexed = atm_vols.set_index("Expiry") if "Expiry" in atm_vols.columns else atm_vols
-                        st.session_state["atm_prem_matrix"][ccy] = {"vol": _vol_indexed, "prem": pm, "vega": vm}
+                        st.session_state["atm_prem_matrix"][ccy] = {"vol": atm_vols, "prem": pm, "vega": vm}
                     st.rerun()
 
             if has_atm:
                 _ad = st.session_state["atm_prem_matrix"][ccy]
-                _adf = {"ATM Vol (bp)": _ad["vol"],
-                        "Forward Premium (bp)": _ad["prem"],
-                        "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
-                # All three stored with Expiry as index
-                if _adf is not None and "Expiry" in _adf.columns:
-                    _adf = _adf.set_index("Expiry")
-                _anc = list(_adf.columns)
-                def _sfmt(x):
-                    try: return f"{float(x):.2f}"
-                    except: return ""
-                _afmt = {c: _sfmt for c in _anc}
-                if show_atm_hm:
-                    st.dataframe(_adf.style.format(_afmt).background_gradient("RdYlGn_r", axis=None, subset=_anc),
-                                 use_container_width=True, height=820)
+                _adf_raw = {"ATM Vol (bp)": _ad["vol"],
+                            "Forward Premium (bp)": _ad["prem"],
+                            "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
+                # Normalise to Expiry as index for display
+                if _adf_raw is not None and not _adf_raw.empty:
+                    if "Expiry" in _adf_raw.columns:
+                        _adf = _adf_raw.set_index("Expiry")
+                    elif _adf_raw.index.name == "Expiry":
+                        _adf = _adf_raw
+                    else:
+                        _adf = _adf_raw
+                    _adf = _adf.apply(pd.to_numeric, errors="coerce")
+                    _anc = list(_adf.columns)
+                    if show_atm_hm:
+                        st.dataframe(_adf.style.format("{:.2f}", na_rep="—").background_gradient("RdYlGn_r", axis=None, subset=_anc),
+                                     use_container_width=True, height=820)
+                    else:
+                        st.dataframe(_adf.style.format("{:.2f}", na_rep="—"), use_container_width=True, height=820)
                 else:
-                    st.dataframe(_adf.style.format(_afmt), use_container_width=True, height=820)
+                    st.info("Click **▶ Generate ATM Matrix**")
             else:
                 st.info("Click **▶ Generate ATM Matrix**")
 
@@ -11364,6 +11367,7 @@ def backtesting_tab():
 
         if not snaps:
             st.info("No vol snapshots in this date range. Save EOD snapshots from the Vol Export tab.")
+            st.caption(f"DEBUG: 0 snapshots loaded from DB for {ccy} between {_vs_start} and {_vs_end}")
 
             # ── 5-day AUD seed (mirrors USD SOD seed) ────────────────────────
             with st.expander("🌱 Seed AUD Vol History (backfill from current surface)", expanded=True):
@@ -11458,7 +11462,13 @@ def backtesting_tab():
                 if _fig:
                     st.plotly_chart(_fig, use_container_width=True, key="hviz_vol_chart")
                 else:
-                    st.warning("Could not build surface — check snapshot data format.")
+                    # Debug: check first snap
+                    _s0 = snaps[0] if snaps else None
+                    if _s0 is not None:
+                        _df0 = _s0["df"]
+                        st.warning(f"Could not build surface. Snap 0: index={list(_df0.index[:3])}, cols={list(_df0.columns[:3])}, shape={_df0.shape}")
+                    else:
+                        st.warning("Could not build surface — check snapshot data format.")
 
             elif _vs_mode == "Single Date":
                 _snap_labels = [f"{s['date'].strftime('%Y-%m-%d')}  {s['label']}" for s in snaps]
