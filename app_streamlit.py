@@ -5266,12 +5266,11 @@ def curves_tab():
                         "Forward Premium (bp)": _ad["prem"],
                         "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
                 _anc  = [c for c in _adf.columns if c != "Expiry"]
-                _afmt = {c: "{:.2f}" for c in _anc}
                 if show_atm_hm:
-                    st.dataframe(_adf.style.format(_afmt).background_gradient("RdYlGn_r", axis=None, subset=_anc),
+                    st.dataframe(_adf.style.format("{:.2f}", na_rep="—", subset=_anc).background_gradient("RdYlGn_r", axis=None, subset=_anc),
                                  use_container_width=True, height=820)
                 else:
-                    st.dataframe(_adf.style.format(_afmt), use_container_width=True, height=820)
+                    st.dataframe(_adf.style.format("{:.2f}", na_rep="—", subset=_anc), use_container_width=True, height=820)
             else:
                 st.info("Click **▶ Generate ATM Matrix**")
 
