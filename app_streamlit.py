@@ -5266,8 +5266,11 @@ def curves_tab():
                 _adf = {"ATM Vol (bp)": _ad["vol"],
                         "Forward Premium (bp)": _ad["prem"],
                         "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
-                _anc = [c for c in _adf.columns if c != "Expiry"]
+                # Ensure Expiry is index not column before numeric conversion
+                if "Expiry" in _adf.columns:
+                    _adf = _adf.set_index("Expiry")
                 _adf = _adf.apply(pd.to_numeric, errors="coerce")
+                _anc = list(_adf.columns)
                 if show_atm_hm:
                     st.dataframe(_adf.style.format("{:.2f}", na_rep="—").background_gradient("RdYlGn_r", axis=None, subset=_anc),
                                  use_container_width=True, height=820)
