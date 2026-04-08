@@ -911,7 +911,7 @@ def render_bulk_adjustment_tools(ccy: str) -> None:
         _sm_passes = st.number_input("Passes", 1, 5, 2, 1, key=f"sm_passes_{ccy}")
     with _sm2:
         _sm_rows = st.multiselect("Pin rows (no smooth)", w["Expiry"].tolist(),
-                                   default=["1w","2w"] if any(e in ["1w","2w"] for e in w["Expiry"].tolist()) else [],
+                                   default=[e for e in ["1w","2w"] if e in w["Expiry"].tolist()],
                                    key=f"sm_pin_{ccy}")
     with _sm3:
         st.caption("Weighted average across expiry neighbours. Pin rows to preserve them unchanged (e.g. 1w/2w short-end extrapolated rows).")
