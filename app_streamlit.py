@@ -3950,34 +3950,55 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
         if load_type in ["curves", "all"]:
             curve_df = None
 
-            # AUD: use Curves_AUD directly as zeros (par rates ≈ zeros for this curve shape)
-            # This matches BBG forward calculations. Bootstrap is NOT used for AUD projection curve.
             if ccy == "AUD":
-                curve_name = "Curves_AUD"
-                if curve_name in xl.sheet_names:
-                    raw_curve = pd.read_excel(xl, sheet_name=curve_name, usecols=[0, 1])
-                    try:
-                        curve_df = load_curve_flexible(raw_curve, curve_name)
-                    except:
-                        curve_df = load_curve(raw_curve, curve_name)
-
-            # Primary for NZD/USD:
-            if curve_df is None:
+                # AUD: ALWAYS bootstrap from BBG_Feed (reads par rates + 6v3 basis directly
+                # from xl in one pass). Do NOT use Curves_AUD as the projection curve —
+                # that sheet contains par rates mislabeled as zeros and bypasses the bootstrap.
+                try:
+                    _aud_zc = bootstrap_aud_zeros_from_bbg_feed(xl)
+                except Exception:
+                    _aud_zc = None
+                if _aud_zc is not None and len(_aud_zc) > 0:
+                    # Store in curves (for display / NZD-USD style access) without calling
+                    # _set_aud_dual_proj_curves — bootstrap already set _aud_zc_qq/ss/qq_full
+                    st.session_state.setdefault("curves", {})["AUD"] = _aud_zc
+                    _cids = st.session_state.setdefault("_curve_commit_ids", {})
+                    _cids["AUD"] = _cids.get("AUD", 0) + 1
+                    st.session_state.get("_fwd_ann_cache", {}).clear()
+                    st.session_state.setdefault("config_curves", {})["AUD"] = _aud_zc
+                    set_timestamp("curves", "AUD")
+                    loaded["curves"] += 1
+                else:
+                    # Fallback: read Curves_AUD and go through normal path
+                    curve_name = "Curves_AUD"
+                    if curve_name in xl.sheet_names:
+                        raw_curve = pd.read_excel(xl, sheet_name=curve_name, usecols=[0, 1])
+                        try:
+                            curve_df = load_curve_flexible(raw_curve, curve_name)
+                        except Exception:
+                            curve_df = load_curve(raw_curve, curve_name)
+                    if curve_df is not None and len(curve_df) > 0:
+                        set_ccy_curve(ccy, curve_df)
+                        st.session_state.setdefault("config_curves", {})[ccy] = curve_df
+                        set_timestamp("curves", ccy)
+                        loaded["curves"] += 1
+            else:
+                # NZD/USD: read from Curves_{ccy} sheet
                 curve_name = f"Curves_{ccy}"
                 if curve_name in xl.sheet_names:
                     raw_curve = pd.read_excel(xl, sheet_name=curve_name, usecols=[0, 1])
                     try:
                         curve_df = load_curve_flexible(raw_curve, curve_name)
-                    except:
+                    except Exception:
                         curve_df = load_curve(raw_curve, curve_name)
 
-            if curve_df is not None and len(curve_df) > 0:
-                set_ccy_curve(ccy, curve_df)
-                if "config_curves" not in st.session_state:
-                    st.session_state["config_curves"] = {}
-                st.session_state["config_curves"][ccy] = curve_df
-                set_timestamp("curves", ccy)
-                loaded["curves"] += 1
+                if curve_df is not None and len(curve_df) > 0:
+                    set_ccy_curve(ccy, curve_df)
+                    if "config_curves" not in st.session_state:
+                        st.session_state["config_curves"] = {}
+                    st.session_state["config_curves"][ccy] = curve_df
+                    set_timestamp("curves", ccy)
+                    loaded["curves"] += 1
             
             # 6v3 basis curve
             basis_6v3_name = f"Basis_{ccy}_6v3"
@@ -14433,7 +14454,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804t</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804u</div>
             </div>
             """,
             unsafe_allow_html=True,
