@@ -15073,21 +15073,31 @@ def sod_report_tab():
         return
 
     # Normalise: ensure Expiry is index
+    # BBG expiry aliases: "1Mo"→"1m", "3Mo"→"3m" etc
+    _BBG_EXP_MAP = {
+        "1mo":"1m","2mo":"2m","3mo":"3m","6mo":"6m","9mo":"9m",
+        "1yr":"1y","2yr":"2y","3yr":"3y","4yr":"4y","5yr":"5y",
+        "6yr":"6y","7yr":"7y","8yr":"8y","9yr":"9y","10yr":"10y",
+        "12yr":"12y","15yr":"15y","20yr":"20y","25yr":"25y","30yr":"30y",
+    }
+    def _norm_exp(lbl):
+        s = str(lbl).lower().strip()
+        return _BBG_EXP_MAP.get(s, s)
+
     def _norm(df):
         if df is None: return None
         df = df.copy()
-        if "Expiry" in df.columns:
-            df = df.set_index("Expiry")
+        # Handle Expiry as column or any case variant
+        for _ec in ["Expiry","expiry","EXPIRY"]:
+            if _ec in df.columns:
+                df = df.set_index(_ec)
+                break
+        df.index = [_norm_exp(e) for e in df.index]
+        df.columns = [str(c).upper() for c in df.columns]
         return df
 
     _atm1 = _norm(_atm1)
     _atm2 = _norm(_atm2)
-    # Normalise index to lowercase so AUD/USD expiry labels match
-    if _atm1 is not None: _atm1.index = _atm1.index.astype(str).str.lower().str.strip()
-    if _atm2 is not None: _atm2.index = _atm2.index.astype(str).str.lower().str.strip()
-    # Normalise columns to uppercase for tenor matching
-    if _atm1 is not None: _atm1.columns = [str(c).upper() for c in _atm1.columns]
-    if _atm2 is not None: _atm2.columns = [str(c).upper() for c in _atm2.columns]
 
     # ── USD Vol Change Matrix ─────────────────────────────────────
     st.markdown("### 🇺🇸 USD Vol Changes   —   Overnight (T-1 close vs T-2 close)")
