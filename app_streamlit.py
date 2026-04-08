@@ -14421,8 +14421,8 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
         prem_rows.append(prow)
         vega_rows.append(vrow)
 
-    prem_df = pd.DataFrame(prem_rows).set_index("Expiry")
-    vega_df = pd.DataFrame(vega_rows).set_index("Expiry")
+    prem_df = pd.DataFrame(prem_rows)
+    vega_df = pd.DataFrame(vega_rows)
     return prem_df, vega_df
 
 
