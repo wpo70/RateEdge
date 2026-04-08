@@ -4905,18 +4905,19 @@ def curves_tab():
         _cols_to_show = []
         if _show_par:
             if par_rates is not None and not par_rates.empty:
-                # Add 40Y/50Y to par table if available
                 _par_table = par_rates.copy()
-                _par_ss_full = st.session_state.get("_aud_par_ss", {})
+                # Add 40Y/50Y from curve_c (Curves_AUD) - single source, no duplicates
+                import pandas as _pd2
                 _existing_tenors = set(_par_table["Tenor"].astype(str).str.upper())
                 _extra_rows = []
-                for _et in [40.0, 50.0]:
-                    _tk = f"{int(_et)}Y"
-                    _tk2 = f"{_et}Y"  # Also check "40.0Y" format from curve_c
-                    if _tk not in _existing_tenors and _tk2 not in _existing_tenors and _et in _par_ss_full:
-                        _extra_rows.append({"Tenor": _tk, "Par Rate (%)": round(_par_ss_full[_et], 4), "Conv": "S/S"})
+                for _, _cr in curve_c.iterrows():
+                    _m = float(_cr["MaturityY"])
+                    if _m in [40.0, 50.0]:
+                        _tk = f"{int(_m)}Y"
+                        if _tk not in _existing_tenors:
+                            _extra_rows.append({"Tenor": _tk, "Par Rate (%)": round(float(_cr["ZeroRatePct"]),4), "Conv": "S/S"})
+                            _existing_tenors.add(_tk)
                 if _extra_rows:
-                    import pandas as _pd2
                     _par_table = _pd2.concat([_par_table, _pd2.DataFrame(_extra_rows)], ignore_index=True)
             else:
                 _par_table = curve_c
@@ -4924,12 +4925,14 @@ def curves_tab():
         if _show_irs:
             if ccy == "AUD" and st.session_state.get("_aud_proj_curve") is not None:
                 _proj_disp = st.session_state["_aud_proj_curve"].copy()
-                # Extend to 40/50Y from _aud_zc_ss, deduplicated
-                _zc_ss_t = st.session_state.get("_aud_zc_ss") or {}
-                _existing = set(_proj_disp["MaturityY"].astype(float).tolist())
+                # Extend to 40/50Y from curve_c (Curves_AUD has 40/50Y par rates)
                 import pandas as _pd2
-                _extra = [{"MaturityY": _et, "ZeroRatePct": _zc_ss_t[_et]}
-                          for _et in [40.0, 50.0] if _et in _zc_ss_t and _et not in _existing]
+                _existing_m = set(_proj_disp["MaturityY"].astype(float).tolist())
+                _extra = []
+                for _, _cr in curve_c.iterrows():
+                    _m = float(_cr["MaturityY"])
+                    if _m in [40.0, 50.0] and _m not in _existing_m:
+                        _extra.append({"MaturityY": _m, "ZeroRatePct": float(_cr["ZeroRatePct"])})
                 if _extra:
                     _proj_disp = _pd2.concat([_proj_disp, _pd2.DataFrame(_extra)], ignore_index=True)
                 _cols_to_show.append(("IRS Zero Curve (%)", _proj_disp))
@@ -6150,9 +6153,21 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
     SPOT_M = 1.0 / 252.0
 
     def _fwd_from_zc(zc, exp, tenor, freq):
-        """Forward swap rate from a zero curve dict {maturity: zero_rate_pct}."""
+        """Forward swap rate from a zero curve dict {maturity: zero_rate_pct}.
+        Uses log-linear extrapolation beyond last key to avoid flat DF extrapolation."""
         xs = np.array(sorted(zc.keys()))
         ys = np.array([zc[k] / 100.0 for k in xs])
+        # Log-linear DF interpolation/extrapolation
+        def _df(t):
+            if t <= xs[0]: return math.exp(-ys[0] * t)
+            if t >= xs[-1]:
+                # Log-linear extrapolation using last two points
+                _z1 = ys[-2]; _t1 = xs[-2]; _z2 = ys[-1]; _t2 = xs[-1]
+                _slope = (_z2*_t2 - _z1*_t1) / (_t2 - _t1)
+                _z_ext = (_z2*_t2 + _slope*(t - _t2)) / t
+                return math.exp(-_z_ext * t)
+            _z = float(np.interp(t, xs, ys))
+            return math.exp(-_z * t)
         t_s = exp + SPOT_M; t_e = t_s + tenor
         times = []; t = t_s + freq
         while t <= t_e + 1e-9:
@@ -6160,11 +6175,9 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
         if not times: return 0.0
         prev = t_s; ann = 0.0
         for ti in times:
-            z = float(np.interp(ti, xs, ys))
-            ann += math.exp(-z * ti) * (ti - prev); prev = ti
+            ann += _df(ti) * (ti - prev); prev = ti
         if ann <= 0: return 0.0
-        zs = float(np.interp(t_s, xs, ys)); ze = float(np.interp(t_e, xs, ys))
-        df_s = math.exp(-zs * t_s); df_e = math.exp(-ze * t_e)
+        df_s = _df(t_s); df_e = _df(t_e)
         return (df_s - df_e) / ann * 100.0
 
     matrix = []
@@ -14420,7 +14433,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804r</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804t</div>
             </div>
             """,
             unsafe_allow_html=True,
