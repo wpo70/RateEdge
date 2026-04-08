@@ -3417,6 +3417,8 @@ def get_ccy_curve(ccy: str) -> Optional[pd.DataFrame]:
     return st.session_state["curves"].get(ccy)
 
 
+# 🔒 LOCKED — called only as fallback from set_ccy_curve (non-AUD path).
+# AUD bootstrap now runs via bootstrap_aud_zeros_from_bbg_feed in load_config_excel.
 def _set_aud_dual_proj_curves(curve_df: pd.DataFrame):
     """Build and store AUD QQ and SS zero curves with basis applied.
     QQ curve (3M BBSW): from QQ par rates, quarterly bootstrap, used for <=3Y tenors.
@@ -3588,6 +3590,16 @@ def build_aud_ois_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
         return None
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 🔒 LOCKED — AUD DUAL-CURVE BOOTSTRAP  (v0804w)
+# DO NOT MODIFY without explicit instruction from Will Parry-Okeden.
+# Logic verified 08-Apr-2026. Changes here break 5y5y and all AUD fwd rates.
+# Methodology: QQ (0.5-3Y, Q/Q, continuous) | SS (4Y+, S/S, seeded from QQ at 3Y)
+# QQ-full = SS par minus 6v3 basis, bootstrapped Q/Q for smooth long-end display.
+# Primary entry: bootstrap_aud_zeros_from_bbg_feed() called from load_config_excel().
+# DB save/restore: all 5 curves (par_qq, par_ss, zc_qq, zc_ss, zc_qq_full,
+#                  basis_6v3, basis_3v1, ois_zeros) in aud_par_rates record.
+# ═══════════════════════════════════════════════════════════════════════════════
 def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
     """
     Bootstrap AUD zero curve from BBG_Feed par swap rates.
@@ -10882,7 +10894,9 @@ _EXPIRY_YEARS_MAP = {
 }
 
 def _load_vol_snapshots_for_viz(ccy: str, start_date: str, end_date: str) -> list:
-    """Load vol snapshots from vol_history within date range. Returns list of dicts."""
+    """Load vol snapshots from vol_history within date range. Returns list of dicts.
+    Catches snapshots saved under any user_id (shared, admin emails, legacy IDs).
+    """
     if not HAS_POSTGRES:
         return []
     try:
@@ -10893,7 +10907,11 @@ def _load_vol_snapshots_for_viz(ccy: str, start_date: str, end_date: str) -> lis
         cur.execute(
             """SELECT id, snapshot_date, label, atm_vols
                FROM vol_history
-               WHERE currency = %s AND atm_vols IS NOT NULL
+               WHERE (user_id = 'shared'
+                   OR user_id = 'wpo@rateedge.au'
+                   OR user_id = 'wpo70@icloud.com'
+                   OR user_id = 'default')
+                 AND currency = %s AND atm_vols IS NOT NULL
                  AND snapshot_date::date BETWEEN %s AND %s
                ORDER BY snapshot_date ASC
                LIMIT 500""",
@@ -10909,20 +10927,20 @@ def _load_vol_snapshots_for_viz(ccy: str, start_date: str, end_date: str) -> lis
                 df = pd.DataFrame(atm_vols["values"])
                 if "Expiry" in df.columns:
                     df = df.set_index("Expiry")
-                # Normalise index to lowercase
                 df.index = df.index.str.lower().str.strip()
                 df = df.apply(pd.to_numeric, errors="coerce")
                 results.append({
-                    "id": row_id,
-                    "date": pd.to_datetime(snap_date),
+                    "id":    row_id,
+                    "date":  pd.to_datetime(snap_date),
                     "label": label or str(snap_date)[:10],
-                    "df": df,
+                    "df":    df,
                 })
             except Exception:
                 pass
         return results
     except Exception:
         return []
+
 
 @st.cache_data(ttl=120, show_spinner=False)
 def _load_fwd_rates_for_viz(ccy: str, start_date: str, end_date: str,
@@ -11002,6 +11020,14 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)") 
             for ti, tl in enumerate(tenor_labels):
                 _row.append(f"{el} x {tl}  {z[ei,ti]:.1f}bp")
             _customdata.append(_row)
+        # Build text array matching z shape — more reliable than customdata on flat surfaces
+        import numpy as _np2
+        _text_arr = []
+        for ei, el in enumerate(exp_labels):
+            _trow = []
+            for ti, tl in enumerate(tenor_labels):
+                _trow.append(f"{el} x {tl}  {z[ei,ti]:.1f}bp")
+            _text_arr.append(_trow)
         frames.append(go.Frame(
             data=[go.Surface(
                 x=tenor_x, y=expiry_y, z=z.tolist(),
@@ -11009,8 +11035,8 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)") 
                 cmin=50, cmax=130,
                 showscale=True,
                 colorbar=dict(title="bp", thickness=12, len=0.6),
-                customdata=_customdata,
-                hovertemplate="%{customdata}<extra></extra>",
+                text=_text_arr,
+                hovertemplate="%{text}<extra></extra>",
                 hoverlabel=dict(bgcolor="#1e293b", bordercolor="#FFD700",
                                font=dict(color="#FFD700", size=14, family="Arial Black")),
             )],
