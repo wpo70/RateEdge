@@ -15543,7 +15543,7 @@ The range across the surface was {_usd_min_chg:+.1f}bp to {_usd_max_chg:+.1f}bp.
 AUD vols are implied to open broadly {_aud_direction}, averaging {abs(_aud_avg_chg):.1f}bp change. \
 Key AUD moves to watch: {_aud_move_str}.{_aud_prem_ctx}
 
-**Tactical note:** {"Short-dated AUD gamma looks relatively more affected given the short-end beta pickup. Consider reviewing 3m-6m expiry trades before the open." if abs(_aud_avg_chg) > 1.5 else "Moves are modest   —   no urgent repricing expected at the AUD open, but monitor live market confirmation."} \
+**Tactical note:** {"🔴 Significant overnight move — short-dated AUD gamma likely repriced at open. Priority: review 3m-6m expiry positions before first trades." if abs(float(_implied_chg.values.astype(float).max() if _implied_chg.values.astype(float).max() > abs(_implied_chg.values.astype(float).min()) else _implied_chg.values.astype(float).min())) > 4.0 else ("⚠️ Moderate moves — short-dated AUD gamma affected. Monitor 3m-6m expiry trades at open." if abs(float(_implied_chg.values.astype(float).max() if _implied_chg.values.astype(float).max() > abs(_implied_chg.values.astype(float).min()) else _implied_chg.values.astype(float).min())) > 2.0 else "✅ Moves are modest — no urgent repricing expected at the AUD open. Monitor live market confirmation.")} \
 These are indicative adjustments based on observed USD/AUD correlations and should be verified against live interdealer markets at open.
 """
             st.markdown(_narrative)
