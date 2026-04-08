@@ -5271,8 +5271,7 @@ def curves_tab():
                 if _adf is not None and "Expiry" in _adf.columns:
                     _adf = _adf.set_index("Expiry")
                 _anc = list(_adf.columns)
-                _safe_fmt = lambda x: f"{x:.2f}" if isinstance(x, (int, float)) and x == x else ""
-                _afmt = {c: _safe_fmt for c in _anc}
+                _afmt = {c: lambda x: f"{float(x):.2f}" if x is not None and str(x) not in ("nan","None","") else "" for c in _anc}
                 if show_atm_hm:
                     st.dataframe(_adf.style.format(_afmt).background_gradient("RdYlGn_r", axis=None, subset=_anc),
                                  use_container_width=True, height=820)
@@ -14426,8 +14425,8 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
         prem_rows.append(prow)
         vega_rows.append(vrow)
 
-    prem_df = pd.DataFrame(prem_rows).set_index("Expiry")
-    vega_df = pd.DataFrame(vega_rows).set_index("Expiry")
+    prem_df = pd.DataFrame(prem_rows).set_index("Expiry").apply(pd.to_numeric, errors="coerce")
+    vega_df = pd.DataFrame(vega_rows).set_index("Expiry").apply(pd.to_numeric, errors="coerce")
     return prem_df, vega_df
 
 
