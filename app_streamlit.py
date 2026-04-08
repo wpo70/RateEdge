@@ -11708,6 +11708,28 @@ def rv_tab():
         "🔮 What-If Scenarios",
     ]
     _rv_active = st.session_state.get("_rv_active_tab", 0)
+
+    # ── Define _par_rate and _fwd_rate here so all tabs can use them ──
+    if curve is not None:
+        _xs_c = curve["MaturityY"].to_numpy().astype(float)
+        _ys_c = curve["ZeroRatePct"].to_numpy().astype(float)
+        def _par_rate(t): return float(np.interp(t, _xs_c, _ys_c))
+        _rv_zc_qq = st.session_state.get("_aud_zc_qq_full") or st.session_state.get("_aud_zc_qq")
+        _rv_zc_ss = st.session_state.get("_aud_zc_ss")
+        def _fwd_rate(t1, t2):
+            tenor = t2 - t1
+            if tenor <= 0: return None
+            try:
+                if tenor <= 3.0 and _rv_zc_qq:
+                    return _fwd_from_zc(_rv_zc_qq, float(t1), float(tenor), 0.25)
+                if _rv_zc_ss:
+                    return _fwd_from_zc(_rv_zc_ss, float(t1), float(tenor), 0.50)
+                return None
+            except Exception:
+                return None
+    else:
+        def _par_rate(t): return None
+        def _fwd_rate(t1, t2): return None
     _rv_cols = st.columns(len(_rv_tab_names))
     for _ri, _rn in enumerate(_rv_tab_names):
         with _rv_cols[_ri]:
@@ -14953,9 +14975,28 @@ def sod_report_tab():
 
     st.markdown("---")
 
-    # ── Load snapshot data ────────────────────────────────────────
-    _d1 = load_vol_snapshot(_usd_t1["id"])
-    _d2 = load_vol_snapshot(_usd_t2["id"])
+    # ── Generate gate — all heavy computation behind button ───────
+    _sod_cache_key = f"sod_{_usd_t1['id']}_{_usd_t2['id']}_{(_aud_snap or {}).get('id','none')}"
+    if st.button("⚡ Generate SOD Report", key="sod_generate", type="primary"):
+        st.session_state["_sod_run_key"] = _sod_cache_key
+        st.session_state.pop("_sod_computed", None)  # force recompute
+    if st.session_state.get("_sod_run_key") != _sod_cache_key:
+        st.info("Select snapshots above then click **⚡ Generate SOD Report**.")
+        return
+
+    # ── Load + compute — cached in session state by snapshot IDs ─
+    if st.session_state.get("_sod_computed_key") != _sod_cache_key:
+        with st.spinner("Loading snapshots and pricing matrices..."):
+            _d1 = load_vol_snapshot(_usd_t1["id"])
+            _d2 = load_vol_snapshot(_usd_t2["id"])
+            st.session_state["_sod_d1"] = _d1
+            st.session_state["_sod_d2"] = _d2
+            _aud_d = load_vol_snapshot(_aud_snap["id"]) if _aud_snap else None
+            st.session_state["_sod_aud_d"] = _aud_d
+            st.session_state["_sod_computed_key"] = _sod_cache_key
+    else:
+        _d1 = st.session_state.get("_sod_d1")
+        _d2 = st.session_state.get("_sod_d2")
 
     if _d1 is None or _d2 is None:
         st.error("Failed to load USD snapshots.")
@@ -15063,13 +15104,13 @@ def sod_report_tab():
 
     # ── AUD Vol Snapshot ──────────────────────────────────────────
     _aud_atm = None
-    if _aud_snap:
-        _aud_data = load_vol_snapshot(_aud_snap["id"])
-        if _aud_data:
-            _aud_atm = _norm(_aud_data.get("atm"))
-            if _aud_atm is not None:
-                _aud_atm.index = _aud_atm.index.str.lower().str.strip()
-                _aud_atm.columns = [str(c).upper() for c in _aud_atm.columns]
+    _aud_d_cached = st.session_state.get("_sod_aud_d")
+    _aud_data = _aud_d_cached if _aud_d_cached else (load_vol_snapshot(_aud_snap["id"]) if _aud_snap else None)
+    if _aud_data:
+        _aud_atm = _norm(_aud_data.get("atm"))
+        if _aud_atm is not None:
+            _aud_atm.index = _aud_atm.index.str.lower().str.strip()
+            _aud_atm.columns = [str(c).upper() for c in _aud_atm.columns]
 
     # ── Implied AUD Vol Open ──────────────────────────────────────
     st.markdown("---")
