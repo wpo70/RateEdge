@@ -5084,7 +5084,8 @@ def curves_tab():
                 _disp = st.session_state.get("basis_matrix_3v1", {}).get(ccy)
             if _disp is not None:
                 _nc  = [c for c in _disp.columns if c != "Expiry"]
-                _fmt = {c: "{:.4f}" for c in _nc}
+                _safe_fmt = lambda x: f"{x:.4f}" if isinstance(x, (int, float)) and x == x else ""
+                _fmt = {c: _safe_fmt for c in _nc}
                 if show_hm:
                     _cm = "RdYlGn_r" if _rv == "IRS Fwd" else "RdYlGn"
                     st.dataframe(_disp.style.format(_fmt).background_gradient(_cm, axis=None, subset=_nc),
@@ -12998,7 +12999,7 @@ def rv_tab():
                     # Key swaption pricer cells
                     st.markdown("**Shocked Surface ATM Vols (bp):**")
                     _nc2 = [c for c in _shocked.columns]
-                    st.dataframe(_shocked.style.format({c: "{:.2f}" for c in _nc2}).background_gradient(
+                    st.dataframe(_shocked.style.format({c: (lambda x: f"{x:.2f}" if isinstance(x,(int,float)) and x==x else "") for c in _nc2}).background_gradient(
                         "RdYlGn_r", axis=None, subset=_nc2),
                         use_container_width=True, height=350)
 
@@ -13044,7 +13045,7 @@ def rv_tab():
                                     "RdYlGn_r", axis=None), use_container_width=True, height=320)
                             with col_b:
                                 st.markdown("**Change vs Today (bp):**")
-                                _fmt_chg = {c: "{:+.2f}" for c in _common_ten}
+                                _fmt_chg = {c: (lambda x: f"{x:+.2f}" if isinstance(x,(int,float)) and x==x else "") for c in _common_ten}
                                 st.dataframe(_chg.style.format(_fmt_chg).background_gradient(
                                     "RdYlGn", axis=None,
                                     vmin=-10, vmax=10), use_container_width=True, height=320)
