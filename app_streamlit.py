@@ -5263,26 +5263,16 @@ def curves_tab():
 
             if has_atm:
                 _ad = st.session_state["atm_prem_matrix"][ccy]
-                _adf_raw = {"ATM Vol (bp)": _ad["vol"],
-                            "Forward Premium (bp)": _ad["prem"],
-                            "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
-                # Normalise to Expiry as index for display
-                if _adf_raw is not None and not _adf_raw.empty:
-                    if "Expiry" in _adf_raw.columns:
-                        _adf = _adf_raw.set_index("Expiry")
-                    elif _adf_raw.index.name == "Expiry":
-                        _adf = _adf_raw
-                    else:
-                        _adf = _adf_raw
-                    _adf = _adf.apply(pd.to_numeric, errors="coerce")
-                    _anc = list(_adf.columns)
-                    if show_atm_hm:
-                        st.dataframe(_adf.style.format("{:.2f}", na_rep="—").background_gradient("RdYlGn_r", axis=None, subset=_anc),
-                                     use_container_width=True, height=820)
-                    else:
-                        st.dataframe(_adf.style.format("{:.2f}", na_rep="—"), use_container_width=True, height=820)
+                _adf = {"ATM Vol (bp)": _ad["vol"],
+                        "Forward Premium (bp)": _ad["prem"],
+                        "Vega ($/1bp 100mm)": _ad["vega"]}.get(_av, _ad["vol"])
+                _anc = [c for c in _adf.columns if c != "Expiry"]
+                _adf = _adf.apply(pd.to_numeric, errors="coerce")
+                if show_atm_hm:
+                    st.dataframe(_adf.style.format("{:.2f}", na_rep="—").background_gradient("RdYlGn_r", axis=None, subset=_anc),
+                                 use_container_width=True, height=820)
                 else:
-                    st.info("Click **▶ Generate ATM Matrix**")
+                    st.dataframe(_adf.style.format("{:.2f}", na_rep="—"), use_container_width=True, height=820)
             else:
                 st.info("Click **▶ Generate ATM Matrix**")
 
