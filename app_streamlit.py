@@ -14348,7 +14348,13 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
       prem_df    —   ATM straddle forward premium in bp
       vega_df    —   Vega in $ per 1bp vol move, scaled to 100mm notional
     """
-    if "Expiry" not in atm_vols.columns:
+    # Normalise: ensure Expiry is a column not the index
+    if atm_vols is not None and "Expiry" not in atm_vols.columns:
+        if atm_vols.index.name and atm_vols.index.name.lower() == "expiry":
+            atm_vols = atm_vols.reset_index().rename(columns={atm_vols.index.name: "Expiry"})
+        elif atm_vols.index.dtype == object:
+            atm_vols = atm_vols.reset_index().rename(columns={"index": "Expiry"})
+    if atm_vols is None or "Expiry" not in atm_vols.columns:
         empty = pd.DataFrame()
         return empty, empty
 
