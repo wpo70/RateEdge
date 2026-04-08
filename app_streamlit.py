@@ -12143,7 +12143,16 @@ def rv_tab():
         if atm is None or curve is None:
             st.warning("Load both AUD ATM vol surface and IRS curve to generate ideas.")
         else:
-            ideas = []
+            # Gate behind button — idea engine is expensive, don't run every render
+            _rv_ideas_key = "rv_ideas_run"
+            if st.button("⚡ Generate Trade Ideas", key="rv_gen_ideas", type="primary"):
+                st.session_state[_rv_ideas_key] = True
+                st.session_state.pop("_rv_ideas_cache", None)
+            if not st.session_state.get(_rv_ideas_key):
+                st.info("Click **⚡ Generate Trade Ideas** to run the idea engine.")
+            else:
+              if True:  # indent wrapper
+                ideas = []
 
             # ── Idea engine ──────────────────────────────────────────
             # 1. Vol butterfly   —   ATM vs wings in expiry dim
