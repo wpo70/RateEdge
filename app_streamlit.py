@@ -5271,7 +5271,10 @@ def curves_tab():
                 if _adf is not None and "Expiry" in _adf.columns:
                     _adf = _adf.set_index("Expiry")
                 _anc = list(_adf.columns)
-                _afmt = {c: lambda x: f"{float(x):.2f}" if x is not None and str(x) not in ("nan","None","") else "" for c in _anc}
+                def _sfmt(x):
+                    try: return f"{float(x):.2f}"
+                    except: return ""
+                _afmt = {c: _sfmt for c in _anc}
                 if show_atm_hm:
                     st.dataframe(_adf.style.format(_afmt).background_gradient("RdYlGn_r", axis=None, subset=_anc),
                                  use_container_width=True, height=820)
