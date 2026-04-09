@@ -15636,6 +15636,9 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             _report_text = "\n".join(_report_lines)
 
             # Build JSON payload for DB storage
+            # Store implied open for Vol Editor button
+            st.session_state["_sod_implied_open"] = _implied_open.copy()
+
             _report_payload = {
                 "usd_chg": _usd_chg.to_dict(),
                 "usd_prem_chg": _usd_prem_chg.to_dict() if not _usd_prem_chg.empty else {},

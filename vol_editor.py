@@ -148,10 +148,13 @@ def _init_state(ccy: str, surface: pd.DataFrame) -> None:
     # Always update base to the current committed surface
     # This ensures the editor always starts from the correct loaded surface
     current_base = ed["base"].get(ccy)
+    _sod_loaded = ed.get("sod_loaded", {}).get(ccy, False)
     if current_base is None or not current_base.equals(surface):
-        # Surface has changed (new load from DB) — reset base AND working
+        # Surface has changed (new load from DB) — reset base
         ed["base"][ccy] = surface.copy()
-        ed["working"][ccy] = surface.copy()
+        # Only reset working if SOD hasn't loaded an implied open
+        if not _sod_loaded:
+            ed["working"][ccy] = surface.copy()
         ed["history"][ccy] = []
         ed["redo_stack"][ccy] = []
         ed["view_mode"][ccy] = "vol"
