@@ -2191,7 +2191,7 @@ def build_caplet_vol_curve_from_surface(ccy: str, atm_surface):
 def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None, 
                           spread_3m1y=-3.0, spread_1y1y=12.0, spread_2y1y=15.0, 
                           spread_3y1y=19.0, spread_4y1y=22.0, spread_5y2y=40.0, spread_7y3y=60.0,
-                          spread_10y2y=50.0, spread_12y3y=70.0):
+                          spread_10y2y=50.0, spread_12y3y=70.0, spread_15v20=-5.0):
     """
     Build caplet vol curve using cumulative premium method with proper solving.
     """
@@ -2421,6 +2421,15 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         except:
             pass
     
+    # Extend to 20y using vol spread if provided
+    if 15.0 in caplet_vols and spread_15v20 is not None:
+        try:
+            vol_15y = caplet_vols[15.0]
+            vol_20y = max(vol_15y + spread_15v20, 1.0)
+            caplet_vols[20.0] = vol_20y
+        except Exception:
+            pass
+
     # Final cubic spline interpolation with solved anchors
     from scipy.interpolate import CubicSpline
     anchor_mats = np.array(sorted([m for m in caplet_vols.keys() if m >= 1.0 and m == int(m)]))
@@ -3251,7 +3260,7 @@ def init_session():
     _spread_defaults = {
         "cf_spr_3m1y": 10.0, "cf_spr_1y1y": 11.5, "cf_spr_2y1y": 13.0,
         "cf_spr_3y1y": 17.5, "cf_spr_4y1y": 20.0, "cf_spr_5y2y": 45.0,
-        "cf_spr_7y3y": 50.0, "cf_spr_10y2y": 35.0, "cf_spr_12y3y": 100.0,
+        "cf_spr_7y3y": 50.0, "cf_spr_10y2y": 35.0, "cf_spr_12y3y": 100.0, "cf_spr_15v20": -5.0,
     }
     _spreads_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cfs_spreads.json")
     if not any(k in st.session_state for k in _spread_defaults):
@@ -7743,6 +7752,7 @@ def caps_floors_tab(vol_mode: str):
     spread_7y3y  = st.session_state.get("cf_spr_7y3y",  50.0)
     spread_10y2y = st.session_state.get("cf_spr_10y2y", 35.0)
     spread_12y3y = st.session_state.get("cf_spr_12y3y", 75.0)
+    spread_15v20   = st.session_state.get("cf_spr_15v20", -5.0)
     caplet_vol_curve = None  # Initialize
     
     if vol_src == "Manual Flat":
@@ -7807,6 +7817,7 @@ def caps_floors_tab(vol_mode: str):
         spread_7y3y  = st.session_state["cf_spr_7y3y"]
         spread_10y2y = st.session_state["cf_spr_10y2y"]
         spread_12y3y = st.session_state["cf_spr_12y3y"]
+        spread_15v20 = st.session_state.get("cf_spr_15v20", -5.0)
 
         # Toggle
         if "wedges_expanded" not in st.session_state:
@@ -7911,6 +7922,28 @@ def caps_floors_tab(vol_mode: str):
                     new_spread_values[spr_key] = new_val
                     st.session_state[f"{spr_key}_temp"] = new_val
 
+                # ── Vol spread row for 15y → 20y extension (not a wedge) ──
+                st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+                st.markdown("<hr style='margin:2px 0;border-color:#1e3050;border-style:dashed'>", unsafe_allow_html=True)
+                _vs_cols = st.columns(CW)
+                _fs = "font-size:0.80rem;padding-top:6px"
+                _vs_cols[0].markdown(f"<div style='{_fs};color:#f59e0b'>15y vs 20y Vol Spd</div>", unsafe_allow_html=True)
+                _spread_15v20_last = st.session_state.get("cf_spr_15v20", -5.0)
+                _spread_15v20_cur  = st.session_state.get("cf_spr_15v20_temp", _spread_15v20_last)
+                _vs_cols[1].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>{_spread_15v20_last:.1f}</div>", unsafe_allow_html=True)
+                _spread_15v20_new = _vs_cols[2].number_input("", value=_spread_15v20_cur, key="cf_spr_15v20_new",
+                                                              format="%.1f", step=0.5, label_visibility="collapsed")
+                _delta_15v20 = _spread_15v20_new - _spread_15v20_last
+                _dc = "#22c55e" if _delta_15v20 > 0 else "#ef4444" if _delta_15v20 < 0 else "#94a3b8"
+                _vs_cols[3].markdown(f"<div style='{_fs};text-align:right;color:{_dc}'>{_delta_15v20:+.1f}</div>", unsafe_allow_html=True)
+                _vs_cols[5].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>vol spd</div>", unsafe_allow_html=True)
+                _vs_cols[7].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>15→20</div>", unsafe_allow_html=True)
+                _vs_cols[8].markdown(f"<div style='{_fs};text-align:right;color:#f59e0b'>{_spread_15v20_new:.1f}bp</div>", unsafe_allow_html=True)
+                _vs_cols[9].markdown(f"<div style='{_fs};text-align:right;color:#38bdf8;font-weight:600'>20Y CFS</div>", unsafe_allow_html=True)
+                _vs_cols[10].markdown(f"<div style='{_fs};text-align:right;color:#64748b'>vol ext</div>", unsafe_allow_html=True)
+                st.session_state["cf_spr_15v20_temp"] = _spread_15v20_new
+                new_spread_values["cf_spr_15v20"] = _spread_15v20_new
+
             with col_sabr:
                 with st.expander("⚙️ SABR Skew Params", expanded=False):
                  st.markdown("<div style='font-size:0.75rem;font-weight:600;color:#64748b;margin-bottom:2px'>SABR Parameters (Caplet Skew)</div>", unsafe_allow_html=True)
@@ -7942,6 +7975,7 @@ def caps_floors_tab(vol_mode: str):
             if bl.button("✅ Calculate CFS from Spreads", key="apply_spreads", type="primary") and require_admin("Edit Spreads"):
                 for spr_key, *_ in ROW_DATA:
                     st.session_state[spr_key] = new_spread_values[spr_key]
+                st.session_state["cf_spr_15v20"] = new_spread_values.get("cf_spr_15v20", st.session_state.get("cf_spr_15v20", -5.0))
                 # Persist to disk
                 try:
                     _spreads_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cfs_spreads.json")
@@ -8264,6 +8298,7 @@ def caps_floors_tab(vol_mode: str):
                 spread_7y3y=spread_7y3y,
                 spread_10y2y=spread_10y2y,
                 spread_12y3y=spread_12y3y,
+                spread_15v20=st.session_state.get("cf_spr_15v20", -5.0),
             )
             st.session_state["_caplet_curve_key"] = _caplet_key
         else:
