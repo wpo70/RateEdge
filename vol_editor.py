@@ -706,7 +706,7 @@ def render_vol_surface_editor(ccy: str, atm_surface: pd.DataFrame, curve: pd.Dat
     if force_update:
         st.session_state["vol_editor"]["working"][ccy] = atm_surface.copy()
     ed = st.session_state["vol_editor"]
-    working, base = _norm_df(ed["working"][ccy]), _norm_df(ed["base"][ccy])
+    working, base = ed["working"][ccy], ed["base"][ccy]
     view_mode = ed["view_mode"].get(ccy, "vol")
     smoothing = ed["smoothing"].get(ccy, DEFAULT_SMOOTHING)
     has_changes = _has_changes(ccy)
@@ -834,8 +834,6 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
     with st.expander("📊 ATM Vol Surface (Live)", expanded=False):
         changes = None
         if show_chg and has_changes:
-            _w = _norm_df(working)
-            _b = _norm_df(base)
             changes = _w.copy()
             for c in _w.columns[1:]:
                 if c in _b.columns:
@@ -848,12 +846,16 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
     st.markdown("---")
     st.markdown("#### 📋 Edit Grid")
     
+    # Normalise for display only — don't store back
+    _w = _norm_df(working)
+    _b = _norm_df(base)
+    
     # Prepare display data
-    display = surface_vol_to_premium(working, ccy) if view_mode == "fwd_premium" else working.copy()
-    base_display = surface_vol_to_premium(base, ccy) if view_mode == "fwd_premium" else base.copy()
+    display = surface_vol_to_premium(_w, ccy) if view_mode == "fwd_premium" else _w.copy()
+    base_display = surface_vol_to_premium(_b, ccy) if view_mode == "fwd_premium" else _b.copy()
     
     # Calculate changes for styling
-    tcols = working.columns[1:].tolist()
+    tcols = _w.columns[1:].tolist()
     
     # Create styled dataframe showing changes as heatmap
     if has_changes and show_chg:
