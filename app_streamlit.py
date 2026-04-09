@@ -15035,7 +15035,9 @@ def midcurve_tab():
     # Get vol surface and curve
     _vol_data = st.session_state.get("vol_data", {}).get(ccy, {})
     atm = _vol_data.get("atm")
-    _curve = st.session_state.get("config_curves", {}).get(ccy) or get_ccy_curve(ccy)
+    _curve = st.session_state.get("config_curves", {}).get(ccy)
+    if _curve is None or (hasattr(_curve, "empty") and _curve.empty):
+        _curve = get_ccy_curve(ccy)
 
     if atm is None or atm.empty:
         st.info(f"No ATM vol surface loaded for {ccy}. Upload via IRS / Vol Upload tab.")
