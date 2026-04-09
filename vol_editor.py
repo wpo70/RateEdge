@@ -934,8 +934,10 @@ def render_bulk_adjustment_tools(ccy: str) -> None:
     with _sm1:
         _sm_passes = st.number_input("Passes", 1, 5, 2, 1, key=f"sm_passes_{ccy}")
     with _sm2:
-        _sm_rows = st.multiselect("Pin rows (no smooth)", w["Expiry"].tolist(),
-                                   default=[e for e in ["1w","2w"] if e in w["Expiry"].tolist()],
+        # Normalise expiry column name
+        _exp_col = next((c for c in w.columns if c.lower() == "expiry"), w.columns[0])
+        _sm_rows = st.multiselect("Pin rows (no smooth)", w[_exp_col].tolist(),
+                                   default=[e for e in ["1w","2w"] if e in w[_exp_col].tolist()],
                                    key=f"sm_pin_{ccy}")
     with _sm3:
         st.caption("Weighted average across expiry neighbours. Pin rows to preserve them unchanged (e.g. 1w/2w short-end extrapolated rows).")
@@ -943,7 +945,7 @@ def render_bulk_adjustment_tools(ccy: str) -> None:
         _push_history(ccy)
         import numpy as _np
         _arr = w[tcols].values.astype(float).copy()
-        _pinned = [i for i, e in enumerate(w["Expiry"].tolist()) if str(e) in _sm_rows]
+        _pinned = [i for i, e in enumerate(w[_exp_col].tolist()) if str(e) in _sm_rows]
         for _pass in range(int(_sm_passes)):
             _new = _arr.copy()
             for i in range(len(_arr)):
