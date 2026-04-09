@@ -15274,6 +15274,10 @@ def sod_report_tab():
     if _aud_atm is not None:
         _aud_exp = [e for e in _aud_atm.index if e in _usd_chg.index]
         _aud_ten = [c for c in _aud_atm.columns if c in _usd_chg.columns]
+        # Always store AUD surface for Vol Editor button regardless of overlap
+        _aud_atm_for_ve = _aud_atm.reset_index()
+        _aud_atm_for_ve.columns = ["Expiry"] + list(_aud_atm_for_ve.columns[1:])
+        st.session_state["_sod_implied_open"] = _aud_atm_for_ve.copy()
 
         if _aud_exp and _aud_ten:
             _implied_chg  = pd.DataFrame(index=_aud_exp, columns=_aud_ten, dtype=float)
@@ -15289,6 +15293,12 @@ def sod_report_tab():
                         _implied_open.loc[_e, _t] = round(_aud_now + _usd_mv * _b, 2)
                     except Exception:
                         pass
+
+            # Store implied open for Vol Editor button
+            # Update with actual implied open if computed
+            _io_df = _implied_open.reset_index()
+            _io_df.columns = ["Expiry"] + list(_io_df.columns[1:])
+            st.session_state["_sod_implied_open"] = _io_df.copy()
 
             # ── Compute AUD premium matrices ─────────────────────────
             _aud_curve = get_ccy_curve("AUD")
@@ -15636,9 +15646,6 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             _report_text = "\n".join(_report_lines)
 
             # Build JSON payload for DB storage
-            # Store implied open for Vol Editor button
-            st.session_state["_sod_implied_open"] = _implied_open.copy()
-
             _report_payload = {
                 "usd_chg": _usd_chg.to_dict(),
                 "usd_prem_chg": _usd_prem_chg.to_dict() if not _usd_prem_chg.empty else {},
