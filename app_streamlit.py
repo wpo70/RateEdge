@@ -11212,11 +11212,27 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)") 
 
     # Format date label e.g. "2026-02-03" → "03-Feb-26"
     def _fmt_snap_date(s):
+        import re as _re2
+        from datetime import datetime as _dt2
+        # Try ISO format first
         try:
-            from datetime import datetime as _dt2
-            return _dt2.strptime(s, "%Y-%m-%d").strftime("%d-%b-%y")
+            return _dt2.strptime(s.strip(), "%Y-%m-%d").strftime("%d-%b-%y")
         except Exception:
-            return s
+            pass
+        # Extract date from labels like "EOD 09-Apr-2026 AEDT" or "09-Apr-2026"
+        _m = _re2.search(r"(\d{2}-[A-Za-z]{3}-\d{4})", s)
+        if _m:
+            try:
+                return _dt2.strptime(_m.group(1), "%d-%b-%Y").strftime("%d-%b-%y")
+            except Exception:
+                pass
+        _m2 = _re2.search(r"(\d{4}-\d{2}-\d{2})", s)
+        if _m2:
+            try:
+                return _dt2.strptime(_m2.group(1), "%Y-%m-%d").strftime("%d-%b-%y")
+            except Exception:
+                pass
+        return s
 
     # Initial surface = first frame
     first = frames[0].data[0]
@@ -11287,8 +11303,7 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)") 
                     method="animate",
                     args=[[d], dict(mode="immediate", frame=dict(duration=0, redraw=True))],
                     # Show every 5th label to avoid crowding; blank the rest
-                    label=(_fmt_snap_date(d.split()[-1] if " " in d else d)
-                           if _i % 3 == 0 else ""),
+                    label=(_fmt_snap_date(d) if _i % 3 == 0 else ""),
                 ) for _i, d in enumerate(dates)],
                 len=0.90, x=0.05, y=0.0,
                 font=dict(color="#94a3b8", size=10, family="Arial"),
