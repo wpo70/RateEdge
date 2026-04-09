@@ -31,18 +31,21 @@ EXPIRY_YEARS = {
 DEFAULT_SMOOTHING = {"enabled": True, "radius": 1, "falloff": 0.5}
 
 
+_lty_cache = {}
 def label_to_years(label: str) -> float:
-    label = label.upper().strip()
-    if label in EXPIRY_YEARS:
-        return EXPIRY_YEARS[label]
-    if label.endswith("M"):
-        _r = float(label[:-1])
-    _lty_cache[_orig] = _r
-    return _r / 12
-    if label.endswith("Y"):
-        _r = float(label[:-1])
-    _lty_cache[_orig] = _r
-    return _r
+    orig = str(label)
+    if orig in _lty_cache: return _lty_cache[orig]
+    s = orig.upper().strip()
+    if s in EXPIRY_YEARS:
+        _lty_cache[orig] = EXPIRY_YEARS[s]
+        return _lty_cache[orig]
+    if s.endswith("M"):
+        _lty_cache[orig] = float(s[:-1]) / 12
+        return _lty_cache[orig]
+    if s.endswith("Y"):
+        _lty_cache[orig] = float(s[:-1])
+        return _lty_cache[orig]
+    _lty_cache[orig] = 1.0
     return 1.0
 
 
@@ -137,15 +140,18 @@ def _init_state(ccy: str, surface: pd.DataFrame) -> None:
     # Always update base to the current committed surface
     # This ensures the editor always starts from the correct loaded surface
     current_base = ed["base"].get(ccy)
+    _sod_active = ed.get("sod_loaded", {}).get(ccy, False)
     if current_base is None or not current_base.equals(surface):
-        # Surface has changed (new load from DB) — reset base AND working
+        # Surface has changed — reset base, but preserve working if SOD was loaded
         ed["base"][ccy] = surface.copy()
-        ed["working"][ccy] = surface.copy()
+        if not _sod_active:
+            ed["working"][ccy] = surface.copy()
         ed["history"][ccy] = []
         ed["redo_stack"][ccy] = []
-        ed["view_mode"][ccy] = "vol"
-        ed["smoothing"][ccy] = DEFAULT_SMOOTHING.copy()
-        ed["paste_data"][ccy] = ""
+        if "view_mode" not in ed or ccy not in ed.get("view_mode", {}):
+            ed.setdefault("view_mode", {})[ccy] = "vol"
+        ed.setdefault("smoothing", {})[ccy] = DEFAULT_SMOOTHING.copy()
+        ed.setdefault("paste_data", {})[ccy] = ""
     elif ccy not in ed["working"]:
         ed["working"][ccy] = surface.copy()
         ed["history"][ccy] = []
