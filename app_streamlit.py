@@ -15680,7 +15680,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
 
             # ── Save & Download report ───────────────────────────────
             _report_lines = [
-                f"RateEdge SOD Report   —   {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')} AEST",
+                f"RateEdge SOD Report   —   {pd.Timestamp.now(tz='Australia/Sydney').strftime('%Y-%m-%d %H:%M')} {'AEDT' if pd.Timestamp.now(tz='Australia/Sydney').dst().seconds > 0 else 'AEST'}",
                 f"USD T-1: {_usd_t1_sel[:40]}",
                 f"USD T-2: {_usd_t2_sel[:40]}",
                 f"AUD prev close: {_aud_sel[:40]}",
@@ -15726,7 +15726,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 st.download_button(
                     "📂 Download SOD Report",
                     _report_text.encode(),
-                    f"RateEdge_SOD_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.txt",
+                    f"RateEdge_SOD_{pd.Timestamp.now(tz='Australia/Sydney').strftime('%Y%m%d_%H%M')}.txt",
                     "text/plain", key="sod_download"
                 )
             with _btn_col2:
