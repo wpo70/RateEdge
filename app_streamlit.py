@@ -7396,9 +7396,9 @@ def swaptions_tab(vol_mode: str):
             "<div style='display:grid;grid-template-columns:3.0% 20.3% 6.2% 7.3% 6.2% 8.3% 8.3% 8.3% 8.3% 16.0% 3.8% 3.8%;"
             "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
             "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
-            "<span>#</span><span>Structure</span><span>Expiry</span><span>Tenor</span>"
-            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Premium(bp)</span>"
-            "<span>PV($k)</span><span>Status</span><span></span><span></span></div>",
+            "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
+            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Prem(bp)</span>"
+            "<span>PV($k)</span><span>Status</span><span>Tix</span><span>Del</span></div>",
             unsafe_allow_html=True)
 
         for idx, row in df.iterrows():
@@ -8165,7 +8165,7 @@ def caps_floors_tab(vol_mode: str):
         if st.session_state["atm_cfs_expanded"]:
             _CFS_MAP = [
                 (1, "3m1y"), (2, "1y1y"), (3, "2y1y"), (4, "3y1y"), (5, "4y1y"),
-                (7, "5y2y"), (10, "7y3y"), (12, "10y2y"), (15, "12y3y"),
+                (7, "5y2y"), (10, "7y3y"), (12, "10y2y"), (15, "12y3y"), (20, None),
             ]
             _cfs_tdata = st.session_state.get("cfs_table_data", {})
             _caplet_vc = st.session_state.get("caplet_vol_curve_aud")
@@ -8222,10 +8222,11 @@ def caps_floors_tab(vol_mode: str):
                             else:
                                 _fwd_rate = fast_forward_rate(_cx, _cy, _fwd_start_y, _cap_swap_tenor, ccy, freq_override=None, ois_x=_ox, ois_y=_oy, basis6v3_x=_bx, basis6v3_y=_by)
                         # Cumulative CFS straddle
-                        _wedge_straddle = _cfs_tdata.get(_key, {}).get("cfs_straddle")
-                        if _wedge_straddle is not None:
-                            _cum_prem += float(_wedge_straddle)
-                        _straddle_prem = round(_cum_prem, 4)
+                        if _key is not None:
+                            _wedge_straddle = _cfs_tdata.get(_key, {}).get("cfs_straddle")
+                            if _wedge_straddle is not None:
+                                _cum_prem += float(_wedge_straddle)
+                        _straddle_prem = round(_cum_prem, 4) if _cum_prem else None
                         # Flat vol from caplet curve
                         _flat_vol = None
                         if _caplet_vc:
@@ -8242,12 +8243,17 @@ def caps_floors_tab(vol_mode: str):
                                         _a = (_t - _mats[_j]) / (_mats[_j+1] - _mats[_j])
                                         _flat_vol = _caplet_vc[_mats[_j]] + _a * (_caplet_vc[_mats[_j+1]] - _caplet_vc[_mats[_j]])
                                         break
+                        # For 20Y: use vol spread extension, no wedge straddle key
+                        if _key is None:
+                            _wedge_straddle_20 = None
+                        else:
+                            _wedge_straddle_20 = None
                         _atm_cfs_rows.append({
                             "Tenor": f"{_t}Y",
                             "Start": _start_dt.strftime("%d %b %y"),
                             "End":   _end_dt.strftime("%d %b %y"),
                             "ATM Fwd %": f"{_fwd_rate*100:.3f}" if _fwd_rate else "—",
-                            "Straddle bp": f"{_straddle_prem:.4f}",
+                            "Straddle bp": f"{_straddle_prem:.4f}" if _straddle_prem else "—",
                             "Flat Vol bp": f"{_flat_vol:.1f}" if _flat_vol else "—",
                         })
                         _atm_cfs_data[f"cf_straddle_{_t}y"] = {"value": _straddle_prem, "label": f"{_t}Y ATM CFS straddle"}
@@ -8725,8 +8731,8 @@ def caps_floors_tab(vol_mode: str):
             "<div style='display:grid;grid-template-columns:28px 160px 58px 68px 58px 78px 78px 78px 78px 150px 36px;"
             "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
             "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
-            "<span>#</span><span>Structure</span><span>Expiry</span><span>Tenor</span>"
-            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Premium(bp)</span>"
+            "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
+            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Prem(bp)</span>"
             "<span>PV($k)</span><span>Status</span><span></span></div>",
             unsafe_allow_html=True)
 
@@ -15756,6 +15762,7 @@ def sod_report_tab():
                 ("10Y CFS", "cf_spr_7y3y",  "7y",  "3Y"),
                 ("12Y CFS", "cf_spr_10y2y", "10y", "2Y"),
                 ("15Y CFS", "cf_spr_12y3y", "12y", "3Y"),
+                ("20Y CFS", None,            None,  None),
             ]
 
             def _prem_lookup(df, exp, ten):
@@ -15779,6 +15786,21 @@ def sod_report_tab():
             _cfs_ok = not _aud_prem_prev.empty and not _aud_prem_open.empty
 
             for _cfs_lbl, _spr_key, _exp, _ten in _CFS_CHAIN:
+                # 20Y CFS: vol spread extension — no swaption wedge in the premium matrix
+                if _spr_key is None:
+                    _vol_spd = st.session_state.get("cf_spr_15v20", -5.0)
+                    _cfs_rows.append({
+                        "CFS Tenor": _cfs_lbl,
+                        "Swptn Leg (prev)": "vol spd",
+                        "Wedge": f"{_vol_spd:+.1f}bp",
+                        "CFS Leg (prev)": "—",
+                        "Swptn Leg (open)": "vol spd",
+                        "CFS Leg (open)": "—",
+                        "CFS Total (prev)": f"{_cum_prev:.2f}" if _cum_prev else "—",
+                        "CFS Total (open)": f"{_cum_open:.2f}" if _cum_open else "—",
+                        "> CFS": "—",
+                    })
+                    continue
                 _spr = st.session_state.get(_spr_key, 0.0)
                 _p_prev = _prem_lookup(_aud_prem_prev, _exp, _ten)
                 _p_open = _prem_lookup(_aud_prem_open, _exp, _ten)
