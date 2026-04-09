@@ -831,6 +831,10 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
     elif confirm_btn:
         st.warning("Paste the data first")
     
+    # Normalise for display only — don't store back
+    _w = _norm_df(working)
+    _b = _norm_df(base)
+
     with st.expander("📊 ATM Vol Surface (Live)", expanded=False):
         changes = None
         if show_chg and has_changes:
@@ -845,10 +849,6 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
     
     st.markdown("---")
     st.markdown("#### 📋 Edit Grid")
-    
-    # Normalise for display only — don't store back
-    _w = _norm_df(working)
-    _b = _norm_df(base)
     
     # Prepare display data
     display = surface_vol_to_premium(_w, ccy) if view_mode == "fwd_premium" else _w.copy()
