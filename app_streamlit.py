@@ -14978,6 +14978,7 @@ def main():
         "📏 SOD Report",
         "✅ Vol Editor",
         "📑 Vol Export",
+        "📐 Midcurve & Curve Options",
     ]
     _tab_funcs = [
         home_tab,
@@ -14993,6 +14994,7 @@ def main():
         sod_report_tab,
         vol_surface_editor_tab,
         vol_export_tab,
+        midcurve_tab,
     ]
     if _show_hidden:
         _tab_names += ["📍 Multi-CCY"]
@@ -15003,6 +15005,167 @@ def main():
     for _ti, _tf in enumerate(_tab_funcs):
         with tabs[_ti]:
             _tf()
+
+
+
+def midcurve_tab():
+    """Midcurve & Curve Options Grids — ATM vol, premium and vega for standard midcurve structures."""
+    st.subheader("📐 Midcurve & Curve Options Grids")
+
+    # ── Config ─────────────────────────────────────────────────────
+    MIDCURVE_EXPIRIES = ["1m","2m","3m","6m","9m","1y","2y","5y"]
+    MIDCURVE_SWAPS = {
+        "1m3y":  (1/12, 3),
+        "3m3y":  (3/12, 3),
+        "3m5y":  (3/12, 5),
+        "6m1y":  (6/12, 1),
+        "6m3y":  (6/12, 3),
+        "6m5y":  (6/12, 5),
+        "1y1y":  (1,    1),
+        "1y2y":  (1,    2),
+        "1y10y": (1,   10),
+        "2y1y":  (2,    1),
+        "2y2y":  (2,    2),
+        "2y5y":  (2,    5),
+        "2y10y": (2,   10),
+    }
+
+    ccy = st.selectbox("Currency", ["AUD","USD","NZD"], key="mc_ccy")
+
+    # Get vol surface and curve
+    _vol_data = st.session_state.get("vol_data", {}).get(ccy, {})
+    atm = _vol_data.get("atm")
+    _curve = st.session_state.get("config_curves", {}).get(ccy) or get_ccy_curve(ccy)
+
+    if atm is None or atm.empty:
+        st.info(f"No ATM vol surface loaded for {ccy}. Upload via IRS / Vol Upload tab.")
+        return
+    if _curve is None or _curve.empty:
+        st.info(f"No curve loaded for {ccy}.")
+        return
+
+    # Build par cubic spline for fwd rates
+    try:
+        from scipy.interpolate import CubicSpline as _CS
+        _cx = _curve.iloc[:,0].values.astype(float)
+        _cy = _curve.iloc[:,1].values.astype(float) / 100.0
+        _order = np.argsort(_cx)
+        _cx, _cy = _cx[_order], _cy[_order]
+        _cs = _CS(_cx, _cy)
+    except Exception as _e:
+        st.error(f"Curve spline error: {_e}")
+        return
+
+    # ── View selector ──────────────────────────────────────────────
+    _vc1, _vc2, _vc3 = st.columns([2,2,4])
+    with _vc1:
+        view = st.radio("View", ["ATM Vol (bp)","Fwd Premium (bp)","Vega ($/1bp 1mm)"], key="mc_view")
+    with _vc2:
+        show_heatmap = st.checkbox("Heatmap", value=True, key="mc_heatmap")
+        show_fwd = st.checkbox("Show Fwd Rate", value=False, key="mc_show_fwd")
+
+    # ── Build matrices ─────────────────────────────────────────────
+    swap_labels = list(MIDCURVE_SWAPS.keys())
+    vol_mat  = pd.DataFrame(index=MIDCURVE_EXPIRIES, columns=swap_labels, dtype=float)
+    prem_mat = pd.DataFrame(index=MIDCURVE_EXPIRIES, columns=swap_labels, dtype=float)
+    vega_mat = pd.DataFrame(index=MIDCURVE_EXPIRIES, columns=swap_labels, dtype=float)
+    fwd_mat  = pd.DataFrame(index=MIDCURVE_EXPIRIES, columns=swap_labels, dtype=float)
+
+    for exp_lbl in MIDCURVE_EXPIRIES:
+        T_opt = label_to_years(exp_lbl)
+        for swap_lbl, (fwd_start, tenor) in MIDCURVE_SWAPS.items():
+            # ATM vol from surface — expiry = option expiry, tenor = swap tenor
+            _vol = get_matrix_value(atm, exp_lbl, tenor)
+            if _vol is None:
+                continue
+            vol_mat.at[exp_lbl, swap_lbl] = round(_vol, 2)
+
+            # Fwd rate
+            try:
+                _fwd = _par_fwd(_cs, fwd_start, tenor) * 100
+                fwd_mat.at[exp_lbl, swap_lbl] = round(_fwd, 4)
+            except Exception:
+                _fwd = None
+
+            # Annuity approx: tenor * 0.85 (simplified, no OIS discounting)
+            _ann = tenor * 0.85
+            # Normal vol premium: 2 * N'(0) * vol * sqrt(T) * annuity
+            import math as _math
+            _prem = 2 * 0.3989 * _vol * _math.sqrt(max(T_opt, 1e-6)) * _ann
+            prem_mat.at[exp_lbl, swap_lbl] = round(_prem, 2)
+
+            # Vega: d(premium)/d(vol) = 2 * N'(0) * sqrt(T) * annuity * notional
+            # $/1bp per 1mm notional
+            _vega = 2 * 0.3989 * _math.sqrt(max(T_opt, 1e-6)) * _ann * 1_000_000 / 10_000
+            vega_mat.at[exp_lbl, swap_lbl] = round(_vega, 2)
+
+    # Select display matrix
+    if "Vol" in view:
+        disp = vol_mat.copy()
+        fmt = "{:.2f}"
+        unit = "bp"
+    elif "Premium" in view:
+        disp = prem_mat.copy()
+        fmt = "{:.2f}"
+        unit = "bp"
+    else:
+        disp = vega_mat.copy()
+        fmt = "{:.2f}"
+        unit = "$/1bp"
+
+    # ── Display ────────────────────────────────────────────────────
+    st.markdown(f"#### {ccy} Midcurve — {view}")
+    st.caption("Rows = option expiry | Columns = underlying swap (fwd start × tenor) | Vol from ATM surface, fwd premium uses simplified annuity")
+
+    disp_num = disp.copy()
+    for c in disp_num.columns:
+        disp_num[c] = pd.to_numeric(disp_num[c], errors="coerce")
+
+    if show_heatmap:
+        _vals = disp_num.values.astype(float)
+        _vmin = float(np.nanmin(_vals)) if not np.all(np.isnan(_vals)) else 0
+        _vmax = float(np.nanmax(_vals)) if not np.all(np.isnan(_vals)) else 100
+
+        def _hm_style(v):
+            try:
+                _v = float(v)
+                if np.isnan(_v): return ""
+                _pct = (_v - _vmin) / max(_vmax - _vmin, 0.001)
+                _r = int(20 + (180 - 20) * (1 - _pct))
+                _g = int(60 + (200 - 60) * _pct)
+                _b = 60
+                return f"background-color: rgb({_r},{_g},{_b}); color: white; font-weight:600"
+            except Exception:
+                return ""
+
+        _styled = disp_num.style.applymap(_hm_style).format(fmt, na_rep="—")
+        st.dataframe(_styled, use_container_width=True)
+    else:
+        st.dataframe(disp_num.style.format(fmt, na_rep="—"), use_container_width=True)
+
+    if show_fwd:
+        st.markdown("#### Forward Rates (%)")
+        st.dataframe(fwd_mat.style.format("{:.4f}", na_rep="—"), use_container_width=True)
+
+    # ── Download ───────────────────────────────────────────────────
+    try:
+        from io import BytesIO
+        _out = BytesIO()
+        with pd.ExcelWriter(_out, engine="openpyxl") as _w:
+            vol_mat.to_excel(_w, sheet_name="ATM_Vol_bp")
+            prem_mat.to_excel(_w, sheet_name="Fwd_Premium_bp")
+            vega_mat.to_excel(_w, sheet_name="Vega_per_1bp_1mm")
+            fwd_mat.to_excel(_w, sheet_name="Fwd_Rates_pct")
+        _out.seek(0)
+        st.download_button(
+            "📥 Download Midcurve Grid (Excel)",
+            _out.getvalue(),
+            f"RateEdge_Midcurve_{ccy}_{pd.Timestamp.now(tz='Australia/Sydney').strftime('%Y%m%d_%H%M')}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="mc_download"
+        )
+    except Exception:
+        pass
 
 
 def sod_report_tab():
