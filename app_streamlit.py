@@ -2973,10 +2973,10 @@ def _save_portfolio():
             if _conn:
                 _cur = _conn.cursor()
                 _cur.execute("""
-                    INSERT INTO user_configs (user_id, config_type, config_data, updated_at)
-                    VALUES (%s, 'portfolio', %s, NOW())
-                    ON CONFLICT (user_id, config_type)
-                    DO UPDATE SET config_data = EXCLUDED.config_data, updated_at = NOW()
+                    INSERT INTO user_configs (user_id, config_type, currency, data, updated_at)
+                    VALUES (%s, 'portfolio', 'AUD', %s, NOW())
+                    ON CONFLICT (user_id, config_type, currency)
+                    DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
                 """, (_uid, json.dumps({"portfolio": _port}, default=str)))
                 _conn.commit()
                 _cur.close()
@@ -2999,8 +2999,8 @@ def _load_portfolio() -> list:
             if _conn:
                 _cur = _conn.cursor()
                 _cur.execute("""
-                    SELECT config_data FROM user_configs
-                    WHERE user_id = %s AND config_type = 'portfolio'
+                    SELECT data FROM user_configs
+                    WHERE user_id = %s AND config_type = 'portfolio' AND currency = 'AUD'
                 """, (_uid,))
                 _row = _cur.fetchone()
                 _cur.close()
