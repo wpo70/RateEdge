@@ -122,6 +122,29 @@ def _init_state(ccy: str, surface: pd.DataFrame) -> None:
         if k not in ed:
             ed[k] = {}
 
+    # Normalise surface: ensure Expiry is capital, remove duplicate expiry columns
+    def _norm_surface(df):
+        df = df.copy()
+        # Rename lowercase expiry column to Expiry
+        if "expiry" in df.columns and "Expiry" not in df.columns:
+            df = df.rename(columns={"expiry": "Expiry"})
+        # Remove duplicate expiry columns
+        seen = set()
+        keep = []
+        for c in df.columns:
+            key = c.lower()
+            if key == "expiry" and key in seen:
+                continue
+            seen.add(key)
+            keep.append(c)
+        df = df[keep]
+        # Ensure Expiry is first column
+        if "Expiry" in df.columns and df.columns[0] != "Expiry":
+            df = df[["Expiry"] + [c for c in df.columns if c != "Expiry"]]
+        return df
+
+    surface = _norm_surface(surface)
+
     # Always update base to the current committed surface
     # This ensures the editor always starts from the correct loaded surface
     current_base = ed["base"].get(ccy)
