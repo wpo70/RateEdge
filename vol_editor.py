@@ -196,7 +196,8 @@ def _reset(ccy: str) -> None:
 
 
 def _create_plotly_surface(df: pd.DataFrame, ccy: str, view_mode: str, changes=None) -> go.Figure:
-    exp_col, tcols = df.columns[0], df.columns[1:].tolist()
+    exp_col = df.columns[0]
+    tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
     expiries = df[exp_col].tolist()
     display_df = surface_vol_to_premium(df, ccy) if view_mode == "fwd_premium" else df
     z_label = "Fwd Premium (bp)" if view_mode == "fwd_premium" else "Vol (bp)"
