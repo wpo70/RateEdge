@@ -95,11 +95,15 @@ def surface_vol_to_premium(df: pd.DataFrame, ccy: str = None) -> pd.DataFrame:
             return result
     # fallback: simplified formula
     result = df.copy()
-    exp_col, tcols = df.columns[0], df.columns[1:].tolist()
+    exp_col = df.columns[0]
+    tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
     for i, row in df.iterrows():
         T = label_to_years(str(row[exp_col]))
         for c in tcols:
-            result.at[i, c] = round(vol_to_premium(float(row[c]), T), 2)
+            try:
+                result.at[i, c] = round(vol_to_premium(float(row[c]), T), 2)
+            except Exception:
+                pass
     return result
 
 
@@ -275,7 +279,8 @@ def _create_plotly_surface(df: pd.DataFrame, ccy: str, view_mode: str, changes=N
 
 def _render_3d_editor(df, ccy, view_mode, smoothing, base_df, height=580):
     exp_col = df.columns[0]
-    expiries, tcols = df[exp_col].tolist(), df.columns[1:].tolist()
+    expiries = df[exp_col].tolist()
+    tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
     ey = [label_to_years(str(e)) for e in expiries]
     display_df = surface_vol_to_premium(df, ccy) if view_mode == "fwd_premium" else df
     base_display = surface_vol_to_premium(base_df, ccy) if view_mode == "fwd_premium" else base_df
