@@ -95,15 +95,11 @@ def surface_vol_to_premium(df: pd.DataFrame, ccy: str = None) -> pd.DataFrame:
             return result
     # fallback: simplified formula
     result = df.copy()
-    exp_col = df.columns[0]
-    tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
+    exp_col, tcols = df.columns[0], df.columns[1:].tolist()
     for i, row in df.iterrows():
         T = label_to_years(str(row[exp_col]))
         for c in tcols:
-            try:
-                result.at[i, c] = round(vol_to_premium(float(row[c]), T), 2)
-            except Exception:
-                pass
+            result.at[i, c] = round(vol_to_premium(float(row[c]), T), 2)
     return result
 
 
@@ -196,20 +192,7 @@ def _reset(ccy: str) -> None:
 
 
 def _create_plotly_surface(df: pd.DataFrame, ccy: str, view_mode: str, changes=None) -> go.Figure:
-    df = df.copy()
-    for _ec in list(df.columns):
-        if _ec.lower() == "expiry" and _ec != "Expiry":
-            df = df.rename(columns={_ec: "Expiry"})
-    _seen, _keep = set(), []
-    for c in df.columns:
-        _k = c.lower()
-        if _k == "expiry" and _k in _seen: continue
-        _seen.add(_k); _keep.append(c)
-    df = df[_keep]
-    exp_col = df.columns[0]
-    tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
-    for c in tcols:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
+    exp_col, tcols = df.columns[0], df.columns[1:].tolist()
     expiries = df[exp_col].tolist()
     display_df = surface_vol_to_premium(df, ccy) if view_mode == "fwd_premium" else df
     z_label = "Fwd Premium (bp)" if view_mode == "fwd_premium" else "Vol (bp)"
@@ -291,25 +274,8 @@ def _create_plotly_surface(df: pd.DataFrame, ccy: str, view_mode: str, changes=N
 
 
 def _render_3d_editor(df, ccy, view_mode, smoothing, base_df, height=580):
-    df = df.copy()
-    # Normalise: handle lowercase expiry, duplicate columns, non-numeric data
-    for _ec in list(df.columns):
-        if _ec.lower() == "expiry" and _ec != "Expiry":
-            df = df.rename(columns={_ec: "Expiry"})
-    # Remove duplicate expiry columns
-    _seen, _keep = set(), []
-    for c in df.columns:
-        _k = c.lower()
-        if _k == "expiry" and _k in _seen: continue
-        _seen.add(_k); _keep.append(c)
-    df = df[_keep]
-    if "Expiry" in df.columns and df.columns[0] != "Expiry":
-        df = df[["Expiry"] + [c for c in df.columns if c != "Expiry"]]
     exp_col = df.columns[0]
-    tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
-    for c in tcols:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    expiries = df[exp_col].tolist()
+    expiries, tcols = df[exp_col].tolist(), df.columns[1:].tolist()
     ey = [label_to_years(str(e)) for e in expiries]
     display_df = surface_vol_to_premium(df, ccy) if view_mode == "fwd_premium" else df
     base_display = surface_vol_to_premium(base_df, ccy) if view_mode == "fwd_premium" else base_df
@@ -825,29 +791,6 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
     st.markdown("#### 📋 Edit Grid")
     
     # Prepare display data
-    # Normalise for display — remove duplicate expiry, convert to numeric
-    def _clean(df):
-        df = df.copy()
-        # Rename lowercase expiry
-        rmap = {c: "Expiry" for c in df.columns if c.lower() == "expiry" and c != "Expiry"}
-        if rmap: df = df.rename(columns=rmap)
-        # Drop duplicate expiry cols
-        seen, keep = set(), []
-        for c in df.columns:
-            k = c.lower()
-            if k == "expiry" and k in seen: continue
-            seen.add(k); keep.append(c)
-        df = df[keep]
-        # Expiry first
-        if "Expiry" in df.columns and df.columns[0] != "Expiry":
-            df = df[["Expiry"] + [c for c in df.columns if c != "Expiry"]]
-        # Numeric data cols
-        for c in df.columns[1:]:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-        return df
-
-    working = _clean(working)
-    base = _clean(base)
     display = surface_vol_to_premium(working, ccy) if view_mode == "fwd_premium" else working.copy()
     base_display = surface_vol_to_premium(base, ccy) if view_mode == "fwd_premium" else base.copy()
     
@@ -971,10 +914,8 @@ def render_bulk_adjustment_tools(ccy: str) -> None:
     with _sm1:
         _sm_passes = st.number_input("Passes", 1, 5, 2, 1, key=f"sm_passes_{ccy}")
     with _sm2:
-        _exp_col_w = next((c for c in w.columns if c.lower() == "expiry"), w.columns[0])
-        _exp_opts = w[_exp_col_w].tolist()
-        _sm_rows = st.multiselect("Pin rows (no smooth)", _exp_opts,
-                                   default=[e for e in ["1w","2w"] if e in _exp_opts],
+        _sm_rows = st.multiselect("Pin rows (no smooth)", w["Expiry"].tolist(),
+                                   default=["1w","2w"] if any(e in ["1w","2w"] for e in w["Expiry"].tolist()) else [],
                                    key=f"sm_pin_{ccy}")
     with _sm3:
         st.caption("Weighted average across expiry neighbours. Pin rows to preserve them unchanged (e.g. 1w/2w short-end extrapolated rows).")
@@ -982,7 +923,7 @@ def render_bulk_adjustment_tools(ccy: str) -> None:
         _push_history(ccy)
         import numpy as _np
         _arr = w[tcols].values.astype(float).copy()
-        _pinned = [i for i, e in enumerate(w[_exp_col_w].tolist()) if str(e) in _sm_rows]
+        _pinned = [i for i, e in enumerate(w[_exp_col_sm].tolist()) if str(e) in _sm_rows]
         for _pass in range(int(_sm_passes)):
             _new = _arr.copy()
             for i in range(len(_arr)):
