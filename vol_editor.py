@@ -825,6 +825,29 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
     st.markdown("#### 📋 Edit Grid")
     
     # Prepare display data
+    # Normalise for display — remove duplicate expiry, convert to numeric
+    def _clean(df):
+        df = df.copy()
+        # Rename lowercase expiry
+        rmap = {c: "Expiry" for c in df.columns if c.lower() == "expiry" and c != "Expiry"}
+        if rmap: df = df.rename(columns=rmap)
+        # Drop duplicate expiry cols
+        seen, keep = set(), []
+        for c in df.columns:
+            k = c.lower()
+            if k == "expiry" and k in seen: continue
+            seen.add(k); keep.append(c)
+        df = df[keep]
+        # Expiry first
+        if "Expiry" in df.columns and df.columns[0] != "Expiry":
+            df = df[["Expiry"] + [c for c in df.columns if c != "Expiry"]]
+        # Numeric data cols
+        for c in df.columns[1:]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        return df
+
+    working = _clean(working)
+    base = _clean(base)
     display = surface_vol_to_premium(working, ccy) if view_mode == "fwd_premium" else working.copy()
     base_display = surface_vol_to_premium(base, ccy) if view_mode == "fwd_premium" else base.copy()
     
@@ -949,8 +972,9 @@ def render_bulk_adjustment_tools(ccy: str) -> None:
         _sm_passes = st.number_input("Passes", 1, 5, 2, 1, key=f"sm_passes_{ccy}")
     with _sm2:
         _exp_col_w = next((c for c in w.columns if c.lower() == "expiry"), w.columns[0])
-        _sm_rows = st.multiselect("Pin rows (no smooth)", w[_exp_col_w].tolist(),
-                                   default=["1w","2w"] if any(e in ["1w","2w"] for e in w[_exp_col_w].tolist()) else [],
+        _exp_opts = w[_exp_col_w].tolist()
+        _sm_rows = st.multiselect("Pin rows (no smooth)", _exp_opts,
+                                   default=[e for e in ["1w","2w"] if e in _exp_opts],
                                    key=f"sm_pin_{ccy}")
     with _sm3:
         st.caption("Weighted average across expiry neighbours. Pin rows to preserve them unchanged (e.g. 1w/2w short-end extrapolated rows).")
