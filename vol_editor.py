@@ -95,11 +95,15 @@ def surface_vol_to_premium(df: pd.DataFrame, ccy: str = None) -> pd.DataFrame:
             return result
     # fallback: simplified formula
     result = df.copy()
-    exp_col, tcols = df.columns[0], df.columns[1:].tolist()
+    exp_col = df.columns[0]
+    tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
     for i, row in df.iterrows():
         T = label_to_years(str(row[exp_col]))
         for c in tcols:
-            result.at[i, c] = round(vol_to_premium(float(row[c]), T), 2)
+            try:
+                result.at[i, c] = round(vol_to_premium(float(row[c]), T), 2)
+            except Exception:
+                pass
     return result
 
 
@@ -122,39 +126,13 @@ def _init_state(ccy: str, surface: pd.DataFrame) -> None:
         if k not in ed:
             ed[k] = {}
 
-    # Normalise surface: ensure Expiry is capital, remove duplicate expiry columns
-    def _norm_surface(df):
-        df = df.copy()
-        # Rename lowercase expiry column to Expiry
-        if "expiry" in df.columns and "Expiry" not in df.columns:
-            df = df.rename(columns={"expiry": "Expiry"})
-        # Remove duplicate expiry columns
-        seen = set()
-        keep = []
-        for c in df.columns:
-            key = c.lower()
-            if key == "expiry" and key in seen:
-                continue
-            seen.add(key)
-            keep.append(c)
-        df = df[keep]
-        # Ensure Expiry is first column
-        if "Expiry" in df.columns and df.columns[0] != "Expiry":
-            df = df[["Expiry"] + [c for c in df.columns if c != "Expiry"]]
-        return df
-
-    surface = _norm_surface(surface)
-
     # Always update base to the current committed surface
     # This ensures the editor always starts from the correct loaded surface
     current_base = ed["base"].get(ccy)
-    _sod_loaded = ed.get("sod_loaded", {}).get(ccy, False)
     if current_base is None or not current_base.equals(surface):
-        # Surface has changed (new load from DB) — reset base
+        # Surface has changed (new load from DB) — reset base AND working
         ed["base"][ccy] = surface.copy()
-        # Only reset working if SOD hasn't loaded an implied open
-        if not _sod_loaded:
-            ed["working"][ccy] = surface.copy()
+        ed["working"][ccy] = surface.copy()
         ed["history"][ccy] = []
         ed["redo_stack"][ccy] = []
         ed["view_mode"][ccy] = "vol"
@@ -217,35 +195,8 @@ def _reset(ccy: str) -> None:
     ed["working"][ccy] = ed["base"][ccy].copy()
 
 
-def _norm_df(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalise a vol surface DataFrame: Expiry as first column, no duplicates, numeric data."""
-    df = df.copy()
-    # Rename lowercase expiry
-    if "expiry" in df.columns and "Expiry" not in df.columns:
-        df = df.rename(columns={"expiry": "Expiry"})
-    # Remove duplicate expiry columns
-    seen, keep = set(), []
-    for c in df.columns:
-        k = c.lower()
-        if k == "expiry" and k in seen:
-            continue
-        seen.add(k)
-        keep.append(c)
-    df = df[keep]
-    # Expiry first
-    if "Expiry" in df.columns and df.columns[0] != "Expiry":
-        df = df[["Expiry"] + [c for c in df.columns if c != "Expiry"]]
-    # Numeric data columns
-    tcols = [c for c in df.columns if c.lower() != "expiry"]
-    for c in tcols:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df
-
-
 def _create_plotly_surface(df: pd.DataFrame, ccy: str, view_mode: str, changes=None) -> go.Figure:
-    df = _norm_df(df)
-    exp_col = df.columns[0]
-    tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
+    exp_col, tcols = df.columns[0], df.columns[1:].tolist()
     expiries = df[exp_col].tolist()
     display_df = surface_vol_to_premium(df, ccy) if view_mode == "fwd_premium" else df
     z_label = "Fwd Premium (bp)" if view_mode == "fwd_premium" else "Vol (bp)"
@@ -327,11 +278,8 @@ def _create_plotly_surface(df: pd.DataFrame, ccy: str, view_mode: str, changes=N
 
 
 def _render_3d_editor(df, ccy, view_mode, smoothing, base_df, height=580):
-    df = _norm_df(df)
-    base_df = _norm_df(base_df)
     exp_col = df.columns[0]
-    expiries = df[exp_col].tolist()
-    tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
+    expiries, tcols = df[exp_col].tolist(), df.columns[1:].tolist()
     ey = [label_to_years(str(e)) for e in expiries]
     display_df = surface_vol_to_premium(df, ccy) if view_mode == "fwd_premium" else df
     base_display = surface_vol_to_premium(base_df, ccy) if view_mode == "fwd_premium" else base_df
@@ -831,31 +779,27 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
     elif confirm_btn:
         st.warning("Paste the data first")
     
-    # Normalise for display only — don't store back
-    _w = _norm_df(working)
-    _b = _norm_df(base)
-
     with st.expander("📊 ATM Vol Surface (Live)", expanded=False):
         changes = None
         if show_chg and has_changes:
-            changes = _w.copy()
-            for c in _w.columns[1:]:
-                if c in _b.columns:
-                    try:
-                        changes[c] = pd.to_numeric(_w[c], errors="coerce") - pd.to_numeric(_b[c], errors="coerce")
-                    except Exception:
-                        pass
+            changes = working.copy()
+            for c in working.columns[1:]:
+                try:
+                    if c in base.columns:
+                        changes[c] = pd.to_numeric(working[c], errors="coerce") - pd.to_numeric(base[c], errors="coerce")
+                except Exception:
+                    pass
         st.plotly_chart(_create_plotly_surface(working, ccy, view_mode, changes), use_container_width=True)
     
     st.markdown("---")
     st.markdown("#### 📋 Edit Grid")
     
     # Prepare display data
-    display = surface_vol_to_premium(_w, ccy) if view_mode == "fwd_premium" else _w.copy()
-    base_display = surface_vol_to_premium(_b, ccy) if view_mode == "fwd_premium" else _b.copy()
+    display = surface_vol_to_premium(working, ccy) if view_mode == "fwd_premium" else working.copy()
+    base_display = surface_vol_to_premium(base, ccy) if view_mode == "fwd_premium" else base.copy()
     
     # Calculate changes for styling
-    tcols = _w.columns[1:].tolist()
+    tcols = working.columns[1:].tolist()
     
     # Create styled dataframe showing changes as heatmap
     if has_changes and show_chg:
@@ -974,10 +918,8 @@ def render_bulk_adjustment_tools(ccy: str) -> None:
     with _sm1:
         _sm_passes = st.number_input("Passes", 1, 5, 2, 1, key=f"sm_passes_{ccy}")
     with _sm2:
-        # Normalise expiry column name
-        _exp_col = next((c for c in w.columns if c.lower() == "expiry"), w.columns[0])
-        _sm_rows = st.multiselect("Pin rows (no smooth)", w[_exp_col].tolist(),
-                                   default=[e for e in ["1w","2w"] if e in w[_exp_col].tolist()],
+        _sm_rows = st.multiselect("Pin rows (no smooth)", w["Expiry"].tolist(),
+                                   default=["1w","2w"] if any(e in ["1w","2w"] for e in w["Expiry"].tolist()) else [],
                                    key=f"sm_pin_{ccy}")
     with _sm3:
         st.caption("Weighted average across expiry neighbours. Pin rows to preserve them unchanged (e.g. 1w/2w short-end extrapolated rows).")
@@ -985,7 +927,7 @@ def render_bulk_adjustment_tools(ccy: str) -> None:
         _push_history(ccy)
         import numpy as _np
         _arr = w[tcols].values.astype(float).copy()
-        _pinned = [i for i, e in enumerate(w[_exp_col].tolist()) if str(e) in _sm_rows]
+        _pinned = [i for i, e in enumerate(w[_exp_col_w].tolist()) if str(e) in _sm_rows]
         for _pass in range(int(_sm_passes)):
             _new = _arr.copy()
             for i in range(len(_arr)):
