@@ -834,9 +834,15 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
     with st.expander("📊 ATM Vol Surface (Live)", expanded=False):
         changes = None
         if show_chg and has_changes:
-            changes = working.copy()
-            for c in working.columns[1:]:
-                changes[c] = working[c].astype(float) - base[c].astype(float)
+            _w = _norm_df(working)
+            _b = _norm_df(base)
+            changes = _w.copy()
+            for c in _w.columns[1:]:
+                if c in _b.columns:
+                    try:
+                        changes[c] = pd.to_numeric(_w[c], errors="coerce") - pd.to_numeric(_b[c], errors="coerce")
+                    except Exception:
+                        pass
         st.plotly_chart(_create_plotly_surface(working, ccy, view_mode, changes), use_container_width=True)
     
     st.markdown("---")
