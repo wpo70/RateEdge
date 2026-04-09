@@ -7973,7 +7973,10 @@ def caps_floors_tab(vol_mode: str):
                 st.session_state.pop("_atm_cfs_rows_cache", None)
                 st.rerun()
             if br.button("🔔 Generate Swaption Premiums", key="gen_swpt_prem", type="primary"):
-                curve     = get_ccy_curve(ccy)
+                # Use config_curves (same source as ATM matrix) — not get_ccy_curve which may differ
+                curve = st.session_state.get("config_curves", {}).get(ccy)
+                if curve is None or (hasattr(curve, "empty") and curve.empty):
+                    curve = get_ccy_curve(ccy)
                 atm       = get_working_atm_surface(ccy)
                 _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
                 ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
