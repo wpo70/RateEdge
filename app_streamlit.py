@@ -15247,8 +15247,8 @@ def sod_report_tab():
     st.markdown("---")
     st.markdown("### 💡 Implied AUD Vol Open   —   Based on USD Overnight Moves")
     st.caption(
-        "AUD vol sensitivity to USD: short-dated AUD vols (≤6m) correlate ~40-60% with USD, "
-        "long-dated (≥2y) ~20-35%. Adjustments are indicative   —   verify with live market."
+        "AUD vol sensitivity to USD: short-end (≤6m) 30-50%, mid (1y-2y) 20-40%, long-end (≥3y) 10-30%. "
+        "Default betas 30/20/10 — lower end appropriate for large USD moves. Verify with live market."
     )
 
     # Sensitivity parameters   —   editable
