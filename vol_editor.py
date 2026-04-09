@@ -217,18 +217,35 @@ def _reset(ccy: str) -> None:
     ed["working"][ccy] = ed["base"][ccy].copy()
 
 
-def _create_plotly_surface(df: pd.DataFrame, ccy: str, view_mode: str, changes=None) -> go.Figure:
-    # Normalise: set Expiry as column 0, filter tcols to numeric only
+def _norm_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalise a vol surface DataFrame: Expiry as first column, no duplicates, numeric data."""
     df = df.copy()
-    for _ec in df.columns:
-        if _ec.lower() == "expiry" and _ec != df.columns[0]:
-            cols = [_ec] + [c for c in df.columns if c != _ec]
-            df = df[cols]
-            break
+    # Rename lowercase expiry
+    if "expiry" in df.columns and "Expiry" not in df.columns:
+        df = df.rename(columns={"expiry": "Expiry"})
+    # Remove duplicate expiry columns
+    seen, keep = set(), []
+    for c in df.columns:
+        k = c.lower()
+        if k == "expiry" and k in seen:
+            continue
+        seen.add(k)
+        keep.append(c)
+    df = df[keep]
+    # Expiry first
+    if "Expiry" in df.columns and df.columns[0] != "Expiry":
+        df = df[["Expiry"] + [c for c in df.columns if c != "Expiry"]]
+    # Numeric data columns
+    tcols = [c for c in df.columns if c.lower() != "expiry"]
+    for c in tcols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
+def _create_plotly_surface(df: pd.DataFrame, ccy: str, view_mode: str, changes=None) -> go.Figure:
+    df = _norm_df(df)
     exp_col = df.columns[0]
     tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
-    for _c in tcols:
-        df[_c] = pd.to_numeric(df[_c], errors="coerce")
     expiries = df[exp_col].tolist()
     display_df = surface_vol_to_premium(df, ccy) if view_mode == "fwd_premium" else df
     z_label = "Fwd Premium (bp)" if view_mode == "fwd_premium" else "Vol (bp)"
@@ -310,22 +327,11 @@ def _create_plotly_surface(df: pd.DataFrame, ccy: str, view_mode: str, changes=N
 
 
 def _render_3d_editor(df, ccy, view_mode, smoothing, base_df, height=580):
-    # Normalise: ensure Expiry is column 0 (handle lowercase "expiry" from DB)
-    df = df.copy()
-    if df.columns[0].lower() != "expiry":
-        # Try to find expiry column
-        for _ec in df.columns:
-            if _ec.lower() == "expiry":
-                cols = [_ec] + [c for c in df.columns if c != _ec]
-                df = df[cols]
-                break
+    df = _norm_df(df)
+    base_df = _norm_df(base_df)
     exp_col = df.columns[0]
-    # Filter tcols to only numeric columns
     expiries = df[exp_col].tolist()
     tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
-    # Convert all tcols to numeric
-    for _c in tcols:
-        df[_c] = pd.to_numeric(df[_c], errors="coerce")
     ey = [label_to_years(str(e)) for e in expiries]
     display_df = surface_vol_to_premium(df, ccy) if view_mode == "fwd_premium" else df
     base_display = surface_vol_to_premium(base_df, ccy) if view_mode == "fwd_premium" else base_df
