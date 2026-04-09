@@ -36,9 +36,13 @@ def label_to_years(label: str) -> float:
     if label in EXPIRY_YEARS:
         return EXPIRY_YEARS[label]
     if label.endswith("M"):
-        return float(label[:-1]) / 12
+        _r = float(label[:-1])
+    _lty_cache[_orig] = _r
+    return _r / 12
     if label.endswith("Y"):
-        return float(label[:-1])
+        _r = float(label[:-1])
+    _lty_cache[_orig] = _r
+    return _r
     return 1.0
 
 
@@ -641,7 +645,6 @@ def render_vol_surface_editor(ccy: str, atm_surface: pd.DataFrame, curve: pd.Dat
                         rebuilt.iloc[i, j+1] = round(v, 2)
             
             # Push history for undo before updating
-            _init_state(ccy, atm_surface)  # Ensure state exists
             _push_history(ccy)
             
             atm_surface = rebuilt
