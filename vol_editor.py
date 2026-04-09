@@ -274,8 +274,22 @@ def _create_plotly_surface(df: pd.DataFrame, ccy: str, view_mode: str, changes=N
 
 
 def _render_3d_editor(df, ccy, view_mode, smoothing, base_df, height=580):
+    # Normalise: ensure Expiry is column 0 (handle lowercase "expiry" from DB)
+    df = df.copy()
+    if df.columns[0].lower() != "expiry":
+        # Try to find expiry column
+        for _ec in df.columns:
+            if _ec.lower() == "expiry":
+                cols = [_ec] + [c for c in df.columns if c != _ec]
+                df = df[cols]
+                break
     exp_col = df.columns[0]
-    expiries, tcols = df[exp_col].tolist(), df.columns[1:].tolist()
+    # Filter tcols to only numeric columns
+    expiries = df[exp_col].tolist()
+    tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
+    # Convert all tcols to numeric
+    for _c in tcols:
+        df[_c] = pd.to_numeric(df[_c], errors="coerce")
     ey = [label_to_years(str(e)) for e in expiries]
     display_df = surface_vol_to_premium(df, ccy) if view_mode == "fwd_premium" else df
     base_display = surface_vol_to_premium(base_df, ccy) if view_mode == "fwd_premium" else base_df
