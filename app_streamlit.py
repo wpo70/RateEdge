@@ -1196,7 +1196,18 @@ def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Opt
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             # Write ATM vol surface
             atm.to_excel(writer, sheet_name=f"ATM_Vols_{currency}", index=False)
-            
+
+            # Write ATM forward premium surface
+            try:
+                from vol_editor import surface_vol_to_premium
+                _curve = st.session_state.get("config_curves", {}).get(currency)
+                if _curve is None:
+                    _curve = get_ccy_curve(currency)
+                _prem_df = surface_vol_to_premium(atm, currency)
+                _prem_df.to_excel(writer, sheet_name=f"ATM_Prem_{currency}", index=False)
+            except Exception:
+                pass
+
             # Write SABR parameters if requested and available
             if include_sabr:
                 sabr_alpha = vol_data.get("alpha")
