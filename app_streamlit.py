@@ -3007,18 +3007,8 @@ def _load_portfolio() -> list:
                     return _port
     except Exception:
         pass
-    # Fallback to file
-    try:
-        with open(_PORTFOLIO_FILE, "r") as _f:
-            data = json.load(_f)
-        for entry in data:
-            for fld in ("pv","pv_bp","delta","gamma","vega","theta","bpv","strike","forward","notional_mm"):
-                if fld in entry:
-                    try: entry[fld] = float(entry[fld])
-                    except: pass
-        return data
-    except Exception:
-        return []
+    # File fallback removed — DB is source of truth
+    return []
 
 def ccy_eod_utc(ccy: str, date_str: str) -> str:
     """Return ISO UTC timestamp for the canonical EOD close of a currency on a given date.
@@ -15092,15 +15082,18 @@ def midcurve_tab():
             except Exception:
                 _fwd = None
 
-            # Annuity approx: tenor * 0.85 (simplified, no OIS discounting)
-            _ann = tenor * 0.85
-            # Normal vol premium: 2 * N'(0) * vol * sqrt(T) * annuity
+            # Real annuity from curve
             import math as _math
-            _prem = 2 * 0.3989 * _vol * _math.sqrt(max(T_opt, 1e-6)) * _ann
+            try:
+                _ois = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+                if _ois is None: _ois = get_basis_curve(ccy, "ois")
+                _, _ann, _ = forward_and_annuity_from_curve(_curve, ccy, fwd_start, tenor, _ois)
+            except Exception:
+                _ann = tenor * 0.85
+            _prem = 2 * 0.3989 * _vol / 10000.0 * _math.sqrt(max(T_opt, 1e-6)) * _ann * 10000
             prem_mat.at[exp_lbl, swap_lbl] = round(_prem, 2)
 
-            # Vega: d(premium)/d(vol) = 2 * N'(0) * sqrt(T) * annuity * notional
-            # $/1bp per 1mm notional
+            # Vega $/1bp per 1mm
             _vega = 2 * 0.3989 * _math.sqrt(max(T_opt, 1e-6)) * _ann * 1_000_000 / 10_000
             vega_mat.at[exp_lbl, swap_lbl] = round(_vega, 2)
 
