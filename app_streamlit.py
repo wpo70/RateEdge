@@ -15255,15 +15255,24 @@ def sod_report_tab():
     with st.expander("⚙️ Sensitivity Parameters (edit if needed)", expanded=False):
         _sens_c1, _sens_c2, _sens_c3 = st.columns(3)
         with _sens_c1:
-            _beta_short = st.slider("Short-end beta (≤6m, %)", 10, 90, 50, 5,
-                                    key="sod_beta_short",
-                                    help="% of USD vol move passed through to AUD ≤6m expiries") / 100
+            _bs_raw = st.slider("Short-end beta (≤6m, %)", 10, 90,
+                                st.session_state.get("_sod_beta_s", 30), 5,
+                                key="sod_beta_short",
+                                help="% of USD vol move passed through to AUD ≤6m expiries")
+            st.session_state["_sod_beta_s"] = _bs_raw
+            _beta_short = _bs_raw / 100
         with _sens_c2:
-            _beta_mid = st.slider("Mid beta (1y-2y, %)", 10, 70, 35, 5,
-                                  key="sod_beta_mid") / 100
+            _bm_raw = st.slider("Mid beta (1y-2y, %)", 10, 70,
+                                st.session_state.get("_sod_beta_m", 20), 5,
+                                key="sod_beta_mid")
+            st.session_state["_sod_beta_m"] = _bm_raw
+            _beta_mid = _bm_raw / 100
         with _sens_c3:
-            _beta_long = st.slider("Long-end beta (≥3y, %)", 5, 50, 20, 5,
-                                   key="sod_beta_long") / 100
+            _bl_raw = st.slider("Long-end beta (≥3y, %)", 5, 50,
+                                st.session_state.get("_sod_beta_l", 10), 5,
+                                key="sod_beta_long")
+            st.session_state["_sod_beta_l"] = _bl_raw
+            _beta_long = _bl_raw / 100
 
     def _get_beta(expiry_lbl: str) -> float:
         ey = label_to_years(expiry_lbl)
