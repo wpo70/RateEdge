@@ -706,7 +706,7 @@ def render_vol_surface_editor(ccy: str, atm_surface: pd.DataFrame, curve: pd.Dat
     if force_update:
         st.session_state["vol_editor"]["working"][ccy] = atm_surface.copy()
     ed = st.session_state["vol_editor"]
-    working, base = ed["working"][ccy], ed["base"][ccy]
+    working, base = _norm_df(ed["working"][ccy]), _norm_df(ed["base"][ccy])
     view_mode = ed["view_mode"].get(ccy, "vol")
     smoothing = ed["smoothing"].get(ccy, DEFAULT_SMOOTHING)
     has_changes = _has_changes(ccy)
