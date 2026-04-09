@@ -1,3 +1,4 @@
+# v0904.r
 
 import math
 import os
@@ -11100,21 +11101,12 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)") 
             continue
         lbl = snap["label"] if snap["label"] else snap["date"].strftime("%Y-%m-%d")
         dates.append(lbl)
-        # Build hover using customdata for reliable 3D surface hover
-        import numpy as _np2
-        _customdata = []
-        for ei, el in enumerate(exp_labels):
-            _row = []
-            for ti, tl in enumerate(tenor_labels):
-                _row.append(f"{el} x {tl}  {z[ei,ti]:.1f}bp")
-            _customdata.append(_row)
-        # Build text array matching z shape — more reliable than customdata on flat surfaces
-        import numpy as _np2
+        # Build hover text
         _text_arr = []
         for ei, el in enumerate(exp_labels):
             _trow = []
             for ti, tl in enumerate(tenor_labels):
-                _trow.append(f"{el} x {tl}  {z[ei,ti]:.1f}bp")
+                _trow.append(f"{el} × {tl}  {z[ei,ti]:.1f}bp")
             _text_arr.append(_trow)
         frames.append(go.Frame(
             data=[go.Surface(
@@ -11123,8 +11115,8 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)") 
                 cmin=50, cmax=130,
                 showscale=True,
                 colorbar=dict(title="bp", thickness=12, len=0.6),
-                text=_text_arr,
-                hovertemplate="%{text}<extra></extra>",
+                customdata=_text_arr,
+                hovertemplate="%{customdata}<extra></extra>",
                 hoverlabel=dict(bgcolor="#1e293b", bordercolor="#FFD700",
                                font=dict(color="#FFD700", size=14, family="Arial Black")),
             )],
