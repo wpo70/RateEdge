@@ -12261,11 +12261,8 @@ def rv_tab():
                 st.session_state.pop("_rv_ideas_cache", None)
             if not st.session_state.get(_rv_ideas_key):
                 st.info("Click **⚡ Generate Trade Ideas** to run the idea engine.")
-            else:
-              if True:  # indent wrapper
+            if st.session_state.get(_rv_ideas_key):
                 ideas = []
-
-            # ── Idea engine ──────────────────────────────────────────
             # 1. Vol butterfly   —   ATM vs wings in expiry dim
             for tn in [2, 5, 10]:
                 for mid_e, lo_e, hi_e in [("3m","1m","6m"),("6m","3m","1y"),
@@ -12514,7 +12511,9 @@ def rv_tab():
             # Sort by score
             ideas.sort(key=lambda x: x["Score"], reverse=True)
 
-            if not ideas:
+            if not st.session_state.get(_rv_ideas_key):
+                pass
+            elif not ideas:
                 st.info("No strong signals at current vol levels. Surface appears fair.")
             else:
                 st.markdown(f"**{len(ideas)} trade ideas generated**")
