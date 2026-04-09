@@ -15163,7 +15163,7 @@ def midcurve_tab():
             except Exception:
                 return ""
 
-        _styled = disp_num.style.applymap(_hm_style).format(fmt, na_rep="—")
+        _styled = disp_num.style.map(_hm_style).format(fmt, na_rep="—")
         st.dataframe(_styled, use_container_width=True)
     else:
         st.dataframe(disp_num.style.format(fmt, na_rep="—"), use_container_width=True)
