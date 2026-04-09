@@ -10473,6 +10473,59 @@ def vol_surface_editor_tab():
         st.session_state[f"_vol_editor_open_{ccy}"] = False
         st.rerun()
 
+    # ── SOD Implied Open button ─────────────────────────────────────
+    if ccy == "AUD" and st.session_state.get("_sod_implied_open") is not None:
+        _sod_c1, _sod_c2 = st.columns([2, 5])
+        with _sod_c1:
+            if st.button("📋 Load SOD Implied Open → Editor", key="ve_load_sod", type="primary"):
+                try:
+                    _imp = st.session_state["_sod_implied_open"].copy()
+                    # Normalise
+                    if "expiry" in _imp.columns and "Expiry" not in _imp.columns:
+                        _imp = _imp.rename(columns={"expiry": "Expiry"})
+                    if "Expiry" not in _imp.columns and _imp.index.name and _imp.index.name.lower() == "expiry":
+                        _imp = _imp.reset_index().rename(columns={_imp.index.name: "Expiry"})
+                    _imp.columns = [c if c.lower() == "expiry" else c.upper() for c in _imp.columns]
+                    _imp = _imp.rename(columns={c: "Expiry" for c in _imp.columns if c.lower() == "expiry" and c != "Expiry"})
+                    for _c in _imp.columns[1:]:
+                        _imp[_c] = pd.to_numeric(_imp[_c], errors="coerce")
+                    ve = st.session_state.setdefault("vol_editor", {"working":{},"base":{},"history":{},"redo_stack":{},"view_mode":{},"smoothing":{},"paste_data":{}})
+                    for _k in ["working","base","history","redo_stack","view_mode","smoothing","paste_data"]:
+                        if _k not in ve: ve[_k] = {}
+                    _cur = get_working_atm_surface("AUD")
+                    ve["base"]["AUD"] = _cur.copy() if _cur is not None else _imp.copy()
+                    ve["working"]["AUD"] = _imp.copy()
+                    ve["history"]["AUD"] = []
+                    ve["redo_stack"]["AUD"] = []
+                    ve.setdefault("sod_loaded", {})["AUD"] = True
+                    st.success("✅ SOD implied open loaded into editor.")
+                    st.rerun()
+                except Exception as _e:
+                    st.error(f"Failed: {_e}")
+        with _sod_c2:
+            st.caption("Loads AUD implied open from SOD Report. Run SOD Report first.")
+    st.markdown("---")
+
+    # Normalise ATM surface before passing to vol editor
+    if atm is not None:
+        atm = atm.copy()
+        # Rename lowercase expiry to Expiry
+        if "expiry" in atm.columns and "Expiry" not in atm.columns:
+            atm = atm.rename(columns={"expiry": "Expiry"})
+        # Remove duplicate expiry columns
+        _seen, _keep = set(), []
+        for _c in atm.columns:
+            _k = _c.lower()
+            if _k == "expiry" and _k in _seen: continue
+            _seen.add(_k); _keep.append(_c)
+        atm = atm[_keep]
+        # Ensure Expiry is first column
+        if "Expiry" in atm.columns and atm.columns[0] != "Expiry":
+            atm = atm[["Expiry"] + [c for c in atm.columns if c != "Expiry"]]
+        # Ensure numeric data columns
+        for _c in atm.columns[1:]:
+            atm[_c] = pd.to_numeric(atm[_c], errors="coerce")
+
     # Render the unified editor with mode toggle (Hybrid vs 3D Drag)
     updated_surface = render_vol_surface_editor_unified(ccy, atm, curve, ois_curve)
 
