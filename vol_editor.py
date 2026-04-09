@@ -849,14 +849,18 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
         # Separate editable grid below
         st.markdown("##### ✏️ Edit Values")
     
+    # Strip duplicate expiry column from display before showing in grid
+    _display_cols = [c for c in display.columns if not (c.lower() == "expiry" and c != display.columns[0])]
+    _display_clean = display[_display_cols]
+    _tcols_clean = [c for c in _display_cols if c != _display_cols[0]]
     edited = st.data_editor(
-        display, 
+        _display_clean,
         use_container_width=True, 
         num_rows="fixed", 
         key=f"grid_{ccy}_{view_mode}",
         column_config={
-            working.columns[0]: st.column_config.TextColumn("Expiry", disabled=True),
-            **{col: st.column_config.NumberColumn(col, format="%.2f") for col in tcols}
+            _display_cols[0]: st.column_config.TextColumn("Expiry", disabled=True),
+            **{col: st.column_config.NumberColumn(col, format="%.2f") for col in _tcols_clean}
         }
     )
     
@@ -924,8 +928,10 @@ def render_bulk_adjustment_tools(ccy: str) -> None:
     with _sm1:
         _sm_passes = st.number_input("Passes", 1, 5, 2, 1, key=f"sm_passes_{ccy}")
     with _sm2:
-        _sm_rows = st.multiselect("Pin rows (no smooth)", w["Expiry"].tolist(),
-                                   default=["1w","2w"] if any(e in ["1w","2w"] for e in w["Expiry"].tolist()) else [],
+        _exp_col_sm = "Expiry" if "Expiry" in w.columns else next((c for c in w.columns if c.lower()=="expiry"), w.columns[0])
+        _exp_opts_sm = w[_exp_col_sm].tolist()
+        _sm_rows = st.multiselect("Pin rows (no smooth)", _exp_opts_sm,
+                                   default=[e for e in ["1w","2w"] if e in _exp_opts_sm],
                                    key=f"sm_pin_{ccy}")
     with _sm3:
         st.caption("Weighted average across expiry neighbours. Pin rows to preserve them unchanged (e.g. 1w/2w short-end extrapolated rows).")
