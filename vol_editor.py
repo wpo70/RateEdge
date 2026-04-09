@@ -801,25 +801,6 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
     st.markdown("#### 📋 Edit Grid")
     
     # Prepare display data
-    # Strip duplicate/lowercase expiry columns before display
-    def _strip_expiry(df):
-        df = df.copy()
-        # Rename lowercase expiry
-        if "expiry" in df.columns and "Expiry" not in df.columns:
-            df = df.rename(columns={"expiry": "Expiry"})
-        # Remove duplicate expiry columns
-        seen, keep = set(), []
-        for c in df.columns:
-            k = c.lower()
-            if k == "expiry" and k in seen: continue
-            seen.add(k); keep.append(c)
-        df = df[keep]
-        # Ensure Expiry is first
-        if "Expiry" in df.columns and df.columns[0] != "Expiry":
-            df = df[["Expiry"] + [c for c in df.columns if c != "Expiry"]]
-        return df
-    working = _strip_expiry(working)
-    base = _strip_expiry(base)
     display = surface_vol_to_premium(working, ccy) if view_mode == "fwd_premium" else working.copy()
     base_display = surface_vol_to_premium(base, ccy) if view_mode == "fwd_premium" else base.copy()
     
