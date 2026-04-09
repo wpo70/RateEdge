@@ -196,7 +196,20 @@ def _reset(ccy: str) -> None:
 
 
 def _create_plotly_surface(df: pd.DataFrame, ccy: str, view_mode: str, changes=None) -> go.Figure:
-    exp_col, tcols = df.columns[0], df.columns[1:].tolist()
+    df = df.copy()
+    for _ec in list(df.columns):
+        if _ec.lower() == "expiry" and _ec != "Expiry":
+            df = df.rename(columns={_ec: "Expiry"})
+    _seen, _keep = set(), []
+    for c in df.columns:
+        _k = c.lower()
+        if _k == "expiry" and _k in _seen: continue
+        _seen.add(_k); _keep.append(c)
+    df = df[_keep]
+    exp_col = df.columns[0]
+    tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
+    for c in tcols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
     expiries = df[exp_col].tolist()
     display_df = surface_vol_to_premium(df, ccy) if view_mode == "fwd_premium" else df
     z_label = "Fwd Premium (bp)" if view_mode == "fwd_premium" else "Vol (bp)"
@@ -278,8 +291,25 @@ def _create_plotly_surface(df: pd.DataFrame, ccy: str, view_mode: str, changes=N
 
 
 def _render_3d_editor(df, ccy, view_mode, smoothing, base_df, height=580):
+    df = df.copy()
+    # Normalise: handle lowercase expiry, duplicate columns, non-numeric data
+    for _ec in list(df.columns):
+        if _ec.lower() == "expiry" and _ec != "Expiry":
+            df = df.rename(columns={_ec: "Expiry"})
+    # Remove duplicate expiry columns
+    _seen, _keep = set(), []
+    for c in df.columns:
+        _k = c.lower()
+        if _k == "expiry" and _k in _seen: continue
+        _seen.add(_k); _keep.append(c)
+    df = df[_keep]
+    if "Expiry" in df.columns and df.columns[0] != "Expiry":
+        df = df[["Expiry"] + [c for c in df.columns if c != "Expiry"]]
     exp_col = df.columns[0]
-    expiries, tcols = df[exp_col].tolist(), df.columns[1:].tolist()
+    tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
+    for c in tcols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    expiries = df[exp_col].tolist()
     ey = [label_to_years(str(e)) for e in expiries]
     display_df = surface_vol_to_premium(df, ccy) if view_mode == "fwd_premium" else df
     base_display = surface_vol_to_premium(base_df, ccy) if view_mode == "fwd_premium" else base_df
