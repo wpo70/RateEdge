@@ -7990,7 +7990,9 @@ def caps_floors_tab(vol_mode: str):
             if br.button("🔔 Generate Swaption Premiums", key="gen_swpt_prem", type="primary"):
                 # Use same spot premium formula as build_caplet_vol_curve solver
                 _atm_btn = get_working_atm_surface(ccy)
-                _curve_btn = st.session_state.get("config_curves", {}).get(ccy) or get_ccy_curve(ccy)
+                _curve_btn = st.session_state.get("config_curves", {}).get(ccy)
+                if _curve_btn is None or (hasattr(_curve_btn, "empty") and _curve_btn.empty):
+                    _curve_btn = get_ccy_curve(ccy)
                 if _atm_btn is not None and _curve_btn is not None:
                     for lbl, exp, tenor, cfs_lbl in [
                         ("3m1y","3m",1.0,"1Y CFS"),("1y1y","1y",1.0,"2Y CFS"),
