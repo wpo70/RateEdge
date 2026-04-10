@@ -7545,7 +7545,7 @@ def caps_floors_tab(vol_mode: str):
 
     col_type, col_model = st.columns(2)
     with col_type:
-        cf_type = st.selectbox("Instrument", ["Cap", "Floor", "Straddle", "Collar", "Strangle", "Digital Cap", "Digital Floor"], index=2, key="cf_type")
+        cf_type = st.selectbox("Instrument", ["Cap", "Floor", "Straddle", "Collar", "Strangle", "Cap Corridor", "Floordoor", "Digital Cap", "Digital Floor"], index=2, key="cf_type")
     with col_model:
         model = st.selectbox("Model", ["Normal", "Black"], index=0, key="cf_model")
 
@@ -7712,6 +7712,42 @@ def caps_floors_tab(vol_mode: str):
         
         width_bp = (strike - strike_pct_2) * 10000
         st.caption(f"Width: **{width_bp:.0f} bp**")
+
+    elif cf_type == "Cap Corridor":
+        st.caption("Long low-strike Cap, Short high-strike Cap — capped upside, net long rate vol below upper strike")
+        _corr_mode = st.radio("Strike Mode", ["Symmetric (25bp)", "Symmetric (50bp)", "Symmetric (100bp)", "Manual"], horizontal=True, key="cf_corr_mode")
+        if "Symmetric" in _corr_mode:
+            _corr_w = {"25bp": 0.0025, "50bp": 0.0050, "100bp": 0.0100}[_corr_mode.split("(")[1].rstrip(")")]
+            strike        = fwd  # Low strike = ATM (buyer owns)
+            strike_pct_2  = fwd + _corr_w  # High strike (sold)
+        else:
+            col_k1, col_k2 = st.columns(2)
+            with col_k1:
+                strike = st.number_input("Low Strike — Buy (%)", value=round(fwd_pct, 4), format="%.4f", key="cf_strike") / 100.0
+            with col_k2:
+                strike_pct_2 = st.number_input("High Strike — Sell (%)", value=round(fwd_pct + 0.50, 4), format="%.4f", key="cf_strike_2") / 100.0
+        col_k1, col_k2 = st.columns(2)
+        col_k1.metric("Buy Cap Strike (%)", f"{strike*100:.4f}")
+        col_k2.metric("Sell Cap Strike (%)", f"{strike_pct_2*100:.4f}")
+        st.caption(f"Width: **{(strike_pct_2-strike)*10000:.0f} bp**")
+
+    elif cf_type == "Floordoor":
+        st.caption("Long high-strike Floor, Short low-strike Floor — capped downside, net long rate vol above lower strike")
+        _fd_mode = st.radio("Strike Mode", ["Symmetric (25bp)", "Symmetric (50bp)", "Symmetric (100bp)", "Manual"], horizontal=True, key="cf_fd_mode")
+        if "Symmetric" in _fd_mode:
+            _fd_w = {"25bp": 0.0025, "50bp": 0.0050, "100bp": 0.0100}[_fd_mode.split("(")[1].rstrip(")")]
+            strike        = fwd  # High strike = ATM (buyer owns)
+            strike_pct_2  = fwd - _fd_w  # Low strike (sold)
+        else:
+            col_k1, col_k2 = st.columns(2)
+            with col_k1:
+                strike = st.number_input("High Strike — Buy (%)", value=round(fwd_pct, 4), format="%.4f", key="cf_strike") / 100.0
+            with col_k2:
+                strike_pct_2 = st.number_input("Low Strike — Sell (%)", value=round(fwd_pct - 0.50, 4), format="%.4f", key="cf_strike_2") / 100.0
+        col_k1, col_k2 = st.columns(2)
+        col_k1.metric("Buy Floor Strike (%)", f"{strike*100:.4f}")
+        col_k2.metric("Sell Floor Strike (%)", f"{strike_pct_2*100:.4f}")
+        st.caption(f"Width: **{(strike-strike_pct_2)*10000:.0f} bp**")
 
     elif cf_type in ["Digital Cap", "Digital Floor"]:
         st.caption(f"{'Binary Cap' if cf_type=='Digital Cap' else 'Binary Floor'} — pays **100bp × notional × accrual** on each reset date if BBSW fixes {'at or above' if cf_type=='Digital Cap' else 'at or below'} strike. Priced as tight call spread.")
@@ -8336,15 +8372,22 @@ def caps_floors_tab(vol_mode: str):
         
         # Show the curve
         if caplet_vol_curve:
-            # Extend to 20Y using vol spread if set
+            # Extend to 30Y using cubic spline: vol_15y anchor → vol_20y → vol_30y
+            # vol_20y = vol_15y + spread, vol_30y = vol_15y + 2×spread (linear decline continues)
             _spread_15v20_disp = st.session_state.get("cf_spr_15v20", -5.0)
             if caplet_vol_curve and 15.0 in caplet_vol_curve:
+                from scipy.interpolate import CubicSpline as _CubicSpline30
                 _vol_15 = caplet_vol_curve[15.0]
                 _vol_20 = max(_vol_15 + _spread_15v20_disp, 1.0)
-                _t20 = 15.25
-                while _t20 <= 20.01:
-                    caplet_vol_curve[round(_t20, 2)] = _vol_20
-                    _t20 += 0.25
+                _vol_30 = max(_vol_15 + 2.0 * _spread_15v20_disp, 1.0)
+                # Cubic spline anchors: 15Y, 20Y, 30Y
+                _ext_mats = [15.0, 20.0, 30.0]
+                _ext_vols = [_vol_15, _vol_20, _vol_30]
+                _cs30 = _CubicSpline30(_ext_mats, _ext_vols)
+                _t30 = 15.25
+                while _t30 <= 30.01:
+                    caplet_vol_curve[round(_t30, 2)] = max(float(_cs30(_t30)), 1.0)
+                    _t30 += 0.25
 
             with st.expander("📊 Resulting Caplet Vol Curve", expanded=False):
                 # Show exact bootstrapped vols in table
@@ -8595,6 +8638,32 @@ def caps_floors_tab(vol_mode: str):
                 legs.append(("OTM Cap", strike*100, 1, res_cap))
                 legs.append(("OTM Floor", strike_pct_2*100, 1, res_floor))
                 label = f"Strangle {first_fixing}-{tenor} ({strike_pct_2*100:.2f}/{strike*100:.2f})"
+
+            elif cf_type == "Cap Corridor":
+                # Long low-strike cap, short high-strike cap
+                res_lo = price_strip(strike, True, "Long Cap")
+                res_hi = price_strip(strike_pct_2, True, "Short Cap")
+                pv_total    = res_lo["pv"]    - res_hi["pv"]
+                delta_total = res_lo["delta"] - res_hi["delta"]
+                vega_total  = res_lo["vega"]  - res_hi["vega"]
+                gamma_total = res_lo["gamma"] - res_hi["gamma"]
+                caplet_details = res_lo["caplets"] + res_hi["caplets"]
+                legs.append(("Long Cap",  strike*100,        1,  res_lo))
+                legs.append(("Short Cap", strike_pct_2*100, -1,  res_hi))
+                label = f"Cap Corridor {first_fixing}-{tenor} ({strike*100:.2f}/{strike_pct_2*100:.2f})"
+
+            elif cf_type == "Floordoor":
+                # Long high-strike floor, short low-strike floor
+                res_hi = price_strip(strike,       False, "Long Floor")
+                res_lo = price_strip(strike_pct_2, False, "Short Floor")
+                pv_total    = res_hi["pv"]    - res_lo["pv"]
+                delta_total = res_hi["delta"] - res_lo["delta"]
+                vega_total  = res_hi["vega"]  - res_lo["vega"]
+                gamma_total = res_hi["gamma"] - res_lo["gamma"]
+                caplet_details = res_hi["caplets"] + res_lo["caplets"]
+                legs.append(("Long Floor",  strike*100,        1,  res_hi))
+                legs.append(("Short Floor", strike_pct_2*100, -1,  res_lo))
+                label = f"Floordoor {first_fixing}-{tenor} ({strike*100:.2f}/{strike_pct_2*100:.2f})"
 
             elif cf_type == "Digital Cap":
                 res = price_digital_strip(strike, True, "Digital Cap")
