@@ -7988,9 +7988,10 @@ def caps_floors_tab(vol_mode: str):
                 st.session_state.pop("_atm_cfs_rows_cache", None)
                 st.rerun()
             if br.button("🔔 Generate Swaption Premiums", key="gen_swpt_prem", type="primary"):
-                # Read directly from ATM premium matrix — single source of truth
-                _prem_df = st.session_state.get("atm_prem_matrix", {}).get(ccy, {}).get("prem")
-                if _prem_df is not None and not _prem_df.empty:
+                # Use same spot premium formula as build_caplet_vol_curve solver
+                _atm_btn = get_working_atm_surface(ccy)
+                _curve_btn = st.session_state.get("config_curves", {}).get(ccy) or get_ccy_curve(ccy)
+                if _atm_btn is not None and _curve_btn is not None:
                     for lbl, exp, tenor, cfs_lbl in [
                         ("3m1y","3m",1.0,"1Y CFS"),("1y1y","1y",1.0,"2Y CFS"),
                         ("2y1y","2y",1.0,"3Y CFS"),("3y1y","3y",1.0,"4Y CFS"),
@@ -7999,17 +8000,20 @@ def caps_floors_tab(vol_mode: str):
                         ("12y3y","12y",3.0,"15Y CFS"),
                     ]:
                         try:
-                            premium_bp = get_matrix_value(_prem_df, exp, tenor)
-                            if premium_bp is None: continue
+                            vol_bp = get_matrix_value(_atm_btn, exp, tenor)
+                            if vol_bp is None: continue
+                            exp_y = label_to_years(exp)
+                            _, ann, _ = forward_and_annuity_from_curve(_curve_btn, ccy, exp_y, tenor, None)
+                            premium_bp = 2 * 0.3989 * (vol_bp/10000.0) * math.sqrt(max(exp_y,0.001)) * ann * 10000
                             st.session_state["cfs_table_data"][lbl] = {
-                                "swaption": round(float(premium_bp), 4),
+                                "swaption": round(premium_bp, 4),
                                 "cfs_label": cfs_lbl,
-                                "cfs_straddle": round(float(premium_bp), 4)
+                                "cfs_straddle": round(premium_bp, 4)
                             }
                         except:
                             pass
                 else:
-                    st.warning("Generate ATM Matrix on Curves tab first.")
+                    st.warning("Load ATM surface and curve first.")
                 st.rerun()
 
             # ── Publish Wedge Mids to Blotter ─────────────────────────
@@ -8753,7 +8757,7 @@ def caps_floors_tab(vol_mode: str):
             _cf_sk = f"_cf_status_{_cl}_{_cex}_{_cten}"
             _cf_cur = st.session_state.get(_cf_sk, "—")
             _cf_bg  = _CF_STATUS_COLOURS.get(_cf_cur, "white")
-            _crc = st.columns([0.25, 1.85, 0.58, 0.68, 0.58, 0.78, 0.78, 0.78, 0.78, 1.45, 0.70, 0.65])
+            _crc = st.columns([0.28, 1.9, 0.58, 0.68, 0.58, 0.78, 0.78, 0.78, 0.78, 1.5, 0.36, 0.36])
             for _ci2, _val2 in enumerate([
                 f"{_cidx+1}", _cst, _cex, _cten,
                 f"{float(_crow.get('notional_mm',100)):.0f}mm",
