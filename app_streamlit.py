@@ -4183,6 +4183,401 @@ def publish_vol(ccy: str):
 # Tabs
 # ============================
 
+
+def sdr_live_tab():
+    """DTCC SDR Live — IRO Blotter with alert notifications."""
+
+    import time
+    from datetime import date, datetime, timedelta
+
+    # ── Styles ────────────────────────────────────────────────────────────────
+    st.markdown("""
+    <style>
+    .sdr-header {
+        display:flex; align-items:center; gap:12px; margin-bottom:4px;
+    }
+    .sdr-badge {
+        background:#f59e0b22; color:#f59e0b; border:1px solid #f59e0b55;
+        border-radius:4px; font-size:11px; padding:2px 8px; font-weight:600;
+    }
+    .sdr-badge-blue {
+        background:#3b82f622; color:#60a5fa; border:1px solid #3b82f655;
+        border-radius:4px; font-size:11px; padding:2px 8px; font-weight:600;
+    }
+    .sdr-metric {
+        background:#1e293b; border-radius:8px; padding:12px 16px;
+        border:1px solid #334155; text-align:center;
+    }
+    .sdr-metric .val { font-size:22px; font-weight:700; color:#f1f5f9; }
+    .sdr-metric .lbl { font-size:11px; color:#64748b; margin-top:2px; }
+    .sdr-call  { color:#4ade80; font-weight:700; }
+    .sdr-put   { color:#f87171; font-weight:700; }
+    .sdr-str   { color:#c084fc; font-weight:700; }
+    .sdr-oth   { color:#94a3b8; font-weight:700; }
+    .sdr-newt  { color:#4ade80; font-size:11px; }
+    .sdr-modi  { color:#fb923c; font-size:11px; }
+    .sdr-canc  { color:#f87171; font-size:11px; }
+    .sdr-corr  { color:#facc15; font-size:11px; }
+    .sdr-strike { color:#f59e0b; font-family:monospace; }
+    .sdr-notional { color:#94a3b8; font-family:monospace; }
+    .sdr-premium  { color:#60a5fa; font-family:monospace; }
+    .sdr-tenor  { color:#c084fc; font-weight:600; }
+    .sdr-swptenor { color:#7dd3fc; font-weight:600; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    st.markdown(
+        '<div class="sdr-header">'
+        '<span style="font-size:20px;font-weight:700;color:#f1f5f9;">📡 SDR Live</span>'
+        '<span class="sdr-badge">DTCC · CFTC · Rates · Options</span>'
+        '<span class="sdr-badge-blue">Public Dissemination</span>'
+        '</div>',
+        unsafe_allow_html=True
+    )
+    st.caption("DTCC public price dissemination — interest rate options / swaptions / caps & floors")
+
+    if not HAS_POSTGRES:
+        st.warning("Database not connected. SDR Live requires a Supabase connection.")
+        return
+
+    # ── Check table exists ────────────────────────────────────────────────────
+    def table_exists(conn) -> bool:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM dtcc_sdr LIMIT 1")
+            cur.close()
+            return True
+        except Exception:
+            conn.rollback()
+            return False
+
+    conn = get_db_connection()
+    if not conn:
+        st.error("Cannot connect to database.")
+        return
+
+    if not table_exists(conn):
+        st.warning("⚠️ The `dtcc_sdr` table doesn't exist yet.")
+        st.code(
+            "# Run once from your server or local machine:\n"
+            "python dtcc_sdr_fetcher.py --init-only\n\n"
+            "# Then load yesterday's data:\n"
+            "python dtcc_sdr_fetcher.py\n\n"
+            "# Or backfill 5 days:\n"
+            "python dtcc_sdr_fetcher.py --backfill 5",
+            language="bash"
+        )
+        conn.close()
+        return
+    conn.close()
+
+    # ── Session state init ────────────────────────────────────────────────────
+    if "sdr_last_seen_id" not in st.session_state:
+        st.session_state["sdr_last_seen_id"] = None
+    if "sdr_alert_count" not in st.session_state:
+        st.session_state["sdr_alert_count"] = 0
+
+    # ── Setup / filter panel ──────────────────────────────────────────────────
+    with st.expander("⚙️  Setup & Filters", expanded=True):
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.markdown("**Date range**")
+            date_from = st.date_input(
+                "From", value=date.today() - timedelta(days=7),
+                key="sdr_date_from", label_visibility="collapsed"
+            )
+            date_to = st.date_input(
+                "To", value=date.today(),
+                key="sdr_date_to", label_visibility="collapsed"
+            )
+
+        with col2:
+            st.markdown("**Type & CCY**")
+            type_opts = ["All", "CALL", "PUT", "STR", "OTH"]
+            sel_type = st.selectbox("P/C", type_opts, key="sdr_type", label_visibility="collapsed")
+            ccy_opts = _sdr_get_distinct("notional_ccy")
+            sel_ccy = st.selectbox("CCY", ["All"] + ccy_opts, key="sdr_ccy", label_visibility="collapsed")
+
+        with col3:
+            st.markdown("**Tenor filters**")
+            opt_tenors = _sdr_get_distinct("opt_tenor", order_by_tenor=True)
+            sel_opt_tenor = st.selectbox("Opt expiry", ["All"] + opt_tenors, key="sdr_opt_tenor", label_visibility="collapsed")
+            swp_tenors = _sdr_get_distinct("swp_tenor", order_by_tenor=True)
+            sel_swp_tenor = st.selectbox("Swp tenor", ["All"] + swp_tenors, key="sdr_swp_tenor", label_visibility="collapsed")
+
+        with col4:
+            st.markdown("**Platform & Action**")
+            platforms = _sdr_get_distinct("platform_identifier")
+            sel_platform = st.selectbox("Platform", ["All"] + platforms, key="sdr_platform", label_visibility="collapsed")
+            action_opts = ["All", "NEWT", "MODI", "CORR", "CANC"]
+            sel_action = st.selectbox("Action", action_opts, key="sdr_action", label_visibility="collapsed")
+
+        st.markdown("---")
+        al1, al2, al3, al4 = st.columns(4)
+        with al1:
+            st.markdown("**Alert settings**")
+            alerts_on = st.toggle("🔔 Toast alerts on new NEWT trades", value=True, key="sdr_alerts_on")
+        with al2:
+            min_notional_m = st.number_input(
+                "Min notional (USD M)", min_value=0, value=0, step=25,
+                key="sdr_min_notional", help="Only alert on trades above this size"
+            )
+        with al3:
+            alert_ccy = st.selectbox("Alert CCY filter", ["All"] + ccy_opts, key="sdr_alert_ccy")
+        with al4:
+            auto_refresh = st.selectbox(
+                "Auto-refresh", ["Off", "30s", "1 min", "2 min", "5 min"],
+                key="sdr_refresh_interval"
+            )
+
+    # ── Build query ───────────────────────────────────────────────────────────
+    filters = []
+    params = []
+
+    filters.append("trade_date BETWEEN %s AND %s")
+    params += [date_from, date_to]
+
+    if sel_type != "All":
+        filters.append("option_type_decoded = %s")
+        params.append(sel_type)
+    if sel_ccy != "All":
+        filters.append("notional_ccy = %s")
+        params.append(sel_ccy)
+    if sel_opt_tenor != "All":
+        filters.append("opt_tenor = %s")
+        params.append(sel_opt_tenor)
+    if sel_swp_tenor != "All":
+        filters.append("swp_tenor = %s")
+        params.append(sel_swp_tenor)
+    if sel_platform != "All":
+        filters.append("platform_identifier = %s")
+        params.append(sel_platform)
+    if sel_action != "All":
+        filters.append("action_type = %s")
+        params.append(sel_action)
+    if min_notional_m > 0:
+        filters.append("notional_leg1 >= %s")
+        params.append(min_notional_m * 1_000_000)
+
+    where = "WHERE " + " AND ".join(filters) if filters else ""
+
+    query = f"""
+        SELECT
+            dissemination_id, action_type, option_type_decoded,
+            opt_tenor, swp_tenor, notional_ccy,
+            upi_underlier_name, strike_pct, premium_amount,
+            notional_leg1, cleared, platform_identifier,
+            event_timestamp, trade_date
+        FROM dtcc_sdr
+        {where}
+        ORDER BY event_timestamp DESC
+        LIMIT 2000
+    """
+
+    # ── Load data ─────────────────────────────────────────────────────────────
+    col_refresh, col_status = st.columns([1, 5])
+    with col_refresh:
+        manual_refresh = st.button("🔄 Refresh", key="sdr_refresh_btn", use_container_width=True)
+
+    @st.cache_data(ttl=30, show_spinner=False)
+    def load_sdr_data(q: str, p: tuple):
+        conn = get_db_connection()
+        if not conn:
+            return pd.DataFrame()
+        try:
+            df = pd.read_sql(q, conn, params=list(p))
+            conn.close()
+            return df
+        except Exception as e:
+            conn.close()
+            return pd.DataFrame()
+
+    if manual_refresh:
+        st.cache_data.clear()
+
+    df = load_sdr_data(query, tuple(params))
+
+    # ── Toast alerts for new NEWT trades ─────────────────────────────────────
+    if alerts_on and not df.empty:
+        new_trades = df[df["action_type"] == "NEWT"].copy()
+        if alert_ccy != "All":
+            new_trades = new_trades[new_trades["notional_ccy"] == alert_ccy]
+        if min_notional_m > 0:
+            new_trades = new_trades[new_trades["notional_leg1"] >= min_notional_m * 1_000_000]
+
+        if not new_trades.empty:
+            latest_id = new_trades.iloc[0]["dissemination_id"]
+            if st.session_state["sdr_last_seen_id"] is not None and latest_id != st.session_state["sdr_last_seen_id"]:
+                # Find truly new rows since last render
+                prev_ids = st.session_state.get("sdr_known_ids", set())
+                curr_ids = set(new_trades["dissemination_id"].tolist())
+                fresh = curr_ids - prev_ids
+                for fid in list(fresh)[:5]:  # cap at 5 toasts per refresh
+                    row = new_trades[new_trades["dissemination_id"] == fid].iloc[0]
+                    notional_str = _fmt_notional(row.get("notional_leg1"))
+                    strike_str = f"{row['strike_pct']:.3f}%" if pd.notna(row.get("strike_pct")) else "—"
+                    pc = row.get("option_type_decoded", "?")
+                    ccy = row.get("notional_ccy", "")
+                    plat = row.get("platform_identifier", "")
+                    ot = row.get("opt_tenor", "")
+                    st = row.get("swp_tenor", "")
+                    msg = f"🔔 {pc} {ccy} {ot}x{st}  Strike {strike_str}  Notional {notional_str}  [{plat}]"
+                    st.toast(msg, icon="📡")
+                    st.session_state["sdr_alert_count"] += 1
+                st.session_state["sdr_known_ids"] = curr_ids
+            else:
+                st.session_state["sdr_known_ids"] = set(new_trades["dissemination_id"].tolist())
+            st.session_state["sdr_last_seen_id"] = latest_id
+
+    # ── Summary metrics ───────────────────────────────────────────────────────
+    if not df.empty:
+        total = len(df)
+        calls = (df["option_type_decoded"] == "CALL").sum()
+        puts  = (df["option_type_decoded"] == "PUT").sum()
+        newt  = (df["action_type"] == "NEWT").sum()
+        total_not = df["notional_leg1"].dropna().sum()
+
+        mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+        for col, label, value, color in [
+            (mc1, "Total trades",    f"{total:,}",                "#f1f5f9"),
+            (mc2, "New (NEWT)",      f"{newt:,}",                 "#4ade80"),
+            (mc3, "Calls",           f"{calls:,}",                "#4ade80"),
+            (mc4, "Puts",            f"{puts:,}",                 "#f87171"),
+            (mc5, "Total Notional",  _fmt_notional(total_not),    "#60a5fa"),
+        ]:
+            with col:
+                st.markdown(
+                    f'<div class="sdr-metric">'
+                    f'<div class="val" style="color:{color}">{value}</div>'
+                    f'<div class="lbl">{label}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+        st.markdown("")
+
+    # ── Blotter table ─────────────────────────────────────────────────────────
+    if df.empty:
+        st.info("No data found for selected filters. Run `dtcc_sdr_fetcher.py` to load data, or adjust the date range.")
+    else:
+        # Format display dataframe
+        disp = df.copy()
+
+        def _pc_html(v):
+            cls = {"CALL":"sdr-call","PUT":"sdr-put","STR":"sdr-str"}.get(v,"sdr-oth")
+            return f'<span class="{cls}">{v}</span>'
+
+        def _action_html(v):
+            cls = {"NEWT":"sdr-newt","MODI":"sdr-modi","CANC":"sdr-canc","CORR":"sdr-corr"}.get(v,"")
+            return f'<span class="{cls}">{v}</span>' if cls else v
+
+        def _ts_fmt(v):
+            if pd.isna(v): return "—"
+            try: return pd.Timestamp(v).strftime("%m/%d %H:%M")
+            except: return str(v)[:16]
+
+        # Build display dict
+        rows_html = []
+        for _, r in disp.iterrows():
+            strike = f"{r['strike_pct']:.3f}%" if pd.notna(r.get("strike_pct")) else "—"
+            prem   = _fmt_notional(r.get("premium_amount")) if pd.notna(r.get("premium_amount")) else "—"
+            not1   = _fmt_notional(r.get("notional_leg1"))
+            und    = (r.get("upi_underlier_name") or "—").replace("NA/Swap ","").replace(" Compound","")
+            rows_html.append({
+                "Time":       _ts_fmt(r.get("event_timestamp")),
+                "Action":     r.get("action_type",""),
+                "P/C":        r.get("option_type_decoded",""),
+                "Opt Expiry": r.get("opt_tenor","—"),
+                "Swp Tenor":  r.get("swp_tenor","—"),
+                "CCY":        r.get("notional_ccy","—"),
+                "Underlying": und[:35],
+                "Strike %":   strike,
+                "Premium":    prem,
+                "Notional":   not1,
+                "Cleared":    r.get("cleared","—"),
+                "Platform":   r.get("platform_identifier","—"),
+            })
+
+        disp_df = pd.DataFrame(rows_html)
+
+        # Colour mapping via st.dataframe column config
+        st.dataframe(
+            disp_df,
+            use_container_width=True,
+            height=min(60 + len(disp_df) * 35, 700),
+            column_config={
+                "Time":       st.column_config.TextColumn("Time",       width="small"),
+                "Action":     st.column_config.TextColumn("Action",     width="small"),
+                "P/C":        st.column_config.TextColumn("P/C",        width="small"),
+                "Opt Expiry": st.column_config.TextColumn("Opt Expiry", width="small"),
+                "Swp Tenor":  st.column_config.TextColumn("Swp Tenor",  width="small"),
+                "CCY":        st.column_config.TextColumn("CCY",        width="small"),
+                "Underlying": st.column_config.TextColumn("Underlying", width="medium"),
+                "Strike %":   st.column_config.TextColumn("Strike %",   width="small"),
+                "Premium":    st.column_config.TextColumn("Premium",    width="small"),
+                "Notional":   st.column_config.TextColumn("Notional",   width="small"),
+                "Cleared":    st.column_config.TextColumn("Clrd",       width="small"),
+                "Platform":   st.column_config.TextColumn("Platform",   width="small"),
+            },
+            hide_index=True,
+        )
+
+        st.caption(f"Showing {len(disp_df):,} trades · Last loaded: {datetime.utcnow().strftime('%H:%M UTC')} · Alert count this session: {st.session_state['sdr_alert_count']}")
+
+    # ── Auto-refresh ──────────────────────────────────────────────────────────
+    _refresh_map = {"Off": 0, "30s": 30, "1 min": 60, "2 min": 120, "5 min": 300}
+    _interval = _refresh_map.get(auto_refresh, 0)
+    if _interval > 0:
+        time.sleep(0.1)  # yield to Streamlit
+        st.markdown(
+            f'<meta http-equiv="refresh" content="{_interval}">',
+            unsafe_allow_html=True
+        )
+
+
+# ── SDR helper functions (add alongside sdr_live_tab) ─────────────────────────
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _sdr_get_distinct(column: str, order_by_tenor: bool = False) -> list:
+    """Get distinct non-null values for a column from dtcc_sdr."""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cur = conn.cursor()
+        cur.execute(f"SELECT DISTINCT {column} FROM dtcc_sdr WHERE {column} IS NOT NULL AND {column} != ''")
+        vals = [r[0] for r in cur.fetchall() if r[0]]
+        cur.close()
+        conn.close()
+        if order_by_tenor:
+            def _tenor_months(t):
+                import re
+                m = re.match(r"(\d+)Y(?:(\d+)M)?$", t or "")
+                if m: return int(m.group(1)) * 12 + int(m.group(2) or 0)
+                m2 = re.match(r"(\d+)M$", t or "")
+                if m2: return int(m2.group(1))
+                return 9999
+            return sorted(vals, key=_tenor_months)
+        return sorted(vals)
+    except Exception:
+        try: conn.close()
+        except: pass
+        return []
+
+def _fmt_notional(v) -> str:
+    """Format a notional/premium number to readable string."""
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return "—"
+    if v >= 1e12: return f"{v/1e12:.2f}T"
+    if v >= 1e9:  return f"{v/1e9:.1f}B"
+    if v >= 1e6:  return f"{v/1e6:.0f}M"
+    if v >= 1e3:  return f"{v/1e3:.0f}K"
+    return f"{v:.0f}"
+
+
 def vol_config_tab():
     st.subheader(" Vol / SABR Config & Upload")
     
@@ -15156,6 +15551,7 @@ def main():
 
     _ALL_TAB_DEFS = [
         ("🏡 Home",                      "tab_show_home",      home_tab),
+        ("📡 SDR Live",                  "tab_show_sdr",       sdr_live_tab),
         ("📋 IRS / Vol Upload",          "tab_show_upload",    vol_config_tab),
         ("📏 Curves",                    "tab_show_curves",    curves_tab),
         ("📈 FWD IRS Analysis",          "tab_show_fwd",       fwd_analysis_tab),
@@ -15173,7 +15569,7 @@ def main():
     # Multi-CCY is super_admin only, added separately below
     _tab_names = [n for n, k, f in _ALL_TAB_DEFS if st.session_state.get(k, True)]
     _tab_funcs = [f for n, k, f in _ALL_TAB_DEFS if st.session_state.get(k, True)]
-    if _show_hidden:
+    if st.session_state.get("tab_show_multiccy", True):
         _tab_names += ["📍 Multi-CCY"]
         _tab_funcs += [lambda: multi_ccy_tab(vol_mode)]
 
