@@ -2421,15 +2421,6 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         except:
             pass
     
-    # Extend to 20y using vol spread if provided
-    if 15.0 in caplet_vols and spread_15v20 is not None:
-        try:
-            vol_15y = caplet_vols[15.0]
-            vol_20y = max(vol_15y + spread_15v20, 1.0)
-            caplet_vols[20.0] = vol_20y
-        except Exception:
-            pass
-
     # Final cubic spline interpolation with solved anchors
     from scipy.interpolate import CubicSpline
     anchor_mats = np.array(sorted([m for m in caplet_vols.keys() if m >= 1.0 and m == int(m)]))
@@ -2448,6 +2439,15 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
             caplet_vols_final[round(t, 2)] = max(float(cs(t)), 1.0)
             t += 0.25  # Caps are always quarterly
         
+        # Extend to 20Y using vol spread — add AFTER spline, as flat extension
+        if spread_15v20 is not None and 15.0 in caplet_vols:
+            vol_15y = caplet_vols.get(15.0, caplet_vols_final.get(max(caplet_vols_final.keys()), 75.0))
+            vol_20y = max(vol_15y + spread_15v20, 1.0)
+            t = max_mat + 0.25
+            while t <= 20.0 + 1e-6:
+                caplet_vols_final[round(t, 2)] = vol_20y
+                t += 0.25
+
         return caplet_vols_final
     
     return caplet_vols if caplet_vols else None
@@ -8227,7 +8227,7 @@ def caps_floors_tab(vol_mode: str):
                             if _wedge_straddle is not None:
                                 _cum_prem += float(_wedge_straddle)
                         _straddle_prem = round(_cum_prem, 4) if _cum_prem else None
-                        # Note: for 20Y, _straddle_prem will be overwritten above
+
                         # Flat vol from caplet curve
                         _flat_vol = None
                         if _caplet_vc:
@@ -8244,13 +8244,19 @@ def caps_floors_tab(vol_mode: str):
                                         _a = (_t - _mats[_j]) / (_mats[_j+1] - _mats[_j])
                                         _flat_vol = _caplet_vc[_mats[_j]] + _a * (_caplet_vc[_mats[_j+1]] - _caplet_vc[_mats[_j]])
                                         break
-                        # For 20Y: price 15y→20y caplet leg from extended vol curve
-                        if _key is None and _caplet_vc and 20.0 in _caplet_vc:
-                            try:
-                                _gap_leg = price_caplets_with_vol_curve(ccy, 20.0, _caplet_vc, notional_mm=1.0, expiry_y=15.0)
-                                _cum_prem += _gap_leg
-                                _straddle_prem = round(_cum_prem * 2, 4)  # leg×2 = straddle
-                            except Exception:
+                        # For 20Y: price full 20Y cap from caplet curve, then subtract 15Y
+                        if _key is None:
+                            if _caplet_vc and 20.0 in _caplet_vc:
+                                try:
+                                    _prem_20 = price_caplets_with_vol_curve(ccy, 20.0, _caplet_vc, notional_mm=1.0)
+                                    _prem_15 = price_caplets_with_vol_curve(ccy, 15.0, _caplet_vc, notional_mm=1.0)
+                                    _gap_leg = max(_prem_20 - _prem_15, 0.0)
+                                    _leg_straddle = _gap_leg * 2
+                                    _cum_prem += _leg_straddle
+                                    _straddle_prem = round(_cum_prem, 4)
+                                except Exception:
+                                    _straddle_prem = None
+                            else:
                                 _straddle_prem = None
                         _atm_cfs_rows.append({
                             "Tenor": f"{_t}Y",
