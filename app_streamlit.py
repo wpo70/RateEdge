@@ -7988,7 +7988,7 @@ def caps_floors_tab(vol_mode: str):
                 st.session_state.pop("_atm_cfs_rows_cache", None)
                 st.rerun()
             if br.button("🔔 Generate Swaption Premiums", key="gen_swpt_prem", type="primary"):
-                # Read directly from ATM premium matrix already computed on Curves tab
+                # Read directly from ATM premium matrix — single source of truth
                 _prem_df = st.session_state.get("atm_prem_matrix", {}).get(ccy, {}).get("prem")
                 if _prem_df is not None and not _prem_df.empty:
                     for lbl, exp, tenor, cfs_lbl in [
@@ -8002,9 +8002,9 @@ def caps_floors_tab(vol_mode: str):
                             premium_bp = get_matrix_value(_prem_df, exp, tenor)
                             if premium_bp is None: continue
                             st.session_state["cfs_table_data"][lbl] = {
-                                "swaption": round(premium_bp, 4),
+                                "swaption": round(float(premium_bp), 4),
                                 "cfs_label": cfs_lbl,
-                                "cfs_straddle": round(premium_bp, 4)
+                                "cfs_straddle": round(float(premium_bp), 4)
                             }
                         except:
                             pass
