@@ -4241,6 +4241,19 @@ def sdr_live_tab():
         st.warning("Database not connected. SDR Live requires a Supabase connection.")
         return
 
+    # ── Load persisted filter settings on first render ────────────────────────
+    _uid = st.session_state.get("username", "default")
+    if "sdr_filters_loaded" not in st.session_state:
+        try:
+            _saved = load_user_config(_uid, "sdr_filters", "GLOBAL")
+            if _saved:
+                for _k, _v in _saved.items():
+                    if _k not in st.session_state:
+                        st.session_state[_k] = _v
+        except Exception:
+            pass
+        st.session_state["sdr_filters_loaded"] = True
+
     # ── Check table exists ────────────────────────────────────────────────────
     def table_exists(conn) -> bool:
         try:
@@ -4279,6 +4292,23 @@ def sdr_live_tab():
         st.session_state["sdr_alert_count"] = 0
 
     # ── Setup / filter panel ──────────────────────────────────────────────────
+    def _save_sdr_filters():
+        """Persist current SDR filter state to DB."""
+        _uid = st.session_state.get("username", "default")
+        _keys = ["sdr_date_from", "sdr_date_to", "sdr_type", "sdr_ccy",
+                 "sdr_opt_tenor", "sdr_swp_tenor", "sdr_platform", "sdr_action",
+                 "sdr_cleared", "sdr_alerts_on", "sdr_min_notional",
+                 "sdr_alert_ccy", "sdr_refresh_interval"]
+        _data = {k: st.session_state.get(k) for k in _keys if k in st.session_state}
+        # Convert date objects to strings for JSON serialisation
+        for k in ["sdr_date_from", "sdr_date_to"]:
+            if k in _data and hasattr(_data[k], 'isoformat'):
+                _data[k] = _data[k].isoformat()
+        try:
+            save_user_config(_uid, "sdr_filters", "GLOBAL", _data)
+        except Exception:
+            pass
+
     with st.expander("⚙️  Setup & Filters", expanded=True):
         col1, col2, col3, col4 = st.columns(4)
 
@@ -4286,43 +4316,47 @@ def sdr_live_tab():
             st.markdown("**Date range**")
             date_from = st.date_input(
                 "From", value=date.today() - timedelta(days=7),
-                key="sdr_date_from", label_visibility="collapsed"
+                key="sdr_date_from", label_visibility="collapsed",
+                on_change=_save_sdr_filters
             )
             date_to = st.date_input(
                 "To", value=date.today(),
-                key="sdr_date_to", label_visibility="collapsed"
+                key="sdr_date_to", label_visibility="collapsed",
+                on_change=_save_sdr_filters
             )
 
         with col2:
             st.markdown("**Type & CCY**")
             sel_type = st.multiselect("P/C", ["CALL","PUT","STR","OTH"],
-                default=["CALL","PUT","STR"], key="sdr_type")
+                default=["CALL","PUT","STR"], key="sdr_type",
+                label_visibility="collapsed", on_change=_save_sdr_filters)
             ccy_opts = _sdr_get_distinct("notional_ccy")
-            sel_ccy = st.selectbox("CCY", ["All"] + ccy_opts, key="sdr_ccy", label_visibility="collapsed")
+            sel_ccy = st.selectbox("CCY", ["All"] + ccy_opts, key="sdr_ccy", label_visibility="collapsed", on_change=_save_sdr_filters)
 
         with col3:
             st.markdown("**Tenor filters**")
             opt_tenors = _sdr_get_distinct("opt_tenor", order_by_tenor=True)
-            sel_opt_tenor = st.selectbox("Opt expiry", ["All"] + opt_tenors, key="sdr_opt_tenor", label_visibility="collapsed")
+            sel_opt_tenor = st.selectbox("Opt expiry", ["All"] + opt_tenors, key="sdr_opt_tenor", label_visibility="collapsed", on_change=_save_sdr_filters)
             swp_tenors = _sdr_get_distinct("swp_tenor", order_by_tenor=True)
-            sel_swp_tenor = st.selectbox("Swp tenor", ["All"] + swp_tenors, key="sdr_swp_tenor", label_visibility="collapsed")
+            sel_swp_tenor = st.selectbox("Swp tenor", ["All"] + swp_tenors, key="sdr_swp_tenor", label_visibility="collapsed", on_change=_save_sdr_filters)
 
         with col4:
             st.markdown("**Platform & Action**")
             platforms = _sdr_get_distinct("platform_identifier")
-            sel_platform = st.selectbox("Platform", ["All"] + platforms, key="sdr_platform", label_visibility="collapsed")
+            sel_platform = st.selectbox("Platform", ["All"] + platforms, key="sdr_platform", label_visibility="collapsed", on_change=_save_sdr_filters)
             action_opts = ["All", "NEWT", "MODI", "CORR", "CANC"]
-            sel_action = st.selectbox("Action", action_opts, key="sdr_action", label_visibility="collapsed")
+            sel_action = st.selectbox("Action", action_opts, key="sdr_action", label_visibility="collapsed", on_change=_save_sdr_filters)
 
         st.markdown("---")
         al1, al2, al3, al4 = st.columns(4)
         with al1:
             st.markdown("**Alert settings**")
-            alerts_on = st.toggle("🔔 Toast alerts on new NEWT trades", value=True, key="sdr_alerts_on")
+            alerts_on = st.toggle("🔔 Toast alerts on new NEWT trades", value=True, key="sdr_alerts_on", on_change=_save_sdr_filters)
         with al2:
             min_notional_m = st.number_input(
                 "Min notional (USD M)", min_value=0, value=0, step=25,
-                key="sdr_min_notional", help="Only alert on trades above this size"
+                key="sdr_min_notional", help="Only alert on trades above this size",
+                on_change=_save_sdr_filters
             )
         with al3:
             alert_ccy = st.selectbox("Alert CCY filter", ["All"] + ccy_opts, key="sdr_alert_ccy")
