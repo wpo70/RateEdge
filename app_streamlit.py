@@ -4366,6 +4366,59 @@ def sdr_live_tab():
                 key="sdr_refresh_interval"
             )
 
+    # ── Market hours info panel ───────────────────────────────────────────────
+    with st.expander("🕐  Market Hours & Refresh Schedule", expanded=False):
+        from datetime import timezone as _tz
+        _now_utc = datetime.now(timezone.utc)
+        _utc_h = _now_utc.hour
+
+        # Define windows
+        _WINDOWS = {
+            "AUD": (21, 8,  "21:00–08:00", "08:00–19:00"),
+            "USD": (10, 21, "10:00–21:00", "21:00–08:00"),
+            "JPY": (22, 7,  "22:00–07:00", "09:00–18:00"),
+            "EUR": (7,  16, "07:00–16:00", "18:00–03:00"),
+            "GBP": (7,  16, "07:00–16:00", "18:00–03:00"),
+        }
+        _PRE_OPEN = {"AUD": 20, "USD": 9, "JPY": 21, "EUR": 6, "GBP": 6}
+
+        def _is_active(start, end, h):
+            if start > end: return h >= start or h < end
+            return start <= h < end
+
+        st.markdown("**SDR polling runs every 5 minutes during active windows. Pre-open catch-up runs 1hr before each open (90min lookback).**")
+        st.markdown("")
+
+        cols = st.columns([1,2,2,1,1])
+        cols[0].markdown("**CCY**")
+        cols[1].markdown("**UTC window**")
+        cols[2].markdown("**AEST**")
+        cols[3].markdown("**Pre-open UTC**")
+        cols[4].markdown("**Status**")
+
+        _status_map = {
+            True:  "🟢 Active",
+            False: "⚫ Closed",
+        }
+        _pre_map = {
+            True:  "⏰ Pre-open",
+            False: "",
+        }
+
+        for ccy, (s, e, utc_str, aest_str) in _WINDOWS.items():
+            active  = _is_active(s, e, _utc_h)
+            pre_hr  = _PRE_OPEN.get(ccy, s-1)
+            pre_now = _utc_h == pre_hr
+            c = st.columns([1,2,2,1,1])
+            c[0].markdown(f"**{ccy}**")
+            c[1].markdown(utc_str)
+            c[2].markdown(aest_str)
+            c[3].markdown(f"{pre_hr:02d}:00")
+            c[4].markdown(_pre_map[pre_now] if pre_now else _status_map[active])
+
+        st.markdown("")
+        st.caption(f"Current UTC time: {_now_utc.strftime('%H:%M')} · Refresh loop: every 5 min · Pre-open lookback: 90 min · Active poll lookback: 10 min")
+
     # ── Build query ───────────────────────────────────────────────────────────
     filters = []
     params = []
