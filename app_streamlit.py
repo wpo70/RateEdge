@@ -8372,14 +8372,13 @@ def caps_floors_tab(vol_mode: str):
                 from scipy.interpolate import CubicSpline as _CubicSpline30
                 _vol_15 = caplet_vol_curve[15.0]
                 _vol_20 = max(_vol_15 + _spread_15v20_disp, 1.0)
-                _vol_30 = max(_vol_15 + 2.0 * _spread_15v20_disp, 1.0)
-                # Cubic spline anchors: 15Y, 20Y, 30Y
-                _ext_mats = [15.0, 20.0, 30.0]
-                _ext_vols = [_vol_15, _vol_20, _vol_30]
-                _cs30 = _CubicSpline30(_ext_mats, _ext_vols)
+                # Linear extension 15Y→20Y
+                _ext_mats = [15.0, 20.0]
+                _ext_vols = [_vol_15, _vol_20]
                 _t30 = 15.25
-                while _t30 <= 30.01:
-                    caplet_vol_curve[round(_t30, 2)] = max(float(_cs30(_t30)), 1.0)
+                while _t30 <= 20.01:
+                    _frac = (_t30 - 15.0) / 5.0
+                    caplet_vol_curve[round(_t30, 2)] = max(_vol_15 + _frac * (_vol_20 - _vol_15), 1.0)
                     _t30 += 0.25
 
             with st.expander("📊 Resulting Caplet Vol Curve", expanded=False):
