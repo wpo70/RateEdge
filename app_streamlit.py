@@ -4367,23 +4367,28 @@ def sdr_live_tab():
             sel_action = st.selectbox("Action", action_opts, key="sdr_action", label_visibility="collapsed", on_change=_save_sdr_filters)
 
         st.markdown("---")
-        al1, al2, al3, al4 = st.columns(4)
+        al1, al2, al3, al4, al5 = st.columns(5)
         with al1:
             st.markdown("**Timezone**")
             _tz_options = ["Sydney (AEST/AEDT)", "Auckland (NZST/NZDT)", "New York (ET)", "London (GMT/BST)", "Tokyo (JST)", "UTC"]
             st.selectbox("Timezone", _tz_options, key="sdr_timezone",
                         label_visibility="collapsed", on_change=_save_sdr_filters)
-            st.markdown("**Alert settings**")
-            alerts_on = st.toggle("🔔 Toast alerts on new NEWT trades", value=True, key="sdr_alerts_on", on_change=_save_sdr_filters)
         with al2:
+            st.markdown("**Alerts**")
+            alerts_on = st.toggle("🔔 New NEWT trades", value=True, key="sdr_alerts_on", on_change=_save_sdr_filters)
+        with al3:
+            st.markdown("**Min notional (M)**")
             min_notional_m = st.number_input(
                 "Min notional (USD M)", min_value=0, value=0, step=25,
                 key="sdr_min_notional", help="Only alert on trades above this size",
-                on_change=_save_sdr_filters
+                label_visibility="collapsed", on_change=_save_sdr_filters
             )
-        with al3:
-            alert_ccy = st.selectbox("Alert CCY filter", ["All"] + ccy_opts, key="sdr_alert_ccy")
         with al4:
+            st.markdown("**Alert CCY**")
+            alert_ccy = st.selectbox("Alert CCY filter", ["All"] + ccy_opts, key="sdr_alert_ccy",
+                        label_visibility="collapsed", on_change=_save_sdr_filters)
+        with al5:
+            st.markdown("**Auto-refresh**")
             auto_refresh = st.selectbox(
                 "Auto-refresh", ["Off", "30s", "1 min", "2 min", "5 min"],
                 key="sdr_refresh_interval"
