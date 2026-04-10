@@ -782,8 +782,14 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
                 else:
                     for i, row in enumerate(updated):
                         if i >= len(expiries): break
-                        for j, v in enumerate(row[:len(tcols)]):
-                            working.iloc[i, j+1] = round(float(v), 2)
+                        _col_offset = 0
+                        for j2, v2 in enumerate(row):
+                            if _col_offset >= len(tcols): break
+                            try:
+                                working.iloc[i, _col_offset+1] = round(float(v2), 2)
+                                _col_offset += 1
+                            except (ValueError, TypeError):
+                                pass  # skip non-numeric (e.g. 'AUD' currency col)
                 ed["working"][ccy] = working
                 # Clear paste data after successful confirmation
                 ed["paste_data"][ccy] = ""
