@@ -4237,6 +4237,25 @@ def sdr_live_tab():
     )
     st.caption("DTCC public price dissemination — interest rate options / swaptions / caps & floors")
 
+    # ── Platform code → full name ─────────────────────────────────────────────
+    PLATFORM_NAMES = {
+        "BILT": "Bloomberg SEF",
+        "ISWV": "ICE Swap Trade",
+        "BGCD": "BGC Derivatives SEF",
+        "BGCO": "BGC OTC",
+        "TWSF": "Tradition SEF",
+        "GSEF": "GFI Group SEF",
+        "TSEF": "Tullett Prebon SEF",
+        "RTSX": "Refinitiv SEF",
+        "MKTX": "MarketAxess SEF",
+        "TRWB": "Tradeweb SEF",
+        "NSEF": "nadex SEF",
+        "BBSF": "Bloomberg Swap Facility",
+        "ICSE": "ICE SEF",
+        "GLPX": "Globalplex SEF",
+        "FUSF": "Futures & Options SEF",
+    }
+
     if not HAS_POSTGRES:
         st.warning("Database not connected. SDR Live requires a Supabase connection.")
         return
@@ -4350,6 +4369,10 @@ def sdr_live_tab():
         st.markdown("---")
         al1, al2, al3, al4 = st.columns(4)
         with al1:
+            st.markdown("**Timezone**")
+            _tz_options = ["Sydney (AEST/AEDT)", "Auckland (NZST/NZDT)", "New York (ET)", "London (GMT/BST)", "Tokyo (JST)", "UTC"]
+            st.selectbox("Timezone", _tz_options, key="sdr_timezone",
+                        label_visibility="collapsed", on_change=_save_sdr_filters)
             st.markdown("**Alert settings**")
             alerts_on = st.toggle("🔔 Toast alerts on new NEWT trades", value=True, key="sdr_alerts_on", on_change=_save_sdr_filters)
         with al2:
@@ -4545,6 +4568,34 @@ def sdr_live_tab():
                 )
         st.markdown("")
 
+    # ── Timezone setup ────────────────────────────────────────────────────────
+    from datetime import timezone as _tz
+    _tz_map = {
+        "Sydney (AEST/AEDT)":    "Australia/Sydney",
+        "Auckland (NZST/NZDT)":  "Pacific/Auckland",
+        "New York (ET)":         "America/New_York",
+        "London (GMT/BST)":      "Europe/London",
+        "Tokyo (JST)":           "Asia/Tokyo",
+        "UTC":                   "UTC",
+    }
+    # Default based on CCY preference
+    _default_tz = "Sydney (AEST/AEDT)"
+    _sel_tz = st.session_state.get("sdr_timezone", _default_tz)
+    try:
+        from zoneinfo import ZoneInfo
+        user_tz = ZoneInfo(_tz_map.get(_sel_tz, "Australia/Sydney"))
+    except Exception:
+        user_tz = None
+
+    def _ts_fmt_tz(v, tz=None):
+        if pd.isna(v) or v is None: return "—"
+        try:
+            ts = pd.Timestamp(v)
+            if tz:
+                ts = ts.tz_convert(tz)
+            return ts.strftime("%m/%d %H:%M")
+        except: return str(v)[:16]
+
     # ── Blotter table ─────────────────────────────────────────────────────────
     if df.empty:
         st.info("No data found for selected filters. Run `dtcc_sdr_fetcher.py` to load data, or adjust the date range.")
@@ -4560,7 +4611,7 @@ def sdr_live_tab():
             cls = {"NEWT":"sdr-newt","MODI":"sdr-modi","CANC":"sdr-canc","CORR":"sdr-corr"}.get(v,"")
             return f'<span class="{cls}">{v}</span>' if cls else v
 
-        def _ts_fmt(v):
+        def _ts_fmt(v):  # kept for compat
             if pd.isna(v): return "—"
             try: return pd.Timestamp(v).strftime("%m/%d %H:%M")
             except: return str(v)[:16]
@@ -4568,12 +4619,12 @@ def sdr_live_tab():
         # Build display dict
         rows_html = []
         for _, r in disp.iterrows():
-            strike = f"{r['strike_pct']:.3f}%" if pd.notna(r.get("strike_pct")) else "—"
+            strike = f"{r['strike_pct']:.5f}%" if pd.notna(r.get("strike_pct")) else "—"
             prem   = _fmt_notional(r.get("premium_amount")) if pd.notna(r.get("premium_amount")) else "—"
             not1   = _fmt_notional(r.get("notional_leg1"))
             und    = (r.get("upi_underlier_name") or "—").replace("NA/Swap ","").replace(" Compound","")
             rows_html.append({
-                "Time":       _ts_fmt(r.get("event_timestamp")),
+                "Time":       _ts_fmt_tz(r.get("event_timestamp"), user_tz),
                 "Action":     r.get("action_type",""),
                 "P/C":        r.get("option_type_decoded",""),
                 "Opt Expiry": r.get("opt_tenor","—"),
@@ -4584,7 +4635,7 @@ def sdr_live_tab():
                 "Premium":    prem,
                 "Notional":   not1,
                 "Cleared":    r.get("cleared","—"),
-                "Platform":   r.get("platform_identifier","—"),
+                "Platform":   PLATFORM_NAMES.get(r.get("platform_identifier",""), r.get("platform_identifier","—")),
             })
 
         disp_df = pd.DataFrame(rows_html)
