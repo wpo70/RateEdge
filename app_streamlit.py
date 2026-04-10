@@ -7393,7 +7393,7 @@ def swaptions_tab(vol_mode: str):
 
         # Header row — light grey background
         st.markdown(
-            "<div style='display:grid;grid-template-columns:3.0% 20.3% 6.2% 7.3% 6.2% 8.3% 8.3% 8.3% 8.3% 16.0% 3.8% 3.8%;"
+            "<div style='display:grid;grid-template-columns:2.5% 18.5% 6.0% 7.0% 6.0% 8.0% 8.0% 8.0% 8.0% 14.5% 7.0% 6.5%;"
             "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
             "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
             "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
@@ -7412,7 +7412,7 @@ def swaptions_tab(vol_mode: str):
             _cur_status = st.session_state.get(_status_key, "—")
             _bg = _STATUS_COLOURS.get(_cur_status, "white")
 
-            _rc = st.columns([0.28, 1.9, 0.58, 0.68, 0.58, 0.78, 0.78, 0.78, 0.78, 1.5, 0.36, 0.36])
+            _rc = st.columns([0.25, 1.85, 0.58, 0.68, 0.58, 0.78, 0.78, 0.78, 0.78, 1.45, 0.70, 0.65])
             for _ci, _val in enumerate([
                 f"{idx+1}", _struct, _expiry, _tenor,
                 f"{float(row.get('notional_mm',100)):.0f}mm",
@@ -8227,6 +8227,7 @@ def caps_floors_tab(vol_mode: str):
                             if _wedge_straddle is not None:
                                 _cum_prem += float(_wedge_straddle)
                         _straddle_prem = round(_cum_prem, 4) if _cum_prem else None
+                        # Note: for 20Y, _straddle_prem will be overwritten above
                         # Flat vol from caplet curve
                         _flat_vol = None
                         if _caplet_vc:
@@ -8243,11 +8244,14 @@ def caps_floors_tab(vol_mode: str):
                                         _a = (_t - _mats[_j]) / (_mats[_j+1] - _mats[_j])
                                         _flat_vol = _caplet_vc[_mats[_j]] + _a * (_caplet_vc[_mats[_j+1]] - _caplet_vc[_mats[_j]])
                                         break
-                        # For 20Y: use vol spread extension, no wedge straddle key
-                        if _key is None:
-                            _wedge_straddle_20 = None
-                        else:
-                            _wedge_straddle_20 = None
+                        # For 20Y: price 15y→20y caplet leg from extended vol curve
+                        if _key is None and _caplet_vc and 20.0 in _caplet_vc:
+                            try:
+                                _gap_leg = price_caplets_with_vol_curve(ccy, 20.0, _caplet_vc, notional_mm=1.0, expiry_y=15.0)
+                                _cum_prem += _gap_leg
+                                _straddle_prem = round(_cum_prem * 2, 4)  # leg×2 = straddle
+                            except Exception:
+                                _straddle_prem = None
                         _atm_cfs_rows.append({
                             "Tenor": f"{_t}Y",
                             "Start": _start_dt.strftime("%d %b %y"),
@@ -14773,6 +14777,30 @@ def main():
             index=0,
             key="sidebar_volmode",
         )
+
+        # Tab visibility
+        with st.expander("🗂️ Show/Hide Tabs", expanded=False):
+            _ALL_TABS = [
+                ("🏡 Home", "tab_show_home"),
+                ("📋 IRS / Vol Upload", "tab_show_upload"),
+                ("📏 Curves", "tab_show_curves"),
+                ("📈 FWD IRS Analysis", "tab_show_fwd"),
+                ("📊 Historical VOL Analysis", "tab_show_hva"),
+                ("📊 Swaptions", "tab_show_swaptions"),
+                ("🔔 Caps & Floors", "tab_show_caps"),
+                ("💼 Trade Blotter", "tab_show_blotter"),
+                ("⚛️ RV / Calendar", "tab_show_rv"),
+                ("🔮 Exotics", "tab_show_exotics"),
+                ("📏 SOD Report", "tab_show_sod"),
+                ("✅ Vol Editor", "tab_show_voleditor"),
+                ("📑 Vol Export", "tab_show_volexport"),
+                ("📐 Midcurve & Curve Options", "tab_show_midcurve"),
+            ]
+            for _tname, _tkey in _ALL_TABS:
+                if _tkey not in st.session_state:
+                    st.session_state[_tkey] = True
+                st.session_state[_tkey] = st.checkbox(_tname, value=st.session_state[_tkey], key=f"cb_{_tkey}")
+
         
         st.markdown("---")
         
@@ -15005,38 +15033,24 @@ def main():
     # Only show tabs if authenticated
     _show_hidden = is_super_admin()
 
-    _tab_names = [
-        "🏡 Home",
-        "📋 IRS / Vol Upload",
-        "📏 Curves",
-        "📈 FWD IRS Analysis",
-        "📊 Historical VOL Analysis",
-        "📊 Swaptions",
-        "🔔 Caps & Floors",
-        "💼 Trade Blotter",
-        "⚛️ RV / Calendar",
-        "🔮 Exotics",
-        "📏 SOD Report",
-        "✅ Vol Editor",
-        "📑 Vol Export",
-        "📐 Midcurve & Curve Options",
+    _ALL_TAB_DEFS = [
+        ("🏡 Home",                      "tab_show_home",      home_tab),
+        ("📋 IRS / Vol Upload",          "tab_show_upload",    vol_config_tab),
+        ("📏 Curves",                    "tab_show_curves",    curves_tab),
+        ("📈 FWD IRS Analysis",          "tab_show_fwd",       fwd_analysis_tab),
+        ("📊 Historical VOL Analysis",   "tab_show_hva",       backtesting_tab),
+        ("📊 Swaptions",                 "tab_show_swaptions", lambda: swaptions_tab(vol_mode)),
+        ("🔔 Caps & Floors",             "tab_show_caps",      lambda: caps_floors_tab(vol_mode)),
+        ("💼 Trade Blotter",             "tab_show_blotter",   portfolio_tab),
+        ("⚛️ RV / Calendar",            "tab_show_rv",        rv_tab),
+        ("🔮 Exotics",                   "tab_show_exotics",   lambda: exotics_tab(vol_mode)),
+        ("📏 SOD Report",                "tab_show_sod",       sod_report_tab),
+        ("✅ Vol Editor",                "tab_show_voleditor", vol_surface_editor_tab),
+        ("📑 Vol Export",                "tab_show_volexport", vol_export_tab),
+        ("📐 Midcurve & Curve Options",  "tab_show_midcurve",  midcurve_tab),
     ]
-    _tab_funcs = [
-        home_tab,
-        vol_config_tab,
-        curves_tab,
-        fwd_analysis_tab,
-        backtesting_tab,
-        lambda: swaptions_tab(vol_mode),
-        lambda: caps_floors_tab(vol_mode),
-        portfolio_tab,
-        rv_tab,
-        lambda: exotics_tab(vol_mode),
-        sod_report_tab,
-        vol_surface_editor_tab,
-        vol_export_tab,
-        midcurve_tab,
-    ]
+    _tab_names = [n for n, k, f in _ALL_TAB_DEFS if st.session_state.get(k, True)]
+    _tab_funcs = [f for n, k, f in _ALL_TAB_DEFS if st.session_state.get(k, True)]
     if _show_hidden:
         _tab_names += ["📍 Multi-CCY"]
         _tab_funcs += [lambda: multi_ccy_tab(vol_mode)]
