@@ -768,20 +768,22 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
             if payload.get('ccy') == ccy:
                 updated = payload['vals']
                 mode = payload.get('mode', 'vol')
-                tcols = [c for c in working.columns[1:] if c.lower() != "expiry"]
+                tcols = [c for c in working.columns[1:] if c.lower() != "expiry" and str(c).upper() not in ("AUD","USD","NZD","EUR","GBP","JPY")]
                 expiries = working[working.columns[0]].tolist()
                 
                 _push_history(ccy)
                 if mode == "fwd_premium":
                     for i, row in enumerate(updated):
+                        if i >= len(expiries): break
                         T = label_to_years(str(expiries[i]))
-                        for j, v in enumerate(row):
+                        for j, v in enumerate(row[:len(tcols)]):
                             tenor_y = label_to_years(tcols[j])
-                            working.iloc[i, j+1] = round(premium_to_vol(v, T, tenor_y), 2)
+                            working.iloc[i, j+1] = round(premium_to_vol(float(v), T, tenor_y), 2)
                 else:
                     for i, row in enumerate(updated):
-                        for j, v in enumerate(row):
-                            working.iloc[i, j+1] = round(v, 2)
+                        if i >= len(expiries): break
+                        for j, v in enumerate(row[:len(tcols)]):
+                            working.iloc[i, j+1] = round(float(v), 2)
                 ed["working"][ccy] = working
                 # Clear paste data after successful confirmation
                 ed["paste_data"][ccy] = ""
@@ -790,7 +792,7 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
             else:
                 st.error(f"Currency mismatch")
         except Exception as e:
-            st.error(f"Invalid data: {e}")
+            st.error(f"Invalid data: {e}. Use the Apply button above the 3D chart to generate pasteable data, then paste here.")
     elif confirm_btn:
         st.warning("Paste the data first")
     
