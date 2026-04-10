@@ -4422,8 +4422,8 @@ def sdr_live_tab():
                     ccy = row.get("notional_ccy", "")
                     plat = row.get("platform_identifier", "")
                     ot = row.get("opt_tenor", "")
-                    st = row.get("swp_tenor", "")
-                    msg = f"🔔 {pc} {ccy} {ot}x{st}  Strike {strike_str}  Notional {notional_str}  [{plat}]"
+                    swp_t = row.get("swp_tenor", "")
+                    msg = f"🔔 {pc} {ccy} {ot}x{swp_t}  Strike {strike_str}  Notional {notional_str}  [{plat}]"
                     st.toast(msg, icon="📡")
                     st.session_state["sdr_alert_count"] += 1
                 st.session_state["sdr_known_ids"] = curr_ids
