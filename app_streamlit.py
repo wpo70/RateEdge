@@ -4240,20 +4240,23 @@ def sdr_live_tab():
     # ── Platform code → full name ─────────────────────────────────────────────
     PLATFORM_NAMES = {
         "BILT": "Bloomberg SEF",
-        "ISWV": "ICE Swap Trade",
+        "ISWV": "ICAP SEF",
         "BGCD": "BGC Derivatives SEF",
         "BGCO": "BGC OTC",
         "TWSF": "Tradition SEF",
+        "TSEF": "Tradition SEF",
+        "TSIG": "Tradition Singapore",
+        "TPSE": "Tullett Prebon SEF",
+        "TPAU": "Tullett Prebon Australia",
         "GSEF": "GFI Group SEF",
-        "TSEF": "Tullett Prebon SEF",
         "RTSX": "Refinitiv SEF",
         "MKTX": "MarketAxess SEF",
         "TRWB": "Tradeweb SEF",
-        "NSEF": "nadex SEF",
         "BBSF": "Bloomberg Swap Facility",
         "ICSE": "ICE SEF",
         "GLPX": "Globalplex SEF",
-        "FUSF": "Futures & Options SEF",
+        "FUSF": "TP ICAP Fusion",
+        "NSEF": "NEX SEF",
     }
 
     if not HAS_POSTGRES:
@@ -4574,6 +4577,45 @@ def sdr_live_tab():
                 )
         st.markdown("")
 
+    # ── Underlying name cleaner ───────────────────────────────────────────────
+    def _clean_underlying(underlier: str, fisn: str) -> str:
+        """Map DTCC UPI underlier name to BBG-style display."""
+        u = (underlier or "").strip()
+        f = (fisn or "").strip()
+        # Direct mappings
+        _MAP = {
+            "NA/Swap Fxd Flt AUD":                        "AUD-BBSW",
+            "AUD-BBSW":                                    "AUD-BBSW 3M",
+            "AUD-BBR-BBSW":                                "AUD-BBR-BBSW 6M",
+            "AUD-BBR-BBSW vs USD-SOFR":                   "AUD-BBSW / USD-SOFR",
+            "AUD-BBSW vs USD-SOFR-OIS Compound":          "AUD-BBSW / USD-SOFR OIS",
+            "AUD-BBR-BBSW vs USD-SOFR-OIS Compound":      "AUD-BBR-BBSW / USD-SOFR OIS",
+            "AUD-BBSW vs USD-SOFR-COMPOUND":              "AUD-BBSW / USD-SOFR",
+            "AUD-BBR-BBSW vs USD-SOFR-COMPOUND":          "AUD-BBR-BBSW / USD-SOFR",
+            "AUD-AONIA-OIS Compound vs USD-SOFR-OIS Compound": "AUD-AONIA / USD-SOFR OIS",
+            "AUD-BBSW vs AUD-BBSW":                       "AUD-BBSW Basis",
+            "AUD-CPI":                                     "AUD CPI Inflation",
+            "NA/Swap Fxd Flt USD":                        "USD-SOFR",
+            "NA/Swap OIS USD":                            "USD-SOFR OIS",
+            "USD-SOFR-COMPOUND":                          "USD-SOFR",
+            "NA/Swap Fxd Flt EUR":                        "EUR-EURIBOR",
+            "NA/Swap Fxd Flt GBP":                        "GBP-SONIA",
+            "NA/Swap Fxd Flt JPY":                        "JPY-TONA",
+        }
+        if u in _MAP:
+            return _MAP[u]
+        # Fallback — clean up NA/ prefix and compound suffixes
+        u = u.replace("NA/Swap Fxd Flt ","").replace("NA/Swap Flt Flt ","").replace(" Compound","").replace("-OIS","")
+        return u[:35] if u else f[:35]
+
+    # ── Type display formatter ────────────────────────────────────────────────
+    _TYPE_LABELS = {
+        "CALL": "Call", "PUT": "Put", "STR": "Straddle",
+        "SWN":  "Swaption", "CXL": "Cancelable",
+        "XCS":  "XCCY Swn", "OTH": "Other",
+    }
+    def _fmt_type(t): return _TYPE_LABELS.get(t, t or "—")
+
     # ── Timezone setup ────────────────────────────────────────────────────────
     from datetime import timezone as _tz
     _tz_map = {
@@ -4632,11 +4674,11 @@ def sdr_live_tab():
             rows_html.append({
                 "Time":       _ts_fmt_tz(r.get("event_timestamp"), user_tz),
                 "Action":     r.get("action_type",""),
-                "P/C":        r.get("option_type_decoded",""),
+                "P/C":        _fmt_type(r.get("option_type_decoded","")),
                 "Opt Expiry": r.get("opt_tenor","—"),
                 "Swp Tenor":  r.get("swp_tenor","—"),
                 "CCY":        r.get("notional_ccy","—"),
-                "Underlying": und[:35],
+                "Underlying": _clean_underlying(r.get("upi_underlier_name",""), r.get("upi_fisn","")),
                 "Strike %":   strike,
                 "Premium":    prem,
                 "Notional":   not1,

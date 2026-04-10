@@ -131,11 +131,19 @@ def init_table(conn):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def decode_type(fisn: str) -> str:
+def decode_type(fisn: str, embedded_option_type: str = "") -> str:
     f = (fisn or "").lower()
-    if "/o call" in f or " call " in f: return "CALL"
-    if "/o p " in f or " p epn" in f:   return "PUT"
-    if "straddle" in f or " opt " in f: return "STR"
+    et = (embedded_option_type or "").upper()
+    # Explicit Call/Put from FISN
+    if "/o call" in f or " call epn" in f: return "CALL"
+    if "/o p " in f or " p epn" in f:      return "PUT"
+    if " opt epn" in f or "straddle" in f: return "STR"
+    # OPET on a plain swap FISN = swaption (European option to enter)
+    if et == "OPET" and "/o " not in f:    return "SWN"
+    # MDET = mandatory early termination / cancelable
+    if et == "MDET":                        return "CXL"
+    # OTHR on XCCY = cross-currency swaption
+    if et in ("OPET","OTHR") and "flt flt" in f: return "XCS"
     return "OTH"
 
 def months_diff(a, b):
@@ -207,7 +215,7 @@ def map_row(row: dict, trade_date: date):
         "embedded_option_type":  et or None,
         "upi_fisn":              fisn or None,
         "upi_underlier_name":    row.get("uniqueProductIdentifierUnderlierName"),
-        "option_type_decoded":   decode_type(fisn),
+        "option_type_decoded":   decode_type(fisn, et),
         "strike_raw":            strike_raw,
         "strike_pct":            strike_pct,
         "premium_amount":        parse_num(row.get("optionPremiumAmount")),
