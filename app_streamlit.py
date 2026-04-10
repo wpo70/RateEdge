@@ -4391,6 +4391,7 @@ def sdr_live_tab():
             st.markdown("**Auto-refresh**")
             auto_refresh = st.selectbox(
                 "Auto-refresh", ["Off", "30s", "1 min", "2 min", "5 min"],
+                label_visibility="collapsed",
                 key="sdr_refresh_interval"
             )
 
