@@ -2218,16 +2218,16 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
             if vol_bp is None:
                 return None
             
-            # Calculate premium using SAME formula as table
+            # Calculate forward premium matching ATM matrix (with OIS discounting)
             exp_y = label_to_years(expiry_label)
-            _, ann, _ = forward_and_annuity_from_curve(curve, ccy, exp_y, tenor_y, None)
-            
+            _, ann, _ = forward_and_annuity_from_curve(curve, ccy, exp_y, tenor_y, ois_curve)
             sigma_n = vol_bp / 10000.0
             sqrt_t = math.sqrt(max(exp_y, 0.001))
-            fwd_premium = 2 * 0.3989 * sigma_n * sqrt_t * ann
-            premium_bp = fwd_premium * 10000
-            
-            return premium_bp  # Full precision, no rounding
+            spot_prem = 2 * 0.3989 * sigma_n * sqrt_t * ann * 10000
+            # Forward premium = spot / df(expiry)
+            df_exp = math.exp(-interpolate_zero(ois_curve, exp_y) * exp_y) if ois_curve is not None else math.exp(-0.04 * exp_y)
+            premium_bp = spot_prem / df_exp if df_exp > 0 else spot_prem
+            return premium_bp
         except:
             return None
     
@@ -8041,8 +8041,21 @@ def caps_floors_tab(vol_mode: str):
                             vol_bp = get_matrix_value(_atm_btn, exp, tenor)
                             if vol_bp is None: continue
                             exp_y = label_to_years(exp)
-                            _, ann, _ = forward_and_annuity_from_curve(_curve_btn, ccy, exp_y, tenor, None)
-                            premium_bp = 2 * 0.3989 * (vol_bp/10000.0) * math.sqrt(max(exp_y,0.001)) * ann * 10000
+                            _ois_btn = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois")
+                            _, ann, _ = forward_and_annuity_from_curve(_curve_btn, ccy, exp_y, tenor, _ois_btn)
+                            sigma_n = vol_bp / 10000.0
+                            spot_prem = 2 * 0.3989 * sigma_n * math.sqrt(max(exp_y,0.001)) * ann * 10000
+                            # Convert to forward premium (matching ATM matrix display)
+                            _ois_r = 0.04
+                            if _ois_btn is not None:
+                                try:
+                                    import numpy as _np_btn
+                                    _ox = _ois_btn[_ois_btn.columns[0]].to_numpy().astype(float)
+                                    _oy = _ois_btn[_ois_btn.columns[1]].to_numpy().astype(float) / 100.0
+                                    _ois_r = float(_np_btn.interp(exp_y, _ox, _oy))
+                                except: pass
+                            df_exp = math.exp(-_ois_r * exp_y)
+                            premium_bp = spot_prem / df_exp if df_exp > 0 else spot_prem
                             st.session_state["cfs_table_data"][lbl] = {
                                 "swaption": round(premium_bp, 4),
                                 "cfs_label": cfs_lbl,
