@@ -4611,7 +4611,7 @@ def sdr_live_tab():
     # ── Type display formatter ────────────────────────────────────────────────
     _TYPE_LABELS = {
         "CALL": "Call", "PUT": "Put", "STR": "Straddle",
-        "SWN":  "Swaption", "CXL": "Cancelable",
+        "SWN":  "Euro Std (OPET)", "CXL": "Cancelable",
         "XCS":  "XCCY Swn", "OTH": "Other",
     }
     def _fmt_type(t): return _TYPE_LABELS.get(t, t or "—")
