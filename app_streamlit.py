@@ -8754,12 +8754,12 @@ def caps_floors_tab(vol_mode: str):
         _CF_STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade"]
 
         st.markdown(
-            "<div style='display:grid;grid-template-columns:28px 160px 58px 68px 58px 78px 78px 78px 78px 150px 36px;"
+            "<div style='display:grid;grid-template-columns:2.5% 18.5% 6.0% 7.0% 6.0% 8.0% 8.0% 8.0% 8.0% 14.5% 7.0% 6.5%;"
             "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
             "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
             "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
             "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Prem(bp)</span>"
-            "<span>PV($k)</span><span>Status</span><span></span></div>",
+            "<span>PV($k)</span><span>Status</span><span>Tix</span><span>Del</span></div>",
             unsafe_allow_html=True)
 
         for _cidx, _crow in _df.iterrows():
