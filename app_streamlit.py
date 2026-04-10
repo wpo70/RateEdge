@@ -2191,7 +2191,7 @@ def build_caplet_vol_curve_from_surface(ccy: str, atm_surface):
 def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None, 
                           spread_3m1y=-3.0, spread_1y1y=12.0, spread_2y1y=15.0, 
                           spread_3y1y=19.0, spread_4y1y=22.0, spread_5y2y=40.0, spread_7y3y=60.0,
-                          spread_10y2y=50.0, spread_12y3y=70.0, spread_15v20=-5.0):
+                          spread_10y2y=50.0, spread_12y3y=70.0):
     """
     Build caplet vol curve using cumulative premium method with proper solving.
     """
@@ -2439,15 +2439,6 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
             caplet_vols_final[round(t, 2)] = max(float(cs(t)), 1.0)
             t += 0.25  # Caps are always quarterly
         
-        # Extend to 20Y using vol spread — add AFTER spline, as flat extension
-        if spread_15v20 is not None and 15.0 in caplet_vols:
-            vol_15y = caplet_vols.get(15.0, caplet_vols_final.get(max(caplet_vols_final.keys()), 75.0))
-            vol_20y = max(vol_15y + spread_15v20, 1.0)
-            t = max_mat + 0.25
-            while t <= 20.0 + 1e-6:
-                caplet_vols_final[round(t, 2)] = vol_20y
-                t += 0.25
-
         return caplet_vols_final
     
     return caplet_vols if caplet_vols else None
@@ -8244,16 +8235,26 @@ def caps_floors_tab(vol_mode: str):
                                         _a = (_t - _mats[_j]) / (_mats[_j+1] - _mats[_j])
                                         _flat_vol = _caplet_vc[_mats[_j]] + _a * (_caplet_vc[_mats[_j+1]] - _caplet_vc[_mats[_j]])
                                         break
-                        # For 20Y: price full 20Y cap from caplet curve, then subtract 15Y
+                        # For 20Y: extend using vol spread on 15Y flat vol
                         if _key is None:
-                            if _caplet_vc and 20.0 in _caplet_vc:
+                            _vol_spd_20 = st.session_state.get("cf_spr_15v20", -5.0)
+                            # Get 15Y flat vol from solved caplet curve
+                            _vol_15 = _caplet_vc.get(15.0) if _caplet_vc else None
+                            if _vol_15 is not None:
                                 try:
-                                    _prem_20 = price_caplets_with_vol_curve(ccy, 20.0, _caplet_vc, notional_mm=1.0)
+                                    _vol_20 = max(_vol_15 + _vol_spd_20, 1.0)
+                                    # Build extended curve and price 15-20Y gap
+                                    _ext_curve = dict(_caplet_vc)
+                                    _t20 = 15.25
+                                    while _t20 <= 20.01:
+                                        _ext_curve[round(_t20, 2)] = _vol_20
+                                        _t20 += 0.25
+                                    _prem_20 = price_caplets_with_vol_curve(ccy, 20.0, _ext_curve, notional_mm=1.0)
                                     _prem_15 = price_caplets_with_vol_curve(ccy, 15.0, _caplet_vc, notional_mm=1.0)
-                                    _gap_leg = max(_prem_20 - _prem_15, 0.0)
-                                    _leg_straddle = _gap_leg * 2
-                                    _cum_prem += _leg_straddle
+                                    _gap_straddle = max(_prem_20 - _prem_15, 0.0) * 2
+                                    _cum_prem += _gap_straddle
                                     _straddle_prem = round(_cum_prem, 4)
+                                    _flat_vol = _vol_20  # for display
                                 except Exception:
                                     _straddle_prem = None
                             else:
@@ -8314,7 +8315,6 @@ def caps_floors_tab(vol_mode: str):
                 spread_7y3y=spread_7y3y,
                 spread_10y2y=spread_10y2y,
                 spread_12y3y=spread_12y3y,
-                spread_15v20=st.session_state.get("cf_spr_15v20", -5.0),
             )
             st.session_state["_caplet_curve_key"] = _caplet_key
         else:
@@ -8753,7 +8753,7 @@ def caps_floors_tab(vol_mode: str):
             _cf_sk = f"_cf_status_{_cl}_{_cex}_{_cten}"
             _cf_cur = st.session_state.get(_cf_sk, "—")
             _cf_bg  = _CF_STATUS_COLOURS.get(_cf_cur, "white")
-            _crc = st.columns([0.28, 1.5, 0.58, 0.68, 0.58, 0.78, 0.78, 0.78, 0.78, 1.5, 0.36])
+            _crc = st.columns([0.25, 1.85, 0.58, 0.68, 0.58, 0.78, 0.78, 0.78, 0.78, 1.45, 0.70, 0.65])
             for _ci2, _val2 in enumerate([
                 f"{_cidx+1}", _cst, _cex, _cten,
                 f"{float(_crow.get('notional_mm',100)):.0f}mm",
@@ -8775,10 +8775,12 @@ def caps_floors_tab(vol_mode: str):
                 st.rerun()
             elif _cf_new != _cf_cur:
                 st.session_state[_cf_sk] = _cf_new; st.rerun()
-            if _crc[10].button("🗑️", key=f"cf_del_{_cidx}", help="Remove"):
+            if can_quick_tix() and _crc[10].button("📋", key=f"cf_tix_{_cidx}", help="Quick Tix"):
+                st.session_state["_cf_tix_open"] = _cidx if st.session_state.get("_cf_tix_open") != _cidx else -1
+            if _crc[11].button("🗑️", key=f"cf_del_{_cidx}", help="Remove"):
                 st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", [])
                                                   if not (t.get("instrument_type")=="Cap/Floor" and t.get("label")==_cl)]
-                st.rerun()
+                _save_portfolio(); st.rerun()
 
 
 def exotics_tab(vol_mode: str):
@@ -14739,6 +14741,21 @@ def main():
                         st.session_state["portfolio"] = _saved_port
                         st.session_state["swaption_portfolio"] = [t for t in _saved_port if t.get("instrument_type","Swaption") == "Swaption"]
                     st.session_state["_portfolio_loaded"] = True
+                    # Load tab visibility prefs
+                    try:
+                        _uid3 = st.session_state.get("username","")
+                        if _uid3 and HAS_POSTGRES:
+                            _conn3 = get_db_connection()
+                            if _conn3:
+                                _cur3 = _conn3.cursor()
+                                _cur3.execute("SELECT data FROM user_configs WHERE user_id=%s AND config_type='tab_prefs' AND currency='AUD'", (_uid3,))
+                                _trow = _cur3.fetchone()
+                                _cur3.close(); _conn3.close()
+                                if _trow and _trow[0]:
+                                    _tprefs = _trow[0] if isinstance(_trow[0], dict) else json.loads(_trow[0])
+                                    for _tk, _tv in _tprefs.items():
+                                        st.session_state[_tk] = _tv
+                    except Exception: pass
                 except Exception:
                     pass
             st.session_state["db_auto_loaded"] = True
@@ -14801,6 +14818,7 @@ def main():
                 ("✅ Vol Editor", "tab_show_voleditor"),
                 ("📑 Vol Export", "tab_show_volexport"),
                 ("📐 Midcurve & Curve Options", "tab_show_midcurve"),
+                ("📍 Multi-CCY", "tab_show_multiccy"),
             ]
             for _tname, _tkey in _ALL_TABS:
                 if _tkey not in st.session_state:
@@ -14824,6 +14842,26 @@ def main():
             )
             if st.button(" Logout", key="logout_btn", use_container_width=True):
                 _save_portfolio()  # Persist portfolio before logout
+                # Persist tab visibility prefs
+                try:
+                    _tab_keys = ["tab_show_home","tab_show_upload","tab_show_curves","tab_show_fwd",
+                                 "tab_show_hva","tab_show_swaptions","tab_show_caps","tab_show_blotter",
+                                 "tab_show_rv","tab_show_exotics","tab_show_sod","tab_show_voleditor",
+                                 "tab_show_volexport","tab_show_midcurve","tab_show_multiccy"]
+                    _tab_prefs = {k: st.session_state.get(k, True) for k in _tab_keys}
+                    _uid2 = st.session_state.get("username","")
+                    if _uid2 and HAS_POSTGRES:
+                        _conn2 = get_db_connection()
+                        if _conn2:
+                            _cur2 = _conn2.cursor()
+                            _cur2.execute("""
+                                INSERT INTO user_configs (user_id, config_type, currency, data, updated_at)
+                                VALUES (%s, 'tab_prefs', 'AUD', %s, NOW())
+                                ON CONFLICT (user_id, config_type, currency)
+                                DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
+                            """, (_uid2, json.dumps(_tab_prefs)))
+                            _conn2.commit(); _cur2.close(); _conn2.close()
+                except Exception: pass
                 st.session_state["authenticated"] = False
                 st.session_state["username"] = None
                 st.session_state["db_auto_loaded"] = False
@@ -15055,6 +15093,7 @@ def main():
         ("📑 Vol Export",                "tab_show_volexport", vol_export_tab),
         ("📐 Midcurve & Curve Options",  "tab_show_midcurve",  midcurve_tab),
     ]
+    # Multi-CCY is super_admin only, added separately below
     _tab_names = [n for n, k, f in _ALL_TAB_DEFS if st.session_state.get(k, True)]
     _tab_funcs = [f for n, k, f in _ALL_TAB_DEFS if st.session_state.get(k, True)]
     if _show_hidden:
