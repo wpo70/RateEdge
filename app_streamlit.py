@@ -4295,8 +4295,8 @@ def sdr_live_tab():
 
         with col2:
             st.markdown("**Type & CCY**")
-            type_opts = ["All", "CALL", "PUT", "STR", "OTH"]
-            sel_type = st.selectbox("P/C", type_opts, key="sdr_type", label_visibility="collapsed")
+            sel_type = st.multiselect("P/C", ["CALL","PUT","STR","OTH"],
+                default=["CALL","PUT","STR"], key="sdr_type")
             ccy_opts = _sdr_get_distinct("notional_ccy")
             sel_ccy = st.selectbox("CCY", ["All"] + ccy_opts, key="sdr_ccy", label_visibility="collapsed")
 
@@ -4339,9 +4339,10 @@ def sdr_live_tab():
     filters.append("trade_date BETWEEN %s AND %s")
     params += [date_from, date_to]
 
-    if sel_type != "All":
-        filters.append("option_type_decoded = %s")
-        params.append(sel_type)
+    if sel_type and len(sel_type) < 4:
+        placeholders = ",".join(["%s"] * len(sel_type))
+        filters.append(f"option_type_decoded IN ({placeholders})")
+        params.extend(sel_type)
     if sel_ccy != "All":
         filters.append("notional_ccy = %s")
         params.append(sel_ccy)
