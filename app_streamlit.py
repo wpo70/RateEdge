@@ -8336,6 +8336,16 @@ def caps_floors_tab(vol_mode: str):
         
         # Show the curve
         if caplet_vol_curve:
+            # Extend to 20Y using vol spread if set
+            _spread_15v20_disp = st.session_state.get("cf_spr_15v20", -5.0)
+            if caplet_vol_curve and 15.0 in caplet_vol_curve:
+                _vol_15 = caplet_vol_curve[15.0]
+                _vol_20 = max(_vol_15 + _spread_15v20_disp, 1.0)
+                _t20 = 15.25
+                while _t20 <= 20.01:
+                    caplet_vol_curve[round(_t20, 2)] = _vol_20
+                    _t20 += 0.25
+
             with st.expander("📊 Resulting Caplet Vol Curve", expanded=False):
                 # Show exact bootstrapped vols in table
                 curve_data = []
@@ -8759,7 +8769,7 @@ def caps_floors_tab(vol_mode: str):
             _cf_sk = f"_cf_status_{_cl}_{_cex}_{_cten}"
             _cf_cur = st.session_state.get(_cf_sk, "—")
             _cf_bg  = _CF_STATUS_COLOURS.get(_cf_cur, "white")
-            _crc = st.columns([0.28, 1.9, 0.58, 0.68, 0.58, 0.78, 0.78, 0.78, 0.78, 1.5, 0.36, 0.36])
+            _crc = st.columns([0.25, 1.85, 0.58, 0.68, 0.58, 0.78, 0.78, 0.78, 0.78, 1.45, 0.70, 0.65])
             for _ci2, _val2 in enumerate([
                 f"{_cidx+1}", _cst, _cex, _cten,
                 f"{float(_crow.get('notional_mm',100)):.0f}mm",
