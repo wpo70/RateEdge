@@ -4368,8 +4368,8 @@ def sdr_live_tab():
 
     # ── Market hours info panel ───────────────────────────────────────────────
     with st.expander("🕐  Market Hours & Refresh Schedule", expanded=False):
-        from datetime import timezone as _tz
-        _now_utc = datetime.now(timezone.utc)
+        from datetime import datetime as _dt, timezone as _tz
+        _now_utc = _dt.now(_tz.utc)
         _utc_h = _now_utc.hour
 
         # Define windows
