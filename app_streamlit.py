@@ -4350,15 +4350,19 @@ def sdr_live_tab():
         with col2:
             st.markdown("**Type & CCY**")
             _type_options = {
-                "Call":             "CALL",
-                "Put":              "PUT",
-                "Straddle":         "STR",
-                "Euro Std (OPET)":  "SWN",
-                "Cancelable":       "CXL",
-                "XCCY Swn":         "XCS",
-                "Other":            "OTH",
+                "Call (C)":              "CALL",
+                "Put (P)":               "PUT",
+                "Straddle (D/EC)":       "STR",
+                "Euro Swn (EC/OPET)":    "EC",
+                "Bermudan Call":         "BCALL",
+                "Non-standard":          "NSTD",
+                "XCCY Swn":              "XCS",
+                "XCCY+MDET":             "XCS-M",
+                "Cancelable (CANC)":     "CANC",
+                "Mand. Term (MDET)":     "MDET",
+                "Other":                 "OTH",
             }
-            _type_defaults = ["Call", "Put", "Straddle", "Euro Std (OPET)"]
+            _type_defaults = ["Call (C)", "Put (P)", "Straddle (D/EC)", "Euro Swn (EC/OPET)"]
             sel_type_labels = st.multiselect("P/C", list(_type_options.keys()),
                 default=_type_defaults, key="sdr_type",
                 label_visibility="collapsed", on_change=_save_sdr_filters)
@@ -4469,7 +4473,7 @@ def sdr_live_tab():
     filters.append("trade_date BETWEEN %s AND %s")
     params += [date_from, date_to]
 
-    if sel_type and len(sel_type) < 7:
+    if sel_type and len(sel_type) < 11:
         placeholders = ",".join(["%s"] * len(sel_type))
         filters.append(f"option_type_decoded IN ({placeholders})")
         params.extend(sel_type)
@@ -4621,9 +4625,17 @@ def sdr_live_tab():
 
     # ── Type display formatter ────────────────────────────────────────────────
     _TYPE_LABELS = {
-        "CALL": "Call", "PUT": "Put", "STR": "Straddle",
-        "SWN":  "Euro Std (OPET)", "CXL": "Cancelable",
-        "XCS":  "XCCY Swn", "OTH": "Other",
+        "CALL":  "Call",
+        "PUT":   "Put",
+        "STR":   "Straddle",
+        "EC":    "Euro Swn",
+        "BCALL": "Berm Call",
+        "NSTD":  "Non-std",
+        "XCS":   "XCCY Swn",
+        "XCS-M": "XCCY+MDET",
+        "CANC":  "Cancelable",
+        "MDET":  "Mand. Term",
+        "OTH":   "Other",
     }
     def _fmt_type(t): return _TYPE_LABELS.get(t, t or "—")
 
@@ -15939,6 +15951,187 @@ def midcurve_tab():
             f"RateEdge_Midcurve_{ccy}_{pd.Timestamp.now(tz='Australia/Sydney').strftime('%Y%m%d_%H%M')}.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="mc_download"
+        )
+    except Exception:
+        pass
+
+    # ══════════════════════════════════════════════════════════════════
+    # CURVE OPTIONS MATRIX
+    # Spread options on slope of swap curve (e.g. 2s5s, 5s10s etc.)
+    # Spread vol = sqrt(σ_long² + σ_short² - 2ρ·σ_long·σ_short)
+    # Straddle premium (bp) = 2·N(0)·σ_spread·√T
+    # ══════════════════════════════════════════════════════════════════
+    st.divider()
+    st.markdown("### 📐 Curve Options Matrix")
+    st.caption("Spread option pricing on swap curve slope. σ_spread = √(σ_long² + σ_short² − 2ρσ_longσ_short). "
+               "ATM spread = fwd_long(T) − fwd_short(T). Straddle premium in bp of notional rate (Bachelier).")
+
+    CURVE_EXPIRIES  = ["1m", "3m", "6m", "1y", "2y"]
+    CURVE_PAIRS = {
+        "2s5s":   (2, 5),
+        "2s10s":  (2, 10),
+        "3s5s":   (3, 5),
+        "3s10s":  (3, 10),
+        "5s10s":  (5, 10),
+        "10s20s": (10, 20),
+    }
+
+    # ── Controls ───────────────────────────────────────────────────────
+    _cc1, _cc2, _cc3 = st.columns([2, 2, 4])
+    with _cc1:
+        co_view = st.radio("View", ["ATM Spread (bp)", "Spread Vol (bp)", "Straddle Prem (bp)", "Vega ($/1bp 1mm)"],
+                           key="co_view")
+    with _cc2:
+        co_corr = st.slider("Correlation (ρ)", min_value=0.50, max_value=0.99,
+                            value=0.85, step=0.01, key="co_corr",
+                            help="Assumed correlation between the two swap rate legs")
+        co_heatmap = st.checkbox("Heatmap", value=True, key="co_heatmap")
+
+    # ── Build matrices ─────────────────────────────────────────────────
+    co_spread_mat = pd.DataFrame(index=CURVE_EXPIRIES, columns=list(CURVE_PAIRS.keys()), dtype=float)
+    co_vol_mat    = pd.DataFrame(index=CURVE_EXPIRIES, columns=list(CURVE_PAIRS.keys()), dtype=float)
+    co_prem_mat   = pd.DataFrame(index=CURVE_EXPIRIES, columns=list(CURVE_PAIRS.keys()), dtype=float)
+    co_vega_mat   = pd.DataFrame(index=CURVE_EXPIRIES, columns=list(CURVE_PAIRS.keys()), dtype=float)
+
+    import math as _cmath
+
+    for _cexp in CURVE_EXPIRIES:
+        _T = label_to_years(_cexp)
+        for _cpair, (_ts, _tl) in CURVE_PAIRS.items():
+            # ATM vols for each leg (option expiry vs swap tenor)
+            _vs = get_matrix_value(atm, _cexp, _ts)   # short leg vol
+            _vl = get_matrix_value(atm, _cexp, _tl)   # long leg vol
+            if _vs is None or _vl is None:
+                continue
+
+            # Spread vol (bp)
+            _rho = co_corr
+            _v_spread = _cmath.sqrt(max(_vl**2 + _vs**2 - 2*_rho*_vl*_vs, 0.0))
+            co_vol_mat.at[_cexp, _cpair] = round(_v_spread, 2)
+
+            # ATM spread = fwd_long(T) − fwd_short(T) in bp
+            try:
+                _T_opt = label_to_years(_cexp)
+                _fwd_s = _par_fwd(_cs, _T_opt, float(_ts)) * 10000   # bps
+                _fwd_l = _par_fwd(_cs, _T_opt, float(_tl)) * 10000   # bps
+                _atm_spread = _fwd_l - _fwd_s
+                co_spread_mat.at[_cexp, _cpair] = round(_atm_spread, 2)
+            except Exception:
+                _atm_spread = None
+
+            # Annuity: use average of the two legs' simplified annuities
+            # (for a spread option, each leg has its own DV01; we use avg for premium estimate)
+            try:
+                _ois_co = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+                if _ois_co is None:
+                    _ois_co = get_basis_curve(ccy, "ois")
+                _, _ann_s, _ = forward_and_annuity_from_curve(_curve, ccy, label_to_years(_cexp), float(_ts), _ois_co)
+                _, _ann_l, _ = forward_and_annuity_from_curve(_curve, ccy, label_to_years(_cexp), float(_tl), _ois_co)
+                _ann_avg = (_ann_s + _ann_l) / 2.0
+            except Exception:
+                _ann_avg = (float(_ts) + float(_tl)) / 2.0 * 0.85
+
+            # Straddle premium in bp (Bachelier ATM straddle = 2·φ(0)·σ·√T)
+            # Here σ_spread is already in bp, result is in bp of spread
+            _prem = 2 * 0.3989422804 * _v_spread * _cmath.sqrt(max(_T, 1e-6))
+            co_prem_mat.at[_cexp, _cpair] = round(_prem, 2)
+
+            # Vega: ∂prem/∂σ = 2·φ(0)·√T  (bp per 1bp change in spread vol, per 1mm notional)
+            # Scale by annuity to express as $/1bp/1mm
+            _vega_co = 2 * 0.3989422804 * _cmath.sqrt(max(_T, 1e-6)) * _ann_avg * 1_000_000 / 10_000
+            co_vega_mat.at[_cexp, _cpair] = round(_vega_co, 2)
+
+    # ── Select display matrix ──────────────────────────────────────────
+    if co_view == "ATM Spread (bp)":
+        co_disp = co_spread_mat.copy()
+        co_fmt  = "{:.2f}"
+    elif co_view == "Spread Vol (bp)":
+        co_disp = co_vol_mat.copy()
+        co_fmt  = "{:.2f}"
+    elif co_view == "Straddle Prem (bp)":
+        co_disp = co_prem_mat.copy()
+        co_fmt  = "{:.2f}"
+    else:
+        co_disp = co_vega_mat.copy()
+        co_fmt  = "{:.2f}"
+
+    # ── Display ────────────────────────────────────────────────────────
+    st.markdown(f"#### {ccy} Curve Options — {co_view}  (ρ = {co_corr:.2f})")
+    st.caption("Rows = option expiry | Columns = curve spread | Vols from ATM surface at option expiry")
+
+    co_disp_num = co_disp.copy()
+    for _c in co_disp_num.columns:
+        co_disp_num[_c] = pd.to_numeric(co_disp_num[_c], errors="coerce")
+
+    if co_heatmap:
+        _co_vals = co_disp_num.values.astype(float)
+        _co_vmin = float(np.nanmin(_co_vals)) if not np.all(np.isnan(_co_vals)) else 0
+        _co_vmax = float(np.nanmax(_co_vals)) if not np.all(np.isnan(_co_vals)) else 100
+        # For ATM Spread, use diverging colour (green=positive, red=negative)
+        _is_spread = (co_view == "ATM Spread (bp)")
+
+        def _co_style(v):
+            try:
+                _v = float(v)
+                if np.isnan(_v): return ""
+                if _is_spread:
+                    # Diverging: midpoint = 0
+                    _abs_max = max(abs(_co_vmin), abs(_co_vmax), 0.001)
+                    _pct = (_v + _abs_max) / (2 * _abs_max)  # 0=negative, 1=positive
+                    if _v >= 0:
+                        _r = int(20 + (60-20)*(1-_pct*2 if _pct>0.5 else 0))
+                        _g = int(140 + (200-140)*_pct)
+                        _b = 60
+                    else:
+                        _r = int(180 + (220-180)*(1-(_pct*2)))
+                        _g = 40
+                        _b = 40
+                else:
+                    _pct = (_v - _co_vmin) / max(_co_vmax - _co_vmin, 0.001)
+                    _r = int(20 + (180-20)*(1-_pct))
+                    _g = int(60 + (200-60)*_pct)
+                    _b = 60
+                return f"background-color: rgb({_r},{_g},{_b}); color: white; font-weight:600"
+            except Exception:
+                return ""
+
+        _co_styled = co_disp_num.style.map(_co_style).format(co_fmt, na_rep="—")
+        st.dataframe(_co_styled, use_container_width=True)
+    else:
+        st.dataframe(co_disp_num.style.format(co_fmt, na_rep="—"), use_container_width=True)
+
+    # ── Correlation sensitivity note ───────────────────────────────────
+    with st.expander("ℹ️ Correlation sensitivity"):
+        st.markdown("""
+**Spread vol** is highly sensitive to the assumed correlation ρ between the two swap legs.
+Higher ρ → lower spread vol (legs move together) → cheaper curve options.
+
+| ρ | Effect |
+|---|--------|
+| 0.95 | Very high — curve barely moves relative to level |
+| 0.85 | Default — typical historical correlation for adjacent tenors |
+| 0.75 | Lower — more relative movement, wider spread distributions |
+| 0.60 | Low — used for very different tenor pairs (e.g. 2s30s) |
+
+Use the ρ slider above to stress-test spread vol across the matrix.
+        """)
+
+    # ── Download curve options ─────────────────────────────────────────
+    try:
+        from io import BytesIO as _BytesIO
+        _co_out = _BytesIO()
+        with pd.ExcelWriter(_co_out, engine="openpyxl") as _cow:
+            co_spread_mat.to_excel(_cow, sheet_name="ATM_Spread_bp")
+            co_vol_mat.to_excel(_cow, sheet_name="Spread_Vol_bp")
+            co_prem_mat.to_excel(_cow, sheet_name="Straddle_Prem_bp")
+            co_vega_mat.to_excel(_cow, sheet_name="Vega_per_1bp_1mm")
+        _co_out.seek(0)
+        st.download_button(
+            "📥 Download Curve Options Grid (Excel)",
+            _co_out.getvalue(),
+            f"RateEdge_CurveOptions_{ccy}_{pd.Timestamp.now(tz='Australia/Sydney').strftime('%Y%m%d_%H%M')}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="co_download"
         )
     except Exception:
         pass
