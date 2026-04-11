@@ -8146,11 +8146,14 @@ def caps_floors_tab(vol_mode: str):
         st.warning(f"├ö├àÔöé {ccy} pricing coming soon. Currently supported: AUD, NZD, USD")
         return
 
-    col_type, col_model = st.columns(2)
+    col_type, col_model, col_prem_mode = st.columns(3)
     with col_type:
         cf_type = st.selectbox("Instrument", ["Cap", "Floor", "Straddle", "Collar", "Strangle", "Cap Corridor", "Floordoor", "Digital Cap", "Digital Floor"], index=2, key="cf_type")
     with col_model:
         model = st.selectbox("Model", ["Normal", "Black"], index=0, key="cf_model")
+    with col_prem_mode:
+        cf_prem_mode = st.radio("Premium", ["Spot", "Forward"], index=0, key="cf_prem_mode", horizontal=True)
+        st.caption("Fwd = Spot ÷ df(expiry)")
 
     col_not, col_first, col_tenor = st.columns(3)
     with col_not:
@@ -9309,9 +9312,17 @@ def caps_floors_tab(vol_mode: str):
 
             # Calculate premium in bp: (PV / Notional) * 10000
             pv_bp = (pv_total / (notional * 1e6)) * 10000.0 if notional > 0 else 0.0
-            
-            # one_bp = sum of caplet annuities = sum(notional * accrual_i * df(Ti) * 0.0001)
-            # Matches how bachelier_caplet computes delta so delta_ratio = 50% ATM exactly
+
+            # Forward premium = spot / df(first_fixing) — for wedge/fwd trading convention
+            try:
+                _r_ff = interpolate_zero(ois_curve, first_fixing_y)
+                _df_ff = math.exp(-_r_ff * first_fixing_y)
+                pv_bp_fwd = pv_bp / _df_ff if _df_ff > 0 else pv_bp
+            except Exception:
+                _df_ff = 1.0
+                pv_bp_fwd = pv_bp
+
+            # one_bp = sum of caplet annuities
             one_bp_annuity = 0.0
             for _Ti, _acc in sched:
                 if _Ti <= first_fixing_y + 1.0/252.0:
@@ -9319,14 +9330,17 @@ def caps_floors_tab(vol_mode: str):
                 _df_i = math.exp(-interpolate_zero(ois_curve, _Ti) * _Ti)
                 one_bp_annuity += notional * 1e6 * _acc * _df_i * 0.0001
 
-            st.success(f"✅ Priced: **{label}** | PV = ${pv_total:,.0f} ({pv_bp:.4f} bp)")
-            
+            st.success(f"✅ Priced: **{label}** | PV = ${pv_total:,.0f} | Spot: {pv_bp:.4f}bp | Fwd: {pv_bp_fwd:.4f}bp")
+
             # Store for display
             st.session_state["cf_last_result"] = {
                 "legs": legs,
                 "caplet_details": caplet_details,
                 "pv_total": pv_total,
                 "pv_bp": pv_bp,
+                "pv_bp_fwd": pv_bp_fwd,
+                "df_ff": _df_ff,
+                "first_fixing_y": first_fixing_y,
                 "delta_total": delta_total,
                 "gamma_total": gamma_total,
                 "vega_total": vega_total,
@@ -9365,30 +9379,36 @@ def caps_floors_tab(vol_mode: str):
     # Display results if available
     if "cf_last_result" in st.session_state:
         r = st.session_state["cf_last_result"]
-        
+        _is_fwd = st.session_state.get("cf_prem_mode", "Spot") == "Forward"
+        _disp_bp = r.get("pv_bp_fwd", r["pv_bp"]) if _is_fwd else r["pv_bp"]
+        _prem_lbl = "Forward" if _is_fwd else "Spot"
+        _df_ff    = r.get("df_ff", 1.0)
+
         st.markdown("###  Results")
         col_params, col_greeks = st.columns(2)
-        
+
         with col_params:
-            # Show leg breakdown
             if len(r["legs"]) > 0:
                 st.markdown("##### Leg Breakdown")
                 leg_data = []
                 notional_val = r.get("notional", 100.0)
                 for leg_name, leg_strike, leg_mult, leg_res in r["legs"]:
-                    leg_pv_bp = ((leg_res['pv'] * leg_mult) / (notional_val * 1e6)) * 10000.0 if notional_val > 0 else 0
+                    leg_spot_bp = ((leg_res['pv'] * leg_mult) / (notional_val * 1e6)) * 10000.0 if notional_val > 0 else 0
+                    leg_disp_bp = leg_spot_bp / _df_ff if _is_fwd and _df_ff > 0 else leg_spot_bp
                     leg_data.append({
                         "Leg": leg_name,
                         "Strike (%)": f"{leg_strike:.4f}",
-                        "Premium (bp)": f"{leg_pv_bp:.4f}",
+                        f"Premium {_prem_lbl} (bp)": f"{leg_disp_bp:.4f}",
                         "PV": f"${leg_res['pv'] * leg_mult:,.0f}",
                         "Delta": f"{leg_res['delta'] * leg_mult:,.0f}"
                     })
                 st.dataframe(pd.DataFrame(leg_data), use_container_width=True, hide_index=True)
-        
+
         with col_greeks:
             st.markdown("##### Valuation")
-            st.metric("Premium (bp)", f"{r['pv_bp']:.4f}")
+            st.metric(f"Premium {_prem_lbl} (bp)", f"{_disp_bp:.4f}")
+            if _is_fwd:
+                st.caption(f"Spot: {r['pv_bp']:.4f}bp | df(expiry): {_df_ff:.4f}")
             st.metric("Total PV", f"${r['pv_total']:,.0f}")
             
             st.markdown("##### Greeks (Net)")
