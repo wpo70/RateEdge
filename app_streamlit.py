@@ -455,7 +455,7 @@ def save_user_config(user_id: str, config_type: str, currency: str, data: dict, 
         return False
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_user_config(user_id: str, config_type: str, currency: str) -> Optional[dict]:
     """Load user config from database"""
     conn = get_db_connection()
@@ -941,7 +941,7 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
         return False
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def list_vol_snapshots(user_id: str, currency: str = None):
     # Normalise: both admin emails share the same snapshots
     _ADMIN_ALIASES = {"wpo70@icloud.com": "wpo@rateedge.au", "wpo@rateedge.au": "wpo@rateedge.au"}
@@ -8877,8 +8877,13 @@ def caps_floors_tab(vol_mode: str):
             _ois_tmp = _ois_tmp_cb if _ois_tmp_cb is not None else get_basis_curve(ccy, "ois")
             _ois_local = _ois_tmp if (_ois_tmp is not None and not isinstance(_ois_tmp, bool)) else _curve_local
 
-            # Cache: only recalculate when curve id or tdata length changes
-            _cfs_id = (ccy, id(_curve_local) if _curve_local is not None else 0, len(_cfs_tdata))
+            # Stable cache key: use committed spread values + caplet curve length
+            _cfs_id = (
+                ccy,
+                st.session_state.get("_caplet_curve_key", 0),
+                len(_cfs_tdata),
+                len(_caplet_vc) if _caplet_vc else 0,
+            )
             _cfs_cached = st.session_state.get("_atm_cfs_cache_key") == _cfs_id
             if _cfs_cached and st.session_state.get("_atm_cfs_rows_cache"):
                 st.dataframe(pd.DataFrame(st.session_state["_atm_cfs_rows_cache"]),
@@ -12655,20 +12660,6 @@ def _compute_realised_vol_db(ccy: str, tenor_y: float, window_days: int = 21) ->
         """, (ccy, fr, tenor_str, window_days + 5))
         rows = cur.fetchall()
         conn.close()
-        if not rows or len(rows) < 5:
-            # Try without floating_rate filter — some rows may use different fr label
-            try:
-                conn2 = get_db_connection()
-                cur2 = conn2.cursor()
-                cur2.execute("""
-                    SELECT date, rate FROM swap_rates
-                    WHERE currency=%s AND tenor=%s
-                    ORDER BY date DESC LIMIT %s
-                """, (ccy, tenor_str, window_days + 5))
-                rows = cur2.fetchall()
-                conn2.close()
-            except Exception:
-                pass
         if not rows or len(rows) < 5:
             return None
         df = pd.DataFrame(rows, columns=["date", "rate"]).sort_values("date")
