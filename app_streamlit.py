@@ -12639,11 +12639,11 @@ def _compute_realised_vol_db(ccy: str, tenor_y: float, window_days: int = 21) ->
         cur = conn.cursor()
         # Determine floating_rate label for this ccy/tenor
         if ccy == "AUD":
-            fr = "BBSW6M" if tenor_y >= 4.0 else "BBSW3M"
+            fr = "6M BBSW" if tenor_y >= 4.0 else "3M BBSW"
         elif ccy == "USD":
             fr = "SOFR"
         else:
-            fr = "BKBM3M"
+            fr = "3M BKBM"
 
         # Closest available tenor string (e.g. "5Y", "10Y")
         tenor_str = f"{int(round(tenor_y))}Y"
@@ -12655,6 +12655,20 @@ def _compute_realised_vol_db(ccy: str, tenor_y: float, window_days: int = 21) ->
         """, (ccy, fr, tenor_str, window_days + 5))
         rows = cur.fetchall()
         conn.close()
+        if not rows or len(rows) < 5:
+            # Try without floating_rate filter — some rows may use different fr label
+            try:
+                conn2 = get_db_connection()
+                cur2 = conn2.cursor()
+                cur2.execute("""
+                    SELECT date, rate FROM swap_rates
+                    WHERE currency=%s AND tenor=%s
+                    ORDER BY date DESC LIMIT %s
+                """, (ccy, tenor_str, window_days + 5))
+                rows = cur2.fetchall()
+                conn2.close()
+            except Exception:
+                pass
         if not rows or len(rows) < 5:
             return None
         df = pd.DataFrame(rows, columns=["date", "rate"]).sort_values("date")
