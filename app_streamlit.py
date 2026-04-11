@@ -12552,6 +12552,243 @@ def _rv_get_vols(data: dict, ccy: str = "AUD") -> pd.DataFrame:
     df["date"] = pd.to_datetime(df["date"])
     return df.sort_values("date").reset_index(drop=True)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# RV ENGINE HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Central Bank Meeting Calendar ─────────────────────────────────────────────
+# Hardcoded 2026-2027. Overrideable via session_state["cb_meetings_override"].
+_CB_MEETINGS_BASE = {
+    "AUD": [  # RBA — 8 meetings/year from 2024 schedule
+        date(2026, 2, 18), date(2026, 4, 7),  date(2026, 5, 20),
+        date(2026, 7, 8),  date(2026, 8, 11), date(2026, 10, 6),
+        date(2026, 11, 3), date(2027, 2, 2),  date(2027, 4, 6),
+        date(2027, 5, 18), date(2027, 7, 6),  date(2027, 8, 10),
+        date(2027, 10, 5), date(2027, 11, 2),
+    ],
+    "USD": [  # FOMC — 8 meetings/year
+        date(2026, 1, 29), date(2026, 3, 18), date(2026, 5, 7),
+        date(2026, 6, 17), date(2026, 7, 29), date(2026, 9, 16),
+        date(2026, 10, 28),date(2026, 12, 16),
+        date(2027, 1, 27), date(2027, 3, 17), date(2027, 5, 5),
+        date(2027, 6, 16), date(2027, 7, 28), date(2027, 9, 15),
+        date(2027, 10, 27),date(2027, 12, 15),
+    ],
+    "NZD": [  # RBNZ — 7 meetings/year
+        date(2026, 2, 25), date(2026, 4, 8),  date(2026, 5, 27),
+        date(2026, 7, 8),  date(2026, 8, 19), date(2026, 10, 7),
+        date(2026, 11, 25),date(2027, 2, 24), date(2027, 4, 14),
+        date(2027, 5, 26), date(2027, 7, 7),  date(2027, 8, 18),
+        date(2027, 10, 6), date(2027, 11, 24),
+    ],
+}
+# Per-meeting vol premium assumption (bp to strip before comparing to realised)
+_CB_MEETING_PREMIUM_BP = {"AUD": 3.0, "USD": 4.5, "NZD": 3.5}
+
+
+def _get_cb_meetings(ccy: str) -> list:
+    """Return CB meeting dates, honouring session-state overrides."""
+    overrides = st.session_state.get("cb_meetings_override", {}).get(ccy, [])
+    base = _CB_MEETINGS_BASE.get(ccy, [])
+    all_dates = sorted(set(base + overrides))
+    return all_dates
+
+
+def _meetings_in_window(ccy: str, expiry_label: str) -> list:
+    """Return list of CB meeting dates falling within [today, today + expiry]."""
+    T = label_to_years(expiry_label)
+    today = date.today()
+    end   = today + timedelta(days=int(T * 365))
+    return [d for d in _get_cb_meetings(ccy) if today <= d <= end]
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _compute_realised_vol_db(ccy: str, tenor_y: float, window_days: int = 21) -> Optional[float]:
+    """Annualised realised normal vol (bp) from swap_rates history.
+    Uses daily rate differences × √252 × 10000."""
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return None
+        cur = conn.cursor()
+        # Determine floating_rate label for this ccy/tenor
+        if ccy == "AUD":
+            fr = "BBSW6M" if tenor_y >= 4.0 else "BBSW3M"
+        elif ccy == "USD":
+            fr = "SOFR"
+        else:
+            fr = "BKBM3M"
+
+        # Closest available tenor string (e.g. "5Y", "10Y")
+        tenor_str = f"{int(round(tenor_y))}Y"
+
+        cur.execute("""
+            SELECT date, rate FROM swap_rates
+            WHERE currency=%s AND floating_rate=%s AND tenor=%s
+            ORDER BY date DESC LIMIT %s
+        """, (ccy, fr, tenor_str, window_days + 5))
+        rows = cur.fetchall()
+        conn.close()
+        if not rows or len(rows) < 5:
+            return None
+        df = pd.DataFrame(rows, columns=["date", "rate"]).sort_values("date")
+        df["rate"] = df["rate"].astype(float)
+        df["diff"] = df["rate"].diff() * 100  # rate is %, diff in bp
+        diffs = df["diff"].dropna().values
+        if len(diffs) < 4:
+            return None
+        rv = float(np.std(diffs) * math.sqrt(252))  # annualised bp
+        return round(rv, 2)
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _load_vol_ratio_stats_db(ccy: str) -> dict:
+    """Load vol_history snapshots, compute 1m/1y ratio per tenor.
+    Returns {tenor_str: {'mean': x, 'std': y, 'n': n, 'history': [...]}}"""
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return {}
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT snapshot_date, atm_vols FROM vol_history
+            WHERE currency=%s AND user_id='shared'
+            ORDER BY snapshot_date DESC LIMIT 120
+        """, (ccy,))
+        rows = cur.fetchall()
+        conn.close()
+        if not rows:
+            return {}
+
+        ratios_by_tenor = {}  # tenor_str -> list of ratios
+        for snap_date, atm_json in rows:
+            if not atm_json:
+                continue
+            try:
+                vals = atm_json.get("values", [])
+                # Build lookup: expiry -> {tenor -> vol}
+                exp_map = {}
+                for row in vals:
+                    exp = row.get("expiry", "").lower()
+                    exp_map[exp] = {k: v for k, v in row.items() if k != "expiry"}
+
+                v1m = exp_map.get("1m", {})
+                v1y = exp_map.get("1y", {})
+                if not v1m or not v1y:
+                    continue
+
+                for tn_str in ["2Y", "5Y", "10Y", "15Y", "20Y"]:
+                    vm = v1m.get(tn_str)
+                    vy = v1y.get(tn_str)
+                    if vm and vy and float(vy) > 0:
+                        ratio = float(vm) / float(vy)
+                        ratios_by_tenor.setdefault(tn_str, []).append(ratio)
+            except Exception:
+                continue
+
+        stats = {}
+        for tn, ratios in ratios_by_tenor.items():
+            if len(ratios) >= 3:
+                stats[tn] = {
+                    "mean": float(np.mean(ratios)),
+                    "std":  float(np.std(ratios)) if len(ratios) > 1 else 0.05,
+                    "n":    len(ratios),
+                    "history": ratios,
+                }
+        return stats
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _fetch_move_index() -> Optional[float]:
+    """Fetch ICE BofA MOVE index level from Yahoo Finance (^MOVE). Returns float or None."""
+    try:
+        import urllib.request, json as _json
+        url = "https://query1.finance.yahoo.com/v8/finance/chart/%5EMOVE?interval=1d&range=5d"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = _json.loads(resp.read())
+        closes = data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+        closes = [c for c in closes if c is not None]
+        return round(float(closes[-1]), 2) if closes else None
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _compute_fwd_vol_surface_stats(ccy: str) -> dict:
+    """Compute implied forward vol pairs from vol_history and return mean/std.
+    σ_fwd(T1→T2) = sqrt[(σ²(T2)·T2 - σ²(T1)·T1) / (T2-T1)]
+    Returns {(exp1,exp2,tenor): {'mean': x, 'std': y, 'n': n}}"""
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return {}
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT snapshot_date, atm_vols FROM vol_history
+            WHERE currency=%s AND user_id='shared'
+            ORDER BY snapshot_date DESC LIMIT 120
+        """, (ccy,))
+        rows = cur.fetchall()
+        conn.close()
+        if not rows:
+            return {}
+
+        # Expiry pairs to analyse (T1_label, T2_label, T1_years, T2_years)
+        EXP_PAIRS = [
+            ("1y", "2y",  1.0,  2.0),
+            ("2y", "3y",  2.0,  3.0),
+            ("1y", "3y",  1.0,  3.0),
+            ("2y", "5y",  2.0,  5.0),
+            ("3y", "5y",  3.0,  5.0),
+            ("5y", "10y", 5.0, 10.0),
+        ]
+        TENORS = [("2Y", 2), ("5Y", 5), ("10Y", 10)]
+
+        fwd_series = {}  # (e1, e2, tn) -> list of fwd vols
+
+        for _, atm_json in rows:
+            if not atm_json:
+                continue
+            try:
+                vals = atm_json.get("values", [])
+                exp_map = {}
+                for row in vals:
+                    exp = row.get("expiry", "").lower()
+                    exp_map[exp] = {k: v for k, v in row.items() if k != "expiry"}
+
+                for e1_lbl, e2_lbl, T1, T2 in EXP_PAIRS:
+                    dT = T2 - T1
+                    for tn_str, _ in TENORS:
+                        v1 = exp_map.get(e1_lbl, {}).get(tn_str)
+                        v2 = exp_map.get(e2_lbl, {}).get(tn_str)
+                        if v1 and v2:
+                            v1, v2 = float(v1), float(v2)
+                            inner = (v2**2 * T2 - v1**2 * T1) / dT
+                            if inner > 0:
+                                fv = math.sqrt(inner)
+                                key = (e1_lbl, e2_lbl, tn_str)
+                                fwd_series.setdefault(key, []).append(fv)
+            except Exception:
+                continue
+
+        stats = {}
+        for key, series in fwd_series.items():
+            if len(series) >= 3:
+                stats[key] = {
+                    "mean": float(np.mean(series)),
+                    "std":  float(np.std(series)) if len(series) > 1 else 1.0,
+                    "n":    len(series),
+                }
+        return stats
+    except Exception:
+        return {}
+
+
 def rv_tab():
     st.subheader("📊 Relative Value   —   Swaption & Cap/Floor Trade Ideas")
     st.caption("Live vol surface + IRS curve for richness/cheapness signals.")
@@ -13053,6 +13290,267 @@ def rv_tab():
             ideas = []
             if not st.session_state.get(_rv_ideas_key):
                 st.info("Click **⚡ Generate Trade Ideas** to run the idea engine.")
+
+            # ══════════════════════════════════════════════════════════
+            # PRE-COMPUTE: realised vol, ratio stats, meetings, MOVE
+            # ══════════════════════════════════════════════════════════
+            _rv_tenors   = [2.0, 5.0, 10.0, 15.0, 20.0]
+            _rv_tn_strs  = ["2Y", "5Y", "10Y", "15Y", "20Y"]
+            _rv_exp_lbls = ["1m", "3m", "6m", "1y", "2y"]
+
+            # Realised vols by tenor (21-day window)
+            _realised = {tn: _compute_realised_vol_db(ccy, tn, 21) for tn in _rv_tenors}
+
+            # Historical 1m/1y ratio stats
+            _ratio_stats = _load_vol_ratio_stats_db(ccy)
+
+            # Forward vol consistency stats
+            _fv_stats = _compute_fwd_vol_surface_stats(ccy)
+
+            # CB meetings per expiry window
+            _meetings = {e: _meetings_in_window(ccy, e) for e in _rv_exp_lbls}
+
+            # MOVE index (USD only; SPI placeholder for AUD)
+            _move_val = _fetch_move_index() if ccy == "USD" else None
+
+            # ── Context panel (always shown once surface loaded) ────────────
+            with st.expander("📊 Market Context — Realised Vol, VRP & CB Calendar", expanded=True):
+                _ctx_t1, _ctx_t2 = st.tabs(["📈 Implied vs Realised (VRP)", "📅 CB Meeting Calendar"])
+
+                with _ctx_t1:
+                    # Build VRP table
+                    _vrp_rows = []
+                    for tn, tn_str in zip(_rv_tenors, _rv_tn_strs):
+                        rv = _realised.get(tn)
+                        for exp_lbl in ["1m", "3m", "6m", "1y"]:
+                            iv = get_matrix_value(atm, exp_lbl, tn)
+                            if iv is None:
+                                continue
+                            # Strip meeting premium from implied before comparing
+                            mtgs = _meetings.get(exp_lbl, [])
+                            _prem = _CB_MEETING_PREMIUM_BP.get(ccy, 3.0)
+                            iv_adj = iv - len(mtgs) * _prem
+                            vrp = round(iv_adj / rv, 2) if rv and rv > 0 else None
+                            _vrp_rows.append({
+                                "Expiry": exp_lbl,
+                                "Tenor": tn_str,
+                                "Implied (bp)": round(iv, 1),
+                                f"Mtgs ({exp_lbl})": len(mtgs),
+                                "Implied Adj (bp)": round(iv_adj, 1),
+                                "Realised 21d (bp)": rv,
+                                "VRP (adj/real)": vrp,
+                                "Signal": ("🔴 RICH" if vrp and vrp > 1.40 else
+                                           "🟢 CHEAP" if vrp and vrp < 0.80 else
+                                           "⚪ FAIR") if vrp else "—",
+                            })
+                    if _vrp_rows:
+                        _vrp_df = pd.DataFrame(_vrp_rows)
+                        # Colour VRP column
+                        def _vrp_style(v):
+                            try:
+                                f = float(v)
+                                if f > 1.40: return "background-color:#7f1d1d;color:white;font-weight:600"
+                                if f > 1.20: return "background-color:#991b1b;color:white"
+                                if f < 0.80: return "background-color:#14532d;color:white;font-weight:600"
+                                if f < 1.00: return "background-color:#166534;color:white"
+                                return ""
+                            except Exception: return ""
+                        st.dataframe(
+                            _vrp_df.style.map(_vrp_style, subset=["VRP (adj/real)"]).format(
+                                {"VRP (adj/real)": "{:.2f}", "Implied (bp)": "{:.1f}",
+                                 "Implied Adj (bp)": "{:.1f}", "Realised 21d (bp)": "{:.1f}"}, na_rep="—"),
+                            use_container_width=True, hide_index=True)
+                        st.caption(f"Implied Adj = Implied − (N meetings × {_CB_MEETING_PREMIUM_BP.get(ccy,3):.0f}bp).  "
+                                   f"VRP > 1.40 → vol RICH vs realised → sell signal.  "
+                                   f"VRP < 0.80 → vol CHEAP → buy signal.")
+                        if ccy == "USD" and _move_val:
+                            st.metric("MOVE Index", f"{_move_val:.1f}",
+                                      help="ICE BofA MOVE Index. >120 = elevated bond vol, "
+                                           "swaption richness may be justified.")
+                        elif ccy == "AUD":
+                            _spi_note = st.session_state.get("spi_vol_override")
+                            if _spi_note:
+                                st.metric("ASX SPI Vol (manual)", f"{_spi_note:.1f}%")
+                            else:
+                                st.caption("🗒 SPI vol feed pending. Enter manually via CB Calendar override below.")
+                    else:
+                        st.info("Load realised vol: ensure swap_rates history is in DB.")
+
+                    # Historical 1m/1y ratio context
+                    if _ratio_stats:
+                        st.markdown("**Historical 1m/1y Vol Ratio by Tenor** (z-score of current reading)")
+                        _zs_rows = []
+                        for tn_str in _rv_tn_strs:
+                            rs = _ratio_stats.get(tn_str)
+                            if not rs:
+                                continue
+                            iv1m = get_matrix_value(atm, "1m", float(tn_str[:-1]))
+                            iv1y = get_matrix_value(atm, "1y", float(tn_str[:-1]))
+                            if iv1m and iv1y and iv1y > 0:
+                                curr_ratio = iv1m / iv1y
+                                z = (curr_ratio - rs["mean"]) / rs["std"] if rs["std"] > 0 else 0
+                                _zs_rows.append({
+                                    "Tenor": tn_str,
+                                    "1m Impl (bp)": round(iv1m, 1),
+                                    "1y Impl (bp)": round(iv1y, 1),
+                                    "Current Ratio": round(curr_ratio, 3),
+                                    "Hist Mean": round(rs["mean"], 3),
+                                    "Hist Std": round(rs["std"], 3),
+                                    "Z-Score": round(z, 2),
+                                    "n snaps": rs["n"],
+                                    "Signal": ("🔴 1m RICH" if z > 1.5 else
+                                               "🟢 1m CHEAP" if z < -1.5 else "⚪ Fair"),
+                                })
+                        if _zs_rows:
+                            def _z_style(v):
+                                try:
+                                    f = float(v)
+                                    if f > 1.5:  return "background-color:#7f1d1d;color:white;font-weight:600"
+                                    if f > 1.0:  return "background-color:#991b1b;color:white"
+                                    if f < -1.5: return "background-color:#14532d;color:white;font-weight:600"
+                                    if f < -1.0: return "background-color:#166534;color:white"
+                                    return ""
+                                except Exception: return ""
+                            st.dataframe(
+                                pd.DataFrame(_zs_rows).style.map(_z_style, subset=["Z-Score"]),
+                                use_container_width=True, hide_index=True)
+
+                with _ctx_t2:
+                    # CB meeting calendar editor
+                    st.markdown(f"**{ccy} Central Bank Meetings — 2026/2027**")
+                    _base_dates = _CB_MEETINGS_BASE.get(ccy, [])
+                    _today_cb = date.today()
+                    _future_meetings = [d for d in _base_dates if d >= _today_cb]
+                    _next_3 = _future_meetings[:3]
+                    if _next_3:
+                        _cols_cb = st.columns(len(_next_3))
+                        for ci, mtg in enumerate(_next_3):
+                            days_to = (mtg - _today_cb).days
+                            _cols_cb[ci].metric(f"Meeting {ci+1}", mtg.strftime("%d %b %Y"),
+                                                f"{days_to}d away")
+
+                    # Bias override per meeting
+                    st.markdown("**Meeting Bias Override**")
+                    _bias_opts = ["Hold", "Cut 25bp", "Cut 50bp", "Hike 25bp", "Hike 50bp"]
+                    _bias_key  = f"cb_bias_{ccy}"
+                    _bias = st.selectbox("Next meeting bias", _bias_opts, key=_bias_key,
+                                         help="Changes vol premium estimate for next meeting")
+                    _prem_override = {"Hold": 3.0, "Cut 25bp": 4.0, "Cut 50bp": 6.0,
+                                      "Hike 25bp": 4.0, "Hike 50bp": 6.0}
+                    _adj_prem = _prem_override.get(_bias, 3.0)
+                    st.caption(f"Meeting vol premium → **{_adj_prem:.0f}bp** per meeting ({_bias})")
+
+                    # SPI vol input for AUD
+                    if ccy == "AUD":
+                        _spi_col, _ = st.columns([2, 4])
+                        with _spi_col:
+                            _spi_input = st.number_input("ASX SPI implied vol (%)", min_value=0.0,
+                                                          max_value=100.0, step=0.5,
+                                                          value=float(st.session_state.get("spi_vol_override", 0.0)),
+                                                          key="spi_vol_input",
+                                                          help="Enter SPI vol from Bloomberg (BBG ticker: VXA Index or SPIVIX). "
+                                                               "Used as equity vol context for AUD swaption richness.")
+                        if _spi_input > 0:
+                            st.session_state["spi_vol_override"] = _spi_input
+
+                    # Add custom meeting date
+                    st.markdown("**Add Custom Meeting Date**")
+                    _add_col1, _add_col2 = st.columns([2, 2])
+                    with _add_col1:
+                        _new_mtg = st.date_input("Date", key=f"cb_new_mtg_{ccy}",
+                                                  value=_future_meetings[0] if _future_meetings else _today_cb)
+                    with _add_col2:
+                        if st.button("➕ Add Meeting", key=f"cb_add_{ccy}"):
+                            _ov = st.session_state.get("cb_meetings_override", {})
+                            _ov.setdefault(ccy, []).append(_new_mtg)
+                            st.session_state["cb_meetings_override"] = _ov
+                            st.rerun()
+
+                    # Full meeting list
+                    with st.expander("All upcoming meetings"):
+                        for d in _future_meetings[:10]:
+                            days_to = (d - _today_cb).days
+                            st.write(f"{d.strftime('%d %b %Y')} — {days_to}d")
+
+            # ── Forward vol surface RV ──────────────────────────────────────
+            if _fv_stats and atm is not None:
+                with st.expander("🔬 Forward Vol Surface RV — Bucket Consistency"):
+                    st.caption("σ_fwd(T1→T2) = √[(σ²(T2)·T2 − σ²(T1)·T1)/(T2−T1)].  "
+                               "Z > +1.5 = forward vol RICH vs history.  Z < −1.5 = CHEAP.")
+                    EXP_PAIRS = [
+                        ("1y","2y",1.0,2.0), ("2y","3y",2.0,3.0),
+                        ("1y","3y",1.0,3.0), ("2y","5y",2.0,5.0),
+                        ("3y","5y",3.0,5.0), ("5y","10y",5.0,10.0),
+                    ]
+                    _fv_rows = []
+                    for e1, e2, T1, T2 in EXP_PAIRS:
+                        dT = T2 - T1
+                        for tn_str in ["5Y", "10Y"]:
+                            v1 = get_matrix_value(atm, e1, float(tn_str[:-1]))
+                            v2 = get_matrix_value(atm, e2, float(tn_str[:-1]))
+                            if not v1 or not v2:
+                                continue
+                            inner = (v2**2 * T2 - v1**2 * T1) / dT
+                            if inner <= 0:
+                                continue
+                            fv_curr = math.sqrt(inner)
+                            key = (e1, e2, tn_str)
+                            hs = _fv_stats.get(key)
+                            if hs:
+                                z = (fv_curr - hs["mean"]) / hs["std"] if hs["std"] > 0 else 0
+                                _fv_rows.append({
+                                    "Window": f"{e1}→{e2}",
+                                    "Tenor": tn_str,
+                                    "Fwd Vol (bp)": round(fv_curr, 2),
+                                    "Hist Mean": round(hs["mean"], 2),
+                                    "Hist Std": round(hs["std"], 2),
+                                    "Z-Score": round(z, 2),
+                                    "n": hs["n"],
+                                    "Signal": ("🔴 RICH" if z > 1.5 else
+                                               "🟢 CHEAP" if z < -1.5 else "⚪ Fair"),
+                                })
+                    if _fv_rows:
+                        def _fvz_style(v):
+                            try:
+                                f = float(v)
+                                if f > 1.5:  return "background-color:#7f1d1d;color:white;font-weight:600"
+                                if f > 1.0:  return "background-color:#991b1b;color:white"
+                                if f < -1.5: return "background-color:#14532d;color:white;font-weight:600"
+                                if f < -1.0: return "background-color:#166534;color:white"
+                                return ""
+                            except Exception: return ""
+                        st.dataframe(
+                            pd.DataFrame(_fv_rows).style.map(_fvz_style, subset=["Z-Score"]),
+                            use_container_width=True, hide_index=True)
+                        # Generate forward vol RV ideas
+                        for row in _fv_rows:
+                            z = row["Z-Score"]
+                            if abs(z) >= 1.5:
+                                e1_lbl, e2_lbl = row["Window"].split("→")
+                                tn = row["Tenor"]
+                                is_rich = z > 0
+                                ideas.append({
+                                    "Type": "Fwd Vol RV",
+                                    "Structure": f"σ_fwd {row['Window']}≈{tn}",
+                                    "Signal": f"Z = {z:+.2f} ({row['Fwd Vol (bp)']:.1f}bp vs {row['Hist Mean']:.1f}bp hist)",
+                                    "Trade": (
+                                        f"Sell {e2_lbl}≈{tn} straddle / Buy {e1_lbl}≈{tn} straddle (sell fwd vol)"
+                                        if is_rich else
+                                        f"Buy {e2_lbl}≈{tn} straddle / Sell {e1_lbl}≈{tn} straddle (buy fwd vol)"
+                                    ),
+                                    "Rationale": (
+                                        f"Implied fwd vol {e1_lbl}→{e2_lbl}≈{tn} at {row['Fwd Vol (bp)']:.1f}bp — "
+                                        f"{'RICH' if is_rich else 'CHEAP'} vs {row['Hist Mean']:.1f}bp historical mean "
+                                        f"({z:+.1f}σ, n={row['n']} snaps). Calendar spread monetises the mispricing."
+                                    ),
+                                    "Risk": ("Vol may stay elevated if macro uncertainty persists"
+                                             if is_rich else
+                                             "Vol may stay suppressed; carry negative on long fwd vol"),
+                                    "Score": abs(z) * 15,
+                                })
+                    else:
+                        st.info("Insufficient vol history for forward vol stats. Load more snapshots.")
+
             # 1. Vol butterfly   —   ATM vs wings in expiry dim
             for tn in [2, 5, 10]:
                 for mid_e, lo_e, hi_e in [("3m","1m","6m"),("6m","3m","1y"),
@@ -13136,27 +13634,113 @@ def rv_tab():
                         "Score": abs(fwd_5y5y - r5) * 80,
                     })
 
-            # 4. Gamma vs theta   —   short-dated high gamma
+            # 4. Gamma vs theta — short-dated vol richness (empirical ratio + VRP)
             for tn in [2, 5, 10]:
+                tn_str = f"{tn}Y"
                 v1m = get_matrix_value(atm, "1m", float(tn))
                 v3m = get_matrix_value(atm, "3m", float(tn))
                 v1y = get_matrix_value(atm, "1y", float(tn))
+                rv_21d = _realised.get(float(tn))
+
                 if v1m and v3m and v1y:
-                    # Normalised gamma proxy: vol ≈ sqrt(T) should scale with sqrt(T)
-                    # If 1m vol >> 1y vol / sqrt(12), 1m gamma is expensive
-                    gamma_fair = v1y / math.sqrt(12)
-                    gamma_actual = v1m
-                    gamma_ratio = gamma_actual / gamma_fair if gamma_fair > 0 else 1.0
-                    if gamma_ratio > 1.30:
+                    curr_ratio = v1m / v1y
+                    rs = _ratio_stats.get(tn_str)
+
+                    # Meetings in 1m window
+                    mtgs_1m = _meetings.get("1m", [])
+                    _prem_per = _CB_MEETING_PREMIUM_BP.get(ccy, 3.0)
+                    v1m_adj = v1m - len(mtgs_1m) * _prem_per  # strip meeting premium
+
+                    # Z-score vs history if available; else fall back to sqrt(T) ratio
+                    if rs and rs["std"] > 0:
+                        z_ratio = (curr_ratio - rs["mean"]) / rs["std"]
+                        fair_desc = f"hist mean {rs['mean']:.3f} (n={rs['n']})"
+                        gamma_ratio = 1.0 + z_ratio / 3.0  # normalise z to ratio scale
+                        use_hist = True
+                    else:
+                        # Fallback: sqrt-T scaling (naive but labelled as such)
+                        gamma_fair = v1y / math.sqrt(12)
+                        z_ratio = (v1m_adj - gamma_fair) / max(gamma_fair * 0.15, 1.0)
+                        fair_desc = f"√T fair {gamma_fair:.1f}bp (no hist data)"
+                        gamma_ratio = v1m_adj / gamma_fair if gamma_fair > 0 else 1.0
+                        use_hist = False
+
+                    # VRP context
+                    vrp_1m = round(v1m_adj / rv_21d, 2) if rv_21d and rv_21d > 0 else None
+                    vrp_txt = f" | VRP={vrp_1m:.2f}x realised" if vrp_1m else ""
+                    mtg_txt = f" | {len(mtgs_1m)} mtg(s) stripped" if mtgs_1m else ""
+
+                    # Only signal if both z-score AND VRP agree (avoids false positives)
+                    is_rich  = z_ratio > 1.5 and (vrp_1m is None or vrp_1m > 1.25)
+                    is_cheap = z_ratio < -1.5 and (vrp_1m is None or vrp_1m < 0.85)
+
+                    if is_rich:
                         ideas.append({
                             "Type": "Gamma/Theta",
                             "Structure": f"1m≈{tn}Y short gamma",
-                            "Signal": f"> ratio = {gamma_ratio:.2f}x fair",
-                            "Trade": f"Sell 1m≈{tn}Y straddle (short gamma)",
-                            "Rationale": f"1m vol {gamma_actual:.0f}bp vs fair {gamma_fair:.0f}bp   —   "
-                                         f"gamma {(gamma_ratio-1)*100:.0f}% expensive on ±-adj basis",
-                            "Risk": "Large near-term rate move would hurt",
-                            "Score": (gamma_ratio - 1) * 60,
+                            "Signal": f"Z={z_ratio:+.2f} | ratio={curr_ratio:.3f} vs {fair_desc}{vrp_txt}{mtg_txt}",
+                            "Trade": f"Sell 1m≈{tn}Y straddle (short gamma / sell vol risk premium)",
+                            "Rationale": (
+                                f"1m≈{tn}Y vol {v1m:.0f}bp (adj {v1m_adj:.0f}bp ex-meetings) — "
+                                f"{'historically expensive by {:.1f}σ'.format(z_ratio) if use_hist else 'above √T fair by {:.0f}%'.format((gamma_ratio-1)*100)}. "
+                                f"{'VRP ' + str(vrp_1m) + '× realised — implied compensates well above delivered.' if vrp_1m and vrp_1m > 1.25 else ''}"
+                            ),
+                            "Risk": "Large near-term rate move; central bank surprise; gap risk around meetings",
+                            "Score": min(z_ratio * 12, 60) + (max(vrp_1m - 1, 0) * 20 if vrp_1m else 0),
+                        })
+                    elif is_cheap:
+                        ideas.append({
+                            "Type": "Gamma/Theta",
+                            "Structure": f"1m≈{tn}Y long gamma",
+                            "Signal": f"Z={z_ratio:+.2f} | ratio={curr_ratio:.3f} vs {fair_desc}{vrp_txt}{mtg_txt}",
+                            "Trade": f"Buy 1m≈{tn}Y straddle (long gamma / buy cheap vol)",
+                            "Rationale": (
+                                f"1m≈{tn}Y vol {v1m:.0f}bp (adj {v1m_adj:.0f}bp ex-meetings) — "
+                                f"historically cheap by {abs(z_ratio):.1f}σ. "
+                                f"{'VRP only ' + str(vrp_1m) + '× — implied offers poor compensation vs realised.' if vrp_1m and vrp_1m < 0.85 else ''}"
+                            ),
+                            "Risk": "Vol may stay suppressed; theta decay if market stays quiet",
+                            "Score": min(abs(z_ratio) * 10, 50),
+                        })
+
+            # 4b. VRP-driven ideas (implied vs realised, meeting-adjusted)
+            for tn in [2, 5, 10]:
+                rv = _realised.get(float(tn))
+                if not rv or rv <= 0:
+                    continue
+                for exp_lbl, exp_y in [("3m", 0.25), ("6m", 0.5), ("1y", 1.0)]:
+                    iv = get_matrix_value(atm, exp_lbl, float(tn))
+                    if not iv:
+                        continue
+                    mtgs = _meetings.get(exp_lbl, [])
+                    iv_adj = iv - len(mtgs) * _CB_MEETING_PREMIUM_BP.get(ccy, 3.0)
+                    vrp = iv_adj / rv
+                    if vrp > 1.50:
+                        ideas.append({
+                            "Type": "Vol Risk Premium",
+                            "Structure": f"{exp_lbl}≈{tn}Y sell VRP",
+                            "Signal": f"VRP={vrp:.2f}x (adj implied {iv_adj:.0f}bp vs {rv:.0f}bp realised)",
+                            "Trade": f"Sell {exp_lbl}≈{tn}Y straddle (harvest vol risk premium)",
+                            "Rationale": (
+                                f"Meeting-adjusted implied {iv_adj:.0f}bp is {vrp:.2f}× 21-day realised {rv:.0f}bp. "
+                                f"{len(mtgs)} CB meeting(s) stripped at {_CB_MEETING_PREMIUM_BP.get(ccy,3):.0f}bp each. "
+                                f"Vol risk premium historically mean-reverts — short vol collects theta as premium decays."
+                            ),
+                            "Risk": "Requires calm market; gap risk if macro shock or surprise CB action",
+                            "Score": (vrp - 1.0) * 40,
+                        })
+                    elif vrp < 0.75:
+                        ideas.append({
+                            "Type": "Vol Risk Premium",
+                            "Structure": f"{exp_lbl}≈{tn}Y buy VRP",
+                            "Signal": f"VRP={vrp:.2f}x (adj implied {iv_adj:.0f}bp vs {rv:.0f}bp realised)",
+                            "Trade": f"Buy {exp_lbl}≈{tn}Y straddle (implied cheap vs realised)",
+                            "Rationale": (
+                                f"Meeting-adjusted implied {iv_adj:.0f}bp only {vrp:.2f}× realised vol {rv:.0f}bp. "
+                                f"Implied vol underpricing current rate volatility — long straddle has positive expected value."
+                            ),
+                            "Risk": "Theta decay if vol mean-reverts lower; negative carry",
+                            "Score": (1.0 - vrp) * 35,
                         })
 
             # ── Curve Steepener / Flattener   —   IRS ───────────────────
