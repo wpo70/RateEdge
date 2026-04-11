@@ -2237,14 +2237,11 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         Price caplets using flat vol.
         Returns total LEG premium in bp.
         """
-        # Create flat vol curve
         flat_curve = {}
         t = 0.25
         while t <= final_maturity_y + 1e-6:
             flat_curve[round(t, 2)] = vol_bp
             t += 0.25
-        
-        # Use shared pricing function
         return price_caplets_with_vol_curve(ccy, final_maturity_y, flat_curve, notional_mm=1.0)
     
     # === STEP 1: 1Y CFS ===
@@ -8501,10 +8498,12 @@ def caps_floors_tab(vol_mode: str):
             col_spr, col_sabr = st.columns([2.2, 1.0])
 
             with col_spr:
-                CW = [1.3, 0.55, 1.0, 0.55, 0.05, 0.55, 0.9, 0.55, 0.55, 0.9, 0.65]
+                CW = [1.3, 0.55, 1.0, 0.55, 0.05, 0.55, 0.9, 0.75, 0.55, 0.55, 0.9, 0.65]
 
                 def _h(txt, align="left"):
                     return f"<div style='font-size:0.75rem;font-weight:600;color:#64748b;text-align:{align}'>{txt}</div>"
+                def _hg(txt, align="right"):
+                    return f"<div style='font-size:0.75rem;font-weight:600;color:#22c55e;text-align:{align}'>{txt}</div>"
 
                 st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
                 hc = st.columns(CW)
@@ -8514,10 +8513,11 @@ def caps_floors_tab(vol_mode: str):
                 hc[3].markdown(_h("Chg","right"),         unsafe_allow_html=True)
                 hc[5].markdown(_h("Label","right"),       unsafe_allow_html=True)
                 hc[6].markdown(_h("Swptn","right"),       unsafe_allow_html=True)
-                hc[7].markdown(_h("Wdg","right"),         unsafe_allow_html=True)
-                hc[8].markdown(_h("Sprd","right"),        unsafe_allow_html=True)
-                hc[9].markdown(_h("FWD CFS","right"),     unsafe_allow_html=True)
-                hc[10].markdown(_h("Target","right"),     unsafe_allow_html=True)
+                hc[7].markdown(_hg("Spot Swptn"),         unsafe_allow_html=True)
+                hc[8].markdown(_h("Wdg","right"),         unsafe_allow_html=True)
+                hc[9].markdown(_h("Sprd","right"),        unsafe_allow_html=True)
+                hc[10].markdown(_h("FWD CFS","right"),    unsafe_allow_html=True)
+                hc[11].markdown(_h("Target","right"),     unsafe_allow_html=True)
                 st.markdown("<hr style='margin:2px 0 0 0;border-color:#334155'>", unsafe_allow_html=True)
 
                 new_spread_values = {}
@@ -8525,8 +8525,8 @@ def caps_floors_tab(vol_mode: str):
                     last_val = st.session_state[spr_key]
                     cur_val  = st.session_state.get(f"{spr_key}_temp", last_val)
                     tdata  = st.session_state["cfs_table_data"].get(tbl_lbl, {})
-                    swpt   = tdata.get("swaption", None)
-                    new_val = cur_val  # will be overwritten by number_input below
+                    swpt   = tdata.get("swaption", None)  # spot premium (post-conversion)
+                    new_val = cur_val
                     rc = st.columns(CW)
                     fs = "font-size:0.80rem;padding-top:6px"
                     rc[0].markdown(f"<div style='{fs}'>{wedge_lbl}</div>", unsafe_allow_html=True)
@@ -8535,23 +8535,40 @@ def caps_floors_tab(vol_mode: str):
                     delta = new_val - last_val
                     dc = "#22c55e" if delta > 0 else "#ef4444" if delta < 0 else "#94a3b8"
                     rc[3].markdown(f"<div style='{fs};text-align:right;color:{dc}'>{delta:+.1f}</div>", unsafe_allow_html=True)
-                    # Use new_val (pending spread) for live CFS display
                     if swpt is not None:
                         cfs = swpt + new_val
                         st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs
-                        swpt_str = f"{swpt:.4f}"
+                        # FWD premium = spot / df(expiry) — read from atm_prem_matrix
+                        _prem_df_row = st.session_state.get("atm_prem_matrix", {}).get(ccy, {}).get("prem")
+                        _exp_lbl_row = tdata.get("_exp_lbl", "")
+                        fwd_swpt_str = "—"
+                        if _prem_df_row is not None and not _prem_df_row.empty:
+                            try:
+                                _exp_for_row = {"3m1y":"3m","1y1y":"1y","2y1y":"2y","3y1y":"3y",
+                                                "4y1y":"4y","5y2y":"5y","7y3y":"7y","10y2y":"10y","12y3y":"12y"}.get(tbl_lbl)
+                                _ten_for_row = {"3m1y":1.0,"1y1y":1.0,"2y1y":1.0,"3y1y":1.0,
+                                                "4y1y":1.0,"5y2y":2.0,"7y3y":3.0,"10y2y":2.0,"12y3y":3.0}.get(tbl_lbl)
+                                if _exp_for_row and _ten_for_row:
+                                    _fv = get_matrix_value(_prem_df_row, _exp_for_row, _ten_for_row)
+                                    if _fv is not None:
+                                        fwd_swpt_str = f"{float(_fv):.4f}"
+                            except Exception:
+                                pass
+                        spot_str = f"{swpt:.4f}"
                         cfs_str  = f"{cfs:.4f}"
                     else:
                         cfs = None
-                        swpt_str = "  —  "
+                        fwd_swpt_str = "  —  "
+                        spot_str = "  —  "
                         cfs_str  = "  —  "
                     st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_label"] = cfs_lbl
                     rc[5].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{tbl_lbl}</div>", unsafe_allow_html=True)
-                    rc[6].markdown(f"<div style='{fs};text-align:right;color:#cbd5e1'>{swpt_str}</div>", unsafe_allow_html=True)
-                    rc[7].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{tbl_wedge}</div>", unsafe_allow_html=True)
-                    rc[8].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{new_val:.1f}</div>", unsafe_allow_html=True)
-                    rc[9].markdown(f"<div style='{fs};text-align:right;color:#38bdf8;font-weight:600'>{cfs_str}</div>", unsafe_allow_html=True)
-                    rc[10].markdown(f"<div style='{fs};text-align:right;color:#64748b'>{cfs_lbl}</div>", unsafe_allow_html=True)
+                    rc[6].markdown(f"<div style='{fs};text-align:right;color:#cbd5e1'>{fwd_swpt_str}</div>", unsafe_allow_html=True)
+                    rc[7].markdown(f"<div style='{fs};text-align:right;color:#22c55e;font-weight:600'>{spot_str}</div>", unsafe_allow_html=True)
+                    rc[8].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{tbl_wedge}</div>", unsafe_allow_html=True)
+                    rc[9].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{new_val:.1f}</div>", unsafe_allow_html=True)
+                    rc[10].markdown(f"<div style='{fs};text-align:right;color:#38bdf8;font-weight:600'>{cfs_str}</div>", unsafe_allow_html=True)
+                    rc[11].markdown(f"<div style='{fs};text-align:right;color:#64748b'>{cfs_lbl}</div>", unsafe_allow_html=True)
                     new_spread_values[spr_key] = new_val
                     st.session_state[f"{spr_key}_temp"] = new_val
 
@@ -8570,10 +8587,10 @@ def caps_floors_tab(vol_mode: str):
                 _dc = "#22c55e" if _delta_15v20 > 0 else "#ef4444" if _delta_15v20 < 0 else "#94a3b8"
                 _vs_cols[3].markdown(f"<div style='{_fs};text-align:right;color:{_dc}'>{_delta_15v20:+.1f}</div>", unsafe_allow_html=True)
                 _vs_cols[5].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>vol spd</div>", unsafe_allow_html=True)
-                _vs_cols[7].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>15→20</div>", unsafe_allow_html=True)
-                _vs_cols[8].markdown(f"<div style='{_fs};text-align:right;color:#f59e0b'>{_spread_15v20_new:.1f}bp</div>", unsafe_allow_html=True)
-                _vs_cols[9].markdown(f"<div style='{_fs};text-align:right;color:#38bdf8;font-weight:600'>20Y CFS</div>", unsafe_allow_html=True)
-                _vs_cols[10].markdown(f"<div style='{_fs};text-align:right;color:#64748b'>vol ext</div>", unsafe_allow_html=True)
+                _vs_cols[8].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>15→20</div>", unsafe_allow_html=True)
+                _vs_cols[9].markdown(f"<div style='{_fs};text-align:right;color:#f59e0b'>{_spread_15v20_new:.1f}bp</div>", unsafe_allow_html=True)
+                _vs_cols[10].markdown(f"<div style='{_fs};text-align:right;color:#38bdf8;font-weight:600'>20Y CFS</div>", unsafe_allow_html=True)
+                _vs_cols[11].markdown(f"<div style='{_fs};text-align:right;color:#64748b'>vol ext</div>", unsafe_allow_html=True)
                 st.session_state["cf_spr_15v20_temp"] = _spread_15v20_new
                 new_spread_values["cf_spr_15v20"] = _spread_15v20_new
 
@@ -8632,6 +8649,9 @@ def caps_floors_tab(vol_mode: str):
             if br.button("🔄 Refresh Swaptions", key="gen_swpt_prem", type="primary"):
                 _prem_df = st.session_state.get("atm_prem_matrix", {}).get(ccy, {}).get("prem")
                 if _prem_df is not None and not _prem_df.empty:
+                    # Get OIS curve for forward→spot conversion
+                    _ois_rs = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+                    if _ois_rs is None: _ois_rs = get_basis_curve(ccy, "ois")
                     for lbl, exp, tenor, cfs_lbl in [
                         ("3m1y","3m",1.0,"1Y CFS"),("1y1y","1y",1.0,"2Y CFS"),
                         ("2y1y","2y",1.0,"3Y CFS"),("3y1y","3y",1.0,"4Y CFS"),
@@ -8642,10 +8662,24 @@ def caps_floors_tab(vol_mode: str):
                         try:
                             v = get_matrix_value(_prem_df, exp, tenor)
                             if v is None: continue
+                            # atm_prem_matrix stores FORWARD premiums — convert to SPOT
+                            # spot = fwd × df(expiry)
+                            _exp_y_rs = label_to_years(exp)
+                            try:
+                                if _ois_rs is not None:
+                                    _ox_rs = _ois_rs[_ois_rs.columns[0]].to_numpy().astype(float)
+                                    _oy_rs = _ois_rs[_ois_rs.columns[1]].to_numpy().astype(float) / 100.0
+                                    _r_rs  = float(np.interp(_exp_y_rs, _ox_rs, _oy_rs))
+                                    _df_rs = math.exp(-_r_rs * _exp_y_rs)
+                                else:
+                                    _df_rs = math.exp(-0.04 * _exp_y_rs)
+                            except Exception:
+                                _df_rs = math.exp(-0.04 * _exp_y_rs)
+                            v_spot = round(float(v) * _df_rs, 4)
                             st.session_state["cfs_table_data"][lbl] = {
-                                "swaption": round(float(v), 4),
+                                "swaption": v_spot,
                                 "cfs_label": cfs_lbl,
-                                "cfs_straddle": round(float(v), 4)
+                                "cfs_straddle": v_spot
                             }
                         except: pass
                 else:
