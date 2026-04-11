@@ -17761,8 +17761,8 @@ def sod_report_tab():
             st.markdown("---")
             st.markdown("### 📋 Implied AUD CFS Open   —   Using Previous Day Wedge Spreads")
             st.caption(
-                "Cumulative CFS = running sum of (swaption leg fwd premium + wedge spread). "
-                "Wedge spreads from current session state (previous close). No caplet stripping."
+                "Cumulative CFS = running sum of (swaption leg spot premium + wedge spread). "
+                "Swaption forward premiums converted to spot via OIS df. Wedge spreads from current session state."
             )
 
             # CFS chain: (label, wedge_spr_key, expiry_in_matrix, tenor_in_matrix)
@@ -17794,6 +17794,10 @@ def sod_report_tab():
                                     return None
                 return None
 
+            # OIS curve for forward→spot conversion
+            _ois_sod = st.session_state.get("config_basis", {}).get("AUD", {}).get("ois")
+            if _ois_sod is None: _ois_sod = get_basis_curve("AUD", "ois")
+
             _cfs_rows = []
             _cum_prev = 0.0
             _cum_open = 0.0
@@ -17818,6 +17822,21 @@ def sod_report_tab():
                 _spr = st.session_state.get(_spr_key, 0.0)
                 _p_prev = _prem_lookup(_aud_prem_prev, _exp, _ten)
                 _p_open = _prem_lookup(_aud_prem_open, _exp, _ten)
+
+                # Convert forward → spot using OIS df at expiry
+                _exp_y_sod = label_to_years(_exp)
+                try:
+                    if _ois_sod is not None:
+                        _ox_s = _ois_sod[_ois_sod.columns[0]].to_numpy().astype(float)
+                        _oy_s = _ois_sod[_ois_sod.columns[1]].to_numpy().astype(float) / 100.0
+                        _r_s  = float(np.interp(_exp_y_sod, _ox_s, _oy_s))
+                        _df_s = math.exp(-_r_s * _exp_y_sod)
+                    else:
+                        _df_s = math.exp(-0.04 * _exp_y_sod)
+                except Exception:
+                    _df_s = math.exp(-0.04 * _exp_y_sod)
+                if _p_prev is not None: _p_prev = _p_prev * _df_s
+                if _p_open is not None: _p_open = _p_open * _df_s
 
                 if _p_prev is not None and _p_open is not None:
                     _leg_prev = _p_prev + _spr
