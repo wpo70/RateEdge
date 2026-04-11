@@ -12611,13 +12611,15 @@ def _compute_realised_vol_db(ccy: str, tenor_y: float, window_days: int = 21) ->
         if conn is None:
             return None
         cur = conn.cursor()
-        # Determine floating_rate label for this ccy/tenor
+        # Determine floating_rate label matching swap_rates DB values
         if ccy == "AUD":
-            fr = "BBSW6M" if tenor_y >= 4.0 else "BBSW3M"
+            fr = "6M BBSW" if tenor_y >= 4.0 else "3M BBSW"
         elif ccy == "USD":
             fr = "SOFR"
+        elif ccy == "NZD":
+            fr = "3M BKBM"
         else:
-            fr = "BKBM3M"
+            fr = "SOFR"
 
         # Closest available tenor string (e.g. "5Y", "10Y")
         tenor_str = f"{int(round(tenor_y))}Y"
@@ -12793,7 +12795,10 @@ def rv_tab():
     st.subheader("📊 Relative Value   —   Swaption & Cap/Floor Trade Ideas")
     st.caption("Live vol surface + IRS curve for richness/cheapness signals.")
 
-    ccy = "AUD"
+    _rv_ccy_col, _ = st.columns([2, 6])
+    with _rv_ccy_col:
+        ccy = st.selectbox("Currency", ["AUD", "USD", "NZD"], key="rv_ccy_sel",
+                           help="Select currency for RV analysis")
     curve     = get_ccy_curve(ccy)
     _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
     ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
@@ -12975,6 +12980,79 @@ def rv_tab():
                                                   .format("{:.0f}%"),
                         use_container_width=True)
                     st.caption("Red = high percentile (vol expensive vs history). Green = cheap.")
+
+            # ── VRP Surface — Implied vs Realised ────────────────────────
+            st.markdown("#### Vol Risk Premium Surface   —   Implied ÷ Realised (21d)")
+            st.caption("VRP = meeting-adjusted implied vol ÷ 21-day realised vol. "
+                       "Red > 1.4 (rich). Green < 0.8 (cheap). "
+                       "Realised pulled from swap_rates history.")
+            _vrp_exp_lbls  = ["1m", "3m", "6m", "1y", "2y"]
+            _vrp_tn_list   = [2, 5, 10, 15, 20]
+            _vrp_surf_rows = []
+            for _vtn in _vrp_tn_list:
+                _rv21 = _compute_realised_vol_db(ccy, float(_vtn), 21)
+                row_vrp = {"Tenor": f"{_vtn}Y", "Realised 21d (bp)": _rv21}
+                for _vexp in _vrp_exp_lbls:
+                    iv = get_matrix_value(atm, _vexp, float(_vtn))
+                    if iv and _rv21 and _rv21 > 0:
+                        _mtgs_n = len(_meetings_in_window(ccy, _vexp))
+                        _iv_adj = iv - _mtgs_n * _CB_MEETING_PREMIUM_BP.get(ccy, 3.0)
+                        row_vrp[_vexp] = round(_iv_adj / _rv21, 2)
+                    else:
+                        row_vrp[_vexp] = None
+                _vrp_surf_rows.append(row_vrp)
+
+            _vrp_surf_df = pd.DataFrame(_vrp_surf_rows).set_index("Tenor")
+            _vrp_surf_exp_cols = [c for c in _vrp_exp_lbls if c in _vrp_surf_df.columns]
+
+            def _vrp_surf_color(v):
+                try:
+                    f = float(v)
+                    if f > 1.60: return "background-color:#7f1d1d;color:white;font-weight:700"
+                    if f > 1.40: return "background-color:#991b1b;color:white;font-weight:600"
+                    if f > 1.20: return "background-color:#b91c1c;color:white"
+                    if f < 0.70: return "background-color:#14532d;color:white;font-weight:700"
+                    if f < 0.80: return "background-color:#166534;color:white;font-weight:600"
+                    if f < 1.00: return "background-color:#15803d;color:white"
+                    return "background-color:#1e293b;color:#94a3b8"
+                except Exception:
+                    return ""
+
+            if _vrp_surf_exp_cols:
+                _vrp_disp = _vrp_surf_df[["Realised 21d (bp)"] + _vrp_surf_exp_cols]
+                st.dataframe(
+                    _vrp_disp.style.map(_vrp_surf_color, subset=_vrp_surf_exp_cols)
+                                   .format("{:.2f}", subset=_vrp_surf_exp_cols, na_rep="—")
+                                   .format("{:.1f}", subset=["Realised 21d (bp)"], na_rep="—"),
+                    use_container_width=True)
+                st.caption("Implied adj = implied − (N CB meetings × meeting premium). "
+                           f"CB premium assumption: {_CB_MEETING_PREMIUM_BP.get(ccy,3):.0f}bp/meeting for {ccy}.")
+            else:
+                st.info("Load swap_rates history to compute realised vol. "
+                        "Ensure swap_rates table has 25+ days of data.")
+
+            # ── Realised vol surface ──────────────────────────────────────
+            with st.expander("📉 Realised Vol Surface (swap_rates history)"):
+                st.caption("21-day annualised realised normal vol (bp) per tenor. "
+                           "Computed from daily swap rate differences in swap_rates table.")
+                _rv_windows = [("5d", 5), ("21d", 21), ("63d", 63)]
+                _rv_tn_list2 = [2, 5, 10, 15, 20]
+                _rv_real_rows = []
+                for _rtn in _rv_tn_list2:
+                    rrow = {"Tenor": f"{_rtn}Y"}
+                    for _wlbl, _wdays in _rv_windows:
+                        rv = _compute_realised_vol_db(ccy, float(_rtn), _wdays)
+                        rrow[_wlbl] = rv
+                    # Also show current 1m implied for quick VRP comparison
+                    rrow["1m Implied"] = get_matrix_value(atm, "1m", float(_rtn))
+                    _rv_real_rows.append(rrow)
+                _rv_real_df = pd.DataFrame(_rv_real_rows).set_index("Tenor")
+                st.dataframe(
+                    _rv_real_df.style.format("{:.1f}", na_rep="—")
+                                     .background_gradient(cmap="Blues", subset=["5d","21d","63d"], axis=None),
+                    use_container_width=True)
+                st.caption("5d = 1-week realised | 21d = 1-month | 63d = 3-month. "
+                           "1m Implied shown for quick comparison.")
 
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     # TAB 2   —   CURVE RV & SPREAD ANALYSIS
@@ -13522,34 +13600,36 @@ def rv_tab():
                         st.dataframe(
                             pd.DataFrame(_fv_rows).style.map(_fvz_style, subset=["Z-Score"]),
                             use_container_width=True, hide_index=True)
-                        # Generate forward vol RV ideas
-                        for row in _fv_rows:
-                            z = row["Z-Score"]
-                            if abs(z) >= 1.5:
-                                e1_lbl, e2_lbl = row["Window"].split("→")
-                                tn = row["Tenor"]
-                                is_rich = z > 0
-                                ideas.append({
-                                    "Type": "Fwd Vol RV",
-                                    "Structure": f"σ_fwd {row['Window']}≈{tn}",
-                                    "Signal": f"Z = {z:+.2f} ({row['Fwd Vol (bp)']:.1f}bp vs {row['Hist Mean']:.1f}bp hist)",
-                                    "Trade": (
-                                        f"Sell {e2_lbl}≈{tn} straddle / Buy {e1_lbl}≈{tn} straddle (sell fwd vol)"
-                                        if is_rich else
-                                        f"Buy {e2_lbl}≈{tn} straddle / Sell {e1_lbl}≈{tn} straddle (buy fwd vol)"
-                                    ),
-                                    "Rationale": (
-                                        f"Implied fwd vol {e1_lbl}→{e2_lbl}≈{tn} at {row['Fwd Vol (bp)']:.1f}bp — "
-                                        f"{'RICH' if is_rich else 'CHEAP'} vs {row['Hist Mean']:.1f}bp historical mean "
-                                        f"({z:+.1f}σ, n={row['n']} snaps). Calendar spread monetises the mispricing."
-                                    ),
-                                    "Risk": ("Vol may stay elevated if macro uncertainty persists"
-                                             if is_rich else
-                                             "Vol may stay suppressed; carry negative on long fwd vol"),
-                                    "Score": abs(z) * 15,
-                                })
                     else:
                         st.info("Insufficient vol history for forward vol stats. Load more snapshots.")
+
+                # ── Fwd vol ideas — gated behind button ──────────────────
+                if st.session_state.get(_rv_ideas_key) and _fv_rows:
+                    for row in _fv_rows:
+                        z = row["Z-Score"]
+                        if abs(z) >= 1.5:
+                            e1_lbl, e2_lbl = row["Window"].split("→")
+                            tn = row["Tenor"]
+                            is_rich = z > 0
+                            ideas.append({
+                                "Type": "Fwd Vol RV",
+                                "Structure": f"σ_fwd {row['Window']}≈{tn}",
+                                "Signal": f"Z = {z:+.2f} ({row['Fwd Vol (bp)']:.1f}bp vs {row['Hist Mean']:.1f}bp hist)",
+                                "Trade": (
+                                    f"Sell {e2_lbl}≈{tn} straddle / Buy {e1_lbl}≈{tn} straddle (sell fwd vol)"
+                                    if is_rich else
+                                    f"Buy {e2_lbl}≈{tn} straddle / Sell {e1_lbl}≈{tn} straddle (buy fwd vol)"
+                                ),
+                                "Rationale": (
+                                    f"Implied fwd vol {e1_lbl}→{e2_lbl}≈{tn} at {row['Fwd Vol (bp)']:.1f}bp — "
+                                    f"{'RICH' if is_rich else 'CHEAP'} vs {row['Hist Mean']:.1f}bp historical mean "
+                                    f"({z:+.1f}σ, n={row['n']} snaps). Calendar spread monetises the mispricing."
+                                ),
+                                "Risk": ("Vol may stay elevated if macro uncertainty persists"
+                                         if is_rich else
+                                         "Vol may stay suppressed; carry negative on long fwd vol"),
+                                "Score": abs(z) * 15,
+                            })
 
             # 1. Vol butterfly   —   ATM vs wings in expiry dim
             for tn in [2, 5, 10]:
@@ -13881,6 +13961,53 @@ def rv_tab():
                                     "Risk": "Negative carry on long-dated short",
                                     "Score": (1 - rich_cheap) * 60,
                                 })
+
+            # ── HIGH CONVICTION composite signals ──────────────────────
+            # Where VRP + z-score + historical percentile all agree,
+            # promote score and flag as HIGH CONVICTION
+            _hc_candidates = {}  # (tenor, direction) -> list of supporting signals
+
+            for idea in ideas:
+                _tn_match = None
+                for _t in [2, 5, 10]:
+                    if f"{_t}Y" in idea["Structure"] or f"≈{_t}Y" in idea["Structure"]:
+                        _tn_match = _t
+                        break
+                if _tn_match is None:
+                    continue
+                _dir = ("sell" if any(w in idea["Trade"].lower()
+                                      for w in ["sell","short","flattener","rich"])
+                        else "buy")
+                key = (_tn_match, _dir)
+                _hc_candidates.setdefault(key, []).append(idea)
+
+            for (tn, direction), supporting in _hc_candidates.items():
+                if len(supporting) >= 2:
+                    # Boost scores and flag
+                    for idea in supporting:
+                        idea["Score"] = idea["Score"] * 1.5
+                        if "HIGH CONVICTION" not in idea["Type"]:
+                            idea["Type"] = "⭐ HIGH CONVICTION — " + idea["Type"]
+                    # Add a summary composite idea
+                    _signals_txt = " + ".join(set(i["Type"].replace("⭐ HIGH CONVICTION — ", "")
+                                                   for i in supporting))
+                    ideas.append({
+                        "Type": "⭐ HIGH CONVICTION Composite",
+                        "Structure": f"≈{tn}Y {direction.upper()} vol composite",
+                        "Signal": f"{len(supporting)} independent signals agree: {_signals_txt}",
+                        "Trade": (
+                            f"{'Sell' if direction=='sell' else 'Buy'} ≈{tn}Y straddles across expiries — "
+                            f"multiple signals confirm {('richness' if direction=='sell' else 'cheapness')}"
+                        ),
+                        "Rationale": (
+                            f"{len(supporting)} separate frameworks ({_signals_txt}) all point "
+                            f"{'RICH' if direction=='sell' else 'CHEAP'} for ≈{tn}Y vol. "
+                            f"Convergence of independent signals significantly increases conviction."
+                        ),
+                        "Risk": ("Model agreement does not guarantee outcome — "
+                                 "tail events can override all signals simultaneously"),
+                        "Score": sum(i["Score"] / 1.5 for i in supporting) * 1.8,
+                    })
 
             # Sort by score
             ideas.sort(key=lambda x: x["Score"], reverse=True)
@@ -14238,7 +14365,368 @@ def rv_tab():
                     st.plotly_chart(_fig_pnl, use_container_width=True)
                 else:
                     st.info("Generate ideas above to see P&L estimates.")
-    if _rv_active == 3:
+
+            # ══════════════════════════════════════════════════════════════
+            # HORIZON ANALYSIS
+            # Theta decay + rate move + vol shift P&L across time horizons
+            # Uses fwd swap matrix to get curve at each future date
+            # ══════════════════════════════════════════════════════════════
+            st.markdown("---")
+            st.markdown("#### ⏱ Horizon Analysis — Theta, Rate & Vol P&L")
+            st.caption(
+                "Select an idea, then set rate and vol shift scenarios. "
+                "P&L computed at each horizon using the forward swap curve and Bachelier repricing."
+            )
+
+            if not ideas:
+                st.info("Generate ideas above to run horizon analysis.")
+            else:
+                # ── Idea selector ───────────────────────────────────────
+                _hz_labels = [f"{i['Type']} | {i['Structure']}" for i in ideas[:12]]
+                _hz_sel_label = st.selectbox("Select idea for horizon analysis",
+                                             _hz_labels, key="hz_idea_sel")
+                _hz_idx   = _hz_labels.index(_hz_sel_label)
+                _hz_idea  = ideas[_hz_idx]
+
+                # Parse expiry and tenor from the idea
+                _hz_exp_y, _hz_tenor_y = _parse_structure(_hz_idea["Structure"])
+                _hz_is_straddle = ("straddle" in _hz_idea["Trade"].lower() or
+                                   "Butterfly" in _hz_idea["Type"] or
+                                   "Gamma" in _hz_idea["Type"] or
+                                   "VRP" in _hz_idea["Type"] or
+                                   "Fwd Vol" in _hz_idea["Type"])
+                _hz_is_payer    = "Payer" in _hz_idea["Trade"] and "Receiver" not in _hz_idea["Trade"]
+                _hz_is_receiver = "Receiver" in _hz_idea["Trade"] and "Payer" not in _hz_idea["Trade"]
+                _hz_is_sell     = any(w in _hz_idea["Trade"].lower()
+                                      for w in ["sell","short","flattener"])
+
+                # ── Controls row ────────────────────────────────────────
+                _hz_c1, _hz_c2, _hz_c3, _hz_c4 = st.columns([2, 2, 2, 2])
+                with _hz_c1:
+                    _hz_notional = st.number_input("Notional (AUD mm)", min_value=1.0,
+                                                    max_value=5000.0, value=100.0, step=25.0,
+                                                    key="hz_notional")
+                with _hz_c2:
+                    _hz_rate_shift = st.slider("Rate shift (bp)", min_value=-150,
+                                               max_value=150, value=0, step=5,
+                                               key="hz_rate_shift",
+                                               help="Parallel shift applied to fwd rate at each horizon")
+                with _hz_c3:
+                    _hz_vol_shift = st.slider("Vol shift (bp)", min_value=-30,
+                                              max_value=30, value=0, step=1,
+                                              key="hz_vol_shift",
+                                              help="Shift applied to ATM implied vol at each horizon")
+                with _hz_c4:
+                    _hz_custom_date = st.date_input("Custom horizon date",
+                                                     value=date.today() + timedelta(days=45),
+                                                     key="hz_custom_date",
+                                                     format="DD/MM/YYYY")
+
+                # ── Build horizon schedule ───────────────────────────────
+                _today_hz   = date.today()
+                _hz_schedule = [
+                    ("7d",   7),
+                    ("14d",  14),
+                    ("21d",  21),
+                    ("1m",   30),
+                    ("3m",   91),
+                    ("Custom", max(1, (_hz_custom_date - _today_hz).days)),
+                ]
+
+                # Implied vol at inception
+                _hz_impl_vol = get_matrix_value(atm, "1y" if _hz_exp_y >= 1.0 else
+                                                    ("6m" if _hz_exp_y >= 0.5 else "3m"),
+                                                _hz_tenor_y) or 80.0
+                _hz_impl_vol_shifted = _hz_impl_vol + _hz_vol_shift
+
+                # Annuity proxy
+                try:
+                    _hz_ois = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+                    if _hz_ois is None:
+                        _hz_ois = get_basis_curve(ccy, "ois")
+                    _, _hz_ann, _ = forward_and_annuity_from_curve(
+                        curve, ccy, _hz_exp_y, _hz_tenor_y, _hz_ois)
+                except Exception:
+                    _hz_ann = _hz_tenor_y * 0.85
+
+                _hz_notional_val = _hz_notional * 1e6
+
+                # Inception ATM fwd rate
+                _hz_spot_fwd = (_par_rate(_hz_tenor_y) or 4.5)
+
+                # Bachelier straddle pricing function
+                def _hz_straddle_val(T_rem: float, fwd_rate: float,
+                                     vol_bp: float, ann: float) -> float:
+                    """ATM Bachelier straddle value in AUD (not bp)."""
+                    if T_rem <= 0:
+                        return 0.0
+                    # Premium in bp of rate × annuity × notional
+                    prem_rate = 2 * 0.3989422804 * (vol_bp / 10000) * math.sqrt(T_rem) * ann
+                    return prem_rate * _hz_notional_val
+
+                def _hz_option_val(T_rem: float, fwd_rate: float, strike: float,
+                                   vol_bp: float, ann: float, opt: str) -> float:
+                    """Bachelier call/put value."""
+                    if T_rem <= 0:
+                        return max(0.0, (fwd_rate - strike) * _hz_notional_val * ann
+                                   if opt == "payer" else
+                                   (strike - fwd_rate) * _hz_notional_val * ann)
+                    sigma = (vol_bp / 10000) * math.sqrt(T_rem)
+                    if sigma < 1e-9:
+                        intrinsic = (fwd_rate - strike) if opt == "payer" else (strike - fwd_rate)
+                        return max(0.0, intrinsic * _hz_notional_val * ann)
+                    from statistics import NormalDist as _ND
+                    nd = _ND(0, 1)
+                    d = (fwd_rate - strike) / sigma
+                    if opt == "payer":
+                        val = (fwd_rate - strike) * nd.cdf(d) + sigma * nd.pdf(d)
+                    else:
+                        val = (strike - fwd_rate) * nd.cdf(-d) + sigma * nd.pdf(d)
+                    return val * ann * _hz_notional_val
+
+                # Strike = inception fwd rate (ATM)
+                _hz_strike = _hz_spot_fwd / 100.0  # in decimal
+
+                # Inception value
+                _hz_incept_val = _hz_straddle_val(
+                    _hz_exp_y, _hz_spot_fwd / 100.0, _hz_impl_vol, _hz_ann)
+
+                # ── Build horizon table ──────────────────────────────────
+                _hz_rows = []
+                _hz_chart_data = []  # for multi-line chart
+
+                for _hlbl, _hdays in _hz_schedule:
+                    _hT = max(_hz_exp_y - _hdays / 365.0, 0.0)
+                    _h_yf = _hdays / 365.0  # time to this horizon from today
+
+                    # Fwd rate at horizon from matrix
+                    if _has_matrix:
+                        _hfwd = _matrix_rate_at(_h_yf, _hz_tenor_y)
+                        if _hfwd is None:
+                            _hfwd = _hz_spot_fwd
+                    else:
+                        _hfwd = _hz_spot_fwd
+
+                    # Apply rate shift
+                    _hfwd_shifted = _hfwd + _hz_rate_shift / 100.0
+
+                    # Reprice at horizon
+                    if _hz_is_straddle:
+                        _hval = _hz_straddle_val(
+                            _hT, _hfwd_shifted / 100.0,
+                            _hz_impl_vol_shifted, _hz_ann)
+                        # P&L for seller = inception premium collected − current value
+                        if _hz_is_sell:
+                            _hpnl = _hz_incept_val - _hval
+                        else:
+                            _hpnl = _hval - _hz_incept_val
+                    elif _hz_is_payer:
+                        _hval = _hz_option_val(
+                            _hT, _hfwd_shifted / 100.0, _hz_strike,
+                            _hz_impl_vol_shifted, _hz_ann, "payer")
+                        _hpnl = _hval - _hz_incept_val
+                    elif _hz_is_receiver:
+                        _hval = _hz_option_val(
+                            _hT, _hfwd_shifted / 100.0, _hz_strike,
+                            _hz_impl_vol_shifted, _hz_ann, "receiver")
+                        _hpnl = _hval - _hz_incept_val
+                    else:
+                        _hpnl = 0.0
+                        _hval = _hz_incept_val
+
+                    _hz_rows.append({
+                        "Horizon":       _hlbl,
+                        "Days":          _hdays,
+                        "Rem T (y)":     round(_hT, 3),
+                        "Fwd Rate (%)":  round(_hfwd, 4),
+                        "Shifted Fwd":   round(_hfwd_shifted, 4),
+                        "Vol (bp)":      round(_hz_impl_vol_shifted, 1),
+                        "Option Value":  f"${_hval/1e3:.1f}k",
+                        "P&L":          f"{'+'if _hpnl>=0 else ''}{_hpnl/1e3:.1f}k",
+                        "_pnl_raw":      _hpnl,
+                        "_days":         _hdays,
+                    })
+                    _hz_chart_data.append({"Horizon": _hlbl, "Days": _hdays,
+                                            "P&L (k)": round(_hpnl / 1e3, 2)})
+
+                # ── Show table ───────────────────────────────────────────
+                st.markdown(f"**{_hz_idea['Structure']}** | "
+                            f"Exp: {_hz_exp_y:.2f}y | Tenor: {_hz_tenor_y:.0f}Y | "
+                            f"Inception vol: {_hz_impl_vol:.1f}bp | "
+                            f"ATM fwd: {_hz_spot_fwd:.3f}%")
+
+                _hz_disp = pd.DataFrame(_hz_rows).drop(columns=["_pnl_raw","_days"])
+
+                def _hz_pnl_color(v):
+                    try:
+                        f = float(str(v).replace("+","").replace("k",""))
+                        if f > 0:  return "color:#22c55e;font-weight:600"
+                        if f < 0:  return "color:#ef4444;font-weight:600"
+                        return ""
+                    except Exception: return ""
+
+                st.dataframe(
+                    _hz_disp.style.map(_hz_pnl_color, subset=["P&L"]),
+                    use_container_width=True, hide_index=True)
+
+                # ── Multi-scenario P&L surface chart ────────────────────
+                st.markdown("##### P&L Surface — Rate × Vol × Time")
+                st.caption("Each line = one time horizon. X axis = rate shift (bp). Y axis = P&L ($k). "
+                           "Vol shift applied uniformly across all scenarios.")
+
+                _hz_rate_scenarios = list(range(-100, 105, 10))  # -100 to +100 in 10bp steps
+                _hz_vol_scenarios  = [0, -10, +10]              # flat, -10bp, +10bp vol
+
+                _hz_fig = go.Figure()
+                _colors_surf = ["#3b82f6","#22c55e","#f59e0b","#a78bfa","#f43f5e","#06b6d4"]
+
+                for _ci, (_hlbl, _hdays) in enumerate(_hz_schedule):
+                    _hT   = max(_hz_exp_y - _hdays / 365.0, 0.0)
+                    _h_yf = _hdays / 365.0
+                    _hfwd = (_matrix_rate_at(_h_yf, _hz_tenor_y)
+                             if _has_matrix else _hz_spot_fwd) or _hz_spot_fwd
+
+                    _pnl_by_rate = []
+                    for _rs_bp in _hz_rate_scenarios:
+                        _hfr = _hfwd + _rs_bp / 100.0
+                        _hvol = _hz_impl_vol + _hz_vol_shift
+
+                        if _hz_is_straddle:
+                            _hv = _hz_straddle_val(_hT, _hfr / 100.0, _hvol, _hz_ann)
+                            _p = (_hz_incept_val - _hv) if _hz_is_sell else (_hv - _hz_incept_val)
+                        elif _hz_is_payer:
+                            _hv = _hz_option_val(_hT, _hfr/100.0, _hz_strike, _hvol, _hz_ann, "payer")
+                            _p = _hv - _hz_incept_val
+                        elif _hz_is_receiver:
+                            _hv = _hz_option_val(_hT, _hfr/100.0, _hz_strike, _hvol, _hz_ann, "receiver")
+                            _p = _hv - _hz_incept_val
+                        else:
+                            _p = 0.0
+                        _pnl_by_rate.append(round(_p / 1e3, 2))
+
+                    _col = _colors_surf[_ci % len(_colors_surf)]
+                    _hz_fig.add_trace(go.Scatter(
+                        x=_hz_rate_scenarios,
+                        y=_pnl_by_rate,
+                        mode="lines",
+                        name=_hlbl,
+                        line=dict(color=_col, width=2),
+                        hovertemplate=f"<b>{_hlbl}</b><br>Rate shift: %{{x}}bp<br>P&L: $%{{y:.1f}}k<extra></extra>"
+                    ))
+
+                # Zero line and inception breakevens
+                _hz_fig.add_hline(y=0, line_dash="dash", line_color="#64748b",
+                                   annotation_text="Breakeven", annotation_position="right")
+
+                _hz_fig.update_layout(
+                    xaxis_title="Rate Shift (bp)",
+                    yaxis_title="Est. P&L ($k)",
+                    legend=dict(title="Horizon", orientation="v",
+                                x=1.01, y=1, bgcolor="rgba(0,0,0,0)"),
+                    template="plotly_dark", height=420,
+                    margin=dict(t=30, r=120),
+                    hovermode="x unified"
+                )
+                st.plotly_chart(_hz_fig, use_container_width=True)
+
+                # ── Vol shift sensitivity chart ──────────────────────────
+                with st.expander("📊 Vol Shift Sensitivity — P&L by Vol Scenario at Each Horizon"):
+                    st.caption("X axis = vol shift (bp). Lines = horizons at current rate (no rate shift).")
+                    _hz_vol_range = list(range(-25, 26, 1))
+                    _hz_vfig = go.Figure()
+
+                    for _ci2, (_hlbl2, _hdays2) in enumerate(_hz_schedule):
+                        _hT2  = max(_hz_exp_y - _hdays2 / 365.0, 0.0)
+                        _h_yf2 = _hdays2 / 365.0
+                        _hfwd2 = (_matrix_rate_at(_h_yf2, _hz_tenor_y)
+                                  if _has_matrix else _hz_spot_fwd) or _hz_spot_fwd
+
+                        _vpnl = []
+                        for _vs in _hz_vol_range:
+                            _hvol2 = _hz_impl_vol + _vs
+                            if _hz_is_straddle:
+                                _hv2 = _hz_straddle_val(_hT2, _hfwd2/100.0, _hvol2, _hz_ann)
+                                _p2 = (_hz_incept_val - _hv2) if _hz_is_sell else (_hv2 - _hz_incept_val)
+                            elif _hz_is_payer:
+                                _hv2 = _hz_option_val(_hT2, _hfwd2/100.0, _hz_strike, _hvol2, _hz_ann, "payer")
+                                _p2 = _hv2 - _hz_incept_val
+                            elif _hz_is_receiver:
+                                _hv2 = _hz_option_val(_hT2, _hfwd2/100.0, _hz_strike, _hvol2, _hz_ann, "receiver")
+                                _p2 = _hv2 - _hz_incept_val
+                            else:
+                                _p2 = 0.0
+                            _vpnl.append(round(_p2 / 1e3, 2))
+
+                        _col2 = _colors_surf[_ci2 % len(_colors_surf)]
+                        _hz_vfig.add_trace(go.Scatter(
+                            x=_hz_vol_range, y=_vpnl,
+                            mode="lines", name=_hlbl2,
+                            line=dict(color=_col2, width=2),
+                            hovertemplate=f"<b>{_hlbl2}</b><br>Vol shift: %{{x}}bp<br>P&L: $%{{y:.1f}}k<extra></extra>"
+                        ))
+                    _hz_vfig.add_hline(y=0, line_dash="dash", line_color="#64748b")
+                    _hz_vfig.update_layout(
+                        xaxis_title="Vol Shift (bp)",
+                        yaxis_title="Est. P&L ($k)",
+                        template="plotly_dark", height=340,
+                        legend=dict(title="Horizon", orientation="v",
+                                    x=1.01, y=1, bgcolor="rgba(0,0,0,0)"),
+                        margin=dict(r=120))
+                    st.plotly_chart(_hz_vfig, use_container_width=True)
+
+                # ── Breakeven surface table ──────────────────────────────
+                with st.expander("📐 Breakeven Rate Move by Horizon"):
+                    st.caption("How many bp does the rate need to move by each horizon "
+                               "for the position to break even? "
+                               "For straddle sellers: how much can rates move before you lose?")
+                    _hz_be_rows = []
+                    for _hlbl3, _hdays3 in _hz_schedule:
+                        _hT3  = max(_hz_exp_y - _hdays3 / 365.0, 0.0)
+                        _h_yf3 = _hdays3 / 365.0
+                        _hfwd3 = (_matrix_rate_at(_h_yf3, _hz_tenor_y)
+                                  if _has_matrix else _hz_spot_fwd) or _hz_spot_fwd
+
+                        # Binary search for breakeven shift
+                        def _pnl_at_shift(shift_bp):
+                            _hfr3 = _hfwd3 + shift_bp / 100.0
+                            _hvol3 = _hz_impl_vol + _hz_vol_shift
+                            if _hz_is_straddle:
+                                _hv3 = _hz_straddle_val(_hT3, _hfr3/100.0, _hvol3, _hz_ann)
+                                return (_hz_incept_val - _hv3) if _hz_is_sell else (_hv3 - _hz_incept_val)
+                            elif _hz_is_payer:
+                                _hv3 = _hz_option_val(_hT3, _hfr3/100.0, _hz_strike, _hvol3, _hz_ann, "payer")
+                                return _hv3 - _hz_incept_val
+                            elif _hz_is_receiver:
+                                _hv3 = _hz_option_val(_hT3, _hfr3/100.0, _hz_strike, _hvol3, _hz_ann, "receiver")
+                                return _hv3 - _hz_incept_val
+                            return 0.0
+
+                        try:
+                            # For straddle sellers, find upper breakeven (positive shift)
+                            from scipy.optimize import brentq as _brentq
+                            _be_up = _brentq(lambda s: _pnl_at_shift(s), 0, 200,
+                                             xtol=0.1) if _hz_is_sell and _hz_is_straddle else None
+                            _be_dn = _brentq(lambda s: _pnl_at_shift(s), -200, 0,
+                                             xtol=0.1) if _hz_is_sell and _hz_is_straddle else None
+                            _be_str = (f"+{_be_up:.0f}bp / {_be_dn:.0f}bp"
+                                       if _be_up and _be_dn else
+                                       f"±{abs(_be_up or _be_dn or 0):.0f}bp")
+                        except Exception:
+                            _theta_pnl = _pnl_at_shift(0)
+                            _be_str = f"~±{abs(_theta_pnl / (_hz_notional_val * 0.0001 * _hz_tenor_y / 100) * 100):.0f}bp" \
+                                      if _theta_pnl != 0 else "—"
+
+                        _theta_only = _pnl_at_shift(0)
+                        _hz_be_rows.append({
+                            "Horizon":       _hlbl3,
+                            "Theta P&L ($k)": f"{'+'if _theta_only>=0 else ''}{_theta_only/1e3:.1f}k",
+                            "Breakeven Range": _be_str,
+                            "Fwd Rate (%)":   f"{_hfwd3:.4f}%",
+                        })
+                    st.dataframe(pd.DataFrame(_hz_be_rows), use_container_width=True,
+                                 hide_index=True)
+                    st.caption("Theta P&L = P&L with zero rate move at that horizon. "
+                               "Breakeven range = rate move where P&L = 0 (straddle sellers only).")
         st.markdown("### Cap/Floor RV Trade Recommendations")
         st.caption("Forward BBSW path vs caplet vol   —   find richness/cheapness by strike and maturity.")
 
