@@ -12611,15 +12611,13 @@ def _compute_realised_vol_db(ccy: str, tenor_y: float, window_days: int = 21) ->
         if conn is None:
             return None
         cur = conn.cursor()
-        # Determine floating_rate label matching swap_rates DB values
+        # Determine floating_rate label for this ccy/tenor
         if ccy == "AUD":
-            fr = "6M BBSW" if tenor_y >= 4.0 else "3M BBSW"
+            fr = "BBSW6M" if tenor_y >= 4.0 else "BBSW3M"
         elif ccy == "USD":
             fr = "SOFR"
-        elif ccy == "NZD":
-            fr = "3M BKBM"
         else:
-            fr = "SOFR"
+            fr = "BKBM3M"
 
         # Closest available tenor string (e.g. "5Y", "10Y")
         tenor_str = f"{int(round(tenor_y))}Y"
@@ -12795,10 +12793,7 @@ def rv_tab():
     st.subheader("📊 Relative Value   —   Swaption & Cap/Floor Trade Ideas")
     st.caption("Live vol surface + IRS curve for richness/cheapness signals.")
 
-    _rv_ccy_col, _ = st.columns([2, 6])
-    with _rv_ccy_col:
-        ccy = st.selectbox("Currency", ["AUD", "USD", "NZD"], key="rv_ccy_sel",
-                           help="Select currency for RV analysis")
+    ccy = "AUD"
     curve     = get_ccy_curve(ccy)
     _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
     ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
@@ -13600,36 +13595,34 @@ def rv_tab():
                         st.dataframe(
                             pd.DataFrame(_fv_rows).style.map(_fvz_style, subset=["Z-Score"]),
                             use_container_width=True, hide_index=True)
+                        # Generate forward vol RV ideas
+                        for row in _fv_rows:
+                            z = row["Z-Score"]
+                            if abs(z) >= 1.5:
+                                e1_lbl, e2_lbl = row["Window"].split("→")
+                                tn = row["Tenor"]
+                                is_rich = z > 0
+                                ideas.append({
+                                    "Type": "Fwd Vol RV",
+                                    "Structure": f"σ_fwd {row['Window']}≈{tn}",
+                                    "Signal": f"Z = {z:+.2f} ({row['Fwd Vol (bp)']:.1f}bp vs {row['Hist Mean']:.1f}bp hist)",
+                                    "Trade": (
+                                        f"Sell {e2_lbl}≈{tn} straddle / Buy {e1_lbl}≈{tn} straddle (sell fwd vol)"
+                                        if is_rich else
+                                        f"Buy {e2_lbl}≈{tn} straddle / Sell {e1_lbl}≈{tn} straddle (buy fwd vol)"
+                                    ),
+                                    "Rationale": (
+                                        f"Implied fwd vol {e1_lbl}→{e2_lbl}≈{tn} at {row['Fwd Vol (bp)']:.1f}bp — "
+                                        f"{'RICH' if is_rich else 'CHEAP'} vs {row['Hist Mean']:.1f}bp historical mean "
+                                        f"({z:+.1f}σ, n={row['n']} snaps). Calendar spread monetises the mispricing."
+                                    ),
+                                    "Risk": ("Vol may stay elevated if macro uncertainty persists"
+                                             if is_rich else
+                                             "Vol may stay suppressed; carry negative on long fwd vol"),
+                                    "Score": abs(z) * 15,
+                                })
                     else:
                         st.info("Insufficient vol history for forward vol stats. Load more snapshots.")
-
-                # ── Fwd vol ideas — gated behind button ──────────────────
-                if st.session_state.get(_rv_ideas_key) and _fv_rows:
-                    for row in _fv_rows:
-                        z = row["Z-Score"]
-                        if abs(z) >= 1.5:
-                            e1_lbl, e2_lbl = row["Window"].split("→")
-                            tn = row["Tenor"]
-                            is_rich = z > 0
-                            ideas.append({
-                                "Type": "Fwd Vol RV",
-                                "Structure": f"σ_fwd {row['Window']}≈{tn}",
-                                "Signal": f"Z = {z:+.2f} ({row['Fwd Vol (bp)']:.1f}bp vs {row['Hist Mean']:.1f}bp hist)",
-                                "Trade": (
-                                    f"Sell {e2_lbl}≈{tn} straddle / Buy {e1_lbl}≈{tn} straddle (sell fwd vol)"
-                                    if is_rich else
-                                    f"Buy {e2_lbl}≈{tn} straddle / Sell {e1_lbl}≈{tn} straddle (buy fwd vol)"
-                                ),
-                                "Rationale": (
-                                    f"Implied fwd vol {e1_lbl}→{e2_lbl}≈{tn} at {row['Fwd Vol (bp)']:.1f}bp — "
-                                    f"{'RICH' if is_rich else 'CHEAP'} vs {row['Hist Mean']:.1f}bp historical mean "
-                                    f"({z:+.1f}σ, n={row['n']} snaps). Calendar spread monetises the mispricing."
-                                ),
-                                "Risk": ("Vol may stay elevated if macro uncertainty persists"
-                                         if is_rich else
-                                         "Vol may stay suppressed; carry negative on long fwd vol"),
-                                "Score": abs(z) * 15,
-                            })
 
             # 1. Vol butterfly   —   ATM vs wings in expiry dim
             for tn in [2, 5, 10]:
