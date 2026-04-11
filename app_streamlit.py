@@ -8825,6 +8825,37 @@ def caps_floors_tab(vol_mode: str):
                     if swpt != "":
                         st.session_state["cfs_table_data"][label]["cfs_straddle"] = swpt + spread
 
+        # Build caplet curve — before ATM CFS table so flat vols are fresh
+        atm = get_working_atm_surface(ccy)
+        _atm_hash = st.session_state.get(f"_atm_hash_{ccy}", 0)
+        _caplet_key = (spread_3m1y, spread_1y1y, spread_2y1y, spread_3y1y,
+                       spread_4y1y, spread_5y2y, spread_7y3y, spread_10y2y, spread_12y3y,
+                       _atm_hash)
+        _cached_key = st.session_state.get("_caplet_curve_key")
+        if _cached_key != _caplet_key or st.session_state.get("caplet_vol_curve_aud") is None:
+            with st.spinner("⚙️ Bootstrapping caplet vol curve..."):
+                caplet_vol_curve = build_caplet_vol_curve(
+                    ccy, atm, None,
+                    spread_3m1y=spread_3m1y,
+                    spread_1y1y=spread_1y1y,
+                    spread_2y1y=spread_2y1y,
+                    spread_3y1y=spread_3y1y,
+                    spread_4y1y=spread_4y1y,
+                    spread_5y2y=spread_5y2y,
+                    spread_7y3y=spread_7y3y,
+                    spread_10y2y=spread_10y2y,
+                    spread_12y3y=spread_12y3y,
+                )
+            st.session_state["_caplet_curve_key"] = _caplet_key
+        else:
+            caplet_vol_curve = st.session_state.get("caplet_vol_curve_aud")
+        if caplet_vol_curve and len(caplet_vol_curve) > 0:
+            st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
+        if caplet_vol_curve is None or len(caplet_vol_curve) == 0:
+            caplet_vol_curve = st.session_state.get("caplet_vol_curve_aud")
+        if caplet_vol_curve is None or len(caplet_vol_curve) == 0:
+            caplet_vol_curve = {t: 35.0 for t in [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0]}
+
         # ── ATM CFS Straddle Table ──────────────────────────────────
         st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
         if "atm_cfs_expanded" not in st.session_state:
@@ -8961,39 +8992,7 @@ def caps_floors_tab(vol_mode: str):
             else:
                 st.info("Generate swaption premiums first to compute ATM CFS straddles.")
 
-
-        # Build caplet curve — only rebuild when spreads or ATM surface change
-        atm = get_working_atm_surface(ccy)
-        _atm_hash = st.session_state.get(f"_atm_hash_{ccy}", 0)
-        _caplet_key = (spread_3m1y, spread_1y1y, spread_2y1y, spread_3y1y,
-                       spread_4y1y, spread_5y2y, spread_7y3y, spread_10y2y, spread_12y3y,
-                       _atm_hash)
-        _cached_key = st.session_state.get("_caplet_curve_key")
-        if _cached_key != _caplet_key or st.session_state.get("caplet_vol_curve_aud") is None:
-            with st.spinner("⚙️ Bootstrapping caplet vol curve..."):
-                caplet_vol_curve = build_caplet_vol_curve(
-                    ccy, atm, None,
-                    spread_3m1y=spread_3m1y,
-                    spread_1y1y=spread_1y1y,
-                    spread_2y1y=spread_2y1y,
-                    spread_3y1y=spread_3y1y,
-                    spread_4y1y=spread_4y1y,
-                    spread_5y2y=spread_5y2y,
-                    spread_7y3y=spread_7y3y,
-                    spread_10y2y=spread_10y2y,
-                    spread_12y3y=spread_12y3y,
-                )
-            st.session_state["_caplet_curve_key"] = _caplet_key
-        else:
-            caplet_vol_curve = st.session_state.get("caplet_vol_curve_aud")
-        
-        if caplet_vol_curve and len(caplet_vol_curve) > 0:
-            st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
-        if caplet_vol_curve is None or len(caplet_vol_curve) == 0:
-            caplet_vol_curve = st.session_state.get("caplet_vol_curve_aud")
-        if caplet_vol_curve is None or len(caplet_vol_curve) == 0:
-            st.warning("No ATM surface found. Falling back to 35bp flat.")
-            caplet_vol_curve = {t: 35.0 for t in [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0]}
+        # caplet curve already built above — use it directly
         
         # Show the curve
         if caplet_vol_curve:
