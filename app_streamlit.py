@@ -16607,6 +16607,7 @@ def main():
         with st.expander("🗂️ Show/Hide Tabs", expanded=False):
             _ALL_TABS = [
                 ("🏡 Home", "tab_show_home"),
+                ("📡 SDR Live", "tab_show_sdr"),
                 ("📋 IRS / Vol Upload", "tab_show_upload"),
                 ("📏 Curves", "tab_show_curves"),
                 ("📈 FWD IRS Analysis", "tab_show_fwd"),
