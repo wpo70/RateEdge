@@ -14760,6 +14760,7 @@ def rv_tab():
                                  hide_index=True)
                     st.caption("Theta P&L = P&L with zero rate move at that horizon. "
                                "Breakeven range = rate move where P&L = 0 (straddle sellers only).")
+    if _rv_active == 3:
         st.markdown("### Cap/Floor RV Trade Recommendations")
         st.caption("Forward BBSW path vs caplet vol   —   find richness/cheapness by strike and maturity.")
 
