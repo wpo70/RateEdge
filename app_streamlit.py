@@ -8811,6 +8811,20 @@ def caps_floors_tab(vol_mode: str):
                 st.caption("Publishes ATM BP vols, Bachelier straddle premiums, FWD ATM IRS rates and CFS mids. Generate forward matrix first.")
 
 
+        # ── CALCULATE CFS VALUES — must run before ATM CFS table and caplet build ──
+        if "cfs_table_data" in st.session_state:
+            spreads_map = {
+                "3m1y": spread_3m1y, "1y1y": spread_1y1y, "2y1y": spread_2y1y,
+                "3y1y": spread_3y1y, "4y1y": spread_4y1y, "5y2y": spread_5y2y,
+                "7y3y": spread_7y3y, "10y2y": spread_10y2y, "12y3y": spread_12y3y
+            }
+            for label in ["3m1y", "1y1y", "2y1y", "3y1y", "4y1y", "5y2y", "7y3y", "10y2y", "12y3y"]:
+                if label in st.session_state["cfs_table_data"]:
+                    swpt = st.session_state["cfs_table_data"][label].get("swaption", "")
+                    spread = spreads_map.get(label, 0)
+                    if swpt != "":
+                        st.session_state["cfs_table_data"][label]["cfs_straddle"] = swpt + spread
+
         # ── ATM CFS Straddle Table ──────────────────────────────────
         st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
         if "atm_cfs_expanded" not in st.session_state:
@@ -8947,21 +8961,7 @@ def caps_floors_tab(vol_mode: str):
             else:
                 st.info("Generate swaption premiums first to compute ATM CFS straddles.")
 
-                # CALCULATE CFS VALUES BEFORE BUILDING VOL CURVE
-        if "cfs_table_data" in st.session_state:
-            spreads_map = {
-                "3m1y": spread_3m1y, "1y1y": spread_1y1y, "2y1y": spread_2y1y,
-                "3y1y": spread_3y1y, "4y1y": spread_4y1y, "5y2y": spread_5y2y,
-                "7y3y": spread_7y3y, "10y2y": spread_10y2y, "12y3y": spread_12y3y
-            }
-            for label in ["3m1y", "1y1y", "2y1y", "3y1y", "4y1y", "5y2y", "7y3y", "10y2y", "12y3y"]:
-                if label in st.session_state["cfs_table_data"]:
-                    swpt = st.session_state["cfs_table_data"][label].get("swaption", "")
-                    spread = spreads_map.get(label, 0)
-                    if swpt != "":
-                        cfs_straddle = swpt + spread
-                        st.session_state["cfs_table_data"][label]["cfs_straddle"] = cfs_straddle
-        
+
         # Build caplet curve — only rebuild when spreads or ATM surface change
         atm = get_working_atm_surface(ccy)
         _atm_hash = st.session_state.get(f"_atm_hash_{ccy}", 0)
