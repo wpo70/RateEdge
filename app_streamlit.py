@@ -2086,7 +2086,7 @@ def build_caplet_vol_curve_from_surface(ccy: str, atm_surface):
             sigma_n = vol_bp / 10000.0
             sqrt_t = math.sqrt(max(exp_y, 0.001))
             return 2 * 0.3989 * sigma_n * sqrt_t * ann * 10000
-        except:
+        except Exception:
             return None
 
     # Build cumulative CFS targets from swaption surface alone
