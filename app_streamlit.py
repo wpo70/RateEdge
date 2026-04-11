@@ -12491,8 +12491,8 @@ def _load_rv_data():
     except Exception:
         return {"swap_rates": [], "vol_surface": []}
 
-@st.cache_data(ttl=300, show_spinner=False)
-def _load_rv_vols_from_db(ccy: str = "AUD", limit: int = 60) -> pd.DataFrame:
+@st.cache_data(ttl=600, show_spinner=False)
+def _load_rv_vols_from_db(ccy: str = "AUD", limit: int = 30) -> pd.DataFrame:
     """Load vol history from Supabase vol_history table. Returns long-format DataFrame."""
     if not HAS_POSTGRES:
         return pd.DataFrame()
@@ -13014,19 +13014,28 @@ def rv_tab():
                        "Realised pulled from swap_rates history.")
             _vrp_exp_lbls  = ["1m", "3m", "6m", "1y", "2y"]
             _vrp_tn_list   = [2, 5, 10, 15, 20]
-            _vrp_surf_rows = []
-            for _vtn in _vrp_tn_list:
-                _rv21 = _compute_realised_vol_db(ccy, float(_vtn), 21)
-                row_vrp = {"Tenor": f"{_vtn}Y", "Realised 21d (bp)": _rv21}
-                for _vexp in _vrp_exp_lbls:
-                    iv = get_matrix_value(atm, _vexp, float(_vtn))
-                    if iv and _rv21 and _rv21 > 0:
-                        _mtgs_n = len(_meetings_in_window(ccy, _vexp))
-                        _iv_adj = iv - _mtgs_n * _CB_MEETING_PREMIUM_BP.get(ccy, 3.0)
-                        row_vrp[_vexp] = round(_iv_adj / _rv21, 2)
-                    else:
-                        row_vrp[_vexp] = None
-                _vrp_surf_rows.append(row_vrp)
+
+            # Cache VRP rows — realised vol changes at most daily
+            _vrp_cache_key = (ccy, st.session_state.get(f"_atm_hash_{ccy}", 0))
+            if st.session_state.get("_vrp_surf_key") != _vrp_cache_key or \
+               st.session_state.get("_vrp_surf_rows") is None:
+                _vrp_surf_rows = []
+                for _vtn in _vrp_tn_list:
+                    _rv21 = _compute_realised_vol_db(ccy, float(_vtn), 21)
+                    row_vrp = {"Tenor": f"{_vtn}Y", "Realised 21d (bp)": _rv21}
+                    for _vexp in _vrp_exp_lbls:
+                        iv = get_matrix_value(atm, _vexp, float(_vtn))
+                        if iv and _rv21 and _rv21 > 0:
+                            _mtgs_n = len(_meetings_in_window(ccy, _vexp))
+                            _iv_adj = iv - _mtgs_n * _CB_MEETING_PREMIUM_BP.get(ccy, 3.0)
+                            row_vrp[_vexp] = round(_iv_adj / _rv21, 2)
+                        else:
+                            row_vrp[_vexp] = None
+                    _vrp_surf_rows.append(row_vrp)
+                st.session_state["_vrp_surf_key"]  = _vrp_cache_key
+                st.session_state["_vrp_surf_rows"] = _vrp_surf_rows
+            else:
+                _vrp_surf_rows = st.session_state["_vrp_surf_rows"]
 
             _vrp_surf_df = pd.DataFrame(_vrp_surf_rows).set_index("Tenor")
             _vrp_surf_exp_cols = [c for c in _vrp_exp_lbls if c in _vrp_surf_df.columns]
@@ -13061,17 +13070,24 @@ def rv_tab():
             with st.expander("📉 Realised Vol Surface (swap_rates history)"):
                 st.caption("21-day annualised realised normal vol (bp) per tenor. "
                            "Computed from daily swap rate differences in swap_rates table.")
-                _rv_windows = [("5d", 5), ("21d", 21), ("63d", 63)]
+                _rv_windows  = [("5d", 5), ("21d", 21), ("63d", 63)]
                 _rv_tn_list2 = [2, 5, 10, 15, 20]
-                _rv_real_rows = []
-                for _rtn in _rv_tn_list2:
-                    rrow = {"Tenor": f"{_rtn}Y"}
-                    for _wlbl, _wdays in _rv_windows:
-                        rv = _compute_realised_vol_db(ccy, float(_rtn), _wdays)
-                        rrow[_wlbl] = rv
-                    # Also show current 1m implied for quick VRP comparison
-                    rrow["1m Implied"] = get_matrix_value(atm, "1m", float(_rtn))
-                    _rv_real_rows.append(rrow)
+
+                _rv_real_key = (ccy, st.session_state.get(f"_atm_hash_{ccy}", 0))
+                if st.session_state.get("_rv_real_surf_key") != _rv_real_key or \
+                   st.session_state.get("_rv_real_rows") is None:
+                    _rv_real_rows = []
+                    for _rtn in _rv_tn_list2:
+                        rrow = {"Tenor": f"{_rtn}Y"}
+                        for _wlbl, _wdays in _rv_windows:
+                            rrow[_wlbl] = _compute_realised_vol_db(ccy, float(_rtn), _wdays)
+                        rrow["1m Implied"] = get_matrix_value(atm, "1m", float(_rtn))
+                        _rv_real_rows.append(rrow)
+                    st.session_state["_rv_real_surf_key"] = _rv_real_key
+                    st.session_state["_rv_real_rows"]     = _rv_real_rows
+                else:
+                    _rv_real_rows = st.session_state["_rv_real_rows"]
+
                 _rv_real_df = pd.DataFrame(_rv_real_rows).set_index("Tenor")
                 st.dataframe(
                     _rv_real_df.style.format("{:.1f}", na_rep="—")
