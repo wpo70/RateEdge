@@ -7879,7 +7879,10 @@ def swaptions_tab(vol_mode: str):
                          delay=delay_sel if is_midcurve else "None",
                          is_midcurve=is_midcurve,
                          notional_mm=notional, strike=strike_pct, forward=fwd_pct, pv=res["pv"],
-                         pv_bp=display_prem_bp, premium_type=premium_type,
+                         pv_bp=display_prem_bp,
+                         pv_bp_spot=res.get("pv_bp_spot", display_prem_bp),
+                         pv_bp_fwd=res.get("pv_bp_fwd", display_prem_bp),
+                         premium_type=premium_type,
                          delta=res["delta"], gamma=res["gamma"], vega=res["vega"],
                          theta=res["theta"], bpv=res["bpv"], label=label,
                          legs=[{"name": l[0], "strike": l[1], "qty": l[2],
@@ -7987,12 +7990,12 @@ def swaptions_tab(vol_mode: str):
 
         # Header row — light grey background
         st.markdown(
-            "<div style='display:grid;grid-template-columns:2.5% 18.5% 6.0% 7.0% 6.0% 8.0% 8.0% 8.0% 8.0% 14.5% 7.0% 6.5%;"
+            "<div style='display:grid;grid-template-columns:2.5% 16% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 13% 6.5% 6.0%;"
             "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
             "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
             "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
-            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Prem(bp)</span>"
-            "<span>PV($k)</span><span>Status</span><span>Tix</span><span>Del</span></div>",
+            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot(bp)</span>"
+            "<span>Fwd(bp)</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Del</span></div>",
             unsafe_allow_html=True)
 
         for idx, row in df.iterrows():
@@ -8006,20 +8009,25 @@ def swaptions_tab(vol_mode: str):
             _cur_status = st.session_state.get(_status_key, "—")
             _bg = _STATUS_COLOURS.get(_cur_status, "white")
 
-            _rc = st.columns([0.25, 1.85, 0.58, 0.68, 0.58, 0.78, 0.78, 0.78, 0.78, 1.45, 0.70, 0.65])
+            # Use stored spot/fwd premiums
+            _fwd_bp      = float(row.get('pv_bp_fwd', row.get('pv_bp', 0)))
+            _spot_bp_disp = float(row.get('pv_bp_spot', row.get('pv_bp', 0)))
+
+            _rc = st.columns([0.25, 1.60, 0.53, 0.63, 0.53, 0.68, 0.68, 0.68, 0.68, 0.68, 1.30, 0.65, 0.60])
             for _ci, _val in enumerate([
                 f"{idx+1}", _struct, _expiry, _tenor,
                 f"{float(row.get('notional_mm',100)):.0f}mm",
                 f"{float(row.get('strike',0)):.4f}",
                 f"{float(row.get('forward',0)):.4f}",
-                f"{float(row.get('pv_bp',0)):.2f}",
+                f"{_spot_bp_disp:.2f}",
+                f"{_fwd_bp:.2f}",
                 f"{float(row.get('pv',0))/1000:,.1f}",
             ]):
                 _rc[_ci].markdown(
                     f"<div style='background:{_bg};padding:5px 3px;font-size:12px;color:#1e293b;"
                     f"border-bottom:1px solid #e2e8f0'>{_val}</div>", unsafe_allow_html=True)
 
-            _new_status = _rc[9].selectbox("", _STATUS_OPTS,
+            _new_status = _rc[10].selectbox("", _STATUS_OPTS,
                 index=_STATUS_OPTS.index(_cur_status) if _cur_status in _STATUS_OPTS else 0,
                 key=f"sw_status_{idx}", label_visibility="collapsed")
             if _new_status == "Clear Trade":
@@ -8033,10 +8041,10 @@ def swaptions_tab(vol_mode: str):
                 st.session_state[_status_key] = _new_status
                 st.rerun()
 
-            if can_quick_tix() and _rc[10].button("📋", key=f"sw_tix_{idx}", help="Quick Tix"):
+            if can_quick_tix() and _rc[11].button("📋", key=f"sw_tix_{idx}", help="Quick Tix"):
                 st.session_state["_sw_tix_open"] = idx if st.session_state.get("_sw_tix_open") != idx else -1
 
-            if _rc[11].button("🗑️", key=f"sw_del_{idx}", help="Remove"):
+            if _rc[12].button("🗑️", key=f"sw_del_{idx}", help="Remove"):
                 st.session_state["swaption_portfolio"].pop(idx)
                 st.session_state["portfolio"] = [p for p in st.session_state["portfolio"]
                                                   if p.get("label") != _label or p.get("expiry") != _expiry]
@@ -9363,6 +9371,7 @@ def caps_floors_tab(vol_mode: str):
                     forward=fwd * 100.0,
                     pv=pv_total,
                     pv_bp=pv_bp,
+                    pv_bp_fwd=pv_bp_fwd,
                     delta=delta_total,
                     gamma=gamma_total,
                     vega=vega_total,
@@ -9471,12 +9480,12 @@ def caps_floors_tab(vol_mode: str):
         _CF_STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade"]
 
         st.markdown(
-            "<div style='display:grid;grid-template-columns:2.5% 18.5% 6.0% 7.0% 6.0% 8.0% 8.0% 8.0% 8.0% 14.5% 7.0% 6.5%;"
+            "<div style='display:grid;grid-template-columns:2.5% 16% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 13% 6.5% 6.0%;"
             "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
             "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
             "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
-            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Prem(bp)</span>"
-            "<span>PV($k)</span><span>Status</span><span>Tix</span><span>Del</span></div>",
+            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot(bp)</span>"
+            "<span>Fwd(bp)</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Del</span></div>",
             unsafe_allow_html=True)
 
         for _cidx, _crow in _df.iterrows():
@@ -9486,19 +9495,22 @@ def caps_floors_tab(vol_mode: str):
             _cf_sk = f"_cf_status_{_cl}_{_cex}_{_cten}"
             _cf_cur = st.session_state.get(_cf_sk, "—")
             _cf_bg  = _CF_STATUS_COLOURS.get(_cf_cur, "white")
-            _crc = st.columns([0.25, 1.85, 0.58, 0.68, 0.58, 0.78, 0.78, 0.78, 0.78, 1.45, 0.70, 0.65])
+            _cf_spot = float(_crow.get('pv_bp', 0))
+            _cf_fwd  = float(_crow.get('pv_bp_fwd', _cf_spot))
+            _crc = st.columns([0.25, 1.60, 0.53, 0.63, 0.53, 0.68, 0.68, 0.68, 0.68, 0.68, 1.30, 0.65, 0.60])
             for _ci2, _val2 in enumerate([
                 f"{_cidx+1}", _cst, _cex, _cten,
                 f"{float(_crow.get('notional_mm',100)):.0f}mm",
                 f"{float(_crow.get('strike',0)):.4f}",
                 f"{float(_crow.get('forward',0)):.4f}",
-                f"{float(_crow.get('pv_bp',0)):.2f}",
+                f"{_cf_spot:.2f}",
+                f"{_cf_fwd:.2f}",
                 f"{float(_crow.get('pv',0))/1000:,.1f}",
             ]):
                 _crc[_ci2].markdown(
                     f"<div style='background:{_cf_bg};padding:5px 3px;font-size:12px;color:#1e293b;"
                     f"border-bottom:1px solid #e2e8f0'>{_val2}</div>", unsafe_allow_html=True)
-            _cf_new = _crc[9].selectbox("", _CF_STATUS_OPTS,
+            _cf_new = _crc[10].selectbox("", _CF_STATUS_OPTS,
                 index=_CF_STATUS_OPTS.index(_cf_cur) if _cf_cur in _CF_STATUS_OPTS else 0,
                 key=f"cf_status_{_cidx}", label_visibility="collapsed")
             if _cf_new == "Clear Trade":
@@ -9508,9 +9520,9 @@ def caps_floors_tab(vol_mode: str):
                 st.rerun()
             elif _cf_new != _cf_cur:
                 st.session_state[_cf_sk] = _cf_new; st.rerun()
-            if can_quick_tix() and _crc[10].button("📋", key=f"cf_tix_{_cidx}", help="Quick Tix"):
+            if can_quick_tix() and _crc[11].button("📋", key=f"cf_tix_{_cidx}", help="Quick Tix"):
                 st.session_state["_cf_tix_open"] = _cidx if st.session_state.get("_cf_tix_open") != _cidx else -1
-            if _crc[11].button("🗑️", key=f"cf_del_{_cidx}", help="Remove"):
+            if _crc[12].button("🗑️", key=f"cf_del_{_cidx}", help="Remove"):
                 st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", [])
                                                   if not (t.get("instrument_type")=="Cap/Floor" and t.get("label")==_cl)]
                 _save_portfolio(); st.rerun()
