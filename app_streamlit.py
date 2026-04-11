@@ -2204,7 +2204,8 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
     cumulative_leg_prems = {}
     
     def get_swaption_premium(expiry_label, tenor_y):
-        """Get swaption PREMIUM - calculate directly from vol surface"""
+        """Get swaption PREMIUM - spot premium for bootstrap targets.
+        atm_prem_matrix stores FORWARD premiums; convert back to spot by × df_exp."""
         try:
             # Get curve and vol
             _cc = st.session_state.get("config_curves", {}).get(ccy)
@@ -2213,18 +2214,31 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
             ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
             if atm_surface is None or curve is None:
                 return None
-            
+
             vol_bp = get_matrix_value(atm_surface, expiry_label, tenor_y)
             if vol_bp is None:
                 return None
-            
-            # Read directly from atm_prem_matrix — same number as Curves tab
+
+            # Read directly from atm_prem_matrix — stored as FORWARD premium
+            # Must convert back to SPOT premium to match price_caplets_flat_vol
             _pm = st.session_state.get("atm_prem_matrix", {}).get(ccy, {}).get("prem")
             if _pm is not None and not _pm.empty:
                 v = get_matrix_value(_pm, expiry_label, tenor_y)
                 if v is not None:
-                    return float(v)
-            # Fallback
+                    # Convert forward → spot: spot = fwd × df_exp
+                    exp_y = label_to_years(expiry_label)
+                    if ois_curve is not None:
+                        try:
+                            _ox = ois_curve[ois_curve.columns[0]].to_numpy().astype(float)
+                            _oy = ois_curve[ois_curve.columns[1]].to_numpy().astype(float) / 100.0
+                            _r  = float(np.interp(exp_y, _ox, _oy))
+                            df_exp = math.exp(-_r * exp_y)
+                        except Exception:
+                            df_exp = math.exp(-0.04 * exp_y)
+                    else:
+                        df_exp = math.exp(-0.04 * exp_y)
+                    return float(v) * df_exp  # forward → spot
+            # Fallback: direct spot formula
             exp_y = label_to_years(expiry_label)
             _, ann, _ = forward_and_annuity_from_curve(curve, ccy, exp_y, tenor_y, None)
             sigma_n = vol_bp / 10000.0
@@ -2252,6 +2266,19 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
     # Get EXACT CFS straddle from table OR calculate directly
     table_data_1y = st.session_state.get("cfs_table_data", {}).get("3m1y", {})
     cfs_1y_straddle = table_data_1y.get("cfs_straddle", None)
+
+    # cfs_straddle from cfs_table_data = forward premium — convert to spot
+    if cfs_1y_straddle is not None and cfs_1y_straddle > 0:
+        _ois_1y = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+        if _ois_1y is None: _ois_1y = get_basis_curve(ccy, "ois")
+        try:
+            if _ois_1y is not None:
+                _ox1 = _ois_1y[_ois_1y.columns[0]].to_numpy().astype(float)
+                _oy1 = _ois_1y[_ois_1y.columns[1]].to_numpy().astype(float) / 100.0
+                _r1  = float(np.interp(0.25, _ox1, _oy1))
+                cfs_1y_straddle = cfs_1y_straddle * math.exp(-_r1 * 0.25)
+        except Exception:
+            cfs_1y_straddle = cfs_1y_straddle * math.exp(-0.04 * 0.25)
     
     if cfs_1y_straddle is None or cfs_1y_straddle <= 0:
         # Calculate directly: swaption premium + spread
@@ -2335,6 +2362,25 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         
         wedge_data = st.session_state.get("cfs_table_data", {}).get(table_label, {})
         wedge_straddle = wedge_data.get("cfs_straddle", None)
+
+        # cfs_straddle from cfs_table_data = swaption_forward_prem + spread
+        # Convert forward → spot by × df(swaption_expiry) so bootstrap targets
+        # are consistent with price_gap_caplets which prices spot premiums
+        if wedge_straddle is not None and wedge_straddle > 0:
+            _exp_y_w = label_to_years(expiry)
+            _ois_cb_w = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+            _ois_w = _ois_cb_w if _ois_cb_w is not None else get_basis_curve(ccy, "ois")
+            try:
+                if _ois_w is not None:
+                    _ox_w = _ois_w[_ois_w.columns[0]].to_numpy().astype(float)
+                    _oy_w = _ois_w[_ois_w.columns[1]].to_numpy().astype(float) / 100.0
+                    _r_w  = float(np.interp(_exp_y_w, _ox_w, _oy_w))
+                    df_w  = math.exp(-_r_w * _exp_y_w)
+                else:
+                    df_w = math.exp(-0.04 * _exp_y_w)
+            except Exception:
+                df_w = math.exp(-0.04 * _exp_y_w)
+            wedge_straddle = wedge_straddle * df_w  # forward → spot
         
         if wedge_straddle is None or wedge_straddle <= 0:
             wedge_swaption_straddle = get_swaption_premium(expiry, tenor)
