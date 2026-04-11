@@ -14802,7 +14802,7 @@ def rv_tab():
             r_pts = [p["Fwd 3m BBSW (%)"] for p in fwd_bbsw_pts] if fwd_bbsw_pts else []
 
             # Idea 1: curve shape → cap vs floor preference
-            curve_slope_2s5s = _par_rate(5) - _par_rate_ss(2)  # 5Y S/S vs 2Y Q/Q adjusted to S/S equivalent
+            curve_slope_2s5s = _par_rate(5) - _par_rate(2)
             fwd_peak_t = t_pts[r_pts.index(max(r_pts))] if r_pts else 0
 
             if curve_slope_2s5s > 0.20:  # steep → rates going up
