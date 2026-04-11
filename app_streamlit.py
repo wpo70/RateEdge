@@ -13391,31 +13391,39 @@ def rv_tab():
             if st.button("⚡ Generate Trade Ideas", key="rv_gen_ideas", type="primary"):
                 st.session_state[_rv_ideas_key] = True
                 st.session_state.pop("_rv_ideas_cache", None)
+                st.session_state.pop("_rv_precompute_cache", None)
             ideas = []
             if not st.session_state.get(_rv_ideas_key):
                 st.info("Click **⚡ Generate Trade Ideas** to run the idea engine.")
 
             # ══════════════════════════════════════════════════════════
             # PRE-COMPUTE: realised vol, ratio stats, meetings, MOVE
+            # Only runs when ideas are active — cached in session state
             # ══════════════════════════════════════════════════════════
             _rv_tenors   = [2.0, 5.0, 10.0, 15.0, 20.0]
             _rv_tn_strs  = ["2Y", "5Y", "10Y", "15Y", "20Y"]
             _rv_exp_lbls = ["1m", "3m", "6m", "1y", "2y"]
 
-            # Realised vols by tenor (21-day window)
-            _realised = {tn: _compute_realised_vol_db(ccy, tn, 21) for tn in _rv_tenors}
-
-            # Historical 1m/1y ratio stats
-            _ratio_stats = _load_vol_ratio_stats_db(ccy)
-
-            # Forward vol consistency stats
-            _fv_stats = _compute_fwd_vol_surface_stats(ccy)
-
-            # CB meetings per expiry window
-            _meetings = {e: _meetings_in_window(ccy, e) for e in _rv_exp_lbls}
-
-            # MOVE index (USD only; SPI placeholder for AUD)
-            _move_val = _fetch_move_index() if ccy == "USD" else None
+            _rv_precompute = st.session_state.get("_rv_precompute_cache")
+            if st.session_state.get(_rv_ideas_key) and _rv_precompute is None:
+                _realised    = {tn: _compute_realised_vol_db(ccy, tn, 21) for tn in _rv_tenors}
+                _ratio_stats = _load_vol_ratio_stats_db(ccy)
+                _fv_stats    = _compute_fwd_vol_surface_stats(ccy)
+                _meetings    = {e: _meetings_in_window(ccy, e) for e in _rv_exp_lbls}
+                _move_val    = _fetch_move_index() if ccy == "USD" else None
+                st.session_state["_rv_precompute_cache"] = {
+                    "realised": _realised, "ratio_stats": _ratio_stats,
+                    "fv_stats": _fv_stats, "meetings": _meetings, "move_val": _move_val
+                }
+            elif _rv_precompute is not None:
+                _realised    = _rv_precompute["realised"]
+                _ratio_stats = _rv_precompute["ratio_stats"]
+                _fv_stats    = _rv_precompute["fv_stats"]
+                _meetings    = _rv_precompute["meetings"]
+                _move_val    = _rv_precompute["move_val"]
+            else:
+                _realised = {}; _ratio_stats = {}; _fv_stats = {}
+                _meetings = {e: 0 for e in _rv_exp_lbls}; _move_val = None
 
             # ── Context panel (always shown once surface loaded) ────────────
             with st.expander("📊 Market Context — Realised Vol, VRP & CB Calendar", expanded=True):
@@ -17601,7 +17609,7 @@ def sod_report_tab():
             _io_df.columns = ["Expiry"] + list(_io_df.columns[1:])
             st.session_state["_sod_implied_open"] = _io_df.copy()
 
-            # ── Compute AUD premium matrices ─────────────────────────
+            # ── Compute AUD premium matrices — cached per SOD session ────
             _aud_curve = get_ccy_curve("AUD")
             _aud_prem_prev   = pd.DataFrame()
             _aud_prem_open   = pd.DataFrame()
@@ -17609,24 +17617,39 @@ def sod_report_tab():
 
             if _aud_curve is not None and not _aud_curve.empty:
                 def _atm_df_with_expiry(idx_df):
-                    """Ensure ATM df has Expiry as column, not index."""
                     d = idx_df.copy()
                     if "Expiry" not in d.columns:
                         d = d.reset_index().rename(columns={"index": "Expiry"})
                     return d
 
-                _aud_prem_prev, _ = calculate_atm_premium_matrix(
-                    "AUD", _aud_curve, _atm_df_with_expiry(_aud_atm)
+                # Cache key: prev snapshot label + open snapshot hash
+                _sod_prem_key = (
+                    st.session_state.get("sod_aud_prev_label", ""),
+                    st.session_state.get("sod_usd_shift", 0),
+                    id(_aud_atm),
                 )
-                _aud_prem_open, _ = calculate_atm_premium_matrix(
-                    "AUD", _aud_curve, _atm_df_with_expiry(_implied_open)
-                )
-                if not _aud_prem_prev.empty and not _aud_prem_open.empty:
-                    _pchg_exp = [e for e in _aud_prem_open.index if e in _aud_prem_prev.index]
-                    _pchg_ten = [c for c in _aud_prem_open.columns if c in _aud_prem_prev.columns]
-                    if _pchg_exp and _pchg_ten:
-                        _aud_prem_chg = _aud_prem_open.loc[_pchg_exp, _pchg_ten].astype(float) - \
-                                        _aud_prem_prev.loc[_pchg_exp, _pchg_ten].astype(float)
+                _sod_prem_cached = st.session_state.get("_sod_prem_key") == _sod_prem_key
+                if _sod_prem_cached and st.session_state.get("_sod_prem_prev") is not None:
+                    _aud_prem_prev = st.session_state["_sod_prem_prev"]
+                    _aud_prem_open = st.session_state["_sod_prem_open"]
+                    _aud_prem_chg  = st.session_state["_sod_prem_chg"]
+                else:
+                    _aud_prem_prev, _ = calculate_atm_premium_matrix(
+                        "AUD", _aud_curve, _atm_df_with_expiry(_aud_atm)
+                    )
+                    _aud_prem_open, _ = calculate_atm_premium_matrix(
+                        "AUD", _aud_curve, _atm_df_with_expiry(_implied_open)
+                    )
+                    if not _aud_prem_prev.empty and not _aud_prem_open.empty:
+                        _pchg_exp = [e for e in _aud_prem_open.index if e in _aud_prem_prev.index]
+                        _pchg_ten = [c for c in _aud_prem_open.columns if c in _aud_prem_prev.columns]
+                        if _pchg_exp and _pchg_ten:
+                            _aud_prem_chg = _aud_prem_open.loc[_pchg_exp, _pchg_ten].astype(float) - \
+                                            _aud_prem_prev.loc[_pchg_exp, _pchg_ten].astype(float)
+                    st.session_state["_sod_prem_key"]  = _sod_prem_key
+                    st.session_state["_sod_prem_prev"] = _aud_prem_prev
+                    st.session_state["_sod_prem_open"] = _aud_prem_open
+                    st.session_state["_sod_prem_chg"]  = _aud_prem_chg
 
             # ── Display: toggle Vol vs Premium ───────────────────────
             if _show_bp:
