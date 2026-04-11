@@ -8633,14 +8633,7 @@ def caps_floors_tab(vol_mode: str):
                         json.dump({k: st.session_state[k] for k, *_ in ROW_DATA}, _f)
                 except Exception:
                     pass
-                # Also persist to DB
-                if HAS_POSTGRES:
-                    try:
-                        _user_id = st.session_state.get("username", "default")
-                        _spread_data = {k: st.session_state[k] for k, *_ in ROW_DATA}
-                        save_user_config(_user_id, "cf_spreads", ccy, _spread_data)
-                    except Exception:
-                        pass
+                # DB persist skipped during calibration — use Apply Spreads to save when ready
                 # Bust caplet and CFS cache so curve re-builds with new spreads
                 st.session_state.pop("_caplet_curve_key", None)
                 st.session_state.pop("_atm_cfs_cache_key", None)
@@ -8971,25 +8964,25 @@ def caps_floors_tab(vol_mode: str):
         
         # Build caplet curve — only rebuild when spreads or ATM surface change
         atm = get_working_atm_surface(ccy)
-        # Use stable ATM hash — id() changes every render if object is recreated
         _atm_hash = st.session_state.get(f"_atm_hash_{ccy}", 0)
         _caplet_key = (spread_3m1y, spread_1y1y, spread_2y1y, spread_3y1y,
                        spread_4y1y, spread_5y2y, spread_7y3y, spread_10y2y, spread_12y3y,
                        _atm_hash)
         _cached_key = st.session_state.get("_caplet_curve_key")
         if _cached_key != _caplet_key or st.session_state.get("caplet_vol_curve_aud") is None:
-            caplet_vol_curve = build_caplet_vol_curve(
-                ccy, atm, None,
-                spread_3m1y=spread_3m1y,
-                spread_1y1y=spread_1y1y,
-                spread_2y1y=spread_2y1y,
-                spread_3y1y=spread_3y1y,
-                spread_4y1y=spread_4y1y,
-                spread_5y2y=spread_5y2y,
-                spread_7y3y=spread_7y3y,
-                spread_10y2y=spread_10y2y,
-                spread_12y3y=spread_12y3y,
-            )
+            with st.spinner("⚙️ Bootstrapping caplet vol curve..."):
+                caplet_vol_curve = build_caplet_vol_curve(
+                    ccy, atm, None,
+                    spread_3m1y=spread_3m1y,
+                    spread_1y1y=spread_1y1y,
+                    spread_2y1y=spread_2y1y,
+                    spread_3y1y=spread_3y1y,
+                    spread_4y1y=spread_4y1y,
+                    spread_5y2y=spread_5y2y,
+                    spread_7y3y=spread_7y3y,
+                    spread_10y2y=spread_10y2y,
+                    spread_12y3y=spread_12y3y,
+                )
             st.session_state["_caplet_curve_key"] = _caplet_key
         else:
             caplet_vol_curve = st.session_state.get("caplet_vol_curve_aud")
