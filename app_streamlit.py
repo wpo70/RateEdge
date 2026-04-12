@@ -19093,6 +19093,176 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         st.markdown("**USD Change Matrix available above.** "
                     "Load an AUD snapshot to compute implied AUD opening vols.")
 
+    # ══════════════════════════════════════════════════════════════════════
+    # RV DAILY REPORT
+    # ══════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("### ⚡ RV Daily Report")
+    st.caption("Top 3 convictions from the RV engine + overnight rate/vol impact on previous SOD calls.")
+
+    _rv_col1, _rv_col2 = st.columns([2, 3])
+
+    with _rv_col1:
+        if st.button("🔄 Update RV Snapshot", key="sod_rv_update", type="primary",
+                     help="Runs RV engine and saves current vol/rate snapshot as today's reference"):
+            _atm_now = get_working_atm_surface("AUD")
+            _curve_now = get_ccy_curve("AUD")
+            if _atm_now is not None and _curve_now is not None:
+                # Capture key ATM levels and curve points
+                _snap = {
+                    "date": str(datetime.date.today()),
+                    "atm": {},
+                    "curve": {},
+                    "ideas": st.session_state.get("_rv_ideas_cache", []),
+                }
+                for _e in ["1m","3m","6m","1y","2y"]:
+                    for _t in [2.0, 5.0, 10.0]:
+                        _v = get_matrix_value(_atm_now, _e, _t)
+                        if _v: _snap["atm"][f"{_e}_{int(_t)}Y"] = round(_v, 1)
+                try:
+                    _cx = _curve_now["MaturityY"].to_numpy().astype(float)
+                    _cy = _curve_now["ZeroRatePct"].to_numpy().astype(float)
+                    for _t in [2.0, 5.0, 10.0]:
+                        _snap["curve"][f"{int(_t)}Y"] = round(float(np.interp(_t, _cx, _cy)), 4)
+                except Exception: pass
+                st.session_state["rv_daily_snap_prev"] = st.session_state.get("rv_daily_snap_curr")
+                st.session_state["rv_daily_snap_curr"] = _snap
+                st.success(f"✅ RV snapshot saved for {_snap['date']}")
+                st.rerun()
+            else:
+                st.error("Load AUD curves and vol surface first.")
+
+    with _rv_col2:
+        if st.button("📋 Publish RV Report", key="sod_rv_publish", type="primary",
+                     help="Generates overnight review report"):
+            _curr = st.session_state.get("rv_daily_snap_curr")
+            _prev = st.session_state.get("rv_daily_snap_prev")
+            _ideas = st.session_state.get("_rv_ideas_cache", [])
+            if not _curr:
+                st.warning("Run Update RV Snapshot first.")
+            else:
+                st.session_state["rv_report_generated"] = True
+
+    # ── Report display ────────────────────────────────────────────────────
+    if st.session_state.get("rv_report_generated"):
+        _curr = st.session_state.get("rv_daily_snap_curr", {})
+        _prev = st.session_state.get("rv_daily_snap_prev", {})
+        _ideas = st.session_state.get("_rv_ideas_cache", [])
+        _top3  = sorted(_ideas, key=lambda x: x.get("Score",0), reverse=True)[:3] if _ideas else []
+
+        _today_str  = _curr.get("date", str(datetime.date.today()))
+        _prev_date  = _prev.get("date", "prior close") if _prev else "prior close"
+
+        # ── Rate / vol change summary ─────────────────────────────────
+        _chg_rows = []
+        if _prev and _curr:
+            for _k, _v_curr in _curr.get("atm", {}).items():
+                _v_prev = _prev.get("atm", {}).get(_k)
+                if _v_prev:
+                    _chg_rows.append({
+                        "Tenor": _k.replace("_","×"),
+                        "Prev (bp)": _v_prev,
+                        "Curr (bp)": _v_curr,
+                        "Chg (bp)": round(_v_curr - _v_prev, 1)
+                    })
+
+        _rate_chg_rows = []
+        if _prev and _curr:
+            for _k, _v_curr in _curr.get("curve", {}).items():
+                _v_prev = _prev.get("curve", {}).get(_k)
+                if _v_prev:
+                    _rate_chg_rows.append({
+                        "Tenor": _k,
+                        "Prev (%)": _v_prev,
+                        "Curr (%)": _v_curr,
+                        "Chg (bp)": round((_v_curr - _v_prev)*100, 1)
+                    })
+
+        # ── Report card ───────────────────────────────────────────────
+        st.markdown(f"""
+<div style='background:linear-gradient(135deg,#0f172a,#1e293b);border:1px solid #1e3a5f;
+border-radius:10px;padding:20px 24px;margin:8px 0'>
+<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:12px'>
+<span style='color:#38bdf8;font-size:1.1rem;font-weight:700'>RateEdge AUD IRO Daily</span>
+<span style='color:#64748b;font-size:0.85rem'>{_today_str} SOD | vs {_prev_date}</span>
+</div>
+""", unsafe_allow_html=True)
+
+        # Overnight move summary
+        if _rate_chg_rows:
+            _r_df = pd.DataFrame(_rate_chg_rows)
+            _max_chg = _r_df["Chg (bp)"].abs().max()
+            _move_dir = "higher" if _r_df["Chg (bp)"].mean() > 0 else "lower"
+            st.markdown(f"**Overnight:** AUD rates moved **{_move_dir}**, max move **{_max_chg:.1f}bp**.")
+
+        if _chg_rows:
+            _v_df = pd.DataFrame(_chg_rows)
+            _vol_dir = "higher" if _v_df["Chg (bp)"].mean() > 0 else "lower"
+            _vol_max = _v_df["Chg (bp)"].abs().max()
+            st.markdown(f"**Vol:** ATM vols **{_vol_dir}** overnight, max move **{_vol_max:.1f}bp**.")
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # ── Top 3 convictions ─────────────────────────────────────────
+        if _top3:
+            st.markdown("#### 🏆 Top 3 Convictions")
+            for _i, _idea in enumerate(_top3):
+                _score = _idea.get("Score", 0)
+                _col_a, _col_b = st.columns([3, 1])
+                with _col_a:
+                    st.markdown(f"**{_i+1}. {_idea.get('Type','')} — {_idea.get('Structure','')}**")
+                    st.markdown(f"_{_idea.get('Signal','')}_ | {_idea.get('Trade','')}")
+                    st.caption(_idea.get("Rationale",""))
+                with _col_b:
+                    _score_col = "#f59e0b" if _score > 50 else "#22c55e" if _score > 20 else "#94a3b8"
+                    st.markdown(f"<div style='text-align:center;padding:8px;background:#1e293b;border-radius:6px'>"
+                                f"<div style='color:{_score_col};font-size:1.3rem;font-weight:700'>{_score:.0f}</div>"
+                                f"<div style='color:#64748b;font-size:0.7rem'>Score</div></div>",
+                                unsafe_allow_html=True)
+                st.markdown("---")
+        else:
+            st.info("Generate trade ideas in the RV tab first, then publish the report.")
+
+        # ── Charts ────────────────────────────────────────────────────
+        if _chg_rows:
+            import plotly.graph_objects as go
+            _v_df = pd.DataFrame(_chg_rows)
+            _fig_rv = go.Figure(go.Bar(
+                x=_v_df["Tenor"], y=_v_df["Chg (bp)"],
+                marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _v_df["Chg (bp)"]],
+                text=[f"{v:+.1f}" for v in _v_df["Chg (bp)"]],
+                textposition="outside"
+            ))
+            _fig_rv.update_layout(
+                title="Overnight ATM Vol Change (bp)",
+                yaxis_title="Change (bp)", xaxis_title="",
+                template="plotly_dark", height=280,
+                margin=dict(t=40, b=40, l=40, r=20),
+                showlegend=False
+            )
+            st.plotly_chart(_fig_rv, use_container_width=True)
+
+        if _rate_chg_rows:
+            _r_df = pd.DataFrame(_rate_chg_rows)
+            _fig_rates = go.Figure(go.Bar(
+                x=_r_df["Tenor"], y=_r_df["Chg (bp)"],
+                marker_color=["#38bdf8" if v >= 0 else "#a78bfa" for v in _r_df["Chg (bp)"]],
+                text=[f"{v:+.1f}" for v in _r_df["Chg (bp)"]],
+                textposition="outside"
+            ))
+            _fig_rates.update_layout(
+                title="Overnight Swap Rate Change (bp)",
+                yaxis_title="Change (bp)", xaxis_title="",
+                template="plotly_dark", height=250,
+                margin=dict(t=40, b=40, l=40, r=20),
+                showlegend=False
+            )
+            st.plotly_chart(_fig_rates, use_container_width=True)
+
+        if st.button("🗑️ Clear Report", key="sod_rv_clear"):
+            st.session_state.pop("rv_report_generated", None)
+            st.rerun()
+
 
 def vol_export_tab():
     """Vol Export tab - Export and email vol surfaces"""
