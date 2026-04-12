@@ -279,12 +279,6 @@ try:
 except ImportError:
     HAS_POSTGRES = False
 
-try:
-    from swaption_ticket_tab import render_ticket_tab
-    HAS_TICKET_TAB = True
-except ImportError:
-    HAS_TICKET_TAB = False
-
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD"]
 ALL_CURRENCIES = ["AUD", "NZD", "USD", "EUR (PENDING)", "GBP (PENDING)", "JPY (PENDING)", "CAD (PENDING)"]
 
@@ -7924,19 +7918,6 @@ def swaptions_tab(vol_mode: str):
             st.session_state["swaption_portfolio"].append(entry)
             st.session_state["portfolio"].append(entry)
             _save_portfolio()
-
-            # ── Ticket tab: push pricing state ──────────────────────
-            st.session_state["ticket_option_type"]     = structure   # Payer/Receiver/Straddle
-            st.session_state["ticket_option_expiry"]   = expiry      # e.g. '3m'
-            st.session_state["ticket_option_expiry_y"] = expiry_y
-            st.session_state["ticket_swap_term"]       = _tenor_display
-            st.session_state["ticket_swap_term_y"]     = tenor_y
-            st.session_state["ticket_expiry_date"]     = expiry_date.strftime('%Y-%m-%d') if 'expiry_date' in dir() else ""
-            st.session_state["ticket_swap_start_date"] = swap_start.strftime('%Y-%m-%d') if 'swap_start' in dir() else ""
-            st.session_state["ticket_strike_rate"]     = strike_pct
-            st.session_state["ticket_premium_bp"]      = display_prem_bp
-            st.session_state["ticket_notional"]        = notional
-            st.session_state["ticket_currency"]        = ccy
             
         except Exception as e:
             st.error(f" Pricing error: {e}")
@@ -8032,12 +8013,12 @@ def swaptions_tab(vol_mode: str):
 
         # Header row — light grey background
         st.markdown(
-            "<div style='display:grid;grid-template-columns:2.5% 15% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 12.5% 6.0% 6.0% 6.0%;"
+            "<div style='display:grid;grid-template-columns:2.5% 16% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 13.5% 7.0% 6.5%;"
             "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
             "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
             "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
             "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot Prem</span>"
-            "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Prnt</span><span>Del</span></div>",
+            "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Del</span></div>",
             unsafe_allow_html=True)
 
         for idx, row in df.iterrows():
@@ -8063,7 +8044,7 @@ def swaptions_tab(vol_mode: str):
                 except: return 1.0
             _spot_bp_disp = _fwd_bp * _df_exp_bl(label_to_years(str(row.get('expiry','1y'))))
 
-            _rc = st.columns([0.25, 1.50, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.25, 0.60, 0.60, 0.65])
+            _rc = st.columns([0.25, 1.60, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.35, 0.70, 0.65])
             _sw_vals = [
                 f"{idx+1}", _struct, _expiry, _tenor,
                 f"{float(row.get('notional_mm',100)):.0f}mm",
@@ -8098,30 +8079,7 @@ def swaptions_tab(vol_mode: str):
             if can_quick_tix() and _rc[11].button("📋", key=f"sw_tix_{idx}", help="Quick Tix"):
                 st.session_state["_sw_tix_open"] = idx if st.session_state.get("_sw_tix_open") != idx else -1
 
-            if can_quick_tix() and _rc[12].button("🎫", key=f"sw_ptix_{idx}", help="Print Tix → Trade Ticket"):
-                # Push this blotter row into ticket session state so broker can amend premium before sending to MW
-                try:
-                    from datetime import date as _ptd, timedelta as _pttd
-                    _pt_exp_y = label_to_years(str(row.get("expiry", "3m")))
-                    _pt_tenor_y = float(str(row.get("tenor","5Y")).replace("Y","").replace("y","")) if row.get("tenor") else 5.0
-                    _pt_exp_dt = _ptd.today() + _pttd(days=int(_pt_exp_y * 365.25))
-                    _pt_start = _pt_exp_dt + _pttd(days=1)
-                    st.session_state["ticket_option_type"]     = row.get("structure", "Straddle")
-                    st.session_state["ticket_option_expiry"]   = str(row.get("expiry", ""))
-                    st.session_state["ticket_option_expiry_y"] = _pt_exp_y
-                    st.session_state["ticket_swap_term"]       = str(row.get("tenor", ""))
-                    st.session_state["ticket_swap_term_y"]     = _pt_tenor_y
-                    st.session_state["ticket_expiry_date"]     = _pt_exp_dt.strftime("%Y-%m-%d")
-                    st.session_state["ticket_swap_start_date"] = _pt_start.strftime("%Y-%m-%d")
-                    st.session_state["ticket_strike_rate"]     = float(row.get("strike", 0))
-                    st.session_state["ticket_premium_bp"]      = float(row.get("pv_bp_fwd", row.get("pv_bp", 0)))
-                    st.session_state["ticket_notional"]        = float(row.get("notional_mm", 100))
-                    st.session_state["ticket_currency"]        = row.get("currency", ccy)
-                    st.toast("📋 Loaded into Trade Ticket tab — amend premium then send to MW", icon="🎫")
-                except Exception as _pte:
-                    st.error(f"Print Tix error: {_pte}")
-
-            if _rc[13].button("🗑️", key=f"sw_del_{idx}", help="Remove"):
+            if _rc[12].button("🗑️", key=f"sw_del_{idx}", help="Remove"):
                 st.session_state["swaption_portfolio"].pop(idx)
                 st.session_state["portfolio"] = [p for p in st.session_state["portfolio"]
                                                   if p.get("label") != _label or p.get("expiry") != _expiry]
@@ -9557,12 +9515,12 @@ def caps_floors_tab(vol_mode: str):
         _CF_STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade"]
 
         st.markdown(
-            "<div style='display:grid;grid-template-columns:2.5% 15% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 12.5% 6.0% 6.0% 6.0%;"
+            "<div style='display:grid;grid-template-columns:2.5% 16% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 13.5% 7.0% 6.5%;"
             "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
             "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
             "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
             "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot Prem</span>"
-            "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Prnt</span><span>Del</span></div>",
+            "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Del</span></div>",
             unsafe_allow_html=True)
 
         for _cidx, _crow in _df.iterrows():
@@ -9582,7 +9540,7 @@ def caps_floors_tab(vol_mode: str):
                     return math.exp(-0.035*ey)
                 except: return 1.0
             _cf_spot = _cf_fwd * _df_cf(label_to_years(str(_crow.get('expiry','1y'))))
-            _crc = st.columns([0.25, 1.50, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.25, 0.60, 0.60, 0.65])
+            _crc = st.columns([0.25, 1.60, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.35, 0.70, 0.65])
             _cf_vals = [
                 f"{_cidx+1}", _cst, _cex, _cten,
                 f"{float(_crow.get('notional_mm',100)):.0f}mm",
@@ -9611,28 +9569,7 @@ def caps_floors_tab(vol_mode: str):
                 st.session_state[_cf_sk] = _cf_new; st.rerun()
             if can_quick_tix() and _crc[11].button("📋", key=f"cf_tix_{_cidx}", help="Quick Tix"):
                 st.session_state["_cf_tix_open"] = _cidx if st.session_state.get("_cf_tix_open") != _cidx else -1
-            if can_quick_tix() and _crc[12].button("🎫", key=f"cf_ptix_{_cidx}", help="Print Tix → Trade Ticket"):
-                try:
-                    from datetime import date as _cptd, timedelta as _cpttd
-                    _cp_exp_y  = label_to_years(str(_crow.get("expiry","3m")))
-                    _cp_ten_y  = float(str(_crow.get("tenor","5Y")).replace("Y","").replace("y","")) if _crow.get("tenor") else 5.0
-                    _cp_exp_dt = _cptd.today() + _cpttd(days=int(_cp_exp_y*365.25))
-                    _cp_start  = _cp_exp_dt + _cpttd(days=1)
-                    st.session_state["ticket_option_type"]     = _crow.get("structure","Cap")
-                    st.session_state["ticket_option_expiry"]   = str(_crow.get("expiry",""))
-                    st.session_state["ticket_option_expiry_y"] = _cp_exp_y
-                    st.session_state["ticket_swap_term"]       = str(_crow.get("tenor",""))
-                    st.session_state["ticket_swap_term_y"]     = _cp_ten_y
-                    st.session_state["ticket_expiry_date"]     = _cp_exp_dt.strftime("%Y-%m-%d")
-                    st.session_state["ticket_swap_start_date"] = _cp_start.strftime("%Y-%m-%d")
-                    st.session_state["ticket_strike_rate"]     = float(_crow.get("strike",0))
-                    st.session_state["ticket_premium_bp"]      = float(_crow.get("pv_bp_fwd",_crow.get("pv_bp",0)))
-                    st.session_state["ticket_notional"]        = float(_crow.get("notional_mm",100))
-                    st.session_state["ticket_currency"]        = _crow.get("currency", ccy)
-                    st.toast("📋 Loaded into Trade Ticket tab — amend premium then send to MW", icon="🎫")
-                except Exception as _cpe:
-                    st.error(f"Print Tix error: {_cpe}")
-            if _crc[13].button("🗑️", key=f"cf_del_{_cidx}", help="Remove"):
+            if _crc[12].button("🗑️", key=f"cf_del_{_cidx}", help="Remove"):
                 st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", [])
                                                   if not (t.get("instrument_type")=="Cap/Floor" and t.get("label")==_cl)]
                 _save_portfolio(); st.rerun()
@@ -13599,13 +13536,14 @@ def rv_tab():
                             # Strip meeting premium from implied before comparing
                             mtgs = _meetings.get(exp_lbl, [])
                             _prem = _CB_MEETING_PREMIUM_BP.get(ccy, 3.0)
-                            iv_adj = iv - len(mtgs) * _prem
+                            _n_mtgs = mtgs if isinstance(mtgs, int) else len(mtgs)
+                            iv_adj = iv - _n_mtgs * _prem
                             vrp = round(iv_adj / rv, 2) if rv and rv > 0 else None
                             _vrp_rows.append({
                                 "Expiry": exp_lbl,
                                 "Tenor": tn_str,
                                 "Implied (bp)": round(iv, 1),
-                                f"Mtgs ({exp_lbl})": len(mtgs),
+                                f"Mtgs ({exp_lbl})": (_n_mtgs),
                                 "Implied Adj (bp)": round(iv_adj, 1),
                                 "Realised 21d (bp)": rv,
                                 "VRP (adj/real)": vrp,
@@ -13919,7 +13857,8 @@ def rv_tab():
                     # Meetings in 1m window
                     mtgs_1m = _meetings.get("1m", [])
                     _prem_per = _CB_MEETING_PREMIUM_BP.get(ccy, 3.0)
-                    v1m_adj = v1m - len(mtgs_1m) * _prem_per  # strip meeting premium
+                    _n_m1m = mtgs_1m if isinstance(mtgs_1m, int) else len(mtgs_1m)
+                    v1m_adj = v1m - _n_m1m * _prem_per  # strip meeting premium
 
                     # Z-score vs history if available; else fall back to sqrt(T) ratio
                     if rs and rs["std"] > 0:
@@ -13938,7 +13877,8 @@ def rv_tab():
                     # VRP context
                     vrp_1m = round(v1m_adj / rv_21d, 2) if rv_21d and rv_21d > 0 else None
                     vrp_txt = f" | VRP={vrp_1m:.2f}x realised" if vrp_1m else ""
-                    mtg_txt = f" | {len(mtgs_1m)} mtg(s) stripped" if mtgs_1m else ""
+                    _n_m1m2 = mtgs_1m if isinstance(mtgs_1m, int) else len(mtgs_1m)
+                    mtg_txt = f" | {_n_m1m2} mtg(s) stripped" if _n_m1m2 else ""
 
                     # Only signal if both z-score AND VRP agree (avoids false positives)
                     is_rich  = z_ratio > 1.5 and (vrp_1m is None or vrp_1m > 1.25)
@@ -13983,7 +13923,8 @@ def rv_tab():
                     if not iv:
                         continue
                     mtgs = _meetings.get(exp_lbl, [])
-                    iv_adj = iv - len(mtgs) * _CB_MEETING_PREMIUM_BP.get(ccy, 3.0)
+                    _n_m = mtgs if isinstance(mtgs, int) else len(mtgs)
+                    iv_adj = iv - _n_m * _CB_MEETING_PREMIUM_BP.get(ccy, 3.0)
                     vrp = iv_adj / rv
                     if vrp > 1.50:
                         ideas.append({
@@ -13993,7 +13934,7 @@ def rv_tab():
                             "Trade": f"Sell {exp_lbl}≈{tn}Y straddle (harvest vol risk premium)",
                             "Rationale": (
                                 f"Meeting-adjusted implied {iv_adj:.0f}bp is {vrp:.2f}× 21-day realised {rv:.0f}bp. "
-                                f"{len(mtgs)} CB meeting(s) stripped at {_CB_MEETING_PREMIUM_BP.get(ccy,3):.0f}bp each. "
+                                f"{(_n_m if isinstance(mtgs,int) else len(mtgs))} CB meeting(s) stripped at {_CB_MEETING_PREMIUM_BP.get(ccy,3):.0f}bp each. "
                                 f"Vol risk premium historically mean-reverts — short vol collects theta as premium decays."
                             ),
                             "Risk": "Requires calm market; gap risk if macro shock or surprise CB action",
@@ -14764,12 +14705,14 @@ def rv_tab():
                 st.caption("Each line = one time horizon. X axis = rate shift (bp). Y axis = P&L ($k). "
                            "Vol shift applied uniformly across all scenarios.")
 
-                _hz_rate_scenarios = list(range(-100, 105, 10))  # -100 to +100 in 10bp steps
-                _hz_vol_scenarios  = [0, -10, +10]              # flat, -10bp, +10bp vol
+                _hz_rate_scenarios = list(range(-200, 205, 5))  # wider range, finer steps
+                _hz_vol_scenarios  = [0, -10, +10]
 
                 _hz_fig = go.Figure()
                 _colors_surf = ["#3b82f6","#22c55e","#f59e0b","#a78bfa","#f43f5e","#06b6d4"]
 
+                _all_pnl = []
+                _hz_surface_data = []
                 for _ci, (_hlbl, _hdays) in enumerate(_hz_schedule):
                     _hT   = max(_hz_exp_y - _hdays / 365.0, 0.0)
                     _h_yf = _hdays / 365.0
@@ -14793,29 +14736,43 @@ def rv_tab():
                         else:
                             _p = 0.0
                         _pnl_by_rate.append(round(_p / 1e3, 2))
+                    _all_pnl.extend(_pnl_by_rate)
+                    _hz_surface_data.append((_hlbl, _hdays, _pnl_by_rate, _colors_surf[_ci % len(_colors_surf)]))
 
-                    _col = _colors_surf[_ci % len(_colors_surf)]
+                # Auto-scale y-axis
+                _pnl_min = min(_all_pnl) if _all_pnl else -100
+                _pnl_max = max(_all_pnl) if _all_pnl else 100
+                _pnl_pad = max(abs(_pnl_max - _pnl_min) * 0.15, 10)
+
+                for _hlbl, _hdays, _pnl_by_rate, _col in _hz_surface_data:
                     _hz_fig.add_trace(go.Scatter(
                         x=_hz_rate_scenarios,
                         y=_pnl_by_rate,
                         mode="lines",
                         name=_hlbl,
-                        line=dict(color=_col, width=2),
+                        line=dict(color=_col, width=2.5),
                         hovertemplate=f"<b>{_hlbl}</b><br>Rate shift: %{{x}}bp<br>P&L: $%{{y:.1f}}k<extra></extra>"
                     ))
 
-                # Zero line and inception breakevens
-                _hz_fig.add_hline(y=0, line_dash="dash", line_color="#64748b",
-                                   annotation_text="Breakeven", annotation_position="right")
+                # Zero line
+                _hz_fig.add_hline(y=0, line_dash="dash", line_color="#64748b", line_width=1,
+                                   annotation_text="Breakeven", annotation_position="right",
+                                   annotation_font_color="#64748b")
+                # ATM vertical
+                _hz_fig.add_vline(x=0, line_dash="dot", line_color="#334155", line_width=1)
 
                 _hz_fig.update_layout(
-                    xaxis_title="Rate Shift (bp)",
-                    yaxis_title="Est. P&L ($k)",
+                    xaxis=dict(title="Rate Shift (bp)", tickmode="linear", dtick=25,
+                               zeroline=True, zerolinecolor="#334155"),
+                    yaxis=dict(title="Est. P&L ($k)",
+                               range=[_pnl_min - _pnl_pad, _pnl_max + _pnl_pad]),
                     legend=dict(title="Horizon", orientation="v",
                                 x=1.01, y=1, bgcolor="rgba(0,0,0,0)"),
-                    template="plotly_dark", height=420,
-                    margin=dict(t=30, r=120),
-                    hovermode="x unified"
+                    template="plotly_dark", height=380,
+                    margin=dict(t=20, r=120, l=60),
+                    hovermode="x unified",
+                    plot_bgcolor="rgba(15,23,42,0.8)",
+                    paper_bgcolor="rgba(0,0,0,0)",
                 )
                 st.plotly_chart(_hz_fig, use_container_width=True)
 
@@ -15851,15 +15808,15 @@ def portfolio_tab():
             df_sw["_expiry_sort"] = df_sw["expiry"].apply(lambda e: label_to_years(str(e)))
             df_sw = df_sw.sort_values("_expiry_sort").reset_index(drop=True)
 
-            GRID = "2.5% 15% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 12.5% 6.0% 6.0% 6.0%"
-            COLS = [0.25, 1.50, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.25, 0.60, 0.60, 0.65]
+            GRID = "2.5% 16% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 13.5% 7.0% 6.5%"
+            COLS = [0.25, 1.60, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.35, 0.70, 0.65]
             st.markdown(
                 f"<div style='display:grid;grid-template-columns:{GRID};"
                 "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
                 "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
                 "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
                 "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot Prem</span>"
-                "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Prnt</span><span>Del</span></div>",
+                "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Del</span></div>",
                 unsafe_allow_html=True)
 
             _PTF_STATUS_COLOURS = {"TP Trade":"rgba(220,255,220,0.95)","Away Trade":"rgba(255,210,210,0.95)","Direct Trade":"rgba(255,235,195,0.95)"}
@@ -15902,28 +15859,7 @@ def portfolio_tab():
                 if _new != _cur: st.session_state[_status_key]=_new; st.rerun()
                 if can_quick_tix() and _rc[11].button("📋",key=f"ptfsw_tix_{idx}",help="Quick Tix"):
                     st.session_state["_ptf_tix_open"] = idx if st.session_state.get("_ptf_tix_open")!=idx else -1
-                if can_quick_tix() and _rc[12].button("🎫",key=f"ptfsw_ptix_{idx}",help="Print Tix → Trade Ticket"):
-                    try:
-                        from datetime import date as _bptd, timedelta as _bpttd
-                        _bp_exp_y  = label_to_years(str(row.get("expiry","3m")))
-                        _bp_ten_y  = float(str(row.get("tenor","5Y")).replace("Y","").replace("y","")) if row.get("tenor") else 5.0
-                        _bp_exp_dt = _bptd.today() + _bpttd(days=int(_bp_exp_y*365.25))
-                        _bp_start  = _bp_exp_dt + _bpttd(days=1)
-                        st.session_state["ticket_option_type"]     = row.get("structure","Straddle")
-                        st.session_state["ticket_option_expiry"]   = str(row.get("expiry",""))
-                        st.session_state["ticket_option_expiry_y"] = _bp_exp_y
-                        st.session_state["ticket_swap_term"]       = str(row.get("tenor",""))
-                        st.session_state["ticket_swap_term_y"]     = _bp_ten_y
-                        st.session_state["ticket_expiry_date"]     = _bp_exp_dt.strftime("%Y-%m-%d")
-                        st.session_state["ticket_swap_start_date"] = _bp_start.strftime("%Y-%m-%d")
-                        st.session_state["ticket_strike_rate"]     = float(row.get("strike",0))
-                        st.session_state["ticket_premium_bp"]      = float(row.get("pv_bp_fwd",row.get("pv_bp",0)))
-                        st.session_state["ticket_notional"]        = float(row.get("notional_mm",100))
-                        st.session_state["ticket_currency"]        = row.get("currency","AUD")
-                        st.toast("📋 Loaded into Trade Ticket tab — amend premium then send to MW", icon="🎫")
-                    except Exception as _bpe:
-                        st.error(f"Print Tix error: {_bpe}")
-                if _rc[13].button("🗑️",key=f"ptfsw_del_{idx}",help="Delete"):
+                if _rc[12].button("🗑️",key=f"ptfsw_del_{idx}",help="Delete"):
                     st.session_state["portfolio"] = [p for p in portfolio if p.get("label")!=_label or p.get("instrument_type")!="Swaption"]
                     st.session_state["swaption_portfolio"] = [p for p in st.session_state["swaption_portfolio"] if p.get("label")!=_label]
                     _save_portfolio(); st.rerun()
@@ -16027,15 +15963,15 @@ def portfolio_tab():
             df_cf["_sort"] = df_cf["expiry"].apply(lambda e: label_to_years(str(e)))
             df_cf = df_cf.sort_values("_sort").reset_index(drop=True)
 
-            GRID = "2.5% 15% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 12.5% 6.0% 6.0% 6.0%"
-            COLS = [0.25, 1.50, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.25, 0.60, 0.60, 0.65]
+            GRID = "2.5% 16% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 13.5% 7.0% 6.5%"
+            COLS = [0.25, 1.60, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.35, 0.70, 0.65]
             st.markdown(
                 f"<div style='display:grid;grid-template-columns:{GRID};"
                 "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
                 "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
                 "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
                 "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot Prem</span>"
-                "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Prnt</span><span>Del</span></div>",
+                "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Del</span></div>",
                 unsafe_allow_html=True)
 
             _CFPTF_STATUS_COLOURS = {"TP Trade":"rgba(220,255,220,0.95)","Away Trade":"rgba(255,210,210,0.95)","Direct Trade":"rgba(255,235,195,0.95)"}
@@ -16076,28 +16012,7 @@ def portfolio_tab():
                 if _new3 != _cur3: st.session_state[_sk3]=_new3; st.rerun()
                 if _rc3[11].button("📋",key=f"ptfcf_tix_{_ci3}",help="Quick Tix"):
                     st.session_state["_ptfcf_tix_open"] = _ci3 if st.session_state.get("_ptfcf_tix_open")!=_ci3 else -1
-                if can_quick_tix() and _rc3[12].button("🎫",key=f"ptfcf_ptix_{_ci3}",help="Print Tix → Trade Ticket"):
-                    try:
-                        from datetime import date as _bptd3, timedelta as _bpttd3
-                        _bp3_exp_y  = label_to_years(str(_cr3.get("expiry","3m")))
-                        _bp3_ten_y  = float(str(_cr3.get("tenor","5Y")).replace("Y","").replace("y","")) if _cr3.get("tenor") else 5.0
-                        _bp3_exp_dt = _bptd3.today() + _bpttd3(days=int(_bp3_exp_y*365.25))
-                        _bp3_start  = _bp3_exp_dt + _bpttd3(days=1)
-                        st.session_state["ticket_option_type"]     = _cr3.get("structure","Cap")
-                        st.session_state["ticket_option_expiry"]   = str(_cr3.get("expiry",""))
-                        st.session_state["ticket_option_expiry_y"] = _bp3_exp_y
-                        st.session_state["ticket_swap_term"]       = str(_cr3.get("tenor",""))
-                        st.session_state["ticket_swap_term_y"]     = _bp3_ten_y
-                        st.session_state["ticket_expiry_date"]     = _bp3_exp_dt.strftime("%Y-%m-%d")
-                        st.session_state["ticket_swap_start_date"] = _bp3_start.strftime("%Y-%m-%d")
-                        st.session_state["ticket_strike_rate"]     = float(_cr3.get("strike",0))
-                        st.session_state["ticket_premium_bp"]      = float(_cr3.get("pv_bp_fwd",_cr3.get("pv_bp",0)))
-                        st.session_state["ticket_notional"]        = float(_cr3.get("notional_mm",100))
-                        st.session_state["ticket_currency"]        = _cr3.get("currency","AUD")
-                        st.toast("📋 Loaded into Trade Ticket tab — amend premium then send to MW", icon="🎫")
-                    except Exception as _bp3e:
-                        st.error(f"Print Tix error: {_bp3e}")
-                if _rc3[13].button("🗑️",key=f"ptfcf_del_{_ci3}",help="Delete"):
+                if _rc3[12].button("🗑️",key=f"ptfcf_del_{_ci3}",help="Delete"):
                     st.session_state["portfolio"] = [p for p in portfolio if not (p.get("instrument_type")=="Cap/Floor" and p.get("label")==_lbl3)]
                     _save_portfolio(); st.rerun()
 
@@ -17150,7 +17065,6 @@ def main():
         ("✅ Vol Editor",                "tab_show_voleditor", vol_surface_editor_tab),
         ("📑 Vol Export",                "tab_show_volexport", vol_export_tab),
         ("📐 Midcurve & Curve Options",  "tab_show_midcurve",  midcurve_tab),
-        ("🎫 Trade Ticket",              "tab_show_ticket",    lambda: render_ticket_tab(st.session_state) if HAS_TICKET_TAB else st.info("swaption_ticket_tab.py not found")),
     ]
     # Multi-CCY is super_admin only, added separately below
     _tab_names = [n for n, k, f in _ALL_TAB_DEFS if st.session_state.get(k, True)]
