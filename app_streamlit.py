@@ -19057,19 +19057,131 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             }
 
             st.markdown("---")
-            _btn_col1, _btn_col2 = st.columns(2)
+            _btn_col1, _btn_col2, _btn_col3 = st.columns(3)
             with _btn_col1:
                 st.download_button(
-                    "📂 Download SOD Report",
+                    "📄 Download (TXT)",
                     _report_text.encode(),
                     f"RateEdge_SOD_{pd.Timestamp.now(tz='Australia/Sydney').strftime('%Y%m%d_%H%M')}.txt",
                     "text/plain", key="sod_download"
                 )
             with _btn_col2:
+                # ── PDF generation ─────────────────────────────────
+                try:
+                    from reportlab.lib.pagesizes import A4
+                    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                    from reportlab.lib.units import cm
+                    from reportlab.lib import colors
+                    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+                    import io as _sod_io
+
+                    _sod_buf = _sod_io.BytesIO()
+                    _sod_doc = SimpleDocTemplate(_sod_buf, pagesize=A4,
+                                                 leftMargin=2*cm, rightMargin=2*cm,
+                                                 topMargin=2*cm, bottomMargin=2*cm)
+                    _ss = getSampleStyleSheet()
+                    _sT = ParagraphStyle("sT", parent=_ss["Title"], fontSize=15,
+                                         textColor=colors.HexColor("#0f172a"), spaceAfter=4)
+                    _sSub = ParagraphStyle("sSub", parent=_ss["Normal"], fontSize=8,
+                                           textColor=colors.HexColor("#64748b"), spaceAfter=8)
+                    _sH2 = ParagraphStyle("sH2", parent=_ss["Heading2"], fontSize=11,
+                                          textColor=colors.HexColor("#1e3a5f"), spaceBefore=10, spaceAfter=4)
+                    _sB = ParagraphStyle("sB", parent=_ss["Normal"], fontSize=8, leading=12, spaceAfter=6)
+                    _sCap = ParagraphStyle("sCap", parent=_ss["Normal"], fontSize=7,
+                                           textColor=colors.HexColor("#94a3b8"), spaceAfter=10)
+
+                    _sod_story = []
+                    _ts = pd.Timestamp.now(tz='Australia/Sydney').strftime('%Y-%m-%d %H:%M')
+                    _sod_story.append(Paragraph("RateEdge — Start of Day Report", _sT))
+                    _sod_story.append(Paragraph(f"{_ts} AEST   |   USD T-1: {_usd_t1_sel[:50]}   |   AUD: {_aud_sel[:40]}", _sSub))
+                    _sod_story.append(HRFlowable(width="100%", thickness=1.5,
+                                                  color=colors.HexColor("#3b82f6"), spaceAfter=8))
+
+                    # Narrative
+                    _clean_narr = _narrative.replace("**","").replace("\n"," ").strip()
+                    _sod_story.append(Paragraph(_clean_narr, _sB))
+                    _sod_story.append(Spacer(1, 6))
+
+                    # USD Vol Changes table
+                    _sod_story.append(Paragraph("USD Vol Changes (bp)", _sH2))
+                    _usd_chg_r = _usd_chg.reset_index()
+                    _usd_tbl_data = [["Expiry"] + list(_usd_chg_r.columns[1:])]
+                    for _, _row in _usd_chg_r.iterrows():
+                        _usd_tbl_data.append([str(_row.iloc[0])] + [f"{float(v):+.2f}" if v==v else "—" for v in _row.iloc[1:]])
+                    _usd_t = Table(_usd_tbl_data)
+                    _usd_t.setStyle(TableStyle([
+                        ("BACKGROUND",(0,0),(-1,0), colors.HexColor("#1e293b")),
+                        ("TEXTCOLOR",(0,0),(-1,0), colors.white),
+                        ("FONTSIZE",(0,0),(-1,-1), 7),
+                        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+                        ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),
+                        ("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#e2e8f0")),
+                        ("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),
+                        ("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2),
+                    ]))
+                    _sod_story.append(_usd_t)
+
+                    # Implied AUD Changes table
+                    _sod_story.append(Paragraph("Implied AUD Vol Change at Open (bp)", _sH2))
+                    _aud_chg_r = _implied_chg.astype(float).reset_index()
+                    _aud_tbl_data = [["Expiry"] + list(_aud_chg_r.columns[1:])]
+                    for _, _row in _aud_chg_r.iterrows():
+                        _aud_tbl_data.append([str(_row.iloc[0])] + [f"{float(v):+.2f}" if v==v else "—" for v in _row.iloc[1:]])
+                    _aud_t = Table(_aud_tbl_data)
+                    _aud_t.setStyle(TableStyle([
+                        ("BACKGROUND",(0,0),(-1,0), colors.HexColor("#1e3a5f")),
+                        ("TEXTCOLOR",(0,0),(-1,0), colors.white),
+                        ("FONTSIZE",(0,0),(-1,-1), 7),
+                        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+                        ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),
+                        ("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#e2e8f0")),
+                        ("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),
+                        ("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2),
+                    ]))
+                    _sod_story.append(_aud_t)
+
+                    # CFS rows
+                    if _cfs_rows:
+                        _sod_story.append(Paragraph("Implied AUD CFS Open Levels (bp fwd prem)", _sH2))
+                        _cfs_pdf_df = pd.DataFrame(_cfs_rows)[["CFS Tenor","CFS Total (prev)","CFS Total (open)","> CFS"]]
+                        _cfs_tbl_data = [list(_cfs_pdf_df.columns)] + [list(r) for _,r in _cfs_pdf_df.iterrows()]
+                        _cfs_t = Table(_cfs_tbl_data)
+                        _cfs_t.setStyle(TableStyle([
+                            ("BACKGROUND",(0,0),(-1,0), colors.HexColor("#1e293b")),
+                            ("TEXTCOLOR",(0,0),(-1,0), colors.white),
+                            ("FONTSIZE",(0,0),(-1,-1), 7),
+                            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+                            ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),
+                            ("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#e2e8f0")),
+                            ("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),
+                            ("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2),
+                        ]))
+                        _sod_story.append(_cfs_t)
+
+                    _sod_story.append(Spacer(1, 16))
+                    _sod_story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#e2e8f0")))
+                    _sod_story.append(Paragraph(
+                        f"RateEdge Options Platform | {_ts} | Confidential | For internal use only",
+                        _sCap))
+
+                    _sod_doc.build(_sod_story)
+                    _sod_pdf_bytes = _sod_buf.getvalue()
+
+                    st.download_button(
+                        "⬇️ Download (PDF)",
+                        data=_sod_pdf_bytes,
+                        file_name=f"RateEdge_SOD_{pd.Timestamp.now(tz='Australia/Sydney').strftime('%Y%m%d_%H%M')}.pdf",
+                        mime="application/pdf",
+                        key="sod_dl_pdf"
+                    )
+                except Exception as _sod_pdf_err:
+                    st.caption(f"PDF unavailable: {_sod_pdf_err}")
+
+            with _btn_col3:
                 if HAS_POSTGRES:
                     _sod_notes = st.text_input("Notes (optional)", value="", key="sod_save_notes", label_visibility="collapsed",
                                                placeholder="Notes (optional)")
-                    if st.button("💾 Save Report to Supabase", key="sod_save_btn", type="primary", use_container_width=True):
+                    if st.button("💾 Save to Supabase", key="sod_save_btn", type="primary", use_container_width=True):
                         _rid = save_sod_report(
                             user_id=user_id,
                             report_date=pd.Timestamp.now().date(),
