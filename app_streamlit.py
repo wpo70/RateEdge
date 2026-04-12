@@ -19402,11 +19402,11 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
     ]
 
     _DERIVED = [
-        ("aud_2s10s",  "AUD 2s10s",  "swap_2y",    "swap_10y",  100),
-        ("aud_3s10s",  "AUD 3s10s",  "swap_3y",    "swap_10y",  100),
-        ("aud_10s20s", "AUD 10s20s", "swap_10y",   "swap_20y",  100),
-        ("usd_2s10s",  "UST 2s10s",  "usd_2y",     "usd_10y",   100),
-        ("usd_2s30s",  "UST 2s30s",  "usd_2y",     "usd_30y",   100),
+        ("aud_2s10s",  "AUD 2s10s",  "swap_10y",   "swap_2y",    100),
+        ("aud_3s10s",  "AUD 3s10s",  "swap_10y",   "swap_3y",    100),
+        ("aud_10s20s", "AUD 10s20s", "swap_20y",   "swap_10y",   100),
+        ("usd_2s10s",  "UST 2s10s",  "usd_10y",    "usd_2y",     100),
+        ("usd_2s30s",  "UST 2s30s",  "usd_30y",    "usd_2y",     100),
         ("usd_ss_2y",  "USD SS 2Y",  "usdswap_2y", "usd_2y",    100),
         ("usd_ss_10y", "USD SS 10Y", "usdswap_10y","usd_10y",   100),
         ("usd_ss_30y", "USD SS 30Y", "usdswap_30y","usd_30y",   100),
