@@ -14750,651 +14750,657 @@ def rv_tab():
             st.markdown("#### 📈 Theoretical P&L at a Given Forward Rate")
             st.caption("Each trade uses its own specific rate exposure   —   not a single 5Y proxy.")
 
-            # ── Helper: parse expiry + tenor from idea Structure string ─
-            import re as _re_pnl
-            def _parse_structure(struct: str):
-                """Extract (expiry_str, tenor_y) from strings like '1m≈10Y fly', '5y≈5Y', '2s10s Flattener'."""
-                # Pattern: XeYY e.g. 1m≈10Y, 3m≈5Y
-                m = _re_pnl.search(r"(\d+(?:\.\d+)?)(m|y|w)\s*[≈x*/]\s*(\d+(?:\.\d+)?)Y", struct, _re_pnl.IGNORECASE)
-                if m:
-                    qty, unit, tenor = m.group(1), m.group(2).lower(), float(m.group(3))
-                    exp_y = float(qty)/12 if unit == "m" else float(qty)/52 if unit == "w" else float(qty)
-                    return exp_y, tenor
-                # Pattern: NsMs e.g. 2s10s → expiry=1y, tenor=10Y (curve spread)
-                m2 = _re_pnl.search(r"(\d+)s(\d+)s", struct)
-                if m2:
-                    short_t = float(m2.group(1))
-                    long_t  = float(m2.group(2))
-                    return 1.0, long_t  # use 1y expiry, long-end tenor for DV01
-                # Pattern: Ny≈NY e.g. 5y≈5Y, 2y≈10Y
-                m3 = _re_pnl.search(r"(\d+)y\s*[≈x*/]\s*(\d+)Y", struct, _re_pnl.IGNORECASE)
-                if m3:
-                    return float(m3.group(1)), float(m3.group(2))
-                return 1.0, 5.0  # fallback
+            if not st.session_state.get(_rv_ideas_key):
+                st.info("Generate trade ideas first to run P&L scenarios.")
+            elif not ideas:
+                st.info("No ideas generated — adjust the vol surface or run again.")
+            else:
 
-            # ── Helper: AFMA modified-following year-fraction ───────────
-            def _to_yearfrac(val_date, exp_y: float) -> float:
-                """Convert expiry year fraction from val_date, approx AFMA modified following."""
-                from datetime import timedelta as _td
-                import calendar as _cal
-                d = val_date + _td(days=round(exp_y * 365))
-                # Roll to Monday if weekend
-                if d.weekday() == 5: d += _td(days=2)
-                if d.weekday() == 6: d += _td(days=1)
-                # Roll back if month-end crossed   —   simplified
-                from datetime import date as _dt2
-                _, last = _cal.monthrange(d.year, d.month)
-                if d.day > last:
-                    d = d.replace(day=last)
-                    while d.weekday() >= 5:
-                        d -= _td(days=1)
-                return (d - val_date).days / 365.0
+                # ── Helper: parse expiry + tenor from idea Structure string ─
+                import re as _re_pnl
+                def _parse_structure(struct: str):
+                    """Extract (expiry_str, tenor_y) from strings like '1m≈10Y fly', '5y≈5Y', '2s10s Flattener'."""
+                    # Pattern: XeYY e.g. 1m≈10Y, 3m≈5Y
+                    m = _re_pnl.search(r"(\d+(?:\.\d+)?)(m|y|w)\s*[≈x*/]\s*(\d+(?:\.\d+)?)Y", struct, _re_pnl.IGNORECASE)
+                    if m:
+                        qty, unit, tenor = m.group(1), m.group(2).lower(), float(m.group(3))
+                        exp_y = float(qty)/12 if unit == "m" else float(qty)/52 if unit == "w" else float(qty)
+                        return exp_y, tenor
+                    # Pattern: NsMs e.g. 2s10s → expiry=1y, tenor=10Y (curve spread)
+                    m2 = _re_pnl.search(r"(\d+)s(\d+)s", struct)
+                    if m2:
+                        short_t = float(m2.group(1))
+                        long_t  = float(m2.group(2))
+                        return 1.0, long_t  # use 1y expiry, long-end tenor for DV01
+                    # Pattern: Ny≈NY e.g. 5y≈5Y, 2y≈10Y
+                    m3 = _re_pnl.search(r"(\d+)y\s*[≈x*/]\s*(\d+)Y", struct, _re_pnl.IGNORECASE)
+                    if m3:
+                        return float(m3.group(1)), float(m3.group(2))
+                    return 1.0, 5.0  # fallback
 
-            # ── Build forward rate lookup from matrix ──────────────────
-            _fwd_matrix_ss = st.session_state.get("fwd_matrix", {}).get("AUD")
-            _has_matrix = _fwd_matrix_ss is not None and not _fwd_matrix_ss.empty
+                # ── Helper: AFMA modified-following year-fraction ───────────
+                def _to_yearfrac(val_date, exp_y: float) -> float:
+                    """Convert expiry year fraction from val_date, approx AFMA modified following."""
+                    from datetime import timedelta as _td
+                    import calendar as _cal
+                    d = val_date + _td(days=round(exp_y * 365))
+                    # Roll to Monday if weekend
+                    if d.weekday() == 5: d += _td(days=2)
+                    if d.weekday() == 6: d += _td(days=1)
+                    # Roll back if month-end crossed   —   simplified
+                    from datetime import date as _dt2
+                    _, last = _cal.monthrange(d.year, d.month)
+                    if d.day > last:
+                        d = d.replace(day=last)
+                        while d.weekday() >= 5:
+                            d -= _td(days=1)
+                    return (d - val_date).days / 365.0
 
-            # Matrix expiry labels and their year fractions
-            _matrix_exp_labels = list(_fwd_matrix_ss.index) if _has_matrix else []
-            _matrix_exp_yf     = [label_to_years(e) for e in _matrix_exp_labels] if _has_matrix else []
-            _matrix_tenors     = [float(c[:-1]) for c in _fwd_matrix_ss.columns] if _has_matrix else []
+                # ── Build forward rate lookup from matrix ──────────────────
+                _fwd_matrix_ss = st.session_state.get("fwd_matrix", {}).get("AUD")
+                _has_matrix = _fwd_matrix_ss is not None and not _fwd_matrix_ss.empty
 
-            def _matrix_rate_at(exp_y: float, tenor_y: float) -> float | None:
-                """Interpolate fwd matrix at (expiry_yf_from_today, tenor_y).
-                exp_y is already the year fraction from today   —   no date conversion needed here."""
-                if not _has_matrix:
-                    return None
-                if len(_matrix_exp_yf) < 2 or len(_matrix_tenors) < 2:
-                    return None
-                _ey = max(exp_y, _matrix_exp_yf[0])
-                try:
-                    from scipy.interpolate import CubicSpline as _CS
-                    # Interpolate across tenor columns first, then spline across expiry axis
-                    if tenor_y <= _matrix_tenors[0]:
-                        rates = _fwd_matrix_ss[_fwd_matrix_ss.columns[0]].values.astype(float)
-                    elif tenor_y >= _matrix_tenors[-1]:
-                        rates = _fwd_matrix_ss[_fwd_matrix_ss.columns[-1]].values.astype(float)
-                    else:
-                        col_idx = int(np.searchsorted(_matrix_tenors, tenor_y))
-                        col_lo  = _fwd_matrix_ss.columns[col_idx - 1]
-                        col_hi  = _fwd_matrix_ss.columns[col_idx]
-                        w = (tenor_y - _matrix_tenors[col_idx-1]) / (_matrix_tenors[col_idx] - _matrix_tenors[col_idx-1])
-                        rates = ((1-w) * _fwd_matrix_ss[col_lo].values +
-                                    w  * _fwd_matrix_ss[col_hi].values).astype(float)
-                    cs = _CS(_matrix_exp_yf, rates, extrapolate=True)
-                    return float(cs(_ey))
-                except Exception:
-                    return float(np.interp(_ey, _matrix_exp_yf,
-                               [float(np.interp(tenor_y, _matrix_tenors,
-                                [float(_fwd_matrix_ss[c].iloc[i]) for c in _fwd_matrix_ss.columns]))
-                                for i in range(len(_matrix_exp_yf))]))
+                # Matrix expiry labels and their year fractions
+                _matrix_exp_labels = list(_fwd_matrix_ss.index) if _has_matrix else []
+                _matrix_exp_yf     = [label_to_years(e) for e in _matrix_exp_labels] if _has_matrix else []
+                _matrix_tenors     = [float(c[:-1]) for c in _fwd_matrix_ss.columns] if _has_matrix else []
 
-            # ── UI ─────────────────────────────────────────────────────
-            _src_col, _notional_col = st.columns([5, 2])
-            with _src_col:
-                _pnl_src = st.radio("Rate source", ["Manual shift (bp)", "Fwd Curve from Matrix"],
-                                    horizontal=True, key="rv_pnl_src")
-            with _notional_col:
-                _notional_mm = st.number_input("Notional (AUD mm)", min_value=1.0, max_value=5000.0,
-                                               value=100.0, step=25.0, key="rv_pnl_notional")
+                def _matrix_rate_at(exp_y: float, tenor_y: float) -> float | None:
+                    """Interpolate fwd matrix at (expiry_yf_from_today, tenor_y).
+                    exp_y is already the year fraction from today   —   no date conversion needed here."""
+                    if not _has_matrix:
+                        return None
+                    if len(_matrix_exp_yf) < 2 or len(_matrix_tenors) < 2:
+                        return None
+                    _ey = max(exp_y, _matrix_exp_yf[0])
+                    try:
+                        from scipy.interpolate import CubicSpline as _CS
+                        # Interpolate across tenor columns first, then spline across expiry axis
+                        if tenor_y <= _matrix_tenors[0]:
+                            rates = _fwd_matrix_ss[_fwd_matrix_ss.columns[0]].values.astype(float)
+                        elif tenor_y >= _matrix_tenors[-1]:
+                            rates = _fwd_matrix_ss[_fwd_matrix_ss.columns[-1]].values.astype(float)
+                        else:
+                            col_idx = int(np.searchsorted(_matrix_tenors, tenor_y))
+                            col_lo  = _fwd_matrix_ss.columns[col_idx - 1]
+                            col_hi  = _fwd_matrix_ss.columns[col_idx]
+                            w = (tenor_y - _matrix_tenors[col_idx-1]) / (_matrix_tenors[col_idx] - _matrix_tenors[col_idx-1])
+                            rates = ((1-w) * _fwd_matrix_ss[col_lo].values +
+                                        w  * _fwd_matrix_ss[col_hi].values).astype(float)
+                        cs = _CS(_matrix_exp_yf, rates, extrapolate=True)
+                        return float(cs(_ey))
+                    except Exception:
+                        return float(np.interp(_ey, _matrix_exp_yf,
+                                   [float(np.interp(tenor_y, _matrix_tenors,
+                                    [float(_fwd_matrix_ss[c].iloc[i]) for c in _fwd_matrix_ss.columns]))
+                                    for i in range(len(_matrix_exp_yf))]))
 
-            if _pnl_src == "Manual shift (bp)":
-                _shift_col, _info_col = st.columns([3, 3])
-                with _shift_col:
-                    _manual_shift_bp = st.number_input("Parallel shift (bp)", min_value=-300.0, max_value=300.0,
-                                                       value=0.0, step=5.0, key="rv_pnl_shift",
-                                                       help="Applied uniformly to every trade's specific rate")
-                with _info_col:
-                    st.info(f"Each trade's P&L uses its own expiry/tenor rate from the current curve, "
-                            f"then applies this {_manual_shift_bp:+.0f}bp shift.")
+                # ── UI ─────────────────────────────────────────────────────
+                _src_col, _notional_col = st.columns([5, 2])
+                with _src_col:
+                    _pnl_src = st.radio("Rate source", ["Manual shift (bp)", "Fwd Curve from Matrix"],
+                                        horizontal=True, key="rv_pnl_src")
+                with _notional_col:
+                    _notional_mm = st.number_input("Notional (AUD mm)", min_value=1.0, max_value=5000.0,
+                                                   value=100.0, step=25.0, key="rv_pnl_notional")
 
-                def _get_move_for_idea(exp_y, tenor_y, val_date=None):
-                    """Manual: shift is same for all."""
-                    spot = (_par_rate(tenor_y) or 4.5) if curve is not None else 4.5
-                    return _manual_shift_bp, spot, spot + _manual_shift_bp / 100
-
-                _val_date_used = None
-                _show_fwd_curve = False
-
-            else:  # Fwd Curve from Matrix
-                if not _has_matrix:
-                    st.warning("No fwd matrix loaded   —   go to Rate/Vol Matrix tab and click 'Generate All Matrices' first.")
-                    _get_move_for_idea = lambda e, t, d=None: (0.0, 4.5, 4.5)
-                    _val_date_used = None
-                    _show_fwd_curve = False
-                else:
-                    _dc1, _dc2, _dc3 = st.columns([2, 2, 2])
-                    with _dc1:
-                        from datetime import date as _today_cls
-                        _val_date = st.date_input("Valuation date", value=_today_cls.today(),
-                                                  key="rv_pnl_valdate", format="DD/MM/YYYY",
-                                                  help="Forward rates interpolated to this date using Modified Following")
-                    with _dc2:
-                        _show_fwd_curve = st.checkbox("Show interpolated curve for this date", value=True,
-                                                      key="rv_pnl_show_curve")
-                    with _dc3:
-                        st.caption(f"Matrix has {len(_matrix_exp_labels)} expiry rows ≈ {len(_matrix_tenors)} tenor cols. "
-                                   f"Cubic spline across expiry axis, linear across tenors.")
-
-                    _val_date_used = _val_date
-
-                    # Compute year fraction from today to val_date (the base offset)
-                    from datetime import date as _today_ref
-                    _val_exp_y = max((_val_date - _today_ref.today()).days / 365.0, 0.0)
-
-                    # Show interpolated curve for selected date
-                    if _show_fwd_curve:
-                        _curve_rows = []
-                        for _tn_y in _matrix_tenors:
-                            # Curve AT val_date = matrix lookup at expiry = val_exp_y
-                            _r = _matrix_rate_at(_val_exp_y, _tn_y)
-                            if _r is not None:
-                                _curve_rows.append({"Tenor (Y)": _tn_y, "Fwd Rate (%)": round(_r, 4)})
-                        if _curve_rows:
-                            _fc1, _fc2 = st.columns([2, 3])
-                            with _fc1:
-                                st.dataframe(pd.DataFrame(_curve_rows), use_container_width=True,
-                                             hide_index=True, height=220)
-                            with _fc2:
-                                _fig_fc = go.Figure()
-                                _fig_fc.add_trace(go.Scatter(
-                                    x=[r["Tenor (Y)"] for r in _curve_rows],
-                                    y=[r["Fwd Rate (%)"] for r in _curve_rows],
-                                    mode="lines+markers", line=dict(color="#3b82f6", width=2),
-                                    marker=dict(size=7), name=f"Fwd curve {_val_date}"))
-                                # Also show today's curve for comparison
-                                _today_rows = [_matrix_rate_at(0.0, t) for t in _matrix_tenors]
-                                if any(r is not None for r in _today_rows):
-                                    _fig_fc.add_trace(go.Scatter(
-                                        x=_matrix_tenors,
-                                        y=[r for r in _today_rows if r is not None],
-                                        mode="lines", line=dict(color="#94a3b8", width=1.5, dash="dot"),
-                                        name="Today"))
-                                _fig_fc.update_layout(
-                                    title=f"Forward Curve at {_val_date} vs Today (Modified Following approx.)",
-                                    xaxis_title="Tenor (Y)", yaxis_title="Rate (%)",
-                                    template="plotly_dark", height=240,
-                                    margin=dict(t=40, b=35, l=50, r=20),
-                                    legend=dict(orientation="h", y=1.05))
-                                st.plotly_chart(_fig_fc, use_container_width=True)
+                if _pnl_src == "Manual shift (bp)":
+                    _shift_col, _info_col = st.columns([3, 3])
+                    with _shift_col:
+                        _manual_shift_bp = st.number_input("Parallel shift (bp)", min_value=-300.0, max_value=300.0,
+                                                           value=0.0, step=5.0, key="rv_pnl_shift",
+                                                           help="Applied uniformly to every trade's specific rate")
+                    with _info_col:
+                        st.info(f"Each trade's P&L uses its own expiry/tenor rate from the current curve, "
+                                f"then applies this {_manual_shift_bp:+.0f}bp shift.")
 
                     def _get_move_for_idea(exp_y, tenor_y, val_date=None):
-                        """Fwd rate at (val_date offset + trade expiry), vs today's spot."""
+                        """Manual: shift is same for all."""
                         spot = (_par_rate(tenor_y) or 4.5) if curve is not None else 4.5
-                        # Total expiry from today = time to val_date + trade's own expiry
-                        total_exp_y = _val_exp_y + exp_y
-                        fwd = _matrix_rate_at(total_exp_y, tenor_y)
-                        if fwd is None:
-                            fwd = spot
-                        move_bp = round((fwd - spot) * 100, 2)
-                        return move_bp, spot, fwd
+                        return _manual_shift_bp, spot, spot + _manual_shift_bp / 100
 
-            # ── Per-trade P&L calculation ──────────────────────────────
-            if ideas:
-                _notional = _notional_mm * 1e6
-                _pnl_rows = []
+                    _val_date_used = None
+                    _show_fwd_curve = False
 
-                for idx, idea in enumerate(ideas[:12]):
-                    is_sel = idx in selected if selected else True
-                    if not is_sel:
-                        continue
-
-                    exp_y, tenor_y = _parse_structure(idea["Structure"])
-                    _move_bp, _spot_rate, _fwd_rate_val = _get_move_for_idea(exp_y, tenor_y, _val_date_used)
-
-                    # DV01 scaled to actual tenor of the underlying swap
-                    _dv01 = _notional * 0.0001 * tenor_y  # $1bp per unit notional ≈ tenor years
-                    _est_pnl = None
-                    _basis = f"exp {exp_y:.2f}y ≈ {tenor_y:.0f}Y swap"
-
-                    _trade = idea["Trade"]
-                    _type  = idea["Type"]
-
-                    if "Calendar" in _type or "Spread" in _type or "straddle" in _trade.lower():
-                        # Long straddle / calendar spread   —   profits from vol change + abs move
-                        _est_pnl = abs(_move_bp) * _dv01 / 100 * 0.5
-                        _basis += f" | |{_move_bp:.1f}bp| >├ö├½├¬50%"
-                    elif "Payer" in _trade and "Receiver" not in _trade:
-                        _est_pnl = _move_bp * _dv01 / 100
-                        _basis += f" | +{_move_bp:+.1f}bp"
-                    elif "Receiver" in _trade and "Payer" not in _trade:
-                        _est_pnl = -_move_bp * _dv01 / 100
-                        _basis += f" | -{_move_bp:+.1f}bp"
-                    elif "Flattener" in _trade:
-                        # Flattener: gains if short end rises vs long end   —   use slope move
-                        _short_y = max(tenor_y - 8, 2.0)
-                        _, _, _fwd_short = _get_move_for_idea(exp_y, _short_y, _val_date_used)
-                        _, _, _fwd_long  = _get_move_for_idea(exp_y, tenor_y, _val_date_used)
-                        _slope_move = ((_fwd_long - (_par_rate(tenor_y) or 4.5)) -
-                                       (_fwd_short - (_par_rate(_short_y) or 4.0))) * 100
-                        _est_pnl = -_slope_move * _notional * 0.0001 * tenor_y / 100
-                        _basis += f" | slope {_slope_move:+.1f}bp"
-                    elif "Steepener" in _trade:
-                        _short_y = max(tenor_y - 8, 2.0)
-                        _, _, _fwd_short = _get_move_for_idea(exp_y, _short_y, _val_date_used)
-                        _, _, _fwd_long  = _get_move_for_idea(exp_y, tenor_y, _val_date_used)
-                        _slope_move = ((_fwd_long - (_par_rate(tenor_y) or 4.5)) -
-                                       (_fwd_short - (_par_rate(_short_y) or 4.0))) * 100
-                        _est_pnl = _slope_move * _notional * 0.0001 * tenor_y / 100
-                        _basis += f" | slope {_slope_move:+.1f}bp"
+                else:  # Fwd Curve from Matrix
+                    if not _has_matrix:
+                        st.warning("No fwd matrix loaded   —   go to Rate/Vol Matrix tab and click 'Generate All Matrices' first.")
+                        _get_move_for_idea = lambda e, t, d=None: (0.0, 4.5, 4.5)
+                        _val_date_used = None
+                        _show_fwd_curve = False
                     else:
-                        # Catch-all: treat as delta-one to the move
-                        _est_pnl = _move_bp * _dv01 / 100 * 0.3
-                        _basis += f" | {_move_bp:+.1f}bp ≈30%"
+                        _dc1, _dc2, _dc3 = st.columns([2, 2, 2])
+                        with _dc1:
+                            from datetime import date as _today_cls
+                            _val_date = st.date_input("Valuation date", value=_today_cls.today(),
+                                                      key="rv_pnl_valdate", format="DD/MM/YYYY",
+                                                      help="Forward rates interpolated to this date using Modified Following")
+                        with _dc2:
+                            _show_fwd_curve = st.checkbox("Show interpolated curve for this date", value=True,
+                                                          key="rv_pnl_show_curve")
+                        with _dc3:
+                            st.caption(f"Matrix has {len(_matrix_exp_labels)} expiry rows ≈ {len(_matrix_tenors)} tenor cols. "
+                                       f"Cubic spline across expiry axis, linear across tenors.")
 
-                    if _est_pnl is not None:
-                        _pnl_rows.append({
-                            "Structure": idea["Structure"],
-                            "Exp": f"{exp_y:.2f}y",
-                            "Tenor": f"{tenor_y:.0f}Y",
-                            "Spot (%)": f"{_spot_rate:.3f}",
-                            "Fwd (%)": f"{_fwd_rate_val:.3f}",
-                            "Move": f"{_move_bp:+.1f}bp",
-                            "DV01 (k)": f"{_dv01/1e3:.1f}",
-                            "Est. P&L": f"{'+'if _est_pnl>=0 else ''}{_est_pnl/1e3:.1f}k",
-                        })
+                        _val_date_used = _val_date
 
-                if _pnl_rows:
-                    st.dataframe(pd.DataFrame(_pnl_rows), use_container_width=True, hide_index=True)
-                    st.caption("⚙️ Estimates only   —   DV01 ≈ rate move proxy. "
-                               "Use Swaptions/Caps tabs for full vol-adjusted pricing.")
+                        # Compute year fraction from today to val_date (the base offset)
+                        from datetime import date as _today_ref
+                        _val_exp_y = max((_val_date - _today_ref.today()).days / 365.0, 0.0)
 
-                    _vals = [float(r["Est. P&L"].replace("k","").replace("+","")) for r in _pnl_rows]
-                    _lbls = [r["Structure"] for r in _pnl_rows]
-                    _moves = [r["Move"] for r in _pnl_rows]
-                    _colors = ["#22c55e" if v >= 0 else "#ef4444" for v in _vals]
-                    _fig_pnl = go.Figure(go.Bar(
-                        x=_lbls, y=_vals, marker_color=_colors,
-                        text=[f"{v:+.1f}k\n{m}" for v, m in zip(_vals, _moves)],
-                        textposition="outside"))
-                    _title_date = str(_val_date_used) if _val_date_used else "manual shift"
-                    _fig_pnl.update_layout(
-                        title=f"Est. P&L   —   {_notional_mm:.0f}mm notional | {_title_date}",
-                        yaxis_title="Est. P&L (AUD '000)",
-                        xaxis_tickangle=-35,
-                        template="plotly_dark", height=360,
-                        margin=dict(t=50, b=100))
-                    st.plotly_chart(_fig_pnl, use_container_width=True)
-                else:
-                    st.info("Generate ideas above to see P&L estimates.")
+                        # Show interpolated curve for selected date
+                        if _show_fwd_curve:
+                            _curve_rows = []
+                            for _tn_y in _matrix_tenors:
+                                # Curve AT val_date = matrix lookup at expiry = val_exp_y
+                                _r = _matrix_rate_at(_val_exp_y, _tn_y)
+                                if _r is not None:
+                                    _curve_rows.append({"Tenor (Y)": _tn_y, "Fwd Rate (%)": round(_r, 4)})
+                            if _curve_rows:
+                                _fc1, _fc2 = st.columns([2, 3])
+                                with _fc1:
+                                    st.dataframe(pd.DataFrame(_curve_rows), use_container_width=True,
+                                                 hide_index=True, height=220)
+                                with _fc2:
+                                    _fig_fc = go.Figure()
+                                    _fig_fc.add_trace(go.Scatter(
+                                        x=[r["Tenor (Y)"] for r in _curve_rows],
+                                        y=[r["Fwd Rate (%)"] for r in _curve_rows],
+                                        mode="lines+markers", line=dict(color="#3b82f6", width=2),
+                                        marker=dict(size=7), name=f"Fwd curve {_val_date}"))
+                                    # Also show today's curve for comparison
+                                    _today_rows = [_matrix_rate_at(0.0, t) for t in _matrix_tenors]
+                                    if any(r is not None for r in _today_rows):
+                                        _fig_fc.add_trace(go.Scatter(
+                                            x=_matrix_tenors,
+                                            y=[r for r in _today_rows if r is not None],
+                                            mode="lines", line=dict(color="#94a3b8", width=1.5, dash="dot"),
+                                            name="Today"))
+                                    _fig_fc.update_layout(
+                                        title=f"Forward Curve at {_val_date} vs Today (Modified Following approx.)",
+                                        xaxis_title="Tenor (Y)", yaxis_title="Rate (%)",
+                                        template="plotly_dark", height=240,
+                                        margin=dict(t=40, b=35, l=50, r=20),
+                                        legend=dict(orientation="h", y=1.05))
+                                    st.plotly_chart(_fig_fc, use_container_width=True)
 
-            # ══════════════════════════════════════════════════════════════
-            # HORIZON ANALYSIS
-            # Theta decay + rate move + vol shift P&L across time horizons
-            # Uses fwd swap matrix to get curve at each future date
-            # ══════════════════════════════════════════════════════════════
-            st.markdown("---")
-            st.markdown("#### ⏱ Horizon Analysis — Theta, Rate & Vol P&L")
-            st.caption(
-                "Select an idea, then set rate and vol shift scenarios. "
-                "P&L computed at each horizon using the forward swap curve and Bachelier repricing."
-            )
+                        def _get_move_for_idea(exp_y, tenor_y, val_date=None):
+                            """Fwd rate at (val_date offset + trade expiry), vs today's spot."""
+                            spot = (_par_rate(tenor_y) or 4.5) if curve is not None else 4.5
+                            # Total expiry from today = time to val_date + trade's own expiry
+                            total_exp_y = _val_exp_y + exp_y
+                            fwd = _matrix_rate_at(total_exp_y, tenor_y)
+                            if fwd is None:
+                                fwd = spot
+                            move_bp = round((fwd - spot) * 100, 2)
+                            return move_bp, spot, fwd
 
-            if not ideas:
-                st.info("Generate ideas above to run horizon analysis.")
-            else:
-                # ── Idea selector ───────────────────────────────────────
-                _hz_labels = [f"{i['Type']} | {i['Structure']}" for i in ideas[:12]]
-                _hz_sel_label = st.selectbox("Select idea for horizon analysis",
-                                             _hz_labels, key="hz_idea_sel")
-                _hz_idx   = _hz_labels.index(_hz_sel_label)
-                _hz_idea  = ideas[_hz_idx]
+                # ── Per-trade P&L calculation ──────────────────────────────
+                if ideas:
+                    _notional = _notional_mm * 1e6
+                    _pnl_rows = []
 
-                # Parse expiry and tenor from the idea
-                _hz_exp_y, _hz_tenor_y = _parse_structure(_hz_idea["Structure"])
-                _hz_is_straddle = ("straddle" in _hz_idea["Trade"].lower() or
-                                   "Butterfly" in _hz_idea["Type"] or
-                                   "Gamma" in _hz_idea["Type"] or
-                                   "VRP" in _hz_idea["Type"] or
-                                   "Fwd Vol" in _hz_idea["Type"])
-                _hz_is_payer    = "Payer" in _hz_idea["Trade"] and "Receiver" not in _hz_idea["Trade"]
-                _hz_is_receiver = "Receiver" in _hz_idea["Trade"] and "Payer" not in _hz_idea["Trade"]
-                _hz_is_sell     = any(w in _hz_idea["Trade"].lower()
-                                      for w in ["sell","short","flattener"])
+                    for idx, idea in enumerate(ideas[:12]):
+                        is_sel = idx in selected if selected else True
+                        if not is_sel:
+                            continue
 
-                # ── Controls row ────────────────────────────────────────
-                _hz_c1, _hz_c2, _hz_c3, _hz_c4 = st.columns([2, 2, 2, 2])
-                with _hz_c1:
-                    _hz_notional = st.number_input("Notional (AUD mm)", min_value=1.0,
-                                                    max_value=5000.0, value=100.0, step=25.0,
-                                                    key="hz_notional")
-                with _hz_c2:
-                    _hz_rate_shift = st.slider("Rate shift (bp)", min_value=-150,
-                                               max_value=150, value=0, step=5,
-                                               key="hz_rate_shift",
-                                               help="Parallel shift applied to fwd rate at each horizon")
-                with _hz_c3:
-                    _hz_vol_shift = st.slider("Vol shift (bp)", min_value=-30,
-                                              max_value=30, value=0, step=1,
-                                              key="hz_vol_shift",
-                                              help="Shift applied to ATM implied vol at each horizon")
-                with _hz_c4:
-                    _hz_custom_date = st.date_input("Custom horizon date",
-                                                     value=date.today() + timedelta(days=45),
-                                                     key="hz_custom_date",
-                                                     format="DD/MM/YYYY")
+                        exp_y, tenor_y = _parse_structure(idea["Structure"])
+                        _move_bp, _spot_rate, _fwd_rate_val = _get_move_for_idea(exp_y, tenor_y, _val_date_used)
 
-                # ── Build horizon schedule ───────────────────────────────
-                _today_hz   = date.today()
-                _hz_schedule = [
-                    ("7d",   7),
-                    ("14d",  14),
-                    ("21d",  21),
-                    ("1m",   30),
-                    ("3m",   91),
-                    ("Custom", max(1, (_hz_custom_date - _today_hz).days)),
-                ]
+                        # DV01 scaled to actual tenor of the underlying swap
+                        _dv01 = _notional * 0.0001 * tenor_y  # $1bp per unit notional ≈ tenor years
+                        _est_pnl = None
+                        _basis = f"exp {exp_y:.2f}y ≈ {tenor_y:.0f}Y swap"
 
-                # Implied vol at inception
-                _hz_impl_vol = get_matrix_value(atm, "1y" if _hz_exp_y >= 1.0 else
-                                                    ("6m" if _hz_exp_y >= 0.5 else "3m"),
-                                                _hz_tenor_y) or 80.0
-                _hz_impl_vol_shifted = _hz_impl_vol + _hz_vol_shift
+                        _trade = idea["Trade"]
+                        _type  = idea["Type"]
 
-                # Annuity proxy
-                try:
-                    _hz_ois = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
-                    if _hz_ois is None:
-                        _hz_ois = get_basis_curve(ccy, "ois")
-                    _, _hz_ann, _ = forward_and_annuity_from_curve(
-                        curve, ccy, _hz_exp_y, _hz_tenor_y, _hz_ois)
-                except Exception:
-                    _hz_ann = _hz_tenor_y * 0.85
-
-                _hz_notional_val = _hz_notional * 1e6
-
-                # Inception ATM fwd rate
-                _hz_spot_fwd = (_par_rate(_hz_tenor_y) or 4.5)
-
-                # Bachelier straddle pricing function
-                def _hz_straddle_val(T_rem: float, fwd_rate: float,
-                                     vol_bp: float, ann: float) -> float:
-                    """ATM Bachelier straddle value in AUD (not bp)."""
-                    if T_rem <= 0:
-                        return 0.0
-                    # Premium in bp of rate × annuity × notional
-                    prem_rate = 2 * 0.3989422804 * (vol_bp / 10000) * math.sqrt(T_rem) * ann
-                    return prem_rate * _hz_notional_val
-
-                def _hz_option_val(T_rem: float, fwd_rate: float, strike: float,
-                                   vol_bp: float, ann: float, opt: str) -> float:
-                    """Bachelier call/put value."""
-                    if T_rem <= 0:
-                        return max(0.0, (fwd_rate - strike) * _hz_notional_val * ann
-                                   if opt == "payer" else
-                                   (strike - fwd_rate) * _hz_notional_val * ann)
-                    sigma = (vol_bp / 10000) * math.sqrt(T_rem)
-                    if sigma < 1e-9:
-                        intrinsic = (fwd_rate - strike) if opt == "payer" else (strike - fwd_rate)
-                        return max(0.0, intrinsic * _hz_notional_val * ann)
-                    from statistics import NormalDist as _ND
-                    nd = _ND(0, 1)
-                    d = (fwd_rate - strike) / sigma
-                    if opt == "payer":
-                        val = (fwd_rate - strike) * nd.cdf(d) + sigma * nd.pdf(d)
-                    else:
-                        val = (strike - fwd_rate) * nd.cdf(-d) + sigma * nd.pdf(d)
-                    return val * ann * _hz_notional_val
-
-                # Strike = inception fwd rate (ATM)
-                _hz_strike = _hz_spot_fwd / 100.0  # in decimal
-
-                # Inception value
-                _hz_incept_val = _hz_straddle_val(
-                    _hz_exp_y, _hz_spot_fwd / 100.0, _hz_impl_vol, _hz_ann)
-
-                # ── Build horizon table ──────────────────────────────────
-                _hz_rows = []
-                _hz_chart_data = []  # for multi-line chart
-
-                for _hlbl, _hdays in _hz_schedule:
-                    _hT = max(_hz_exp_y - _hdays / 365.0, 0.0)
-                    _h_yf = _hdays / 365.0  # time to this horizon from today
-
-                    # Fwd rate at horizon from matrix
-                    if _has_matrix:
-                        _hfwd = _matrix_rate_at(_h_yf, _hz_tenor_y)
-                        if _hfwd is None:
-                            _hfwd = _hz_spot_fwd
-                    else:
-                        _hfwd = _hz_spot_fwd
-
-                    # Apply rate shift
-                    _hfwd_shifted = _hfwd + _hz_rate_shift / 100.0
-
-                    # Reprice at horizon
-                    if _hz_is_straddle:
-                        _hval = _hz_straddle_val(
-                            _hT, _hfwd_shifted / 100.0,
-                            _hz_impl_vol_shifted, _hz_ann)
-                        # P&L for seller = inception premium collected − current value
-                        if _hz_is_sell:
-                            _hpnl = _hz_incept_val - _hval
+                        if "Calendar" in _type or "Spread" in _type or "straddle" in _trade.lower():
+                            # Long straddle / calendar spread   —   profits from vol change + abs move
+                            _est_pnl = abs(_move_bp) * _dv01 / 100 * 0.5
+                            _basis += f" | |{_move_bp:.1f}bp| >├ö├½├¬50%"
+                        elif "Payer" in _trade and "Receiver" not in _trade:
+                            _est_pnl = _move_bp * _dv01 / 100
+                            _basis += f" | +{_move_bp:+.1f}bp"
+                        elif "Receiver" in _trade and "Payer" not in _trade:
+                            _est_pnl = -_move_bp * _dv01 / 100
+                            _basis += f" | -{_move_bp:+.1f}bp"
+                        elif "Flattener" in _trade:
+                            # Flattener: gains if short end rises vs long end   —   use slope move
+                            _short_y = max(tenor_y - 8, 2.0)
+                            _, _, _fwd_short = _get_move_for_idea(exp_y, _short_y, _val_date_used)
+                            _, _, _fwd_long  = _get_move_for_idea(exp_y, tenor_y, _val_date_used)
+                            _slope_move = ((_fwd_long - (_par_rate(tenor_y) or 4.5)) -
+                                           (_fwd_short - (_par_rate(_short_y) or 4.0))) * 100
+                            _est_pnl = -_slope_move * _notional * 0.0001 * tenor_y / 100
+                            _basis += f" | slope {_slope_move:+.1f}bp"
+                        elif "Steepener" in _trade:
+                            _short_y = max(tenor_y - 8, 2.0)
+                            _, _, _fwd_short = _get_move_for_idea(exp_y, _short_y, _val_date_used)
+                            _, _, _fwd_long  = _get_move_for_idea(exp_y, tenor_y, _val_date_used)
+                            _slope_move = ((_fwd_long - (_par_rate(tenor_y) or 4.5)) -
+                                           (_fwd_short - (_par_rate(_short_y) or 4.0))) * 100
+                            _est_pnl = _slope_move * _notional * 0.0001 * tenor_y / 100
+                            _basis += f" | slope {_slope_move:+.1f}bp"
                         else:
-                            _hpnl = _hval - _hz_incept_val
-                    elif _hz_is_payer:
-                        _hval = _hz_option_val(
-                            _hT, _hfwd_shifted / 100.0, _hz_strike,
-                            _hz_impl_vol_shifted, _hz_ann, "payer")
-                        _hpnl = _hval - _hz_incept_val
-                    elif _hz_is_receiver:
-                        _hval = _hz_option_val(
-                            _hT, _hfwd_shifted / 100.0, _hz_strike,
-                            _hz_impl_vol_shifted, _hz_ann, "receiver")
-                        _hpnl = _hval - _hz_incept_val
+                            # Catch-all: treat as delta-one to the move
+                            _est_pnl = _move_bp * _dv01 / 100 * 0.3
+                            _basis += f" | {_move_bp:+.1f}bp ≈30%"
+
+                        if _est_pnl is not None:
+                            _pnl_rows.append({
+                                "Structure": idea["Structure"],
+                                "Exp": f"{exp_y:.2f}y",
+                                "Tenor": f"{tenor_y:.0f}Y",
+                                "Spot (%)": f"{_spot_rate:.3f}",
+                                "Fwd (%)": f"{_fwd_rate_val:.3f}",
+                                "Move": f"{_move_bp:+.1f}bp",
+                                "DV01 (k)": f"{_dv01/1e3:.1f}",
+                                "Est. P&L": f"{'+'if _est_pnl>=0 else ''}{_est_pnl/1e3:.1f}k",
+                            })
+
+                    if _pnl_rows:
+                        st.dataframe(pd.DataFrame(_pnl_rows), use_container_width=True, hide_index=True)
+                        st.caption("⚙️ Estimates only   —   DV01 ≈ rate move proxy. "
+                                   "Use Swaptions/Caps tabs for full vol-adjusted pricing.")
+
+                        _vals = [float(r["Est. P&L"].replace("k","").replace("+","")) for r in _pnl_rows]
+                        _lbls = [r["Structure"] for r in _pnl_rows]
+                        _moves = [r["Move"] for r in _pnl_rows]
+                        _colors = ["#22c55e" if v >= 0 else "#ef4444" for v in _vals]
+                        _fig_pnl = go.Figure(go.Bar(
+                            x=_lbls, y=_vals, marker_color=_colors,
+                            text=[f"{v:+.1f}k\n{m}" for v, m in zip(_vals, _moves)],
+                            textposition="outside"))
+                        _title_date = str(_val_date_used) if _val_date_used else "manual shift"
+                        _fig_pnl.update_layout(
+                            title=f"Est. P&L   —   {_notional_mm:.0f}mm notional | {_title_date}",
+                            yaxis_title="Est. P&L (AUD '000)",
+                            xaxis_tickangle=-35,
+                            template="plotly_dark", height=360,
+                            margin=dict(t=50, b=100))
+                        st.plotly_chart(_fig_pnl, use_container_width=True)
                     else:
-                        _hpnl = 0.0
-                        _hval = _hz_incept_val
+                        st.info("Generate ideas above to see P&L estimates.")
 
-                    _hz_rows.append({
-                        "Horizon":       _hlbl,
-                        "Days":          _hdays,
-                        "Rem T (y)":     round(_hT, 3),
-                        "Fwd Rate (%)":  round(_hfwd, 4),
-                        "Shifted Fwd":   round(_hfwd_shifted, 4),
-                        "Vol (bp)":      round(_hz_impl_vol_shifted, 1),
-                        "Option Value":  f"${_hval/1e3:.1f}k",
-                        "P&L":          f"{'+'if _hpnl>=0 else ''}{_hpnl/1e3:.1f}k",
-                        "_pnl_raw":      _hpnl,
-                        "_days":         _hdays,
-                    })
-                    _hz_chart_data.append({"Horizon": _hlbl, "Days": _hdays,
-                                            "P&L (k)": round(_hpnl / 1e3, 2)})
-
-                # ── Show table ───────────────────────────────────────────
-                st.markdown(f"**{_hz_idea['Structure']}** | "
-                            f"Exp: {_hz_exp_y:.2f}y | Tenor: {_hz_tenor_y:.0f}Y | "
-                            f"Inception vol: {_hz_impl_vol:.1f}bp | "
-                            f"ATM fwd: {_hz_spot_fwd:.3f}%")
-
-                _hz_disp = pd.DataFrame(_hz_rows).drop(columns=["_pnl_raw","_days"])
-
-                def _hz_pnl_color(v):
-                    try:
-                        f = float(str(v).replace("+","").replace("k",""))
-                        if f > 0:  return "color:#22c55e;font-weight:600"
-                        if f < 0:  return "color:#ef4444;font-weight:600"
-                        return ""
-                    except Exception: return ""
-
-                st.dataframe(
-                    _hz_disp.style.map(_hz_pnl_color, subset=["P&L"]),
-                    use_container_width=True, hide_index=True)
-
-                # ── Multi-scenario P&L surface chart ────────────────────
-                st.markdown("##### P&L Surface — Rate × Vol × Time")
-                st.caption("Each line = one time horizon. X axis = rate shift (bp). Y axis = P&L ($k). "
-                           "Vol shift applied uniformly across all scenarios.")
-
-                _hz_rate_scenarios = list(range(-200, 205, 5))  # wider range, finer steps
-                _hz_vol_scenarios  = [0, -10, +10]
-
-                _hz_fig = go.Figure()
-                _colors_surf = ["#3b82f6","#22c55e","#f59e0b","#a78bfa","#f43f5e","#06b6d4"]
-
-                _all_pnl = []
-                _hz_surface_data = []
-                for _ci, (_hlbl, _hdays) in enumerate(_hz_schedule):
-                    _hT   = max(_hz_exp_y - _hdays / 365.0, 0.0)
-                    _h_yf = _hdays / 365.0
-                    _hfwd = (_matrix_rate_at(_h_yf, _hz_tenor_y)
-                             if _has_matrix else _hz_spot_fwd) or _hz_spot_fwd
-
-                    _pnl_by_rate = []
-                    for _rs_bp in _hz_rate_scenarios:
-                        _hfr = _hfwd + _rs_bp / 100.0
-                        _hvol = _hz_impl_vol + _hz_vol_shift
-
-                        if _hz_is_straddle:
-                            _hv = _hz_straddle_val(_hT, _hfr / 100.0, _hvol, _hz_ann)
-                            _p = (_hz_incept_val - _hv) if _hz_is_sell else (_hv - _hz_incept_val)
-                        elif _hz_is_payer:
-                            _hv = _hz_option_val(_hT, _hfr/100.0, _hz_strike, _hvol, _hz_ann, "payer")
-                            _p = _hv - _hz_incept_val
-                        elif _hz_is_receiver:
-                            _hv = _hz_option_val(_hT, _hfr/100.0, _hz_strike, _hvol, _hz_ann, "receiver")
-                            _p = _hv - _hz_incept_val
-                        else:
-                            _p = 0.0
-                        _pnl_by_rate.append(round(_p / 1e3, 2))
-                    _all_pnl.extend(_pnl_by_rate)
-                    _hz_surface_data.append((_hlbl, _hdays, _pnl_by_rate, _colors_surf[_ci % len(_colors_surf)]))
-
-                # Auto-scale y-axis
-                _pnl_min = min(_all_pnl) if _all_pnl else -100
-                _pnl_max = max(_all_pnl) if _all_pnl else 100
-                _pnl_pad = max(abs(_pnl_max - _pnl_min) * 0.15, 10)
-
-                for _hlbl, _hdays, _pnl_by_rate, _col in _hz_surface_data:
-                    _hz_fig.add_trace(go.Scatter(
-                        x=_hz_rate_scenarios,
-                        y=_pnl_by_rate,
-                        mode="lines",
-                        name=_hlbl,
-                        line=dict(color=_col, width=2.5),
-                        hovertemplate=f"<b>{_hlbl}</b><br>Rate shift: %{{x}}bp<br>P&L: $%{{y:.1f}}k<extra></extra>"
-                    ))
-
-                # Zero line
-                _hz_fig.add_hline(y=0, line_dash="dash", line_color="#64748b", line_width=1,
-                                   annotation_text="Breakeven", annotation_position="right",
-                                   annotation_font_color="#64748b")
-                # ATM vertical
-                _hz_fig.add_vline(x=0, line_dash="dot", line_color="#334155", line_width=1)
-
-                _hz_fig.update_layout(
-                    xaxis=dict(title="Rate Shift (bp)", tickmode="linear", dtick=25,
-                               zeroline=True, zerolinecolor="#334155"),
-                    yaxis=dict(title="Est. P&L ($k)",
-                               range=[_pnl_min - _pnl_pad, _pnl_max + _pnl_pad]),
-                    legend=dict(title="Horizon", orientation="v",
-                                x=1.01, y=1, bgcolor="rgba(0,0,0,0)"),
-                    template="plotly_dark", height=380,
-                    margin=dict(t=20, r=120, l=60),
-                    hovermode="x unified",
-                    plot_bgcolor="rgba(15,23,42,0.8)",
-                    paper_bgcolor="rgba(0,0,0,0)",
+                # ══════════════════════════════════════════════════════════════
+                # HORIZON ANALYSIS
+                # Theta decay + rate move + vol shift P&L across time horizons
+                # Uses fwd swap matrix to get curve at each future date
+                # ══════════════════════════════════════════════════════════════
+                st.markdown("---")
+                st.markdown("#### ⏱ Horizon Analysis — Theta, Rate & Vol P&L")
+                st.caption(
+                    "Select an idea, then set rate and vol shift scenarios. "
+                    "P&L computed at each horizon using the forward swap curve and Bachelier repricing."
                 )
-                st.plotly_chart(_hz_fig, use_container_width=True)
 
-                # ── Vol shift sensitivity chart ──────────────────────────
-                with st.expander("📊 Vol Shift Sensitivity — P&L by Vol Scenario at Each Horizon"):
-                    st.caption("X axis = vol shift (bp). Lines = horizons at current rate (no rate shift).")
-                    _hz_vol_range = list(range(-25, 26, 1))
-                    _hz_vfig = go.Figure()
+                if not ideas:
+                    st.info("Generate ideas above to run horizon analysis.")
+                else:
+                    # ── Idea selector ───────────────────────────────────────
+                    _hz_labels = [f"{i['Type']} | {i['Structure']}" for i in ideas[:12]]
+                    _hz_sel_label = st.selectbox("Select idea for horizon analysis",
+                                                 _hz_labels, key="hz_idea_sel")
+                    _hz_idx   = _hz_labels.index(_hz_sel_label)
+                    _hz_idea  = ideas[_hz_idx]
 
-                    for _ci2, (_hlbl2, _hdays2) in enumerate(_hz_schedule):
-                        _hT2  = max(_hz_exp_y - _hdays2 / 365.0, 0.0)
-                        _h_yf2 = _hdays2 / 365.0
-                        _hfwd2 = (_matrix_rate_at(_h_yf2, _hz_tenor_y)
-                                  if _has_matrix else _hz_spot_fwd) or _hz_spot_fwd
+                    # Parse expiry and tenor from the idea
+                    _hz_exp_y, _hz_tenor_y = _parse_structure(_hz_idea["Structure"])
+                    _hz_is_straddle = ("straddle" in _hz_idea["Trade"].lower() or
+                                       "Butterfly" in _hz_idea["Type"] or
+                                       "Gamma" in _hz_idea["Type"] or
+                                       "VRP" in _hz_idea["Type"] or
+                                       "Fwd Vol" in _hz_idea["Type"])
+                    _hz_is_payer    = "Payer" in _hz_idea["Trade"] and "Receiver" not in _hz_idea["Trade"]
+                    _hz_is_receiver = "Receiver" in _hz_idea["Trade"] and "Payer" not in _hz_idea["Trade"]
+                    _hz_is_sell     = any(w in _hz_idea["Trade"].lower()
+                                          for w in ["sell","short","flattener"])
 
-                        _vpnl = []
-                        for _vs in _hz_vol_range:
-                            _hvol2 = _hz_impl_vol + _vs
-                            if _hz_is_straddle:
-                                _hv2 = _hz_straddle_val(_hT2, _hfwd2/100.0, _hvol2, _hz_ann)
-                                _p2 = (_hz_incept_val - _hv2) if _hz_is_sell else (_hv2 - _hz_incept_val)
-                            elif _hz_is_payer:
-                                _hv2 = _hz_option_val(_hT2, _hfwd2/100.0, _hz_strike, _hvol2, _hz_ann, "payer")
-                                _p2 = _hv2 - _hz_incept_val
-                            elif _hz_is_receiver:
-                                _hv2 = _hz_option_val(_hT2, _hfwd2/100.0, _hz_strike, _hvol2, _hz_ann, "receiver")
-                                _p2 = _hv2 - _hz_incept_val
+                    # ── Controls row ────────────────────────────────────────
+                    _hz_c1, _hz_c2, _hz_c3, _hz_c4 = st.columns([2, 2, 2, 2])
+                    with _hz_c1:
+                        _hz_notional = st.number_input("Notional (AUD mm)", min_value=1.0,
+                                                        max_value=5000.0, value=100.0, step=25.0,
+                                                        key="hz_notional")
+                    with _hz_c2:
+                        _hz_rate_shift = st.slider("Rate shift (bp)", min_value=-150,
+                                                   max_value=150, value=0, step=5,
+                                                   key="hz_rate_shift",
+                                                   help="Parallel shift applied to fwd rate at each horizon")
+                    with _hz_c3:
+                        _hz_vol_shift = st.slider("Vol shift (bp)", min_value=-30,
+                                                  max_value=30, value=0, step=1,
+                                                  key="hz_vol_shift",
+                                                  help="Shift applied to ATM implied vol at each horizon")
+                    with _hz_c4:
+                        _hz_custom_date = st.date_input("Custom horizon date",
+                                                         value=date.today() + timedelta(days=45),
+                                                         key="hz_custom_date",
+                                                         format="DD/MM/YYYY")
+
+                    # ── Build horizon schedule ───────────────────────────────
+                    _today_hz   = date.today()
+                    _hz_schedule = [
+                        ("7d",   7),
+                        ("14d",  14),
+                        ("21d",  21),
+                        ("1m",   30),
+                        ("3m",   91),
+                        ("Custom", max(1, (_hz_custom_date - _today_hz).days)),
+                    ]
+
+                    # Implied vol at inception
+                    _hz_impl_vol = get_matrix_value(atm, "1y" if _hz_exp_y >= 1.0 else
+                                                        ("6m" if _hz_exp_y >= 0.5 else "3m"),
+                                                    _hz_tenor_y) or 80.0
+                    _hz_impl_vol_shifted = _hz_impl_vol + _hz_vol_shift
+
+                    # Annuity proxy
+                    try:
+                        _hz_ois = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+                        if _hz_ois is None:
+                            _hz_ois = get_basis_curve(ccy, "ois")
+                        _, _hz_ann, _ = forward_and_annuity_from_curve(
+                            curve, ccy, _hz_exp_y, _hz_tenor_y, _hz_ois)
+                    except Exception:
+                        _hz_ann = _hz_tenor_y * 0.85
+
+                    _hz_notional_val = _hz_notional * 1e6
+
+                    # Inception ATM fwd rate
+                    _hz_spot_fwd = (_par_rate(_hz_tenor_y) or 4.5)
+
+                    # Bachelier straddle pricing function
+                    def _hz_straddle_val(T_rem: float, fwd_rate: float,
+                                         vol_bp: float, ann: float) -> float:
+                        """ATM Bachelier straddle value in AUD (not bp)."""
+                        if T_rem <= 0:
+                            return 0.0
+                        # Premium in bp of rate × annuity × notional
+                        prem_rate = 2 * 0.3989422804 * (vol_bp / 10000) * math.sqrt(T_rem) * ann
+                        return prem_rate * _hz_notional_val
+
+                    def _hz_option_val(T_rem: float, fwd_rate: float, strike: float,
+                                       vol_bp: float, ann: float, opt: str) -> float:
+                        """Bachelier call/put value."""
+                        if T_rem <= 0:
+                            return max(0.0, (fwd_rate - strike) * _hz_notional_val * ann
+                                       if opt == "payer" else
+                                       (strike - fwd_rate) * _hz_notional_val * ann)
+                        sigma = (vol_bp / 10000) * math.sqrt(T_rem)
+                        if sigma < 1e-9:
+                            intrinsic = (fwd_rate - strike) if opt == "payer" else (strike - fwd_rate)
+                            return max(0.0, intrinsic * _hz_notional_val * ann)
+                        from statistics import NormalDist as _ND
+                        nd = _ND(0, 1)
+                        d = (fwd_rate - strike) / sigma
+                        if opt == "payer":
+                            val = (fwd_rate - strike) * nd.cdf(d) + sigma * nd.pdf(d)
+                        else:
+                            val = (strike - fwd_rate) * nd.cdf(-d) + sigma * nd.pdf(d)
+                        return val * ann * _hz_notional_val
+
+                    # Strike = inception fwd rate (ATM)
+                    _hz_strike = _hz_spot_fwd / 100.0  # in decimal
+
+                    # Inception value
+                    _hz_incept_val = _hz_straddle_val(
+                        _hz_exp_y, _hz_spot_fwd / 100.0, _hz_impl_vol, _hz_ann)
+
+                    # ── Build horizon table ──────────────────────────────────
+                    _hz_rows = []
+                    _hz_chart_data = []  # for multi-line chart
+
+                    for _hlbl, _hdays in _hz_schedule:
+                        _hT = max(_hz_exp_y - _hdays / 365.0, 0.0)
+                        _h_yf = _hdays / 365.0  # time to this horizon from today
+
+                        # Fwd rate at horizon from matrix
+                        if _has_matrix:
+                            _hfwd = _matrix_rate_at(_h_yf, _hz_tenor_y)
+                            if _hfwd is None:
+                                _hfwd = _hz_spot_fwd
+                        else:
+                            _hfwd = _hz_spot_fwd
+
+                        # Apply rate shift
+                        _hfwd_shifted = _hfwd + _hz_rate_shift / 100.0
+
+                        # Reprice at horizon
+                        if _hz_is_straddle:
+                            _hval = _hz_straddle_val(
+                                _hT, _hfwd_shifted / 100.0,
+                                _hz_impl_vol_shifted, _hz_ann)
+                            # P&L for seller = inception premium collected − current value
+                            if _hz_is_sell:
+                                _hpnl = _hz_incept_val - _hval
                             else:
-                                _p2 = 0.0
-                            _vpnl.append(round(_p2 / 1e3, 2))
+                                _hpnl = _hval - _hz_incept_val
+                        elif _hz_is_payer:
+                            _hval = _hz_option_val(
+                                _hT, _hfwd_shifted / 100.0, _hz_strike,
+                                _hz_impl_vol_shifted, _hz_ann, "payer")
+                            _hpnl = _hval - _hz_incept_val
+                        elif _hz_is_receiver:
+                            _hval = _hz_option_val(
+                                _hT, _hfwd_shifted / 100.0, _hz_strike,
+                                _hz_impl_vol_shifted, _hz_ann, "receiver")
+                            _hpnl = _hval - _hz_incept_val
+                        else:
+                            _hpnl = 0.0
+                            _hval = _hz_incept_val
 
-                        _col2 = _colors_surf[_ci2 % len(_colors_surf)]
-                        _hz_vfig.add_trace(go.Scatter(
-                            x=_hz_vol_range, y=_vpnl,
-                            mode="lines", name=_hlbl2,
-                            line=dict(color=_col2, width=2),
-                            hovertemplate=f"<b>{_hlbl2}</b><br>Vol shift: %{{x}}bp<br>P&L: $%{{y:.1f}}k<extra></extra>"
+                        _hz_rows.append({
+                            "Horizon":       _hlbl,
+                            "Days":          _hdays,
+                            "Rem T (y)":     round(_hT, 3),
+                            "Fwd Rate (%)":  round(_hfwd, 4),
+                            "Shifted Fwd":   round(_hfwd_shifted, 4),
+                            "Vol (bp)":      round(_hz_impl_vol_shifted, 1),
+                            "Option Value":  f"${_hval/1e3:.1f}k",
+                            "P&L":          f"{'+'if _hpnl>=0 else ''}{_hpnl/1e3:.1f}k",
+                            "_pnl_raw":      _hpnl,
+                            "_days":         _hdays,
+                        })
+                        _hz_chart_data.append({"Horizon": _hlbl, "Days": _hdays,
+                                                "P&L (k)": round(_hpnl / 1e3, 2)})
+
+                    # ── Show table ───────────────────────────────────────────
+                    st.markdown(f"**{_hz_idea['Structure']}** | "
+                                f"Exp: {_hz_exp_y:.2f}y | Tenor: {_hz_tenor_y:.0f}Y | "
+                                f"Inception vol: {_hz_impl_vol:.1f}bp | "
+                                f"ATM fwd: {_hz_spot_fwd:.3f}%")
+
+                    _hz_disp = pd.DataFrame(_hz_rows).drop(columns=["_pnl_raw","_days"])
+
+                    def _hz_pnl_color(v):
+                        try:
+                            f = float(str(v).replace("+","").replace("k",""))
+                            if f > 0:  return "color:#22c55e;font-weight:600"
+                            if f < 0:  return "color:#ef4444;font-weight:600"
+                            return ""
+                        except Exception: return ""
+
+                    st.dataframe(
+                        _hz_disp.style.map(_hz_pnl_color, subset=["P&L"]),
+                        use_container_width=True, hide_index=True)
+
+                    # ── Multi-scenario P&L surface chart ────────────────────
+                    st.markdown("##### P&L Surface — Rate × Vol × Time")
+                    st.caption("Each line = one time horizon. X axis = rate shift (bp). Y axis = P&L ($k). "
+                               "Vol shift applied uniformly across all scenarios.")
+
+                    _hz_rate_scenarios = list(range(-200, 205, 5))  # wider range, finer steps
+                    _hz_vol_scenarios  = [0, -10, +10]
+
+                    _hz_fig = go.Figure()
+                    _colors_surf = ["#3b82f6","#22c55e","#f59e0b","#a78bfa","#f43f5e","#06b6d4"]
+
+                    _all_pnl = []
+                    _hz_surface_data = []
+                    for _ci, (_hlbl, _hdays) in enumerate(_hz_schedule):
+                        _hT   = max(_hz_exp_y - _hdays / 365.0, 0.0)
+                        _h_yf = _hdays / 365.0
+                        _hfwd = (_matrix_rate_at(_h_yf, _hz_tenor_y)
+                                 if _has_matrix else _hz_spot_fwd) or _hz_spot_fwd
+
+                        _pnl_by_rate = []
+                        for _rs_bp in _hz_rate_scenarios:
+                            _hfr = _hfwd + _rs_bp / 100.0
+                            _hvol = _hz_impl_vol + _hz_vol_shift
+
+                            if _hz_is_straddle:
+                                _hv = _hz_straddle_val(_hT, _hfr / 100.0, _hvol, _hz_ann)
+                                _p = (_hz_incept_val - _hv) if _hz_is_sell else (_hv - _hz_incept_val)
+                            elif _hz_is_payer:
+                                _hv = _hz_option_val(_hT, _hfr/100.0, _hz_strike, _hvol, _hz_ann, "payer")
+                                _p = _hv - _hz_incept_val
+                            elif _hz_is_receiver:
+                                _hv = _hz_option_val(_hT, _hfr/100.0, _hz_strike, _hvol, _hz_ann, "receiver")
+                                _p = _hv - _hz_incept_val
+                            else:
+                                _p = 0.0
+                            _pnl_by_rate.append(round(_p / 1e3, 2))
+                        _all_pnl.extend(_pnl_by_rate)
+                        _hz_surface_data.append((_hlbl, _hdays, _pnl_by_rate, _colors_surf[_ci % len(_colors_surf)]))
+
+                    # Auto-scale y-axis
+                    _pnl_min = min(_all_pnl) if _all_pnl else -100
+                    _pnl_max = max(_all_pnl) if _all_pnl else 100
+                    _pnl_pad = max(abs(_pnl_max - _pnl_min) * 0.15, 10)
+
+                    for _hlbl, _hdays, _pnl_by_rate, _col in _hz_surface_data:
+                        _hz_fig.add_trace(go.Scatter(
+                            x=_hz_rate_scenarios,
+                            y=_pnl_by_rate,
+                            mode="lines",
+                            name=_hlbl,
+                            line=dict(color=_col, width=2.5),
+                            hovertemplate=f"<b>{_hlbl}</b><br>Rate shift: %{{x}}bp<br>P&L: $%{{y:.1f}}k<extra></extra>"
                         ))
-                    _hz_vfig.add_hline(y=0, line_dash="dash", line_color="#64748b")
-                    _hz_vfig.update_layout(
-                        xaxis_title="Vol Shift (bp)",
-                        yaxis_title="Est. P&L ($k)",
-                        template="plotly_dark", height=340,
+
+                    # Zero line
+                    _hz_fig.add_hline(y=0, line_dash="dash", line_color="#64748b", line_width=1,
+                                       annotation_text="Breakeven", annotation_position="right",
+                                       annotation_font_color="#64748b")
+                    # ATM vertical
+                    _hz_fig.add_vline(x=0, line_dash="dot", line_color="#334155", line_width=1)
+
+                    _hz_fig.update_layout(
+                        xaxis=dict(title="Rate Shift (bp)", tickmode="linear", dtick=25,
+                                   zeroline=True, zerolinecolor="#334155"),
+                        yaxis=dict(title="Est. P&L ($k)",
+                                   range=[_pnl_min - _pnl_pad, _pnl_max + _pnl_pad]),
                         legend=dict(title="Horizon", orientation="v",
                                     x=1.01, y=1, bgcolor="rgba(0,0,0,0)"),
-                        margin=dict(r=120))
-                    st.plotly_chart(_hz_vfig, use_container_width=True)
+                        template="plotly_dark", height=380,
+                        margin=dict(t=20, r=120, l=60),
+                        hovermode="x unified",
+                        plot_bgcolor="rgba(15,23,42,0.8)",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                    )
+                    st.plotly_chart(_hz_fig, use_container_width=True)
 
-                # ── Breakeven surface table ──────────────────────────────
-                with st.expander("📐 Breakeven Rate Move by Horizon"):
-                    st.caption("How many bp does the rate need to move by each horizon "
-                               "for the position to break even? "
-                               "For straddle sellers: how much can rates move before you lose?")
-                    _hz_be_rows = []
-                    for _hlbl3, _hdays3 in _hz_schedule:
-                        _hT3  = max(_hz_exp_y - _hdays3 / 365.0, 0.0)
-                        _h_yf3 = _hdays3 / 365.0
-                        _hfwd3 = (_matrix_rate_at(_h_yf3, _hz_tenor_y)
-                                  if _has_matrix else _hz_spot_fwd) or _hz_spot_fwd
+                    # ── Vol shift sensitivity chart ──────────────────────────
+                    with st.expander("📊 Vol Shift Sensitivity — P&L by Vol Scenario at Each Horizon"):
+                        st.caption("X axis = vol shift (bp). Lines = horizons at current rate (no rate shift).")
+                        _hz_vol_range = list(range(-25, 26, 1))
+                        _hz_vfig = go.Figure()
 
-                        # Binary search for breakeven shift
-                        def _pnl_at_shift(shift_bp):
-                            _hfr3 = _hfwd3 + shift_bp / 100.0
-                            _hvol3 = _hz_impl_vol + _hz_vol_shift
-                            if _hz_is_straddle:
-                                _hv3 = _hz_straddle_val(_hT3, _hfr3/100.0, _hvol3, _hz_ann)
-                                return (_hz_incept_val - _hv3) if _hz_is_sell else (_hv3 - _hz_incept_val)
-                            elif _hz_is_payer:
-                                _hv3 = _hz_option_val(_hT3, _hfr3/100.0, _hz_strike, _hvol3, _hz_ann, "payer")
-                                return _hv3 - _hz_incept_val
-                            elif _hz_is_receiver:
-                                _hv3 = _hz_option_val(_hT3, _hfr3/100.0, _hz_strike, _hvol3, _hz_ann, "receiver")
-                                return _hv3 - _hz_incept_val
-                            return 0.0
+                        for _ci2, (_hlbl2, _hdays2) in enumerate(_hz_schedule):
+                            _hT2  = max(_hz_exp_y - _hdays2 / 365.0, 0.0)
+                            _h_yf2 = _hdays2 / 365.0
+                            _hfwd2 = (_matrix_rate_at(_h_yf2, _hz_tenor_y)
+                                      if _has_matrix else _hz_spot_fwd) or _hz_spot_fwd
 
-                        try:
-                            # For straddle sellers, find upper breakeven (positive shift)
-                            from scipy.optimize import brentq as _brentq
-                            _be_up = _brentq(lambda s: _pnl_at_shift(s), 0, 200,
-                                             xtol=0.1) if _hz_is_sell and _hz_is_straddle else None
-                            _be_dn = _brentq(lambda s: _pnl_at_shift(s), -200, 0,
-                                             xtol=0.1) if _hz_is_sell and _hz_is_straddle else None
-                            _be_str = (f"+{_be_up:.0f}bp / {_be_dn:.0f}bp"
-                                       if _be_up and _be_dn else
-                                       f"±{abs(_be_up or _be_dn or 0):.0f}bp")
-                        except Exception:
-                            _theta_pnl = _pnl_at_shift(0)
-                            _be_str = f"~±{abs(_theta_pnl / (_hz_notional_val * 0.0001 * _hz_tenor_y / 100) * 100):.0f}bp" \
-                                      if _theta_pnl != 0 else "—"
+                            _vpnl = []
+                            for _vs in _hz_vol_range:
+                                _hvol2 = _hz_impl_vol + _vs
+                                if _hz_is_straddle:
+                                    _hv2 = _hz_straddle_val(_hT2, _hfwd2/100.0, _hvol2, _hz_ann)
+                                    _p2 = (_hz_incept_val - _hv2) if _hz_is_sell else (_hv2 - _hz_incept_val)
+                                elif _hz_is_payer:
+                                    _hv2 = _hz_option_val(_hT2, _hfwd2/100.0, _hz_strike, _hvol2, _hz_ann, "payer")
+                                    _p2 = _hv2 - _hz_incept_val
+                                elif _hz_is_receiver:
+                                    _hv2 = _hz_option_val(_hT2, _hfwd2/100.0, _hz_strike, _hvol2, _hz_ann, "receiver")
+                                    _p2 = _hv2 - _hz_incept_val
+                                else:
+                                    _p2 = 0.0
+                                _vpnl.append(round(_p2 / 1e3, 2))
 
-                        _theta_only = _pnl_at_shift(0)
-                        _hz_be_rows.append({
-                            "Horizon":       _hlbl3,
-                            "Theta P&L ($k)": f"{'+'if _theta_only>=0 else ''}{_theta_only/1e3:.1f}k",
-                            "Breakeven Range": _be_str,
-                            "Fwd Rate (%)":   f"{_hfwd3:.4f}%",
-                        })
-                    st.dataframe(pd.DataFrame(_hz_be_rows), use_container_width=True,
-                                 hide_index=True)
-                    st.caption("Theta P&L = P&L with zero rate move at that horizon. "
-                               "Breakeven range = rate move where P&L = 0 (straddle sellers only).")
+                            _col2 = _colors_surf[_ci2 % len(_colors_surf)]
+                            _hz_vfig.add_trace(go.Scatter(
+                                x=_hz_vol_range, y=_vpnl,
+                                mode="lines", name=_hlbl2,
+                                line=dict(color=_col2, width=2),
+                                hovertemplate=f"<b>{_hlbl2}</b><br>Vol shift: %{{x}}bp<br>P&L: $%{{y:.1f}}k<extra></extra>"
+                            ))
+                        _hz_vfig.add_hline(y=0, line_dash="dash", line_color="#64748b")
+                        _hz_vfig.update_layout(
+                            xaxis_title="Vol Shift (bp)",
+                            yaxis_title="Est. P&L ($k)",
+                            template="plotly_dark", height=340,
+                            legend=dict(title="Horizon", orientation="v",
+                                        x=1.01, y=1, bgcolor="rgba(0,0,0,0)"),
+                            margin=dict(r=120))
+                        st.plotly_chart(_hz_vfig, use_container_width=True)
+
+                    # ── Breakeven surface table ──────────────────────────────
+                    with st.expander("📐 Breakeven Rate Move by Horizon"):
+                        st.caption("How many bp does the rate need to move by each horizon "
+                                   "for the position to break even? "
+                                   "For straddle sellers: how much can rates move before you lose?")
+                        _hz_be_rows = []
+                        for _hlbl3, _hdays3 in _hz_schedule:
+                            _hT3  = max(_hz_exp_y - _hdays3 / 365.0, 0.0)
+                            _h_yf3 = _hdays3 / 365.0
+                            _hfwd3 = (_matrix_rate_at(_h_yf3, _hz_tenor_y)
+                                      if _has_matrix else _hz_spot_fwd) or _hz_spot_fwd
+
+                            # Binary search for breakeven shift
+                            def _pnl_at_shift(shift_bp):
+                                _hfr3 = _hfwd3 + shift_bp / 100.0
+                                _hvol3 = _hz_impl_vol + _hz_vol_shift
+                                if _hz_is_straddle:
+                                    _hv3 = _hz_straddle_val(_hT3, _hfr3/100.0, _hvol3, _hz_ann)
+                                    return (_hz_incept_val - _hv3) if _hz_is_sell else (_hv3 - _hz_incept_val)
+                                elif _hz_is_payer:
+                                    _hv3 = _hz_option_val(_hT3, _hfr3/100.0, _hz_strike, _hvol3, _hz_ann, "payer")
+                                    return _hv3 - _hz_incept_val
+                                elif _hz_is_receiver:
+                                    _hv3 = _hz_option_val(_hT3, _hfr3/100.0, _hz_strike, _hvol3, _hz_ann, "receiver")
+                                    return _hv3 - _hz_incept_val
+                                return 0.0
+
+                            try:
+                                # For straddle sellers, find upper breakeven (positive shift)
+                                from scipy.optimize import brentq as _brentq
+                                _be_up = _brentq(lambda s: _pnl_at_shift(s), 0, 200,
+                                                 xtol=0.1) if _hz_is_sell and _hz_is_straddle else None
+                                _be_dn = _brentq(lambda s: _pnl_at_shift(s), -200, 0,
+                                                 xtol=0.1) if _hz_is_sell and _hz_is_straddle else None
+                                _be_str = (f"+{_be_up:.0f}bp / {_be_dn:.0f}bp"
+                                           if _be_up and _be_dn else
+                                           f"±{abs(_be_up or _be_dn or 0):.0f}bp")
+                            except Exception:
+                                _theta_pnl = _pnl_at_shift(0)
+                                _be_str = f"~±{abs(_theta_pnl / (_hz_notional_val * 0.0001 * _hz_tenor_y / 100) * 100):.0f}bp" \
+                                          if _theta_pnl != 0 else "—"
+
+                            _theta_only = _pnl_at_shift(0)
+                            _hz_be_rows.append({
+                                "Horizon":       _hlbl3,
+                                "Theta P&L ($k)": f"{'+'if _theta_only>=0 else ''}{_theta_only/1e3:.1f}k",
+                                "Breakeven Range": _be_str,
+                                "Fwd Rate (%)":   f"{_hfwd3:.4f}%",
+                            })
+                        st.dataframe(pd.DataFrame(_hz_be_rows), use_container_width=True,
+                                     hide_index=True)
+                        st.caption("Theta P&L = P&L with zero rate move at that horizon. "
+                                   "Breakeven range = rate move where P&L = 0 (straddle sellers only).")
     if _rv_active == 3:
         st.markdown("### Cap/Floor RV Trade Recommendations")
         st.caption("Forward BBSW path vs caplet vol   —   find richness/cheapness by strike and maturity.")
