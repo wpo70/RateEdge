@@ -19181,6 +19181,148 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             else:
                 st.session_state["rv_report_generated"] = True
 
+    # ── Morning Rates Input ───────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 🌏 Morning Markets Input")
+    st.caption("Enter today's opening levels. Yesterday's close auto-saves on Update. Moves calculated automatically.")
+
+    # Define rate structure
+    _RATE_FIELDS = [
+        # (key, label, group)
+        ("rba_cash",   "RBA Cash Rate",    "AUD Money"),
+        ("bbsw_3m",    "BBSW 3M",          "AUD Money"),
+        ("bbsw_6m",    "BBSW 6M",          "AUD Money"),
+        ("ois_1m",     "OIS 1M",           "AUD OIS"),
+        ("ois_3m",     "OIS 3M",           "AUD OIS"),
+        ("ois_6m",     "OIS 6M",           "AUD OIS"),
+        ("swap_2y",    "Swap 2Y",          "AUD Swaps"),
+        ("swap_3y",    "Swap 3Y",          "AUD Swaps"),
+        ("swap_5y",    "Swap 5Y",          "AUD Swaps"),
+        ("swap_10y",   "Swap 10Y",         "AUD Swaps"),
+        ("swap_20y",   "Swap 20Y",         "AUD Swaps"),
+        ("aud_fut_3y", "AGB 3Y Fut",       "AUD Futures"),
+        ("aud_fut_10y","AGB 10Y Fut",      "AUD Futures"),
+        ("spi",        "SPI 200 Fut",      "Equities"),
+        ("sp500",      "S&P 500",          "Equities"),
+        ("audusd",     "AUD/USD",          "FX"),
+        ("usd_2y",     "UST 2Y",           "USD Rates"),
+        ("usd_10y",    "UST 10Y",          "USD Rates"),
+        ("usd_30y",    "UST 30Y",          "USD Rates"),
+        ("usdswap_2y", "USD Swap 2Y",      "USD Rates"),
+        ("usdswap_10y","USD Swap 10Y",     "USD Rates"),
+        ("usdswap_30y","USD Swap 30Y",     "USD Rates"),
+    ]
+
+    _DERIVED = [
+        ("aud_2s10s",  "AUD 2s10s",  "swap_2y",    "swap_10y",  100),
+        ("aud_3s10s",  "AUD 3s10s",  "swap_3y",    "swap_10y",  100),
+        ("aud_10s20s", "AUD 10s20s", "swap_10y",   "swap_20y",  100),
+        ("usd_2s10s",  "UST 2s10s",  "usd_2y",     "usd_10y",   100),
+        ("usd_2s30s",  "UST 2s30s",  "usd_2y",     "usd_30y",   100),
+        ("usd_ss_2y",  "USD SS 2Y",  "usdswap_2y", "usd_2y",    100),
+        ("usd_ss_10y", "USD SS 10Y", "usdswap_10y","usd_10y",   100),
+        ("usd_ss_30y", "USD SS 30Y", "usdswap_30y","usd_30y",   100),
+    ]
+
+    # Load stored rates
+    _mr_today = st.session_state.get("morning_rates_today", {})
+    _mr_prev  = st.session_state.get("morning_rates_prev", {})
+
+    with st.expander("📝 Enter Morning Rates", expanded=not bool(_mr_today)):
+        _new_rates = {}
+        _groups = {}
+        for _k, _lbl, _grp in _RATE_FIELDS:
+            _groups.setdefault(_grp, []).append((_k, _lbl))
+
+        for _grp, _fields in _groups.items():
+            st.markdown(f"**{_grp}**")
+            _gcols = st.columns(len(_fields))
+            for _gi, (_k, _lbl) in enumerate(_fields):
+                _def = _mr_today.get(_k, 0.0)
+                _new_rates[_k] = _gcols[_gi].number_input(
+                    _lbl, value=float(_def), format="%.4f" if _def < 10 and "spi" not in _k and "sp500" not in _k else "%.2f",
+                    step=0.0001 if _def < 10 and "spi" not in _k and "sp500" not in _k else 0.01,
+                    key=f"mr_{_k}", label_visibility="visible")
+            st.markdown("")
+
+        if st.button("💾 Save Morning Rates", key="mr_save", type="primary"):
+            st.session_state["morning_rates_prev"]  = _mr_today
+            st.session_state["morning_rates_today"] = _new_rates
+            if HAS_POSTGRES:
+                save_user_config(_uid_rv, "morning_rates_today", "AUD", _new_rates)
+                save_user_config(_uid_rv, "morning_rates_prev",  "AUD", _mr_today)
+                load_user_config.clear()
+            st.success("✅ Morning rates saved")
+            st.rerun()
+
+    # Auto-load from DB
+    if not _mr_today and HAS_POSTGRES:
+        _db_mr = load_user_config(_uid_rv, "morning_rates_today", "AUD")
+        _db_mr_p = load_user_config(_uid_rv, "morning_rates_prev", "AUD")
+        if _db_mr:  st.session_state["morning_rates_today"] = _db_mr;  _mr_today = _db_mr
+        if _db_mr_p: st.session_state["morning_rates_prev"] = _db_mr_p; _mr_prev  = _db_mr_p
+
+    # ── Morning rates display table ───────────────────────────────────
+    if _mr_today:
+        # Add derived fields
+        _mr_display = _mr_today.copy()
+        _mr_prev_disp = _mr_prev.copy() if _mr_prev else {}
+        for _dk, _dlbl, _a, _b, _mult in _DERIVED:
+            if _mr_today.get(_a) and _mr_today.get(_b):
+                _mr_display[_dk]  = round((_mr_today[_a]  - _mr_today[_b])  * _mult, 1)
+                if _mr_prev.get(_a) and _mr_prev.get(_b):
+                    _mr_prev_disp[_dk] = round((_mr_prev[_a] - _mr_prev[_b]) * _mult, 1)
+
+        _all_fields = _RATE_FIELDS + [(_dk,_dlbl,"Spreads") for _dk,_dlbl,_a,_b,_mult in _DERIVED]
+        _tbl_rows = []
+        for _k, _lbl, _grp in _all_fields:
+            _v = _mr_display.get(_k)
+            _p = _mr_prev_disp.get(_k)
+            if _v:
+                _chg = round(_v - _p, 4) if _p else None
+                _is_bp = _grp in ("AUD Money","AUD OIS","AUD Swaps","USD Rates","Spreads")
+                _chg_disp = (f"{_chg*100:+.1f}bp" if _is_bp and _chg is not None else
+                             f"{_chg:+.4f}" if _chg is not None else "—")
+                _tbl_rows.append({
+                    "": _grp, "Rate": _lbl,
+                    "Today": f"{_v:.4f}" if _v < 20 and "spi" not in _k and "sp500" not in _k else f"{_v:.2f}",
+                    "Prev":  (f"{_p:.4f}" if _p and _p < 20 and "spi" not in _k and "sp500" not in _k else f"{_p:.2f}") if _p else "—",
+                    "Move":  _chg_disp,
+                    "_chg":  _chg or 0
+                })
+
+        if _tbl_rows:
+            import plotly.graph_objects as go
+            _tdf = pd.DataFrame(_tbl_rows)
+
+            # Colour move column
+            def _mc(v):
+                try:
+                    f = float(str(v).replace("bp","").replace("+",""))
+                    if f > 0: return "color:#22c55e;font-weight:600"
+                    if f < 0: return "color:#ef4444;font-weight:600"
+                except: pass
+                return ""
+
+            # Group header rows
+            _grp_cols = st.columns([1,2,1.2,1.2,1.2])
+            for _gc, _gh in zip(_grp_cols, ["Group","Rate","Today","Prev","Move"]):
+                _gc.markdown(f"<div style='font-size:11px;font-weight:700;color:#64748b'>{_gh}</div>", unsafe_allow_html=True)
+            st.markdown("<hr style='margin:4px 0;border-color:#1e3050'>", unsafe_allow_html=True)
+
+            _prev_grp = None
+            for _, _row in _tdf.iterrows():
+                if _row[""] != _prev_grp:
+                    if _prev_grp: st.markdown("<hr style='margin:2px 0;border-color:#1e3050'>", unsafe_allow_html=True)
+                    _prev_grp = _row[""]
+                _rc = st.columns([1,2,1.2,1.2,1.2])
+                _rc[0].markdown(f"<div style='font-size:10px;color:#475569'>{_row['']}</div>", unsafe_allow_html=True)
+                _rc[1].markdown(f"<div style='font-size:12px;color:#e2e8f0'>{_row['Rate']}</div>", unsafe_allow_html=True)
+                _rc[2].markdown(f"<div style='font-size:12px;font-weight:600;color:#f8fafc'>{_row['Today']}</div>", unsafe_allow_html=True)
+                _rc[3].markdown(f"<div style='font-size:12px;color:#64748b'>{_row['Prev']}</div>", unsafe_allow_html=True)
+                _mv_col = "#22c55e" if _row["_chg"] > 0 else "#ef4444" if _row["_chg"] < 0 else "#64748b"
+                _rc[4].markdown(f"<div style='font-size:12px;font-weight:600;color:{_mv_col}'>{_row['Move']}</div>", unsafe_allow_html=True)
+
     # ── Report ───────────────────────────────────────────────────────────
     if st.session_state.get("rv_report_generated"):
         import plotly.graph_objects as go
