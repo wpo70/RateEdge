@@ -15691,35 +15691,37 @@ def rv_tab():
             r_pts = [p["Fwd 3m BBSW (%)"] for p in fwd_bbsw_pts] if fwd_bbsw_pts else []
 
             # Idea 1: curve shape → cap vs floor preference
+            # Use Q/Q only. Historical stats: mean=19.4bp, std=8.0bp (Jan25-Apr26)
             curve_slope_2s5s = _par_rate_qq(5) - _par_rate_qq(2)
+            _2s5s_mean = 0.194; _2s5s_std = 0.080
+            _2s5s_z = (curve_slope_2s5s - _2s5s_mean) / _2s5s_std if _2s5s_std > 0 else 0
             fwd_peak_t = t_pts[r_pts.index(max(r_pts))] if r_pts else 0
 
-            if curve_slope_2s5s > 0.20:  # steep → rates going up
+            if _2s5s_z > 1.0:  # >1σ above mean → meaningfully steep
                 v_2y_cap = get_matrix_value(atm, "2y", 2.0)
                 cf_ideas.append({
                     "Type": "Cap",
                     "Structure": "2Y ATM Cap",
-                    "Signal": f"2s5s = {curve_slope_2s5s*100:.0f}bp steep",
+                    "Signal": f"2s5s = {curve_slope_2s5s*100:.0f}bp ({_2s5s_z:+.1f}σ vs {_2s5s_mean*100:.0f}bp mean)",
                     "Trade": "Buy 2Y ATM Cap (receive if BBSW > strike at each reset)",
-                    "Rationale": f"Steep 2s5s ({curve_slope_2s5s*100:.0f}bp) implies market pricing rate rises. "
-                                 f"Cap protects / benefits from realised hikes. "
-                                 f"{'Vol at ' + str(round(v_2y_cap,1)) + 'bp.' if v_2y_cap else ''}",
+                    "Rationale": f"Q/Q 2s5s at {curve_slope_2s5s*100:.0f}bp is {_2s5s_z:.1f}σ above its {_2s5s_mean*100:.0f}bp historical mean. "
+                                 f"Steeper-than-normal curve implies market pricing rate rises above spot. "
+                                 f"{'Cap vol ~' + str(round(v_2y_cap,1)) + 'bp.' if v_2y_cap else ''}",
                     "Risk": "Pays premium; loses if rates stay flat or fall",
-                    "Score": min(abs(curve_slope_2s5s) * 1000, 100),
-                    "Category": "Cap/Floor",
+                    "Score": min(abs(_2s5s_z) * 15, 100),
                     "Category": "Cap/Floor",
                 })
-            elif curve_slope_2s5s < -0.10:  # inverted → cuts priced
+            elif _2s5s_z < -1.0:  # >1σ below mean → inverted vs normal
                 v_2y_floor = get_matrix_value(atm, "2y", 2.0)
                 cf_ideas.append({
                     "Type": "Floor",
                     "Structure": "2Y ATM Floor",
-                    "Signal": f"2s5s = {curve_slope_2s5s*100:.0f}bp inverted",
+                    "Signal": f"2s5s = {curve_slope_2s5s*100:.0f}bp ({_2s5s_z:+.1f}σ vs {_2s5s_mean*100:.0f}bp mean)",
                     "Trade": "Buy 2Y ATM Floor (receive if BBSW < strike)",
-                    "Rationale": f"Inverted 2s5s   —   market pricing cuts. Floor benefits from deeper/faster cuts.",
+                    "Rationale": f"Q/Q 2s5s at {curve_slope_2s5s*100:.0f}bp is {abs(_2s5s_z):.1f}σ below its {_2s5s_mean*100:.0f}bp mean. "
+                                 f"Flat/inverted curve implies cuts priced. Floor benefits from deeper/faster cuts.",
                     "Risk": "Pays premium; loses if cuts slower than priced",
-                    "Score": min(abs(curve_slope_2s5s) * 1000, 100),
-                    "Category": "Cap/Floor",
+                    "Score": min(abs(_2s5s_z) * 15, 100),
                     "Category": "Cap/Floor",
                 })
 
