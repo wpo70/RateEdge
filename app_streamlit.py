@@ -14805,13 +14805,11 @@ def rv_tab():
             # ── Calendar Vol Spreads ──────────────────────────────────
             if atm is not None:
                 for tn in [2, 5, 10]:
-                    for short_e, long_e in [("1m","3m"),("3m","6m"),("6m","1y"),("1y","2y"),
-                                         ("3m","6m"),("6m","1y"),("1y","2y")]:
+                    for short_e, long_e in [("1m","3m"),("3m","6m"),("6m","1y"),("1y","2y")]:
                         v_short = get_matrix_value(atm, short_e, float(tn))
                         v_long  = get_matrix_value(atm, long_e,  float(tn))
                         if v_short and v_long and v_long > 0:
                             ratio = v_short / v_long
-                            # Normalise by sqrt(T)   —   fair ratio should be ~sqrt(T_short/T_long)
                             import re as _re
                             def _e2y(e):
                                 m = _re.match(r"(\d+)(m|y)", e)
@@ -14820,27 +14818,31 @@ def rv_tab():
                                 return 1.0
                             fair_ratio = math.sqrt(_e2y(short_e) / _e2y(long_e))
                             rich_cheap = ratio / fair_ratio
-                            if rich_cheap > 1.30:
+                            # Use tighter thresholds — sqrt(T) is aggressive benchmark
+                            # Require 20% rich/cheap AND score proportional to excess only
+                            if rich_cheap > 1.20:
+                                _excess = rich_cheap - 1.20  # only score the excess above 20%
                                 ideas.append({
                                     "Type": "Calendar Vol Spread",
                                     "Structure": f"Sell {short_e} / Buy {long_e} ≈{tn}Y",
-                                    "Signal": f"Ratio {ratio:.2f}x vs fair {fair_ratio:.2f}x",
+                                    "Signal": f"Ratio {ratio:.2f}x vs fair {fair_ratio:.2f}x ({(rich_cheap-1)*100:.0f}% rich)",
                                     "Trade": f"Sell {short_e}≈{tn}Y straddle, Buy {long_e}≈{tn}Y straddle (vega-neutral)",
                                     "Rationale": f"{short_e} vol {(rich_cheap-1)*100:.0f}% rich vs {long_e} on sqrt(T) basis. "
                                                  f"Sell expensive short-dated gamma, buy cheap long-dated vega.",
                                     "Risk": "Short near-term gamma; large move hurts",
-                                    "Score": min((rich_cheap - 1) * 80, 100),
+                                    "Score": min(_excess * 200, 60),  # max 60 from this signal alone
                                 })
-                            elif rich_cheap < 0.80:
+                            elif rich_cheap < 0.85:
+                                _excess = 0.85 - rich_cheap
                                 ideas.append({
                                     "Type": "Calendar Vol Spread",
                                     "Structure": f"Buy {short_e} / Sell {long_e} ≈{tn}Y",
-                                    "Signal": f"Ratio {ratio:.2f}x vs fair {fair_ratio:.2f}x",
+                                    "Signal": f"Ratio {ratio:.2f}x vs fair {fair_ratio:.2f}x ({(1-rich_cheap)*100:.0f}% cheap)",
                                     "Trade": f"Buy {short_e}≈{tn}Y straddle, Sell {long_e}≈{tn}Y straddle",
                                     "Rationale": f"{short_e} vol {(1-rich_cheap)*100:.0f}% cheap vs {long_e}. "
                                                  f"Buy cheap near-dated gamma vs expensive long-dated vol.",
                                     "Risk": "Negative carry on long-dated short",
-                                    "Score": min((1 - rich_cheap) * 80, 100),
+                                    "Score": min(_excess * 200, 60),
                                 })
 
             # ── HIGH CONVICTION composite signals ──────────────────────
@@ -14864,16 +14866,15 @@ def rv_tab():
 
             for (tn, direction), supporting in _hc_candidates.items():
                 if len(supporting) >= 2:
-                    # Boost scores and flag
                     for idea in supporting:
-                        idea["Score"] = idea["Score"] * 1.5
+                        # Add 10 points for corroboration, cap at 85
+                        idea["Score"] = min(idea["Score"] + 10, 85)
                         if "HIGH CONVICTION" not in idea["Type"]:
-                            idea["Type"] = "⭐ HIGH CONVICTION — " + idea["Type"]
-                    # Add a summary composite idea
-                    _signals_txt = " + ".join(set(i["Type"].replace("⭐ HIGH CONVICTION — ", "")
+                            idea["Type"] = "HIGH CONVICTION — " + idea["Type"]
+                    _signals_txt = " + ".join(set(i["Type"].replace("HIGH CONVICTION — ", "")
                                                    for i in supporting))
                     ideas.append({
-                        "Type": "⭐ HIGH CONVICTION Composite",
+                        "Type": "HIGH CONVICTION Composite",
                         "Structure": f"≈{tn}Y {direction.upper()} vol composite",
                         "Signal": f"{len(supporting)} independent signals agree: {_signals_txt}",
                         "Trade": (
@@ -14883,11 +14884,11 @@ def rv_tab():
                         "Rationale": (
                             f"{len(supporting)} separate frameworks ({_signals_txt}) all point "
                             f"{'RICH' if direction=='sell' else 'CHEAP'} for ≈{tn}Y vol. "
-                            f"Convergence of independent signals significantly increases conviction."
+                            f"Convergence of independent signals increases conviction."
                         ),
                         "Risk": ("Model agreement does not guarantee outcome — "
                                  "tail events can override all signals simultaneously"),
-                        "Score": min(sum(i["Score"] for i in supporting) / max(len(supporting),1), 95),
+                        "Score": min(sum(i["Score"] for i in supporting) / max(len(supporting),1), 85),
                     })
 
             # Sort by score
