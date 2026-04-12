@@ -15681,7 +15681,9 @@ def rv_tab():
                                  f"Cap protects / benefits from realised hikes. "
                                  f"{'Vol at ' + str(round(v_2y_cap,1)) + 'bp.' if v_2y_cap else ''}",
                     "Risk": "Pays premium; loses if rates stay flat or fall",
-                    "Score": curve_slope_2s5s * 300,
+                    "Score": min(abs(curve_slope_2s5s) * 1000, 100),
+                    "Category": "Cap/Floor",
+                    "Category": "Cap/Floor",
                 })
             elif curve_slope_2s5s < -0.10:  # inverted → cuts priced
                 v_2y_floor = get_matrix_value(atm, "2y", 2.0)
@@ -15692,7 +15694,9 @@ def rv_tab():
                     "Trade": "Buy 2Y ATM Floor (receive if BBSW < strike)",
                     "Rationale": f"Inverted 2s5s   —   market pricing cuts. Floor benefits from deeper/faster cuts.",
                     "Risk": "Pays premium; loses if cuts slower than priced",
-                    "Score": abs(curve_slope_2s5s) * 250,
+                    "Score": min(abs(curve_slope_2s5s) * 1000, 100),
+                    "Category": "Cap/Floor",
+                    "Category": "Cap/Floor",
                 })
 
             # Idea 2: Forward peak timing
@@ -15709,6 +15713,7 @@ def rv_tab():
                                  f"{'Cap vol ~' + str(round(v_exp,1)) + 'bp.' if v_exp else ''}",
                     "Risk": "OTM   —   needs BBSW to exceed forward peak",
                     "Score": 15,
+                    "Category": "Cap/Floor",
                 })
 
             # Idea 3: Vol cone percentile for caps
@@ -15730,7 +15735,8 @@ def rv_tab():
                             "Rationale": f"1y caplet vol at {curr_v:.0f}bp = {pct:.0f}th percentile historically. "
                                          f"Cheap entry for long vol / long gamma position.",
                             "Risk": "Theta drag if rates stay range-bound",
-                            "Score": (25 - pct) * 2,
+                            "Score": min((25 - pct) * 2, 100),
+                            "Category": "Cap/Floor",
                         })
                     elif pct > 75:
                         cf_ideas.append({
@@ -15740,10 +15746,17 @@ def rv_tab():
                             "Trade": f"Sell 1y≈{tn}Y cap or floor vs delta hedge",
                             "Rationale": f"1y caplet vol at {curr_v:.0f}bp = {pct:.0f}th percentile. Rich historically.",
                             "Risk": "Short gamma; realised vol could exceed implied",
-                            "Score": (pct - 75) * 1.5,
+                            "Score": min((pct - 75) * 2, 100),
+                            "Category": "Cap/Floor",
                         })
 
             cf_ideas.sort(key=lambda x: x["Score"], reverse=True)
+
+            # Merge into combined ideas cache for SOD report
+            if cf_ideas:
+                _existing = st.session_state.get("_rv_ideas_cache", [])
+                _sw_only = [i for i in _existing if i.get("Category","Swaption") != "Cap/Floor"]
+                st.session_state["_rv_ideas_cache"] = _sw_only + cf_ideas
 
             if not cf_ideas:
                 st.info("No strong cap/floor signals at current levels.")
