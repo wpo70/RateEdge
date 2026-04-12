@@ -7161,31 +7161,42 @@ def swaptions_tab(vol_mode: str):
                     _, _a2, _b2, _r2, _n2 = get_ccy_vol_data(ccy)
                     _atm2 = get_working_atm_surface(ccy)
                     if _a2 is not None and _atm2 is not None:
-                        _new_alpha = _a2.copy()
-                        _exp_col = "Expiry" if "Expiry" in _new_alpha.columns else _new_alpha.columns[0]
-                        _tenor_cols = [c for c in _new_alpha.columns if c != _exp_col]
-                        _updated = 0
-                        for _i, _erow in _new_alpha.iterrows():
-                            _exp_lbl = str(_erow[_exp_col]).strip()
-                            _exp_y2 = label_to_years(_exp_lbl)
-                            if _exp_y2 <= 0:
-                                continue
-                            for _tc in _tenor_cols:
-                                _ten_y2 = label_to_years(str(_tc))
-                                _atm_bp2 = get_matrix_value(_atm2, _exp_lbl, _ten_y2)
-                                _s2 = get_sabr_params_from_matrices(_a2, _b2, _r2, _n2, _exp_lbl, _ten_y2)
-                                if _atm_bp2 is None or _s2 is None:
+                        with st.spinner("⚙️ Recalibrating α across surface…"):
+                            _new_alpha = _a2.copy()
+                            _exp_col = "Expiry" if "Expiry" in _new_alpha.columns else _new_alpha.columns[0]
+                            _tenor_cols = [c for c in _new_alpha.columns if c != _exp_col]
+                            _updated = 0
+                            # Pre-fetch all forwards into a dict to avoid 110 slow curve calls
+                            _fwd_cache2 = {}
+                            _ois_rc = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois")
+                            for _i, _erow in _new_alpha.iterrows():
+                                _exp_lbl = str(_erow[_exp_col]).strip()
+                                _exp_y2 = label_to_years(_exp_lbl)
+                                if _exp_y2 <= 0:
                                     continue
-                                try:
-                                    _F2, _, _ = forward_and_annuity_from_curve(curve, ccy, _exp_y2, _ten_y2, ois_curve)
-                                except Exception:
-                                    _F2 = 0.05
-                                if _F2 <= 0:
-                                    _F2 = 0.05
-                                _new_a = sabr_implied_alpha_from_atm(_atm_bp2 / 10000.0, _F2, _exp_y2, _s2["beta"], _s2["rho"], _s2["nu"])
-                                if _new_a > 0:
-                                    _new_alpha.at[_i, _tc] = _new_a
-                                    _updated += 1
+                                for _tc in _tenor_cols:
+                                    _ten_y2 = label_to_years(str(_tc))
+                                    try:
+                                        _F2, _, _ = forward_and_annuity_from_curve(curve, ccy, _exp_y2, _ten_y2, _ois_rc)
+                                        _fwd_cache2[(_exp_lbl, _tc)] = max(_F2, 0.001)
+                                    except Exception:
+                                        _fwd_cache2[(_exp_lbl, _tc)] = 0.05
+                            for _i, _erow in _new_alpha.iterrows():
+                                _exp_lbl = str(_erow[_exp_col]).strip()
+                                _exp_y2 = label_to_years(_exp_lbl)
+                                if _exp_y2 <= 0:
+                                    continue
+                                for _tc in _tenor_cols:
+                                    _ten_y2 = label_to_years(str(_tc))
+                                    _atm_bp2 = get_matrix_value(_atm2, _exp_lbl, _ten_y2)
+                                    _s2 = get_sabr_params_from_matrices(_a2, _b2, _r2, _n2, _exp_lbl, _ten_y2)
+                                    if _atm_bp2 is None or _s2 is None:
+                                        continue
+                                    _F2 = _fwd_cache2.get((_exp_lbl, _tc), 0.05)
+                                    _new_a = sabr_implied_alpha_from_atm(_atm_bp2 / 10000.0, _F2, _exp_y2, _s2["beta"], _s2["rho"], _s2["nu"])
+                                    if _new_a > 0:
+                                        _new_alpha.at[_i, _tc] = _new_a
+                                        _updated += 1
                         _old_atm, _, _b2, _r2, _n2 = get_ccy_vol_data(ccy)
                         set_ccy_vol_data(ccy, _old_atm, _new_alpha, _b2, _r2, _n2)
                         # Save only alpha — not full session
@@ -7201,6 +7212,7 @@ def swaptions_tab(vol_mode: str):
                                         if _col != "Expiry": _rec[_col] = _row[_col]
                                     _a_records.append(_rec)
                                 save_user_config(_uid, "sabr_alpha", ccy, {"values": _a_records})
+                                load_user_config.clear()
                             except Exception:
                                 pass
                         st.success(f"✅ Alpha recalibrated   —   {_updated} cells updated. ~, ρ,ν, × unchanged.")
@@ -8010,8 +8022,16 @@ def swaptions_tab(vol_mode: str):
             _bg = _STATUS_COLOURS.get(_cur_status, "white")
 
             # Use stored spot/fwd premiums
-            _fwd_bp      = float(row.get('pv_bp_fwd', row.get('pv_bp', 0)))
-            _spot_bp_disp = float(row.get('pv_bp_spot', row.get('pv_bp', 0)))
+            _fwd_bp       = float(row.get('pv_bp_fwd', row.get('pv_bp', 0)))
+            _ois_bl = st.session_state.get('config_basis', {}).get(ccy, {}).get('ois') or get_basis_curve(ccy, 'ois')
+            def _df_exp_bl(ey):
+                try:
+                    if _ois_bl is not None:
+                        _ox=_ois_bl[_ois_bl.columns[0]].to_numpy().astype(float); _oy=_ois_bl[_ois_bl.columns[1]].to_numpy().astype(float)/100.0
+                        return math.exp(-float(np.interp(ey,_ox,_oy))*ey)
+                    return math.exp(-0.035*ey)
+                except: return 1.0
+            _spot_bp_disp = _fwd_bp * _df_exp_bl(label_to_years(str(row.get('expiry','1y'))))
 
             _rc = st.columns([0.25, 1.60, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.35, 0.70, 0.65])
             _sw_vals = [
@@ -9499,8 +9519,16 @@ def caps_floors_tab(vol_mode: str):
             _cf_sk = f"_cf_status_{_cl}_{_cex}_{_cten}"
             _cf_cur = st.session_state.get(_cf_sk, "—")
             _cf_bg  = _CF_STATUS_COLOURS.get(_cf_cur, "white")
-            _cf_spot = float(_crow.get('pv_bp', 0))
-            _cf_fwd  = float(_crow.get('pv_bp_fwd', _cf_spot))
+            _cf_fwd  = float(_crow.get('pv_bp_fwd', _crow.get('pv_bp', 0)))
+            _ois_cf = st.session_state.get('config_basis', {}).get(ccy, {}).get('ois') or get_basis_curve(ccy, 'ois')
+            def _df_cf(ey):
+                try:
+                    if _ois_cf is not None:
+                        _ox=_ois_cf[_ois_cf.columns[0]].to_numpy().astype(float); _oy=_ois_cf[_ois_cf.columns[1]].to_numpy().astype(float)/100.0
+                        return math.exp(-float(np.interp(ey,_ox,_oy))*ey)
+                    return math.exp(-0.035*ey)
+                except: return 1.0
+            _cf_spot = _cf_fwd * _df_cf(label_to_years(str(_crow.get('expiry','1y'))))
             _crc = st.columns([0.25, 1.60, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.35, 0.70, 0.65])
             _cf_vals = [
                 f"{_cidx+1}", _cst, _cex, _cten,
@@ -15770,8 +15798,16 @@ def portfolio_tab():
                 _status_key = f"_ptfsw_status_{idx}"
                 _cur = st.session_state.get(_status_key,"—")
                 _bg  = _PTF_STATUS_COLOURS.get(_cur,"white")
-                _spot = float(row.get('pv_bp_spot', row.get('pv_bp',0)))
-                _fwd  = float(row.get('pv_bp_fwd',  row.get('pv_bp',0)))
+                _fwd  = float(row.get('pv_bp_fwd', row.get('pv_bp',0)))
+                _ois_ptf = st.session_state.get('config_basis', {}).get(ccy, {}).get('ois') or get_basis_curve(ccy, 'ois')
+                def _df_ptf(ey):
+                    try:
+                        if _ois_ptf is not None:
+                            _ox=_ois_ptf[_ois_ptf.columns[0]].to_numpy().astype(float); _oy=_ois_ptf[_ois_ptf.columns[1]].to_numpy().astype(float)/100.0
+                            return math.exp(-float(np.interp(ey,_ox,_oy))*ey)
+                        return math.exp(-0.035*ey)
+                    except: return 1.0
+                _spot = _fwd * _df_ptf(label_to_years(str(row.get('expiry','1y'))))
                 _rc = st.columns(COLS)
                 _vals = [
                     f"{idx+1}", row.get("structure",""), _expiry, _tenor,
@@ -15913,8 +15949,16 @@ def portfolio_tab():
                 _sk3  = f"_ptfcf_status_{_ci3}"
                 _cur3 = st.session_state.get(_sk3,"—")
                 _bg3  = _CFPTF_STATUS_COLOURS.get(_cur3,"white")
-                _sp3  = float(_cr3.get('pv_bp',0))
-                _fw3  = float(_cr3.get('pv_bp_fwd',_sp3))
+                _fw3  = float(_cr3.get('pv_bp_fwd', _cr3.get('pv_bp',0)))
+                _ois_ptfc = st.session_state.get('config_basis', {}).get(ccy, {}).get('ois') or get_basis_curve(ccy, 'ois')
+                def _df_ptfc(ey):
+                    try:
+                        if _ois_ptfc is not None:
+                            _ox=_ois_ptfc[_ois_ptfc.columns[0]].to_numpy().astype(float); _oy=_ois_ptfc[_ois_ptfc.columns[1]].to_numpy().astype(float)/100.0
+                            return math.exp(-float(np.interp(ey,_ox,_oy))*ey)
+                        return math.exp(-0.035*ey)
+                    except: return 1.0
+                _sp3 = _fw3 * _df_ptfc(label_to_years(str(_cr3.get('expiry','1y'))))
                 _rc3  = st.columns(COLS)
                 _v3   = [
                     f"{_ci3+1}", _cr3.get("structure",""), _cr3.get("expiry",""), str(_cr3.get("tenor","")),
