@@ -14480,7 +14480,7 @@ def rv_tab():
                                     "Risk": ("Vol may stay elevated if macro uncertainty persists"
                                              if is_rich else
                                              "Vol may stay suppressed; carry negative on long fwd vol"),
-                                    "Score": abs(z) * 15,
+                                    "Score": min(abs(z) * 15, 100),
                                 })
                     else:
                         st.info("Insufficient vol history for forward vol stats. Load more snapshots.")
@@ -14505,7 +14505,7 @@ def rv_tab():
                                      else f"{direction} {mid_e}≈{tn}Y, sell wings ({lo_e} + {hi_e})",
                             "Rationale": f"ATM {'rich' if fly>0 else 'cheap'} vs calendar wings by {abs(fly):.1f}bp",
                             "Risk": "Vol mean reversion timing",
-                            "Score": abs(fly),
+                            "Score": min(abs(fly) * 5, 100),
                         })
 
             # 2. Calendar spread   —   term structure steepness
@@ -14522,7 +14522,7 @@ def rv_tab():
                             "Trade": f"Sell 3m≈{tn}Y / Buy 2y≈{tn}Y (sell calendar)",
                             "Rationale": f"3m vol {(ratio-1)*100:.0f}% above 2y vol   —   inverted ts, mean-reverts",
                             "Risk": "Short gamma if rates move sharply near-term",
-                            "Score": (ratio - 1.0) * 100,
+                            "Score": min((ratio - 1.0) * 100, 100),
                         })
                     elif ratio < 0.85:
                         ideas.append({
@@ -14532,7 +14532,7 @@ def rv_tab():
                             "Trade": f"Buy 3m≈{tn}Y / Sell 2y≈{tn}Y (buy calendar)",
                             "Rationale": f"Short-dated vol cheap vs 2Y   —   normal structure unusually steep",
                             "Risk": "Carry negative; vol may stay low near-term",
-                            "Score": (1.0 - ratio) * 100,
+                            "Score": min((1.0 - ratio) * 100, 100),
                         })
 
             # 3. Curve-driven swaption direction
@@ -14554,7 +14554,7 @@ def rv_tab():
                         "Rationale": f"Curve pricing {(fwd_5y5y-r5)*100:.0f}bp of steepening by 5Y point   —   asymmetric "
                                      f"risk if RBA easier than fwd. Vol at {v_5y5y:.1f}bp.",
                         "Risk": "Pays premium; loses if rates fall or stay flat",
-                        "Score": (fwd_5y5y - r5) * 80,
+                        "Score": min(abs(fwd_5y5y - r5) * 40, 100),
                     })
                 elif fwd_5y5y and fwd_5y5y < r5 - 0.10:
                     v_5y5y = get_matrix_value(atm, "5y", 5.0)
@@ -14565,7 +14565,7 @@ def rv_tab():
                         "Trade": "Buy 5y≈5Y ATM Receiver",
                         "Rationale": f"Inverted fwd curve pricing easing   —   if RBA cuts more aggressively, receiver pays well.",
                         "Risk": "Pays premium; loses if easing is less than priced",
-                        "Score": abs(fwd_5y5y - r5) * 80,
+                        "Score": min(abs(fwd_5y5y - r5) * 40, 100),
                     })
 
             # 4. Gamma vs theta — short-dated vol richness (empirical ratio + VRP)
@@ -14622,7 +14622,7 @@ def rv_tab():
                                 f"{'VRP ' + str(vrp_1m) + '× realised — implied compensates well above delivered.' if vrp_1m and vrp_1m > 1.25 else ''}"
                             ),
                             "Risk": "Large near-term rate move; central bank surprise; gap risk around meetings",
-                            "Score": min(z_ratio * 12, 60) + (max(vrp_1m - 1, 0) * 20 if vrp_1m else 0),
+                            "Score": min(min(z_ratio * 12, 60) + (max(vrp_1m - 1, 0) * 20 if vrp_1m else 0), 100),
                         })
                     elif is_cheap:
                         ideas.append({
@@ -14636,7 +14636,7 @@ def rv_tab():
                                 f"{'VRP only ' + str(vrp_1m) + '× — implied offers poor compensation vs realised.' if vrp_1m and vrp_1m < 0.85 else ''}"
                             ),
                             "Risk": "Vol may stay suppressed; theta decay if market stays quiet",
-                            "Score": min(abs(z_ratio) * 10, 50),
+                            "Score": min(abs(z_ratio) * 10, 100),
                         })
 
             # 4b. VRP-driven ideas (implied vs realised, meeting-adjusted)
@@ -14664,7 +14664,7 @@ def rv_tab():
                                 f"Vol risk premium historically mean-reverts — short vol collects theta as premium decays."
                             ),
                             "Risk": "Requires calm market; gap risk if macro shock or surprise CB action",
-                            "Score": (vrp - 1.0) * 40,
+                            "Score": min((vrp - 1.0) * 40, 100),
                         })
                     elif vrp < 0.75:
                         ideas.append({
@@ -14677,7 +14677,7 @@ def rv_tab():
                                 f"Implied vol underpricing current rate volatility — long straddle has positive expected value."
                             ),
                             "Risk": "Theta decay if vol mean-reverts lower; negative carry",
-                            "Score": (1.0 - vrp) * 35,
+                            "Score": min((1.0 - vrp) * 40, 100),
                         })
 
             # ── Curve Steepener / Flattener   —   IRS ───────────────────
@@ -14699,7 +14699,7 @@ def rv_tab():
                             "Rationale": f"2s10s at {slope_2s10s*100:.0f}bp   —   historically elevated. "
                                          f"Flattener profits if curve reverts toward fair." + _hist_note("2s10s"),
                             "Risk": "Carry negative in steep curve; stop if curve steepens further",
-                            "Score": slope_2s10s * 120,
+                            "Score": min(abs(slope_2s10s) * 10, 100),
                         })
                     elif slope_2s10s < -0.20:
                         ideas.append({
@@ -14710,7 +14710,7 @@ def rv_tab():
                             "Rationale": f"2s10s inverted {abs(slope_2s10s)*100:.0f}bp   —   "
                                          f"steepener profits on RBA pivot / normalisation." + _hist_note("2s10s"),
                             "Risk": "Carry positive but inversion can persist",
-                            "Score": abs(slope_2s10s) * 100,
+                            "Score": min(abs(slope_2s10s) * 10, 100),
                         })
 
                 if slope_2s5s is not None and abs(slope_2s5s) > 0.30:
@@ -14724,7 +14724,7 @@ def rv_tab():
                         "Rationale": f"2s5s at {slope_2s5s*100:.0f}bp   —   "
                                      f"{'steep relative to history' if slope_2s5s>0 else 'inverted   —   cuts priced'}." + _hist_note("2s5s"),
                         "Risk": "Mark-to-market vol on DV01 mismatch",
-                        "Score": abs(slope_2s5s) * 90,
+                        "Score": min(abs(slope_2s5s) * 10, 100),
                     })
 
                 if slope_5s10s is not None and abs(slope_5s10s) > 0.25:
@@ -14737,7 +14737,7 @@ def rv_tab():
                         "Trade": f"{trade} (IRS {direction.lower()})",
                         "Rationale": f"5s10s at {slope_5s10s*100:.0f}bp." + _hist_note("5s10s"),
                         "Risk": "Basis and carry risk",
-                        "Score": abs(slope_5s10s) * 80,
+                        "Score": min(abs(slope_5s10s) * 10, 100),
                     })
 
             # ── Curve Steepener / Flattener   —   Vol Expression ─────────
@@ -14760,7 +14760,7 @@ def rv_tab():
                                      f"Vols: 2Y={v_rec_2y2:.0f}bp, 10Y={v_pay_2y10:.0f}bp." if v_rec_2y2 and v_pay_2y10 else
                                      f"Express curve flattener via swaptions.",
                         "Risk": "Pays two premiums; needs curve to move",
-                        "Score": slope_2s10s * 80,
+                        "Score": min(abs(slope_2s10s) * 10, 100),
                     })
                 elif slope_2s10s is not None and slope_2s10s < -0.20:
                     v_pay_2y2  = get_matrix_value(atm, "1y", 2.0)
@@ -14775,7 +14775,7 @@ def rv_tab():
                                      f"Vols: 2Y={v_pay_2y2:.0f}bp, 10Y={v_rec_2y10:.0f}bp." if v_pay_2y2 and v_rec_2y10 else
                                      f"Vol expression of curve steepening.",
                         "Risk": "Pays two premiums; needs asymmetric rate moves",
-                        "Score": abs(slope_2s10s) * 70,
+                        "Score": min(abs(slope_2s10s) * 10, 100),
                     })
 
             # ── Calendar Vol Spreads ──────────────────────────────────
@@ -14805,7 +14805,7 @@ def rv_tab():
                                     "Rationale": f"{short_e} vol {(rich_cheap-1)*100:.0f}% rich vs {long_e} on sqrt(T) basis. "
                                                  f"Sell expensive short-dated gamma, buy cheap long-dated vega.",
                                     "Risk": "Short near-term gamma; large move hurts",
-                                    "Score": (rich_cheap - 1) * 80,
+                                    "Score": min((rich_cheap - 1) * 80, 100),
                                 })
                             elif rich_cheap < 0.80:
                                 ideas.append({
@@ -14816,7 +14816,7 @@ def rv_tab():
                                     "Rationale": f"{short_e} vol {(1-rich_cheap)*100:.0f}% cheap vs {long_e}. "
                                                  f"Buy cheap near-dated gamma vs expensive long-dated vol.",
                                     "Risk": "Negative carry on long-dated short",
-                                    "Score": (1 - rich_cheap) * 60,
+                                    "Score": min((1 - rich_cheap) * 80, 100),
                                 })
 
             # ── HIGH CONVICTION composite signals ──────────────────────
@@ -14863,7 +14863,7 @@ def rv_tab():
                         ),
                         "Risk": ("Model agreement does not guarantee outcome — "
                                  "tail events can override all signals simultaneously"),
-                        "Score": sum(i["Score"] / 1.5 for i in supporting) * 1.8,
+                        "Score": min(sum(i["Score"] for i in supporting) / max(len(supporting),1), 95),
                     })
 
             # Sort by score
