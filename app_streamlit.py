@@ -15433,11 +15433,13 @@ def rv_tab():
 
                     # ── Multi-scenario P&L surface chart ────────────────────
                     st.markdown("##### P&L Surface — Rate × Vol × Time")
-                    st.caption("Each line = one time horizon. X axis = rate shift (bp). Y axis = P&L ($k). "
-                               "Vol shift applied uniformly across all scenarios.")
 
-                    _hz_rate_scenarios = list(range(-200, 205, 5))  # wider range, finer steps
-                    _hz_vol_scenarios  = [0, -10, +10]
+                    # Auto-scale x-axis to ±2σ move so curvature is visible
+                    _1sigma_bp = _hz_impl_vol * math.sqrt(_hz_exp_y)  # 1σ move in bp
+                    _x_range   = max(int(_1sigma_bp * 2.2 / 5) * 5, 50)  # round to 5bp, min 50bp
+                    _hz_rate_scenarios = list(range(-_x_range, _x_range + 1, max(1, _x_range // 40)))
+                    st.caption(f"X axis = rate shift (bp) | ±{_x_range}bp = ±2σ at {_hz_impl_vol:.0f}bp vol, {_hz_exp_y:.2f}y expiry. "
+                               f"Each line = one horizon. Y = P&L ($k).")
 
                     _hz_fig = go.Figure()
                     _colors_surf = ["#3b82f6","#22c55e","#f59e0b","#a78bfa","#f43f5e","#06b6d4"]
@@ -15470,37 +15472,48 @@ def rv_tab():
                         _all_pnl.extend(_pnl_by_rate)
                         _hz_surface_data.append((_hlbl, _hdays, _pnl_by_rate, _colors_surf[_ci % len(_colors_surf)]))
 
-                    # Auto-scale y-axis
                     _pnl_min = min(_all_pnl) if _all_pnl else -100
                     _pnl_max = max(_all_pnl) if _all_pnl else 100
-                    _pnl_pad = max(abs(_pnl_max - _pnl_min) * 0.15, 10)
+                    _pnl_pad = max(abs(_pnl_max - _pnl_min) * 0.18, 10)
 
                     for _hlbl, _hdays, _pnl_by_rate, _col in _hz_surface_data:
+                        # Inline label at right edge
+                        _end_pnl = _pnl_by_rate[-1] if _pnl_by_rate else 0
                         _hz_fig.add_trace(go.Scatter(
                             x=_hz_rate_scenarios,
                             y=_pnl_by_rate,
                             mode="lines",
                             name=_hlbl,
                             line=dict(color=_col, width=2.5),
-                            hovertemplate=f"<b>{_hlbl}</b><br>Rate shift: %{{x}}bp<br>P&L: $%{{y:.1f}}k<extra></extra>"
+                            hovertemplate=f"<b>{_hlbl}</b><br>Shift: %{{x}}bp<br>P&L: $%{{y:.1f}}k<extra></extra>"
                         ))
+                        # Inline label at right edge
+                        _hz_fig.add_annotation(
+                            x=_hz_rate_scenarios[-1], y=_end_pnl,
+                            text=f" {_hlbl}",
+                            showarrow=False, xanchor="left",
+                            font=dict(size=10, color=_col),
+                        )
 
-                    # Zero line
-                    _hz_fig.add_hline(y=0, line_dash="dash", line_color="#64748b", line_width=1,
-                                       annotation_text="Breakeven", annotation_position="right",
-                                       annotation_font_color="#64748b")
-                    # ATM vertical
+                    # 1-sigma markers
+                    _hz_fig.add_vline(x=_1sigma_bp, line_dash="dot", line_color="#475569", line_width=1,
+                                      annotation_text=f"+1σ ({_1sigma_bp:.0f}bp)", annotation_position="top",
+                                      annotation_font=dict(size=9, color="#64748b"))
+                    _hz_fig.add_vline(x=-_1sigma_bp, line_dash="dot", line_color="#475569", line_width=1,
+                                      annotation_text=f"-1σ", annotation_position="top",
+                                      annotation_font=dict(size=9, color="#64748b"))
+                    _hz_fig.add_hline(y=0, line_dash="dash", line_color="#94a3b8", line_width=1)
                     _hz_fig.add_vline(x=0, line_dash="dot", line_color="#334155", line_width=1)
 
                     _hz_fig.update_layout(
-                        xaxis=dict(title="Rate Shift (bp)", tickmode="linear", dtick=25,
-                                   zeroline=True, zerolinecolor="#334155"),
+                        xaxis=dict(title="Rate Shift (bp)", tickmode="linear",
+                                   dtick=max(_x_range//4, 10),
+                                   range=[-_x_range*1.05, _x_range*1.3]),  # extra right for labels
                         yaxis=dict(title="Est. P&L ($k)",
                                    range=[_pnl_min - _pnl_pad, _pnl_max + _pnl_pad]),
-                        legend=dict(title="Horizon", orientation="v",
-                                    x=1.01, y=1, bgcolor="rgba(0,0,0,0)"),
-                        template="plotly_dark", height=380,
-                        margin=dict(t=20, r=120, l=60),
+                        showlegend=False,
+                        template="plotly_dark", height=360,
+                        margin=dict(t=20, r=80, l=60, b=50),
                         hovermode="x unified",
                         plot_bgcolor="rgba(15,23,42,0.8)",
                         paper_bgcolor="rgba(0,0,0,0)",
