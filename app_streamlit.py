@@ -19339,7 +19339,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
 
         # Compute changes — only real diffs
         _chg_rows, _rate_chg_rows = [], []
-        if _prev and _curr and _prev.get("date") != _curr.get("date"):
+        if _prev and _curr:
             for _k,_vc in _curr.get("atm",{}).items():
                 _vp = _prev.get("atm",{}).get(_k)
                 if _vp and abs(_vc-_vp) > 0.01:
