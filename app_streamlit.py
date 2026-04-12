@@ -1053,7 +1053,8 @@ def save_all_session_data(user_id: str):
 
         # CFS spreads — save all 9 wedge spread values
         _cf_spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
-                           "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y","cf_spr_12y3y"]
+                           "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y",
+                           "cf_spr_12y3y","cf_spr_15v20"]
         _cf_spread_data = {k: float(st.session_state.get(k, 0)) for k in _cf_spread_keys
                            if k in st.session_state}
         if _cf_spread_data:
@@ -6757,6 +6758,14 @@ def fwd_analysis_tab():
                 _no_data_spreads.append(f"{_a} → {_b}")
 
         _sp_keys = list(_sp_series.keys())
+        # Sort by start tenor, then end tenor
+        def _sp_sort_key(lbl):
+            try:
+                parts = lbl.split(" → ")
+                return (int(parts[0][:-1]), int(parts[1][:-1]))
+            except: return (99, 99)
+        _sp_series = dict(sorted(_sp_series.items(), key=lambda x: _sp_sort_key(x[0])))
+        _sp_keys = list(_sp_series.keys())
         with c3:
             _sp_as_spread = st.checkbox("Show as spread", False, key="sp_as_spread")
         if _sp_as_spread and len(_sp_keys) >= 2:
@@ -9182,7 +9191,18 @@ def caps_floors_tab(vol_mode: str):
                         json.dump({k: st.session_state[k] for k, *_ in ROW_DATA}, _f)
                 except Exception:
                     pass
-                # DB persist skipped during calibration — use Apply Spreads to save when ready
+                # DB persist — save spreads immediately so they survive logout
+                try:
+                    _cf_spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
+                                       "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y",
+                                       "cf_spr_12y3y","cf_spr_15v20"]
+                    _cf_data = {k: float(st.session_state.get(k, 0)) for k in _cf_spread_keys}
+                    _uid_cf = st.session_state.get("username", "default")
+                    if HAS_POSTGRES:
+                        save_user_config(_uid_cf, "cf_spreads", "AUD", _cf_data)
+                        load_user_config.clear()
+                except Exception:
+                    pass
                 # Bust caplet and CFS cache so curve re-builds with new spreads
                 st.session_state.pop("_caplet_curve_key", None)
                 st.session_state.pop("_atm_cfs_cache_key", None)
