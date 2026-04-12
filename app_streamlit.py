@@ -14931,23 +14931,34 @@ def rv_tab():
 
                 # ── Engine inputs debug ────────────────────────────────
                 with st.expander("🔍 Engine Inputs (verify data)", expanded=False):
-                    _dbg_cols = st.columns(3)
+                    _dbg_cols = st.columns(4)
                     with _dbg_cols[0]:
-                        st.markdown("**ATM Vol (bp) — key points**")
+                        st.markdown("**ATM Vol (bp)**")
                         for _de, _dt in [("1m","2Y"),("1m","5Y"),("1m","10Y"),
                                           ("3m","5Y"),("6m","5Y"),("1y","5Y")]:
                             _dv = get_matrix_value(atm, _de, label_to_years(_dt))
                             st.text(f"{_de}×{_dt}: {_dv:.1f}bp" if _dv else f"{_de}×{_dt}: —")
                     with _dbg_cols[1]:
-                        st.markdown("**Swap Curve (%) — Q/Q**")
-                        for _dt in [2, 3, 5, 10, 20]:
-                            _dr = _par_rate(_dt)
+                        st.markdown("**Q/Q Curve (%)**")
+                        _qq_ok = _rv_zc_qq is not None
+                        st.caption("✅ loaded" if _qq_ok else "❌ NOT LOADED")
+                        for _dt in [1, 2, 3]:
+                            _dr = _par_rate_qq(_dt) if _qq_ok else None
                             st.text(f"{_dt}Y: {_dr:.4f}%" if _dr else f"{_dt}Y: —")
                     with _dbg_cols[2]:
+                        st.markdown("**S/S Curve (%)**")
+                        _ss_ok = _rv_zc_ss is not None
+                        st.caption("✅ loaded" if _ss_ok else "❌ NOT LOADED")
+                        for _dt in [5, 10, 20]:
+                            _dr = _par_rate(_dt) if _ss_ok else None
+                            st.text(f"{_dt}Y: {_dr:.4f}%" if _dr else f"{_dt}Y: —")
+                    with _dbg_cols[3]:
                         st.markdown("**Fwd Rates (%)**")
-                        for _t1, _t2, _lbl in [(0,1,"1y fwd 1Y"),(1,2,"2y fwd 1Y"),(5,10,"5y fwd 5Y"),(2,7,"2y fwd 5Y")]:
+                        st.caption("Needs Q/Q + S/S loaded")
+                        for _t1, _t2, _lbl in [(0,1,"1y fwd 1Y"),(1,2,"2y fwd 1Y"),
+                                                (2,7,"2y fwd 5Y"),(5,10,"5y fwd 5Y")]:
                             _dfr = _fwd_rate(_t1, _t2)
-                            st.text(f"{_lbl}: {_dfr:.4f}%" if _dfr else f"{_lbl}: —")
+                            st.text(f"{_lbl}: {_dfr:.4f}%" if _dfr else f"{_lbl}: — (missing {'QQ' if _t2<=3 else 'SS'})")
 
 
                 # ── Select all / copy all ──────────────────────────────
