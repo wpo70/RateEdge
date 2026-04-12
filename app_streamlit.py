@@ -5723,6 +5723,8 @@ def vol_config_tab():
                     snapshot_id = save_vol_snapshot(user_id, snap_ccy, snap_label.strip(), snap_notes.strip())
                     if snapshot_id:
                         st.success(f"✅ Snapshot saved! ID: {snapshot_id}")
+                        list_vol_snapshots.clear()
+                        st.session_state.pop("_snap_list_cache", None)
                     else:
                         st.error("Failed to save snapshot. Make sure vol data is loaded.")
         
@@ -5732,6 +5734,7 @@ def vol_config_tab():
             user_id = st.session_state.get("username", "default")
             filter_ccy = None if manage_ccy == "All" else manage_ccy
             if st.button("🔄 Load Snapshots", key="load_snaps_btn"):
+                list_vol_snapshots.clear()
                 st.session_state["_snap_list_cache"] = list_vol_snapshots(user_id, filter_ccy)
                 st.session_state["_snap_list_ccy"] = filter_ccy
             # Use cached list, refresh if currency changed
@@ -20120,6 +20123,7 @@ RateEdge Options Platform""",
                         _failed.append(_ccy)
                 if _saved:
                     st.success(f"✅ Saved EOD snapshot for: {', '.join(_saved)}")
+                    list_vol_snapshots.clear()  # clear cache so Vol History shows new snapshot immediately
                 if _failed:
                     st.error(f"├ö├ÿ├« Failed for: {', '.join(_failed)}   —   check vol data is loaded.")
 
