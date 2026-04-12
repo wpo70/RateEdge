@@ -7393,16 +7393,27 @@ def swaptions_tab(vol_mode: str):
         
     elif structure == "Strangle":
         st.caption("Buy OTM Payer + Buy OTM Receiver (long vol)")
+        stg_mode = st.radio("Strike Mode",
+                             ["Symmetric (25bp)", "Symmetric (50bp)", "Symmetric (100bp)", "Symmetric (200bp)", "Manual"],
+                             horizontal=True, key="sw_stg_mode")
         col_k1, col_k2 = st.columns(2)
-        with col_k1:
-            strike_pct = st.number_input("Payer Strike (%)", min_value=0.0, max_value=20.0,
-                                         value=round(fwd_pct + 0.25, 4), format="%.4f", key="sw_strike_stg1",
-                                         help="Higher strike - OTM payer")
-        with col_k2:
-            strike_pct_2 = st.number_input("Receiver Strike (%)", min_value=0.0, max_value=20.0,
-                                           value=round(fwd_pct - 0.25, 4), format="%.4f", key="sw_strike_stg2",
-                                           help="Lower strike - OTM receiver")
-        st.caption(f"Width: **{(strike_pct - strike_pct_2)*100:.0f} bp**")
+        if "Symmetric" in stg_mode:
+            offset = {"25bp":0.25,"50bp":0.50,"100bp":1.00,"200bp":2.00}.get(
+                next((x for x in ["25bp","50bp","100bp","200bp"] if x in stg_mode), "25bp"), 0.25)
+            strike_pct   = fwd_pct + offset
+            strike_pct_2 = fwd_pct - offset
+            with col_k1: st.metric("Payer Strike (%)", f"{strike_pct:.4f}")
+            with col_k2: st.metric("Receiver Strike (%)", f"{strike_pct_2:.4f}")
+        else:
+            with col_k1:
+                strike_pct = st.number_input("Payer Strike (%)", min_value=0.0, max_value=20.0,
+                                             value=round(fwd_pct + 0.25, 4), format="%.4f", key="sw_strike_stg1",
+                                             help="Higher strike - OTM payer")
+            with col_k2:
+                strike_pct_2 = st.number_input("Receiver Strike (%)", min_value=0.0, max_value=20.0,
+                                               value=round(fwd_pct - 0.25, 4), format="%.4f", key="sw_strike_stg2",
+                                               help="Lower strike - OTM receiver")
+        st.caption(f"Width: **{(strike_pct - strike_pct_2)*100:.0f} bp** | Payer +{(strike_pct-fwd_pct)*100:.0f}bp | Receiver {(strike_pct_2-fwd_pct)*100:.0f}bp")
         
     elif structure == "Risk Reversal":
         st.caption("Buy Payer + Sell Receiver (or vice versa) - rate protection")
