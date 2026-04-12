@@ -13696,6 +13696,113 @@ def rv_tab():
                 st.caption("5d = 1-week realised | 21d = 1-month | 63d = 3-month. "
                            "1m Implied shown for quick comparison.")
 
+        # ── Cross-Asset Vol: Swaption vs Equity ────────────────────────
+        if ccy == "AUD":
+            _spi_surf_rv = st.session_state.get("spi_vol_surface", {})
+            _spi_front_atm = _spi_surf_rv.get("Jun-26", {}).get("50D")
+            if atm is not None and _spi_front_atm:
+                st.markdown("---")
+                st.markdown("#### 📊 Cross-Asset Vol — Swaption vs SPI")
+
+                # ── Option 1: Ratio Strip ──────────────────────────────
+                _EXPIRY_MAP = [("1m",1/12),("3m",0.25),("6m",0.5),("1y",1.0),("2y",2.0)]
+                _ratio_rows = []
+                for _exp_lbl, _exp_y in _EXPIRY_MAP:
+                    # Swaption ATM: use 5Y tenor as benchmark
+                    _sw_vol = get_matrix_value(atm, _exp_lbl, 5.0)
+                    if _sw_vol is None:
+                        continue
+                    # SPI vol normalised to bp-equivalent: SPI% × sqrt(T) × 100 → annualised bp proxy
+                    # Use front contract for all expiries (no term structure loaded yet)
+                    _spi_bp_equiv = _spi_front_atm * 100 * math.sqrt(_exp_y)  # rough normalisation
+                    _ratio = _sw_vol / _spi_bp_equiv if _spi_bp_equiv > 0 else None
+                    _ratio_rows.append({
+                        "Expiry": _exp_lbl,
+                        "Swptn ATM 5Y (bp)": round(_sw_vol, 1),
+                        "SPI 50D (%)": round(_spi_front_atm, 2),
+                        "SPI bp-equiv": round(_spi_bp_equiv, 1),
+                        "Ratio Swptn/SPI": round(_ratio, 3) if _ratio else None,
+                        "Signal": ("🔴 Rates Rich" if _ratio and _ratio > 1.2 else
+                                   "🟢 Rates Cheap" if _ratio and _ratio < 0.8 else
+                                   "⚪ Neutral") if _ratio else "—"
+                    })
+
+                if _ratio_rows:
+                    _ratio_df = pd.DataFrame(_ratio_rows)
+                    def _ratio_color(v):
+                        try:
+                            f = float(v)
+                            if f > 1.2: return "color:#ef4444;font-weight:600"
+                            if f < 0.8: return "color:#22c55e;font-weight:600"
+                            return "color:#94a3b8"
+                        except: return ""
+                    st.dataframe(
+                        _ratio_df.style.map(_ratio_color, subset=["Ratio Swptn/SPI"]),
+                        use_container_width=True, hide_index=True)
+                    st.caption("Ratio > 1.2 = rates vol rich vs equity vol. < 0.8 = rates cheap. "
+                               "SPI bp-equiv = SPI% × 100 × √T (rough normalisation — no history yet).")
+
+                # ── Option 3: Vol Regime Quadrant ─────────────────────
+                with st.expander("🎯 Vol Regime Quadrant — Equity vs Rates", expanded=False):
+                    st.caption("Today's cross-asset vol position. X = SPI 50D ATM (%), Y = Swaption 3m×5Y ATM (bp)")
+
+                    _sw_3m5y = get_matrix_value(atm, "3m", 5.0)
+                    if _sw_3m5y and _spi_front_atm:
+                        import plotly.graph_objects as go
+                        _xav_fig = go.Figure()
+
+                        # Quadrant shading
+                        _xav_mid_x = 15.0   # SPI ATM midpoint (%)
+                        _xav_mid_y = 85.0   # Swaption ATM midpoint (bp)
+
+                        _xav_fig.add_shape(type="rect", x0=0, x1=_xav_mid_x, y0=_xav_mid_y, y1=200,
+                                           fillcolor="rgba(34,197,94,0.08)", line_width=0)
+                        _xav_fig.add_shape(type="rect", x0=_xav_mid_x, x1=40, y0=_xav_mid_y, y1=200,
+                                           fillcolor="rgba(239,68,68,0.08)", line_width=0)
+                        _xav_fig.add_shape(type="rect", x0=0, x1=_xav_mid_x, y0=0, y1=_xav_mid_y,
+                                           fillcolor="rgba(239,68,68,0.08)", line_width=0)
+                        _xav_fig.add_shape(type="rect", x0=_xav_mid_x, x1=40, y0=0, y1=_xav_mid_y,
+                                           fillcolor="rgba(34,197,94,0.08)", line_width=0)
+
+                        # Quadrant labels
+                        for _ql, _qx, _qy in [
+                            ("Equity Cheap\nRates Rich",   _xav_mid_x*0.5, _xav_mid_y*1.4),
+                            ("Both Rich",                  _xav_mid_x*1.5, _xav_mid_y*1.4),
+                            ("Both Cheap",                 _xav_mid_x*0.5, _xav_mid_y*0.6),
+                            ("Equity Rich\nRates Cheap",   _xav_mid_x*1.5, _xav_mid_y*0.6),
+                        ]:
+                            _xav_fig.add_annotation(x=_qx, y=_qy, text=_ql, showarrow=False,
+                                                    font=dict(size=9, color="#475569"), xanchor="center")
+
+                        # Crosshair lines
+                        _xav_fig.add_vline(x=_xav_mid_x, line_dash="dot", line_color="#334155", line_width=1)
+                        _xav_fig.add_hline(y=_xav_mid_y, line_dash="dot", line_color="#334155", line_width=1)
+
+                        # Today's point
+                        _xav_fig.add_trace(go.Scatter(
+                            x=[_spi_front_atm], y=[_sw_3m5y],
+                            mode="markers+text",
+                            marker=dict(size=16, color="#f59e0b", symbol="star",
+                                        line=dict(color="white", width=1.5)),
+                            text=["Today"], textposition="top center",
+                            textfont=dict(color="#f59e0b", size=11),
+                            name="Today",
+                            hovertemplate=f"SPI ATM: {_spi_front_atm:.2f}%<br>Swptn 3m×5Y: {_sw_3m5y:.1f}bp<extra></extra>"
+                        ))
+
+                        _xav_fig.update_layout(
+                            xaxis=dict(title="SPI 50D ATM (%)", range=[0, 35]),
+                            yaxis=dict(title="Swaption 3m×5Y ATM (bp)", range=[30, 160]),
+                            template="plotly_dark", height=340,
+                            margin=dict(t=20, l=60, r=20, b=50),
+                            showlegend=False,
+                            plot_bgcolor="rgba(15,23,42,0.6)",
+                            paper_bgcolor="rgba(0,0,0,0)",
+                        )
+                        st.plotly_chart(_xav_fig, use_container_width=True)
+                        st.caption(f"Today — SPI: **{_spi_front_atm:.2f}%** | Swptn 3m×5Y: **{_sw_3m5y:.1f}bp** | "
+                                   f"Ratio: **{_sw_3m5y/(_spi_front_atm*100*math.sqrt(0.25)):.3f}**")
+
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     # TAB 2   —   CURVE RV & SPREAD ANALYSIS
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
