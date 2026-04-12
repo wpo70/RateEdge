@@ -17736,10 +17736,10 @@ def main():
                             _sent_email = _er.status_code in (200, 201)
 
                         # SMS via Twilio — uses env vars on Render
-                        _tw_sid   = st.secrets.get("TWILIO_SID",   os.environ.get("TWILIO_SID",   "ACbb0ff7ea8f12c1386d4553977b8d8db7"))
+                        _tw_sid   = st.secrets.get("TWILIO_SID",   os.environ.get("TWILIO_SID",   ""))
                         _tw_token = st.secrets.get("TWILIO_TOKEN", os.environ.get("TWILIO_TOKEN", ""))
-                        _tw_from  = st.secrets.get("TWILIO_FROM",  os.environ.get("TWILIO_FROM",  "+12602979976"))
-                        _tw_to    = os.environ.get("TWILIO_TO", "+61478829669")
+                        _tw_from  = st.secrets.get("TWILIO_FROM",  os.environ.get("TWILIO_FROM",  ""))
+                        _tw_to    = st.secrets.get("TWILIO_TO",    os.environ.get("TWILIO_TO",    ""))
                         if _tw_sid and _tw_token:
                             import requests as _req, base64 as _b64
                             _tw_auth = _b64.b64encode(f"{_tw_sid}:{_tw_token}".encode()).decode()
@@ -18225,6 +18225,7 @@ Use the ρ slider above to stress-test spread vol across the matrix.
 
 def sod_report_tab():
     """Start-of-Day Report   —   USD overnight moves → implied AUD vol open."""
+    import plotly.graph_objects as go
     st.subheader("📋 Start-of-Day Report   —   USD Overnight → AUD Implied Open")
     st.caption(
         "Compares USD previous close vs the close before that. "
