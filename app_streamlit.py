@@ -19111,8 +19111,9 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             _curve_now = get_ccy_curve("AUD")
             if _atm_now is not None and _curve_now is not None:
                 # Capture key ATM levels and curve points
+                from datetime import date as _dt_today
                 _snap = {
-                    "date": str(datetime.date.today()),
+                    "date": str(_dt_today.today()),
                     "atm": {},
                     "curve": {},
                     "ideas": st.session_state.get("_rv_ideas_cache", []),
@@ -19152,7 +19153,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         _ideas = st.session_state.get("_rv_ideas_cache", [])
         _top3  = sorted(_ideas, key=lambda x: x.get("Score",0), reverse=True)[:3] if _ideas else []
 
-        _today_str  = _curr.get("date", str(datetime.date.today()))
+        _today_str  = _curr.get("date", str(_dt_today.today()) if '_dt_today' in dir() else "")
         _prev_date  = _prev.get("date", "prior close") if _prev else "prior close"
 
         # ── Rate / vol change summary ─────────────────────────────────
