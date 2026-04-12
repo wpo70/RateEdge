@@ -13507,7 +13507,8 @@ def rv_tab():
     if curve is not None:
         _xs_c = curve["MaturityY"].to_numpy().astype(float)
         _ys_c = curve["ZeroRatePct"].to_numpy().astype(float)
-        _rv_zc_qq = st.session_state.get("_aud_zc_qq_full") or st.session_state.get("_aud_zc_qq")
+        _rv_zc_qq_full = st.session_state.get("_aud_zc_qq_full")
+        _rv_zc_qq = _rv_zc_qq_full if _rv_zc_qq_full is not None else st.session_state.get("_aud_zc_qq")
         _rv_zc_ss = st.session_state.get("_aud_zc_ss")
         def _par_rate(t):
             # Blended: Q/Q for ≤3Y, S/S for ≥4Y
@@ -13930,7 +13931,8 @@ def rv_tab():
 
             # Fwd rates — use same pure QQ/SS zero curves as the forward matrix
             # This ensures RV signals use identical rates to what's quoted in the matrix
-            _rv_zc_qq = st.session_state.get("_aud_zc_qq_full") or st.session_state.get("_aud_zc_qq")
+            _rv_zc_qq_full2 = st.session_state.get("_aud_zc_qq_full")
+            _rv_zc_qq = _rv_zc_qq_full2 if _rv_zc_qq_full2 is not None else st.session_state.get("_aud_zc_qq")
             _rv_zc_ss = st.session_state.get("_aud_zc_ss")
 
             def _fwd_rate(t1, t2):
