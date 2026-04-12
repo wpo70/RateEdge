@@ -19813,7 +19813,7 @@ h2{{color:#1e3a5f;margin-top:20px}}
                                 colors.HexColor("#64748b")
                         _tbl_data.append([
                             _row["Rate"], _row["Today"], _row["Prev"],
-                            Paragraph(f"<font color='#{_mv_c.hexval()[2:]}'>{_mv}</font>",
+                            Paragraph(f"<font color='#{_mv_c.hexval()[2:] if hasattr(_mv_c,'hexval') else '666666'}'>{_mv}</font>",
                                       _styles["Normal"])
                         ])
                     _rates_tbl = Table(_tbl_data, colWidths=["45%","18%","18%","19%"])
@@ -19874,7 +19874,9 @@ h2{{color:#1e3a5f;margin-top:20px}}
                     key="sod_rv_dl_pdf"
                 )
             except Exception as _pdf_err:
-                st.caption(f"PDF generation unavailable: {_pdf_err}")
+                import traceback
+                st.error(f"PDF generation failed: {_pdf_err}")
+                st.code(traceback.format_exc())
 
         with _cl_col:
             if st.button("🗑️ Clear Report", key="sod_rv_clear"):
