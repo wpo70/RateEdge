@@ -7990,12 +7990,12 @@ def swaptions_tab(vol_mode: str):
 
         # Header row — light grey background
         st.markdown(
-            "<div style='display:grid;grid-template-columns:2.5% 16% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 13% 6.5% 6.0%;"
+            "<div style='display:grid;grid-template-columns:2.5% 16% 5.5% 6.5% 5.5% 7.0% 7.0% 7.5% 7.5% 7.0% 13% 6.5% 6.0%;"
             "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
             "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
             "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
-            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot(bp)</span>"
-            "<span>Fwd(bp)</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Del</span></div>",
+            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot Prem</span>"
+            "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Del</span></div>",
             unsafe_allow_html=True)
 
         for idx, row in df.iterrows():
@@ -8013,7 +8013,7 @@ def swaptions_tab(vol_mode: str):
             _fwd_bp      = float(row.get('pv_bp_fwd', row.get('pv_bp', 0)))
             _spot_bp_disp = float(row.get('pv_bp_spot', row.get('pv_bp', 0)))
 
-            _rc = st.columns([0.25, 1.60, 0.53, 0.63, 0.53, 0.68, 0.68, 0.68, 0.68, 0.68, 1.30, 0.65, 0.60])
+            _rc = st.columns([0.25, 1.60, 0.53, 0.63, 0.53, 0.68, 0.68, 0.73, 0.73, 0.68, 1.27, 0.63, 0.58])
             for _ci, _val in enumerate([
                 f"{idx+1}", _struct, _expiry, _tenor,
                 f"{float(row.get('notional_mm',100)):.0f}mm",
@@ -9480,12 +9480,12 @@ def caps_floors_tab(vol_mode: str):
         _CF_STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade"]
 
         st.markdown(
-            "<div style='display:grid;grid-template-columns:2.5% 16% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 13% 6.5% 6.0%;"
+            "<div style='display:grid;grid-template-columns:2.5% 16% 5.5% 6.5% 5.5% 7.0% 7.0% 7.5% 7.5% 7.0% 13% 6.5% 6.0%;"
             "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
             "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
             "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
-            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot(bp)</span>"
-            "<span>Fwd(bp)</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Del</span></div>",
+            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot Prem</span>"
+            "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Del</span></div>",
             unsafe_allow_html=True)
 
         for _cidx, _crow in _df.iterrows():
@@ -9497,7 +9497,7 @@ def caps_floors_tab(vol_mode: str):
             _cf_bg  = _CF_STATUS_COLOURS.get(_cf_cur, "white")
             _cf_spot = float(_crow.get('pv_bp', 0))
             _cf_fwd  = float(_crow.get('pv_bp_fwd', _cf_spot))
-            _crc = st.columns([0.25, 1.60, 0.53, 0.63, 0.53, 0.68, 0.68, 0.68, 0.68, 0.68, 1.30, 0.65, 0.60])
+            _crc = st.columns([0.25, 1.60, 0.53, 0.63, 0.53, 0.68, 0.68, 0.73, 0.73, 0.68, 1.27, 0.63, 0.58])
             for _ci2, _val2 in enumerate([
                 f"{_cidx+1}", _cst, _cex, _cten,
                 f"{float(_crow.get('notional_mm',100)):.0f}mm",
