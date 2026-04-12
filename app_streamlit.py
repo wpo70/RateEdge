@@ -14906,6 +14906,7 @@ def rv_tab():
                 import plotly.graph_objects as go
                 st.markdown(f"**{len(ideas)} trade ideas generated**")
 
+
                 # ── Select all / copy all ──────────────────────────────
                 if "rv_selected" not in st.session_state:
                     st.session_state["rv_selected"] = set()
@@ -18890,20 +18891,51 @@ def sod_report_tab():
             _cfs_ok = not _aud_prem_prev.empty and not _aud_prem_open.empty
 
             for _cfs_lbl, _spr_key, _exp, _ten in _CFS_CHAIN:
-                # 20Y CFS: vol spread extension — no swaption wedge in the premium matrix
+                # 20Y CFS: extend 15Y using vol spread cf_spr_15v20
                 if _spr_key is None:
-                    _vol_spd = st.session_state.get("cf_spr_15v20", -5.0)
-                    _cfs_rows.append({
-                        "CFS Tenor": _cfs_lbl,
-                        "Swptn Leg (prev)": "vol spd",
-                        "Wedge": f"{_vol_spd:+.1f}bp",
-                        "CFS Leg (prev)": "—",
-                        "Swptn Leg (open)": "vol spd",
-                        "CFS Leg (open)": "—",
-                        "CFS Total (prev)": f"{_cum_prev:.2f}" if _cum_prev else "—",
-                        "CFS Total (open)": f"{_cum_open:.2f}" if _cum_open else "—",
-                        "> CFS": "—",
-                    })
+                    _vol_spd_20 = st.session_state.get("cf_spr_15v20", -5.0)
+                    # The 20Y leg premium ≈ 15Y leg premium adjusted by vol spread
+                    # Use same approach as pricer: find 15Y caplet vol, apply spread, price gap
+                    # For SOD report we approximate: 20Y CFS = 15Y CFS + implied 15y-20y leg
+                    # The 15y-20y leg ≈ 15Y leg × (vol_20/vol_15) ratio × tenor_ratio
+                    # Simpler: use the vol spread to scale the last leg premium
+                    _prev_15_leg = None
+                    _open_15_leg = None
+                    if _cfs_rows:
+                        _last = _cfs_rows[-1]
+                        try:
+                            _prev_15_leg = float(_last.get("CFS Leg (prev)", 0) or 0)
+                            _open_15_leg = float(_last.get("CFS Leg (open)", 0) or 0)
+                        except Exception: pass
+                    if _prev_15_leg and _open_15_leg:
+                        # Scale last leg by vol spread ratio: 20Y leg ≈ 15Y last leg × (1 + spread/vol_15)
+                        # Use spread in bp / approx vol_15 (from session state)
+                        _vol_15_approx = st.session_state.get("atm_cfs_data", {}).get("cf_vol_15y", {}).get("value", 60.0)
+                        _vol_ratio = max((_vol_15_approx + _vol_spd_20) / max(_vol_15_approx, 1.0), 0.1)
+                        _leg_20_prev = _prev_15_leg * _vol_ratio
+                        _leg_20_open = _open_15_leg * _vol_ratio
+                        _cum_prev += _leg_20_prev
+                        _cum_open += _leg_20_open
+                        _delta_20 = _cum_open - _cum_prev
+                        _cfs_rows.append({
+                            "CFS Tenor": "20Y CFS",
+                            "Swptn Leg (prev)": f"vol spd {_vol_spd_20:+.1f}bp",
+                            "Wedge": "—",
+                            "CFS Leg (prev)": f"{_leg_20_prev:.2f}",
+                            "Swptn Leg (open)": f"vol spd {_vol_spd_20:+.1f}bp",
+                            "CFS Leg (open)": f"{_leg_20_open:.2f}",
+                            "CFS Total (prev)": f"{_cum_prev:.2f}",
+                            "CFS Total (open)": f"{_cum_open:.2f}",
+                            "> CFS": f"{_delta_20:+.2f}",
+                        })
+                    else:
+                        _cfs_rows.append({
+                            "CFS Tenor": "20Y CFS",
+                            "Swptn Leg (prev)": "  —  ", "Wedge": "—",
+                            "CFS Leg (prev)": "  —  ", "Swptn Leg (open)": "  —  ",
+                            "CFS Leg (open)": "  —  ", "CFS Total (prev)": "  —  ",
+                            "CFS Total (open)": "  —  ", "> CFS": "  —  ",
+                        })
                     continue
                 _spr = st.session_state.get(_spr_key, 0.0)
                 _p_prev = _prem_lookup(_aud_prem_prev, _exp, _ten)
