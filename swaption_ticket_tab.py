@@ -246,21 +246,47 @@ def render_ticket_tab(ss):
     currency        = getattr(ss, "ticket_currency",          "AUD")
     pricing_ok      = bool(expiry_date and swap_start and premium_bp)
 
-    # ── Pricing summary ───────────────────────────────────────────────────────
+    # ── Pricing (editable) ────────────────────────────────────────────────────
     st.markdown("#### Pricing")
     if not pricing_ok:
         st.warning("Run the pricer to populate pricing fields.")
 
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("Option Expiry", option_expiry)
-    c1.metric("Expiry Date",   expiry_date or "—")
-    c2.metric("Swap Term",     swap_term)
-    c2.metric("Swap Start",    swap_start or "—")
-    c3.metric("Strike",        f"{strike_rate:.4f}%" if strike_rate else "—")
-    c3.metric("Premium",       f"{premium_bp:.2f} bp" if premium_bp else "—")
-    c4.metric("Notional",      f"{currency} {notional}MM")
-    c4.metric("Convention",    "QQ (3M BBSW)" if swap_term_y <= 3 else "SS (6M BBSW)")
+    p1, p2, p3, p4 = st.columns(4)
 
+    with p1:
+        st.text(f"Option Expiry: {option_expiry}")
+        try:
+            _exp_default = datetime.strptime(expiry_date, "%Y-%m-%d").date() if expiry_date else date.today()
+        except:
+            _exp_default = date.today()
+        expiry_date_inp = st.date_input("Expiry Date", value=_exp_default, key="tix_expiry_date")
+        expiry_date = expiry_date_inp.strftime("%Y-%m-%d")
+
+    with p2:
+        st.text(f"Swap Term: {swap_term}")
+        # Swap Start defaults to expiry + 1 business day (mod following approximation)
+        try:
+            _start_default = datetime.strptime(swap_start, "%Y-%m-%d").date() if swap_start else expiry_date_inp + timedelta(days=1)
+        except:
+            _start_default = expiry_date_inp + timedelta(days=1)
+        swap_start_inp = st.date_input("Swap Start", value=_start_default, key="tix_swap_start",
+            help="Default: Expiry + 1 business day (mod following)")
+        swap_start = swap_start_inp.strftime("%Y-%m-%d")
+
+    with p3:
+        st.text(f"Strike: {strike_rate:.4f}%")
+        premium_bp = st.number_input("Premium (bp)", value=float(premium_bp) if premium_bp else 0.0,
+            min_value=0.0, step=0.5, format="%.2f", key="tix_premium_bp")
+
+    with p4:
+        notional = st.number_input("Notional (MM)", value=float(notional) if notional else 100.0,
+            min_value=1.0, step=25.0, format="%.0f", key="tix_notional")
+        # Premium $ = Notional MM × 1,000,000 × Premium bp / 10,000
+        premium_usd = notional * 1_000_000 * premium_bp / 10_000
+        st.metric("Premium $", f"{currency} {premium_usd:,.0f}")
+        st.caption("QQ (3M BBSW)" if swap_term_y <= 3 else "SS (6M BBSW)")
+
+    pricing_ok = bool(expiry_date and swap_start and premium_bp)
     st.divider()
 
     # ── Trade details ─────────────────────────────────────────────────────────
@@ -271,7 +297,7 @@ def render_ticket_tab(ss):
             ["Straddle","Payers","Receivers"],
             index=["Straddle","Payers","Receivers"].index(option_type_pre)
                   if option_type_pre in ["Straddle","Payers","Receivers"] else 0)
-        settlement = st.selectbox("Settlement", ["Physical","Swap"],
+        settlement = st.selectbox("Settlement", ["Physical","Swap"], index=0,
             help="Physical → LCH Cleared Swap (AUD standard)")
     with d2:
         spot_or_fwd = st.selectbox("Premium Basis", ["Fwd","Spot"],
@@ -279,11 +305,7 @@ def render_ticket_tab(ss):
         clearhouse  = st.selectbox("Clearhouse", ["LCH","CME","Bilateral"])
     with d3:
         sef = st.checkbox("SEF", value=False)
-        try:
-            exp_d = datetime.strptime(expiry_date, "%Y-%m-%d").date() if expiry_date else date.today()
-            prem_auto = exp_d if settlement == "Physical" else exp_d + timedelta(days=1)
-        except:
-            prem_auto = date.today()
+        prem_auto = expiry_date_inp if settlement == "Physical" else expiry_date_inp + timedelta(days=1)
         premium_date = st.date_input("Premium Date", value=prem_auto,
             help="Auto: expiry (Physical) or T+1 (Cash). AFMA s3.11.3")
 
@@ -294,39 +316,52 @@ def render_ticket_tab(ss):
     bank_map   = {b["bank"]: b for b in all_banks}
     bank_names = sorted(bank_map.keys())
 
-    def t_for(bank_id): return [t for t in all_traders   if t["bank_id"]  == bank_id]
-    def d_for(bank_id): return [d for d in all_divisions if d["bank_id"]  == bank_id]
+    def t_for(bank_id): return [t for t in all_traders   if t["bank_id"] == bank_id]
+    def d_for(bank_id): return [d for d in all_divisions if d["bank_id"] == bank_id]
 
     col_b, col_s = st.columns(2)
 
     with col_b:
         st.markdown("**Buyer** *(premium payer)*")
-        bb_name  = st.selectbox("Bank",     bank_names, key="bb")
+        bb_name  = st.selectbox("Bank",   bank_names, key="bb")
         bb       = bank_map[bb_name]
         bt_map   = {f"{t['firstname']} {t['lastname']}": t for t in t_for(bb["bank_id"])}
-        bt_name  = st.selectbox("Trader",   sorted(bt_map) or ["—"], key="bt")
+        bt_name  = st.selectbox("Trader", sorted(bt_map) or ["—"], key="bt")
         bt       = bt_map.get(bt_name)
-        bd_map   = {d["name"]: d for d in d_for(bb["bank_id"])}
-        bd_name  = st.selectbox("Division", sorted(bd_map) or ["—"], key="bd")
-        bd       = bd_map.get(bd_name)
-        b_brok   = st.number_input("Brokerage (AUD)", 0.0, value=500.0, step=50.0, key="b_brok")
+        # Division optional — only show if records exist
+        bd_list  = d_for(bb["bank_id"])
+        if bd_list:
+            bd_map  = {d["name"]: d for d in bd_list}
+            bd_name = st.selectbox("Division", sorted(bd_map), key="bd")
+            bd      = bd_map.get(bd_name)
+        else:
+            st.caption("No division records — BIC used directly")
+            bd = None
+        b_brok = st.number_input("Brokerage (AUD)", 0.0, value=500.0, step=50.0, key="b_brok")
 
     with col_s:
         st.markdown("**Seller** *(premium receiver)*")
-        sb_name  = st.selectbox("Bank",     bank_names, key="sb")
+        sb_name  = st.selectbox("Bank",   bank_names, key="sb")
         sb_      = bank_map[sb_name]
         st_map   = {f"{t['firstname']} {t['lastname']}": t for t in t_for(sb_["bank_id"])}
-        st_name  = st.selectbox("Trader",   sorted(st_map) or ["—"], key="st_")
+        st_name  = st.selectbox("Trader", sorted(st_map) or ["—"], key="st_")
         st_      = st_map.get(st_name)
-        sd_map   = {d["name"]: d for d in d_for(sb_["bank_id"])}
-        sd_name  = st.selectbox("Division", sorted(sd_map) or ["—"], key="sd")
-        sd       = sd_map.get(sd_name)
-        s_brok   = st.number_input("Brokerage (AUD)", 0.0, value=500.0, step=50.0, key="s_brok")
+        # Division optional
+        sd_list  = d_for(sb_["bank_id"])
+        if sd_list:
+            sd_map  = {d["name"]: d for d in sd_list}
+            sd_name = st.selectbox("Division", sorted(sd_map), key="sd")
+            sd      = sd_map.get(sd_name)
+        else:
+            st.caption("No division records — BIC used directly")
+            sd = None
+        s_brok = st.number_input("Brokerage (AUD)", 0.0, value=500.0, step=50.0, key="s_brok")
 
-    buyer_ok  = bool(bt and bd)
-    seller_ok = bool(st_ and sd)
+    # Division no longer required — just need bank + trader
+    buyer_ok  = bool(bt)
+    seller_ok = bool(st_)
 
-    # BIC auto-resolve
+    # BIC auto-resolve — fires as soon as both traders selected
     bic_b_code = bic_s_code = ""
     if buyer_ok and seller_ok:
         bic_b, bic_s = resolve_bic(
@@ -371,12 +406,12 @@ def render_ticket_tab(ss):
             "clearhouse":        clearhouse,
             "sef":               sef,
             "buyer_bank_name":   bb_name,
-            "buyer_ov_bank_id":  bb.get("ov_bank_id", bb_name),
+            "buyer_ov_bank_id":  bb.get("short_code", bb_name),
             "buyer_trader_id":   bt["trader_id"],
             "buyer_trader_name": bt_name,
             "buyer_brokerage":   b_brok,
             "seller_bank_name":  sb_name,
-            "seller_ov_bank_id": sb_.get("ov_bank_id", sb_name),
+            "seller_ov_bank_id": sb_.get("short_code", sb_name),
             "seller_trader_id":  st_["trader_id"],
             "seller_trader_name":st_name,
             "seller_brokerage":  s_brok,
