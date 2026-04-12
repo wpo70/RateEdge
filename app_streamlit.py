@@ -14873,6 +14873,7 @@ def rv_tab():
             elif not ideas:
                 st.info("No strong signals at current vol levels. Surface appears fair.")
             else:
+                import plotly.graph_objects as go
                 st.markdown(f"**{len(ideas)} trade ideas generated**")
 
                 # ── Select all / copy all ──────────────────────────────
