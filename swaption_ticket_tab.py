@@ -42,7 +42,7 @@ def get_supabase():
     if not SUPABASE_AVAILABLE:
         return None
     url = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL", ""))
-    key = st.secrets.get("SUPABASE_KEY", os.environ.get("SUPABASE_KEY", ""))
+    key = st.secrets.get("SUPABASE_ANON_KEY", st.secrets.get("SUPABASE_KEY", os.environ.get("SUPABASE_KEY", "")))
     if not url or not key:
         return None
     return create_client(url, key)
