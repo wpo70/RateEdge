@@ -14869,6 +14869,10 @@ def rv_tab():
             # Sort by score
             ideas.sort(key=lambda x: x["Score"], reverse=True)
 
+            # Cache for SOD report
+            if ideas:
+                st.session_state["_rv_ideas_cache"] = ideas
+
             if not st.session_state.get(_rv_ideas_key):
                 pass
             elif not ideas:
@@ -19333,13 +19337,34 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         _curr  = st.session_state.get("rv_daily_snap_curr", {})
         _prev  = st.session_state.get("rv_daily_snap_prev", {})
         _ideas = st.session_state.get("_rv_ideas_cache", [])
-        _top3  = sorted(_ideas, key=lambda x: x.get("Score",0), reverse=True)[:3] if _ideas else []
+        _top3  = sorted(_ideas, key=lambda x: x.get("Score",0), reverse=True)[:3] if _ideas else [
+            {"Type":"Vol RV","Structure":"3m×10Y Receiver","Signal":"🟢 Vol CHEAP vs realised","Trade":"Buy 3m×10Y Receiver Straddle","Rationale":"3m10Y ATM 74.8bp vs 21d realised 68bp. VRP 1.10x — modest premium but rates richly priced.","Score":62},
+            {"Type":"Calendar","Structure":"1m vs 3m×5Y","Signal":"🔴 1m RICH vs 3m","Trade":"Sell 1m×5Y / Buy 3m×5Y Straddle","Rationale":"1m5Y at 87.5bp, 3m5Y at 84.2bp. Term structure inverted into RBA meeting — sell near-dated premium.","Score":48},
+            {"Type":"Curve RV","Structure":"2s10s Flattener","Signal":"⚪ Neutral","Trade":"3m×2Y Payer / 3m×10Y Receiver","Rationale":"AUD 2s10s at -43bp. Curve steep relative to USD. Flattener via options benefits from vol richness at 2Y.","Score":31},
+        ] if _sample_mode else []
         _today_str = _curr.get("date", str(_dtnow.today()))
         _prev_date = _prev.get("date","prior EOD") if _prev else "prior EOD"
 
-        # Compute changes — only real diffs
-        _chg_rows, _rate_chg_rows = [], []
-        if _prev and _curr:
+        # If no real prev — inject sample data so layout is visible
+        _sample_mode = not _prev or not _prev.get("atm")
+        if _sample_mode:
+            _chg_rows = [
+                {"Tenor":"1m×5Y","Prev":85.0,"Now":87.5,"Chg":+2.5},
+                {"Tenor":"3m×5Y","Prev":83.0,"Now":84.2,"Chg":+1.2},
+                {"Tenor":"3m×10Y","Prev":76.0,"Now":74.8,"Chg":-1.2},
+                {"Tenor":"1y×5Y","Prev":78.5,"Now":77.0,"Chg":-1.5},
+                {"Tenor":"2y×10Y","Prev":72.0,"Now":70.5,"Chg":-1.5},
+            ]
+            _rate_chg_rows = [
+                {"Tenor":"2Y","Prev":4.671,"Now":4.708,"Chg (bp)":+3.7},
+                {"Tenor":"5Y","Prev":4.903,"Now":4.940,"Chg (bp)":+3.7},
+                {"Tenor":"10Y","Prev":5.075,"Now":5.098,"Chg (bp)":+2.3},
+            ]
+            _prev_date = "sample (11-Apr-26)"
+            _today_str = str(_dtnow.today()) + " ⚠️ sample"
+        else:
+            # Compute real changes
+            _chg_rows, _rate_chg_rows = [], []
             for _k,_vc in _curr.get("atm",{}).items():
                 _vp = _prev.get("atm",{}).get(_k)
                 if _vp and abs(_vc-_vp) > 0.01:
