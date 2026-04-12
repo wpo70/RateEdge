@@ -14222,6 +14222,63 @@ def rv_tab():
                         if _spi_atm and _spi_atm > 0:
                             st.caption(f"SPI front ATM (50D Jun-26): **{_spi_atm:.2f}%** — used as equity vol context")
 
+                    # SPX vol surface for USD
+                    if ccy == "USD":
+                        st.markdown("**VIX + SPX Implied Vol Surface (%)**")
+                        st.caption("VIX spot + SPX options by expiry × delta strike. Edit cells then click Apply. Front 50D ATM used as equity vol context.")
+
+                        _vix_col, _ = st.columns([2, 4])
+                        with _vix_col:
+                            _vix_spot = st.number_input("VIX Spot", min_value=0.0, max_value=200.0, step=0.01, format="%.2f",
+                                                         value=float(st.session_state.get("vix_spot", 19.26)),
+                                                         key="vix_spot_input")
+                            st.session_state["vix_spot"] = _vix_spot
+
+                        _SPX_CONTRACTS = ["14-Apr-26", "22-Apr-26", "17-Jun-26", "22-Jul-26", "16-Sep-26", "21-Oct-26"]
+                        _SPX_STRIKES   = ["10DP", "15DP", "25DP", "35DP", "50D", "35DC", "25DC", "15DC", "10DC"]
+
+                        _spx_surf = st.session_state.get("spx_vol_surface", {})
+                        if not _spx_surf:
+                            _spx_surf = {
+                                "14-Apr-26": {"10DP":18.26,"15DP":17.33,"25DP":15.89,"35DP":14.74,"50D":13.41,"35DC":12.37,"25DC":11.76,"15DC":11.21,"10DC":10.94},
+                                "22-Apr-26": {"10DP":20.49,"15DP":19.28,"25DP":17.61,"35DP":16.29,"50D":14.68,"35DC":13.34,"25DC":12.54,"15DC":11.75,"10DC":11.34},
+                                "17-Jun-26": {"10DP":22.00,"15DP":20.50,"25DP":18.50,"35DP":17.00,"50D":15.50,"35DC":14.20,"25DC":13.40,"15DC":12.60,"10DC":12.20},
+                                "22-Jul-26": {"10DP":22.50,"15DP":21.00,"25DP":19.00,"35DP":17.50,"50D":16.00,"35DC":14.80,"25DC":14.00,"15DC":13.20,"10DC":12.80},
+                                "16-Sep-26": {"10DP":23.00,"15DP":21.50,"25DP":19.50,"35DP":18.00,"50D":16.50,"35DC":15.20,"25DC":14.40,"15DC":13.60,"10DC":13.20},
+                                "21-Oct-26": {"10DP":23.50,"15DP":22.00,"25DP":20.00,"35DP":18.50,"50D":17.00,"35DC":15.60,"25DC":14.80,"15DC":14.00,"10DC":13.60},
+                            }
+                            st.session_state["spx_vol_surface"] = _spx_surf
+
+                        with st.expander("📊 SPX Vol Surface", expanded=False):
+                            _spx_hcols = st.columns([1.2] + [0.9]*9)
+                            _spx_hcols[0].markdown("<div style='font-size:11px;font-weight:600;color:#64748b'>Expiry</div>", unsafe_allow_html=True)
+                            for _si, _sk in enumerate(_SPX_STRIKES):
+                                _spx_hcols[_si+1].markdown(f"<div style='font-size:11px;font-weight:600;color:{'#38bdf8' if _sk=='50D' else '#64748b'};text-align:center'>{_sk}</div>", unsafe_allow_html=True)
+
+                            _new_spx_surf = {}
+                            for _sc in _SPX_CONTRACTS:
+                                _spx_rcols = st.columns([1.2] + [0.9]*9)
+                                _spx_rcols[0].markdown(f"<div style='font-size:12px;padding-top:8px;font-weight:600;color:#94a3b8'>{_sc}</div>", unsafe_allow_html=True)
+                                _new_spx_surf[_sc] = {}
+                                for _si, _sk in enumerate(_SPX_STRIKES):
+                                    _def = _spx_surf.get(_sc, {}).get(_sk, 15.0)
+                                    _v = _spx_rcols[_si+1].number_input("", value=float(_def), min_value=0.0, max_value=100.0,
+                                                                          step=0.01, format="%.2f",
+                                                                          key=f"spx_{_sc}_{_sk}",
+                                                                          label_visibility="collapsed")
+                                    _new_spx_surf[_sc][_sk] = _v
+
+                            if st.button("✅ Apply SPX Surface", key="spx_apply"):
+                                st.session_state["spx_vol_surface"] = _new_spx_surf
+                                _front_spx_atm = _new_spx_surf.get(_SPX_CONTRACTS[0], {}).get("50D", 0.0)
+                                st.session_state["spx_vol_override"] = _front_spx_atm
+                                st.success(f"✅ SPX surface saved. Front ATM: {_front_spx_atm:.2f}%")
+                                st.rerun()
+
+                        _spx_atm = st.session_state.get("spx_vol_override", _spx_surf.get("14-Apr-26", {}).get("50D", 0.0))
+                        if _spx_atm and _spx_atm > 0:
+                            st.caption(f"SPX front ATM (50D {_SPX_CONTRACTS[0]}): **{_spx_atm:.2f}%** | VIX spot: **{_vix_spot:.2f}** — equity vol context")
+
                     # Add custom meeting date
                     st.markdown("**Add Custom Meeting Date**")
                     _add_col1, _add_col2 = st.columns([2, 2])
