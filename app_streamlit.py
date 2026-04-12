@@ -514,19 +514,27 @@ def render_ticket_tab(ss):
         day = min(d.day, calendar.monthrange(yr, mo)[1])
         return d.replace(year=yr, month=mo, day=day)
 
+    # Versioned key so widgets reset when new ticket data arrives from blotter
+    _tix_ver = f"{option_expiry}_{swap_term}_{strike_rate:.4f}"
+
     p1, p2, p3, p4 = st.columns(4)
 
     with p1:
-        st.markdown(f"<p style='font-size:13px;color:#94a3b8;margin:0'>Option Expiry: <b style='color:#e2e8f0'>{option_expiry}</b></p>", unsafe_allow_html=True)
+        st.markdown(f"<p style='font-size:12px;color:#94a3b8;margin:0 0 4px 0'>Option Expiry: <b style='color:#e2e8f0'>{option_expiry}</b></p>", unsafe_allow_html=True)
         try:
             _exp_def = datetime.strptime(expiry_date, "%Y-%m-%d").date() if expiry_date else date.today()
         except:
             _exp_def = date.today()
-        expiry_date_inp = st.date_input("Expiry Date", value=_exp_def, key="tix_expiry_date")
+        expiry_date_inp = st.date_input("Expiry Date", value=_exp_def,
+            format="DD/MM/YYYY", key=f"tix_expiry_{_tix_ver}")
         expiry_date = expiry_date_inp.strftime("%Y-%m-%d")
+        # Swap end directly under expiry in same column
+        swap_end_d = _add_months(_next_bd(expiry_date_inp), int(round(max(swap_term_y, 0.25) * 12)))
+        st.date_input("Swap End", value=swap_end_d, format="DD/MM/YYYY",
+            key=f"tix_swap_end_{_tix_ver}", disabled=True)
 
     with p2:
-        st.markdown(f"<p style='font-size:13px;color:#94a3b8;margin:0'>Swap Term: <b style='color:#e2e8f0'>{swap_term}</b></p>", unsafe_allow_html=True)
+        st.markdown(f"<p style='font-size:12px;color:#94a3b8;margin:0 0 4px 0'>Swap Term: <b style='color:#e2e8f0'>{swap_term}</b></p>", unsafe_allow_html=True)
         _start_def = _next_bd(expiry_date_inp)
         try:
             _ps = datetime.strptime(swap_start, "%Y-%m-%d").date() if swap_start else _start_def
@@ -534,32 +542,27 @@ def render_ticket_tab(ss):
                 _ps = _start_def
         except:
             _ps = _start_def
-        swap_start_inp = st.date_input("Swap Start", value=_ps, key="tix_swap_start",
-            help="Expiry +1 business day (mod following)")
+        swap_start_inp = st.date_input("Swap Start", value=_ps, format="DD/MM/YYYY",
+            key=f"tix_swap_start_{_tix_ver}", help="Expiry +1 business day (mod following)")
         swap_start = swap_start_inp.strftime("%Y-%m-%d")
-        swap_end_d = _add_months(swap_start_inp, int(round(max(swap_term_y, 0.25) * 12)))
-        st.date_input("Swap End", value=swap_end_d, key="tix_swap_end", disabled=True)
+        # Rolls
+        _freq_m = 3 if swap_term_y <= 3 else 6
+        _rolls = [_add_months(swap_start_inp, _freq_m * (i+1)) for i in range(4)]
+        _roll_str = "  ·  ".join(f"{r.day} {r.strftime('%b')}" for r in _rolls) + "…"
+        st.markdown(f"<p style='font-size:12px;color:#94a3b8;margin-top:8px'>Rolls: {_roll_str}</p>", unsafe_allow_html=True)
 
     with p3:
-        st.markdown(f"<p style='font-size:13px;color:#94a3b8;margin:0'>Strike: <b style='color:#e2e8f0'>{strike_rate:.4f}%</b></p>", unsafe_allow_html=True)
-        # Key includes expiry+term so widget resets when new ticket data arrives
-        _prem_key = f"tix_prem_{expiry_date}_{swap_term}"
+        st.markdown(f"<p style='font-size:12px;color:#94a3b8;margin:0 0 4px 0'>Strike: <b style='color:#e2e8f0'>{strike_rate:.4f}%</b></p>", unsafe_allow_html=True)
         premium_bp = st.number_input("Premium (bp)", value=float(premium_bp) if premium_bp else 0.0,
-            min_value=-9999.0, step=0.5, format="%.2f", key=_prem_key)
+            min_value=-9999.0, step=0.5, format="%.2f", key=f"tix_prem_{_tix_ver}")
         _notional_now = float(notional) if notional else 100.0
         premium_usd = _notional_now * 1_000_000 * premium_bp / 10_000
         st.metric("Premium $", f"{currency} {premium_usd:,.0f}")
 
     with p4:
-        _not_key = f"tix_notional_{expiry_date}_{swap_term}"
+        st.markdown(f"<p style='font-size:12px;color:#94a3b8;margin:0 0 4px 0'>Convention: <b style='color:#e2e8f0'>{'QQ (3M)' if swap_term_y <= 3 else 'SS (6M)'}</b></p>", unsafe_allow_html=True)
         notional = st.number_input("Notional (MM)", value=float(notional) if notional else 100.0,
-            min_value=1.0, step=25.0, format="%.0f", key=_not_key)
-        _freq_m = 3 if swap_term_y <= 3 else 6
-        conv = "QQ (3M BBSW)" if _freq_m == 3 else "SS (6M BBSW)"
-        st.caption(conv)
-        _rolls = [_add_months(swap_start_inp, _freq_m * (i+1)) for i in range(4)]
-        _roll_str = "  ·  ".join(f"{r.day} {r.strftime('%b')}" for r in _rolls) + "…"
-        st.markdown(f"<p style='font-size:12px;color:#94a3b8;margin-top:6px'>Rolls: {_roll_str}</p>", unsafe_allow_html=True)
+            min_value=1.0, step=25.0, format="%.0f", key=f"tix_notional_{_tix_ver}")
 
     pricing_ok = bool(expiry_date and swap_start and premium_bp)
     st.divider()
