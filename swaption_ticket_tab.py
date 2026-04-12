@@ -251,10 +251,25 @@ def render_ticket_tab(ss):
     if not pricing_ok:
         st.warning("Run the pricer to populate pricing fields.")
 
+    def next_business_day(d):
+        """Expiry + 1 mod following — skip weekends."""
+        d = d + timedelta(days=1)
+        if d.weekday() == 5: d += timedelta(days=2)   # Saturday → Monday
+        if d.weekday() == 6: d += timedelta(days=1)   # Sunday → Monday
+        return d
+
+    def add_months(d, months):
+        import calendar
+        month = d.month - 1 + months
+        year  = d.year + month // 12
+        month = month % 12 + 1
+        day   = min(d.day, calendar.monthrange(year, month)[1])
+        return d.replace(year=year, month=month, day=day)
+
     p1, p2, p3, p4 = st.columns(4)
 
     with p1:
-        st.text(f"Option Expiry: {option_expiry}")
+        st.markdown(f"<div style='font-size:13px;color:#94a3b8;margin-bottom:4px'>Option Expiry: <b style='color:#e2e8f0'>{option_expiry}</b></div>", unsafe_allow_html=True)
         try:
             _exp_default = datetime.strptime(expiry_date, "%Y-%m-%d").date() if expiry_date else date.today()
         except:
@@ -263,28 +278,41 @@ def render_ticket_tab(ss):
         expiry_date = expiry_date_inp.strftime("%Y-%m-%d")
 
     with p2:
-        st.text(f"Swap Term: {swap_term}")
-        # Swap Start defaults to expiry + 1 business day (mod following approximation)
+        st.markdown(f"<div style='font-size:13px;color:#94a3b8;margin-bottom:4px'>Swap Term: <b style='color:#e2e8f0'>{swap_term}</b></div>", unsafe_allow_html=True)
+        # Swap Start: expiry + 1 BD mod following
+        _start_default = next_business_day(expiry_date_inp)
         try:
-            _start_default = datetime.strptime(swap_start, "%Y-%m-%d").date() if swap_start else expiry_date_inp + timedelta(days=1)
+            # Use pricer value if it makes sense (after expiry)
+            _ps = datetime.strptime(swap_start, "%Y-%m-%d").date() if swap_start else _start_default
+            if _ps <= expiry_date_inp: _ps = _start_default
         except:
-            _start_default = expiry_date_inp + timedelta(days=1)
-        swap_start_inp = st.date_input("Swap Start", value=_start_default, key="tix_swap_start",
-            help="Default: Expiry + 1 business day (mod following)")
+            _ps = _start_default
+        swap_start_inp = st.date_input("Swap Start", value=_ps, key="tix_swap_start",
+            help="Expiry + 1 business day (mod following)")
         swap_start = swap_start_inp.strftime("%Y-%m-%d")
 
+        # Swap End
+        _freq_m = 3 if swap_term_y <= 3 else 6
+        swap_end_d = add_months(swap_start_inp, int(swap_term_y * 12))
+        st.date_input("Swap End", value=swap_end_d, key="tix_swap_end", disabled=True)
+
     with p3:
-        st.text(f"Strike: {strike_rate:.4f}%")
+        st.markdown(f"<div style='font-size:13px;color:#94a3b8;margin-bottom:4px'>Strike: <b style='color:#e2e8f0'>{strike_rate:.4f}%</b></div>", unsafe_allow_html=True)
         premium_bp = st.number_input("Premium (bp)", value=float(premium_bp) if premium_bp else 0.0,
             min_value=-9999.0, step=0.5, format="%.2f", key="tix_premium_bp")
+        # Premium $ directly under bp
+        premium_usd = (float(notional) if notional else 100.0) * 1_000_000 * premium_bp / 10_000
+        st.metric("Premium $", f"{currency} {premium_usd:,.0f}")
 
     with p4:
         notional = st.number_input("Notional (MM)", value=float(notional) if notional else 100.0,
             min_value=1.0, step=25.0, format="%.0f", key="tix_notional")
-        # Premium $ = Notional MM × 1,000,000 × Premium bp / 10,000
-        premium_usd = notional * 1_000_000 * premium_bp / 10_000
-        st.metric("Premium $", f"{currency} {premium_usd:,.0f}")
-        st.caption("QQ (3M BBSW)" if swap_term_y <= 3 else "SS (6M BBSW)")
+        conv = "QQ (3M BBSW)" if swap_term_y <= 3 else "SS (6M BBSW)"
+        st.caption(conv)
+        # Swap rolls — first 4
+        _rolls = [add_months(swap_start_inp, _freq_m * (i+1)) for i in range(4)]
+        _roll_strs = [f"{r.day} {r.strftime('%b')}" for r in _rolls]
+        st.markdown(f"<div style='font-size:12px;color:#94a3b8'>Rolls: {' · '.join(_roll_strs)}…</div>", unsafe_allow_html=True)
 
     pricing_ok = bool(expiry_date and swap_start and premium_bp)
     st.divider()
