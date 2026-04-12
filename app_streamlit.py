@@ -13535,14 +13535,26 @@ def rv_tab():
                 pass
             return float(np.interp(t, _xs_c, _ys_c))
         def _fwd_rate(t1, t2):
+            """Forward par swap rate using the committed curve directly."""
             tenor = t2 - t1
             if tenor <= 0: return None
             try:
-                if tenor <= 3.0 and _rv_zc_qq is not None:
-                    return _fwd_from_zc(_rv_zc_qq, float(t1), float(tenor), 0.25)
-                if _rv_zc_ss is not None:
-                    return _fwd_from_zc(_rv_zc_ss, float(t1), float(tenor), 0.50)
-                return None
+                SPOT = 1.0/252.0
+                t_s = t1 + SPOT
+                t_e = t_s + tenor
+                freq = 0.25 if tenor <= 3.0 else 0.50
+                def _df(t):
+                    z = interpolate_zero(curve, t)
+                    return math.exp(-z * t)
+                times = []; t = t_s + freq
+                while t <= t_e + 1e-9:
+                    times.append(min(t, t_e)); t += freq
+                if not times: return None
+                prev = t_s; ann = 0.0
+                for ti in times:
+                    ann += _df(ti) * (ti - prev); prev = ti
+                if ann <= 0: return None
+                return (_df(t_s) - _df(t_e)) / ann * 100.0
             except Exception:
                 return None
     else:
@@ -13936,18 +13948,27 @@ def rv_tab():
             _rv_zc_ss = st.session_state.get("_aud_zc_ss")
 
             def _fwd_rate(t1, t2):
-                """Forward swap rate using pure QQ/SS zero curves (matches forward matrix)."""
+                """Forward swap rate using committed curve directly."""
                 tenor = t2 - t1
-                if tenor <= 0:
-                    return None
+                if tenor <= 0: return None
                 try:
-                    if tenor <= 3.0 and _rv_zc_qq:
-                        return _fwd_from_zc(_rv_zc_qq, float(t1), float(tenor), 0.25)
-                    if _rv_zc_ss:
-                        return _fwd_from_zc(_rv_zc_ss, float(t1), float(tenor), 0.50)
+                    SPOT = 1.0/252.0
+                    t_s = t1 + SPOT; t_e = t_s + tenor
+                    freq = 0.25 if tenor <= 3.0 else 0.50
+                    def _df(t):
+                        z = interpolate_zero(curve, t)
+                        return math.exp(-z * t)
+                    times = []; t = t_s + freq
+                    while t <= t_e + 1e-9:
+                        times.append(min(t, t_e)); t += freq
+                    if not times: return None
+                    prev = t_s; ann = 0.0
+                    for ti in times:
+                        ann += _df(ti) * (ti - prev); prev = ti
+                    if ann <= 0: return None
+                    return (_df(t_s) - _df(t_e)) / ann * 100.0
                 except Exception:
-                    pass
-                return None
+                    return None
 
             fwds_live = {
                 "1y1y":  _fwd_rate(1, 2),
