@@ -13421,6 +13421,7 @@ def _compute_fwd_vol_surface_stats(ccy: str) -> dict:
 
 
 def rv_tab():
+    import plotly.graph_objects as go
     st.subheader("📊 Relative Value   —   Swaption & Cap/Floor Trade Ideas")
     st.caption("Live vol surface + IRS curve for richness/cheapness signals.")
 
