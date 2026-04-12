@@ -19211,6 +19211,11 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         ("usdswap_2y", "USD Swap 2Y",      "USD Rates"),
         ("usdswap_10y","USD Swap 10Y",     "USD Rates"),
         ("usdswap_30y","USD Swap 30Y",     "USD Rates"),
+        ("fed_funds",  "Fed Funds Target", "USD Money"),
+        ("sofr_fix",   "SOFR Fix",         "USD Money"),
+        ("sofr_1m",    "SOFR 1M",          "USD Money"),
+        ("sofr_3m",    "SOFR 3M",          "USD Money"),
+        ("sofr_6m",    "SOFR 6M",          "USD Money"),
     ]
 
     _DERIVED = [
