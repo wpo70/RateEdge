@@ -13538,9 +13538,9 @@ def rv_tab():
             tenor = t2 - t1
             if tenor <= 0: return None
             try:
-                if tenor <= 3.0 and _rv_zc_qq:
+                if tenor <= 3.0 and _rv_zc_qq is not None:
                     return _fwd_from_zc(_rv_zc_qq, float(t1), float(tenor), 0.25)
-                if _rv_zc_ss:
+                if _rv_zc_ss is not None:
                     return _fwd_from_zc(_rv_zc_ss, float(t1), float(tenor), 0.50)
                 return None
             except Exception:
