@@ -13484,9 +13484,32 @@ def rv_tab():
     if curve is not None:
         _xs_c = curve["MaturityY"].to_numpy().astype(float)
         _ys_c = curve["ZeroRatePct"].to_numpy().astype(float)
-        def _par_rate(t): return float(np.interp(t, _xs_c, _ys_c))
         _rv_zc_qq = st.session_state.get("_aud_zc_qq_full") or st.session_state.get("_aud_zc_qq")
         _rv_zc_ss = st.session_state.get("_aud_zc_ss")
+        def _par_rate(t):
+            # Blended: Q/Q for ≤3Y, S/S for ≥4Y
+            try:
+                if t <= 3.0 and _rv_zc_qq is not None:
+                    _xq = _rv_zc_qq["MaturityY"].to_numpy().astype(float)
+                    _yq = _rv_zc_qq["ZeroRatePct"].to_numpy().astype(float)
+                    return float(np.interp(t, _xq, _yq))
+                if t >= 4.0 and _rv_zc_ss is not None:
+                    _xs2 = _rv_zc_ss["MaturityY"].to_numpy().astype(float)
+                    _ys2 = _rv_zc_ss["ZeroRatePct"].to_numpy().astype(float)
+                    return float(np.interp(t, _xs2, _ys2))
+            except Exception:
+                pass
+            return float(np.interp(t, _xs_c, _ys_c))
+        def _par_rate_qq(t):
+            # Q/Q only — for cap/floor analysis (3M BBSW resets throughout)
+            try:
+                if _rv_zc_qq is not None:
+                    _xq = _rv_zc_qq["MaturityY"].to_numpy().astype(float)
+                    _yq = _rv_zc_qq["ZeroRatePct"].to_numpy().astype(float)
+                    return float(np.interp(t, _xq, _yq))
+            except Exception:
+                pass
+            return float(np.interp(t, _xs_c, _ys_c))
         def _fwd_rate(t1, t2):
             tenor = t2 - t1
             if tenor <= 0: return None
@@ -13500,6 +13523,7 @@ def rv_tab():
                 return None
     else:
         def _par_rate(t): return None
+        def _par_rate_qq(t): return None
         def _fwd_rate(t1, t2): return None
     _rv_cols = st.columns(len(_rv_tab_names))
     for _ri, _rn in enumerate(_rv_tab_names):
@@ -15649,7 +15673,7 @@ def rv_tab():
                     line=dict(color="#3b82f6", width=2),
                     marker=dict(size=8), name="Fwd 3m BBSW"))
                 # Add current 3m rate
-                r_spot = _par_rate(0.25)
+                r_spot = _par_rate_qq(0.25)
                 fig_fwd.add_hline(y=r_spot, line_dash="dot", line_color="#94a3b8",
                                   annotation_text=f"Spot 3m: {r_spot:.3f}%")
                 fig_fwd.update_layout(
@@ -15660,14 +15684,14 @@ def rv_tab():
 
             # ── Cap/floor ideas ──────────────────────────────────────
             cf_ideas = []
-            spot_3m = _par_rate(0.25)
+            spot_3m = _par_rate_qq(0.25)
             peak_fwd = max((p["Fwd 3m BBSW (%)"] for p in fwd_bbsw_pts), default=spot_3m)
             trough_fwd = min((p["Fwd 3m BBSW (%)"] for p in fwd_bbsw_pts), default=spot_3m)
             t_pts = [p["Start (y)"] for p in fwd_bbsw_pts] if fwd_bbsw_pts else []
             r_pts = [p["Fwd 3m BBSW (%)"] for p in fwd_bbsw_pts] if fwd_bbsw_pts else []
 
             # Idea 1: curve shape → cap vs floor preference
-            curve_slope_2s5s = _par_rate(5) - _par_rate(2)
+            curve_slope_2s5s = _par_rate_qq(5) - _par_rate_qq(2)
             fwd_peak_t = t_pts[r_pts.index(max(r_pts))] if r_pts else 0
 
             if curve_slope_2s5s > 0.20:  # steep → rates going up
