@@ -276,7 +276,7 @@ def render_ticket_tab(ss):
     with p3:
         st.text(f"Strike: {strike_rate:.4f}%")
         premium_bp = st.number_input("Premium (bp)", value=float(premium_bp) if premium_bp else 0.0,
-            min_value=0.0, step=0.5, format="%.2f", key="tix_premium_bp")
+            min_value=-9999.0, step=0.5, format="%.2f", key="tix_premium_bp")
 
     with p4:
         notional = st.number_input("Notional (MM)", value=float(notional) if notional else 100.0,
