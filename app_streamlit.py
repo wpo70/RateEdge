@@ -17287,8 +17287,15 @@ def main():
                                 _cur3.close(); _conn3.close()
                                 if _trow and _trow[0]:
                                     _tprefs = _trow[0] if isinstance(_trow[0], dict) else json.loads(_trow[0])
+                                    _known_tabs = {"tab_show_home","tab_show_sdr","tab_show_upload",
+                                        "tab_show_curves","tab_show_fwd","tab_show_hva",
+                                        "tab_show_swaptions","tab_show_caps","tab_show_blotter",
+                                        "tab_show_rv","tab_show_exotics","tab_show_sod",
+                                        "tab_show_voleditor","tab_show_volexport",
+                                        "tab_show_midcurve","tab_show_multiccy","tab_show_ticket"}
                                     for _tk, _tv in _tprefs.items():
-                                        st.session_state[_tk] = _tv
+                                        if _tk in _known_tabs:
+                                            st.session_state[_tk] = _tv
                     except Exception: pass
                 except Exception:
                     pass
@@ -17354,6 +17361,7 @@ def main():
                 ("📑 Vol Export", "tab_show_volexport"),
                 ("📐 Midcurve & Curve Options", "tab_show_midcurve"),
                 ("📍 Multi-CCY", "tab_show_multiccy"),
+                ("🎫 Trade Ticket", "tab_show_ticket"),
             ]
             for _tname, _tkey in _ALL_TABS:
                 if _tkey not in st.session_state:
@@ -17382,7 +17390,7 @@ def main():
                     _tab_keys = ["tab_show_home","tab_show_upload","tab_show_curves","tab_show_fwd",
                                  "tab_show_hva","tab_show_swaptions","tab_show_caps","tab_show_blotter",
                                  "tab_show_rv","tab_show_exotics","tab_show_sod","tab_show_voleditor",
-                                 "tab_show_volexport","tab_show_midcurve","tab_show_multiccy"]
+                                 "tab_show_volexport","tab_show_midcurve","tab_show_multiccy","tab_show_ticket"]
                     _tab_prefs = {k: st.session_state.get(k, True) for k in _tab_keys}
                     _uid2 = st.session_state.get("username","")
                     if _uid2 and HAS_POSTGRES:
