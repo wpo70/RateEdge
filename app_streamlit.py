@@ -17631,10 +17631,22 @@ def main():
                 ("📍 Multi-CCY", "tab_show_multiccy"),
                 ("🎫 Trade Ticket", "tab_show_ticket"),
             ]
+            _tab_changed = False
             for _tname, _tkey in _ALL_TABS:
                 if _tkey not in st.session_state:
                     st.session_state[_tkey] = True
+                _prev_val = st.session_state[_tkey]
                 st.session_state[_tkey] = st.checkbox(_tname, value=st.session_state[_tkey], key=f"cb_{_tkey}")
+                if st.session_state[_tkey] != _prev_val:
+                    _tab_changed = True
+
+            # Auto-save to DB whenever a checkbox changes
+            if _tab_changed and st.session_state.get("authenticated") and HAS_POSTGRES:
+                try:
+                    _tab_prefs_save = {k: st.session_state.get(k, True) for _, k in _ALL_TABS}
+                    save_user_config(st.session_state.get("username",""), "tab_prefs", "AUD", _tab_prefs_save)
+                    load_user_config.clear()
+                except Exception: pass
 
         
         st.markdown("---")
