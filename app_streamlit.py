@@ -13534,27 +13534,32 @@ def rv_tab():
             except Exception:
                 pass
             return float(np.interp(t, _xs_c, _ys_c))
+        # Use the fwd matrix directly — authoritative source
+        _rv_fwd_matrix = st.session_state.get("fwd_matrix", {}).get(ccy)
         def _fwd_rate(t1, t2):
-            """Forward par swap rate using the committed curve directly."""
+            """Look up forward rate from the committed fwd matrix."""
             tenor = t2 - t1
             if tenor <= 0: return None
             try:
-                SPOT = 1.0/252.0
-                t_s = t1 + SPOT
-                t_e = t_s + tenor
-                freq = 0.25 if tenor <= 3.0 else 0.50
-                def _df(t):
-                    z = interpolate_zero(curve, t)
-                    return math.exp(-z * t)
-                times = []; t = t_s + freq
-                while t <= t_e + 1e-9:
-                    times.append(min(t, t_e)); t += freq
-                if not times: return None
-                prev = t_s; ann = 0.0
-                for ti in times:
-                    ann += _df(ti) * (ti - prev); prev = ti
-                if ann <= 0: return None
-                return (_df(t_s) - _df(t_e)) / ann * 100.0
+                if _rv_fwd_matrix is None or _rv_fwd_matrix.empty:
+                    return None
+                # Expiry label from t1 years
+                _exp_labels = list(_rv_fwd_matrix.index)
+                _exp_yrs = np.array([label_to_years(str(e)) for e in _exp_labels], dtype=float)
+                # Tenor columns
+                _ten_cols = list(_rv_fwd_matrix.columns)
+                _ten_yrs = np.array([float(c.replace("Y","")) for c in _ten_cols], dtype=float)
+                # Interpolate across expiry axis at t1, then tenor axis at tenor
+                _col_vals = []
+                for _col in _ten_cols:
+                    _cv = pd.to_numeric(_rv_fwd_matrix[_col], errors='coerce').values.astype(float)
+                    _mask = ~np.isnan(_cv)
+                    if _mask.sum() < 2: _col_vals.append(np.nan); continue
+                    _col_vals.append(float(np.interp(t1, _exp_yrs[_mask], _cv[_mask])))
+                _col_vals = np.array(_col_vals, dtype=float)
+                _valid = ~np.isnan(_col_vals)
+                if _valid.sum() < 1: return None
+                return float(np.interp(tenor, _ten_yrs[_valid], _col_vals[_valid]))
             except Exception:
                 return None
     else:
@@ -13947,26 +13952,26 @@ def rv_tab():
             _rv_zc_qq = _rv_zc_qq_full2 if _rv_zc_qq_full2 is not None else st.session_state.get("_aud_zc_qq")
             _rv_zc_ss = st.session_state.get("_aud_zc_ss")
 
+            _rv_fwd_matrix2 = st.session_state.get("fwd_matrix", {}).get(ccy)
             def _fwd_rate(t1, t2):
-                """Forward swap rate using committed curve directly."""
                 tenor = t2 - t1
                 if tenor <= 0: return None
                 try:
-                    SPOT = 1.0/252.0
-                    t_s = t1 + SPOT; t_e = t_s + tenor
-                    freq = 0.25 if tenor <= 3.0 else 0.50
-                    def _df(t):
-                        z = interpolate_zero(curve, t)
-                        return math.exp(-z * t)
-                    times = []; t = t_s + freq
-                    while t <= t_e + 1e-9:
-                        times.append(min(t, t_e)); t += freq
-                    if not times: return None
-                    prev = t_s; ann = 0.0
-                    for ti in times:
-                        ann += _df(ti) * (ti - prev); prev = ti
-                    if ann <= 0: return None
-                    return (_df(t_s) - _df(t_e)) / ann * 100.0
+                    if _rv_fwd_matrix2 is None or _rv_fwd_matrix2.empty: return None
+                    _exp_labels = list(_rv_fwd_matrix2.index)
+                    _exp_yrs = np.array([label_to_years(str(e)) for e in _exp_labels], dtype=float)
+                    _ten_cols = list(_rv_fwd_matrix2.columns)
+                    _ten_yrs = np.array([float(c.replace("Y","")) for c in _ten_cols], dtype=float)
+                    _col_vals = []
+                    for _col in _ten_cols:
+                        _cv = pd.to_numeric(_rv_fwd_matrix2[_col], errors='coerce').values.astype(float)
+                        _mask = ~np.isnan(_cv)
+                        if _mask.sum() < 2: _col_vals.append(np.nan); continue
+                        _col_vals.append(float(np.interp(t1, _exp_yrs[_mask], _cv[_mask])))
+                    _col_vals = np.array(_col_vals, dtype=float)
+                    _valid = ~np.isnan(_col_vals)
+                    if _valid.sum() < 1: return None
+                    return float(np.interp(tenor, _ten_yrs[_valid], _col_vals[_valid]))
                 except Exception:
                     return None
 
