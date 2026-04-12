@@ -18307,20 +18307,22 @@ def sod_report_tab():
     import re as _re_pdf
 
     def _pdf_clean(text):
-        """Strip emojis and non-latin chars for reportlab compatibility."""
+        """Strip emojis, substitute with ASCII for reportlab compatibility."""
+        import re as _re_pdf
         _em = [
-            ("🔴","[HIGH]"),("⚠️","[WARN]"),("✅","[OK]"),("■",""),
-            ("🟢","[LOW]"),("⚪","[NEU]"),("🟡","[MED]"),
-            ("📋",""),("💾",""),("⬇️",""),("🗑️",""),("📊",""),
-            ("📈",""),("📉",""),("🏆",""),("⚡",""),("🌏",""),
+            ("🔴","RICH"),("🟢","CHEAP"),("⚪","NEUTRAL"),("🟡","WATCH"),
+            ("⭐","*"),("★","*"),("■","*"),("⚠️","[!]"),("✅","[OK]"),
+            ("⚡",""),("📋",""),("💾",""),("⬇️",""),("🗑️",""),
+            ("📊",""),("📈",""),("📉",""),("🏆",""),("🌏",""),
             ("🎯",""),("💱",""),("🔧",""),("📐",""),("📞",""),
             ("💡",""),("🔔",""),("📅",""),("📂",""),("💼",""),
+            ("≈","~"),("→","->"),("←","<-"),("≥",">="),("≤","<="),
+            ("σ","s"),("α","a"),("β","b"),("ρ","r"),("ν","v"),
         ]
         for _e, _r in _em:
             text = text.replace(_e, _r)
-        text = text.replace("**","").replace("*","")
-        # Strip remaining non-ASCII above latin extended
-        text = _re_pdf.sub(r'[^\x00-\x024F]', '', text)
+        text = text.replace("**","").replace("*","*")
+        text = _re_pdf.sub(r'[^\x20-\x7E\u00A0-\u024F]', '', text)
         return text.strip()
     st.subheader("📋 Start-of-Day Report   —   USD Overnight → AUD Implied Open")
     st.caption(
