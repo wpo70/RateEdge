@@ -14169,18 +14169,58 @@ def rv_tab():
                     _adj_prem = _prem_override.get(_bias, 3.0)
                     st.caption(f"Meeting vol premium → **{_adj_prem:.0f}bp** per meeting ({_bias})")
 
-                    # SPI vol input for AUD
+                    # SPI vol surface for AUD
                     if ccy == "AUD":
-                        _spi_col, _ = st.columns([2, 4])
-                        with _spi_col:
-                            _spi_input = st.number_input("ASX SPI implied vol (%)", min_value=0.0,
-                                                          max_value=100.0, step=0.5,
-                                                          value=float(st.session_state.get("spi_vol_override", 0.0)),
-                                                          key="spi_vol_input",
-                                                          help="Enter SPI vol from Bloomberg (BBG ticker: VXA Index or SPIVIX). "
-                                                               "Used as equity vol context for AUD swaption richness.")
-                        if _spi_input > 0:
-                            st.session_state["spi_vol_override"] = _spi_input
+                        st.markdown("**ASX SPI 200 Implied Vol Surface (%)**")
+                        st.caption("Contracts × delta strikes. Edit cells then click Apply. 50D ATM used as SPI context vol.")
+
+                        _SPI_CONTRACTS = ["Jun-26", "Sep-26", "Dec-26", "Mar-27"]
+                        _SPI_STRIKES   = ["10DP", "15DP", "25DP", "35DP", "50D", "35DC", "25DC", "15DC", "10DC"]
+
+                        # Load or init SPI surface
+                        _spi_surf = st.session_state.get("spi_vol_surface", {})
+                        if not _spi_surf:
+                            # Pre-fill with today's BBG values from screenshot
+                            _spi_surf = {
+                                "Jun-26": {"10DP":22.39,"15DP":20.52,"25DP":18.19,"35DP":16.58,"50D":14.88,"35DC":13.73,"25DC":13.13,"15DC":12.63,"10DC":12.42},
+                                "Sep-26": {"10DP":22.72,"15DP":21.17,"25DP":18.80,"35DP":17.09,"50D":15.34,"35DC":14.05,"25DC":13.29,"15DC":12.62,"10DC":12.41},
+                                "Dec-26": {"10DP":23.97,"15DP":22.12,"25DP":19.43,"35DP":17.43,"50D":15.28,"35DC":13.72,"25DC":12.93,"15DC":12.53,"10DC":12.85},
+                                "Mar-27": {"10DP":24.18,"15DP":22.30,"25DP":19.55,"35DP":17.50,"50D":15.46,"35DC":14.29,"25DC":13.99,"15DC":14.59,"10DC":15.90},
+                            }
+                            st.session_state["spi_vol_surface"] = _spi_surf
+
+                        with st.expander("📊 SPI Vol Surface", expanded=False):
+                            # Header
+                            _spi_hcols = st.columns([1.2] + [0.9]*9)
+                            _spi_hcols[0].markdown("<div style='font-size:11px;font-weight:600;color:#64748b'>Contract</div>", unsafe_allow_html=True)
+                            for _si, _sk in enumerate(_SPI_STRIKES):
+                                _spi_hcols[_si+1].markdown(f"<div style='font-size:11px;font-weight:600;color:#64748b;text-align:center'>{'<b style=\"color:#38bdf8\">'+_sk+'</b>' if _sk=='50D' else _sk}</div>", unsafe_allow_html=True)
+
+                            _new_spi_surf = {}
+                            for _sc in _SPI_CONTRACTS:
+                                _spi_rcols = st.columns([1.2] + [0.9]*9)
+                                _spi_rcols[0].markdown(f"<div style='font-size:12px;padding-top:8px;font-weight:600;color:#94a3b8'>{_sc}</div>", unsafe_allow_html=True)
+                                _new_spi_surf[_sc] = {}
+                                for _si, _sk in enumerate(_SPI_STRIKES):
+                                    _def = _spi_surf.get(_sc, {}).get(_sk, 15.0)
+                                    _v = _spi_rcols[_si+1].number_input("", value=float(_def), min_value=0.0, max_value=100.0,
+                                                                         step=0.01, format="%.2f",
+                                                                         key=f"spi_{_sc}_{_sk}",
+                                                                         label_visibility="collapsed")
+                                    _new_spi_surf[_sc][_sk] = _v
+
+                            if st.button("✅ Apply SPI Surface", key="spi_apply"):
+                                st.session_state["spi_vol_surface"] = _new_spi_surf
+                                # Use front contract 50D as the single SPI vol context
+                                _front_atm = _new_spi_surf.get(_SPI_CONTRACTS[0], {}).get("50D", 0.0)
+                                st.session_state["spi_vol_override"] = _front_atm
+                                st.success(f"✅ SPI surface saved. Front ATM: {_front_atm:.2f}%")
+                                st.rerun()
+
+                        # Show current front ATM
+                        _spi_atm = st.session_state.get("spi_vol_override", _spi_surf.get("Jun-26", {}).get("50D", 0.0))
+                        if _spi_atm and _spi_atm > 0:
+                            st.caption(f"SPI front ATM (50D Jun-26): **{_spi_atm:.2f}%** — used as equity vol context")
 
                     # Add custom meeting date
                     st.markdown("**Add Custom Meeting Date**")
