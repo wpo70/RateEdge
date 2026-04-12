@@ -8014,7 +8014,7 @@ def swaptions_tab(vol_mode: str):
             _spot_bp_disp = float(row.get('pv_bp_spot', row.get('pv_bp', 0)))
 
             _rc = st.columns([0.25, 1.60, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.35, 0.70, 0.65])
-            for _ci, _val in enumerate([
+            _sw_vals = [
                 f"{idx+1}", _struct, _expiry, _tenor,
                 f"{float(row.get('notional_mm',100)):.0f}mm",
                 f"{float(row.get('strike',0)):.4f}",
@@ -8022,10 +8022,14 @@ def swaptions_tab(vol_mode: str):
                 f"{_spot_bp_disp:.2f}",
                 f"{_fwd_bp:.2f}",
                 f"{float(row.get('pv',0))/1000:,.1f}",
-            ]):
+            ]
+            _sw_colours = {7: "#22c55e", 8: "#38bdf8"}  # green=spot, blue=fwd
+            for _ci, _val in enumerate(_sw_vals):
+                _col = _sw_colours.get(_ci, "#1e293b")
+                _fw  = "700" if _ci in _sw_colours else "400"
                 _rc[_ci].markdown(
-                    f"<div style='background:{_bg};padding:5px 3px;font-size:12px;color:#1e293b;"
-                    f"border-bottom:1px solid #e2e8f0'>{_val}</div>", unsafe_allow_html=True)
+                    f"<div style='background:{_bg};padding:5px 3px;font-size:12px;color:{_col};"
+                    f"font-weight:{_fw};border-bottom:1px solid #e2e8f0'>{_val}</div>", unsafe_allow_html=True)
 
             _new_status = _rc[10].selectbox("", _STATUS_OPTS,
                 index=_STATUS_OPTS.index(_cur_status) if _cur_status in _STATUS_OPTS else 0,
@@ -9498,7 +9502,7 @@ def caps_floors_tab(vol_mode: str):
             _cf_spot = float(_crow.get('pv_bp', 0))
             _cf_fwd  = float(_crow.get('pv_bp_fwd', _cf_spot))
             _crc = st.columns([0.25, 1.60, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.35, 0.70, 0.65])
-            for _ci2, _val2 in enumerate([
+            _cf_vals = [
                 f"{_cidx+1}", _cst, _cex, _cten,
                 f"{float(_crow.get('notional_mm',100)):.0f}mm",
                 f"{float(_crow.get('strike',0)):.4f}",
@@ -9506,10 +9510,14 @@ def caps_floors_tab(vol_mode: str):
                 f"{_cf_spot:.2f}",
                 f"{_cf_fwd:.2f}",
                 f"{float(_crow.get('pv',0))/1000:,.1f}",
-            ]):
+            ]
+            _cf_colours = {7: "#22c55e", 8: "#38bdf8"}
+            for _ci2, _val2 in enumerate(_cf_vals):
+                _cf_col = _cf_colours.get(_ci2, "#1e293b")
+                _cf_fw  = "700" if _ci2 in _cf_colours else "400"
                 _crc[_ci2].markdown(
-                    f"<div style='background:{_cf_bg};padding:5px 3px;font-size:12px;color:#1e293b;"
-                    f"border-bottom:1px solid #e2e8f0'>{_val2}</div>", unsafe_allow_html=True)
+                    f"<div style='background:{_cf_bg};padding:5px 3px;font-size:12px;color:{_cf_col};"
+                    f"font-weight:{_cf_fw};border-bottom:1px solid #e2e8f0'>{_val2}</div>", unsafe_allow_html=True)
             _cf_new = _crc[10].selectbox("", _CF_STATUS_OPTS,
                 index=_CF_STATUS_OPTS.index(_cf_cur) if _cf_cur in _CF_STATUS_OPTS else 0,
                 key=f"cf_status_{_cidx}", label_visibility="collapsed")
@@ -15741,35 +15749,50 @@ def portfolio_tab():
             df_sw["_expiry_sort"] = df_sw["expiry"].apply(lambda e: label_to_years(str(e)))
             df_sw = df_sw.sort_values("_expiry_sort").reset_index(drop=True)
 
-            # Header row
-            _hc = st.columns([0.4, 1.8, 0.7, 0.8, 0.7, 0.9, 0.9, 0.9, 0.9, 0.9, 0.5, 0.5])
-            for _h, _col in zip(["#","Structure","Expiry","Tenor","Notl","Strike %","Fwd %","PV (bp)","PV ($k)","Δ ($k)","",""], _hc):
-                _col.markdown(f"<small style='color:#94a3b8'>{_h}</small>", unsafe_allow_html=True)
-            st.markdown("<hr style='margin:2px 0;border-color:#1e3050'>", unsafe_allow_html=True)
+            GRID = "2.5% 16% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 13.5% 7.0% 6.5%"
+            COLS = [0.25, 1.60, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.35, 0.70, 0.65]
+            st.markdown(
+                f"<div style='display:grid;grid-template-columns:{GRID};"
+                "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
+                "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
+                "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
+                "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot Prem</span>"
+                "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Del</span></div>",
+                unsafe_allow_html=True)
+
+            _PTF_STATUS_COLOURS = {"TP Trade":"rgba(220,255,220,0.95)","Away Trade":"rgba(255,210,210,0.95)","Direct Trade":"rgba(255,235,195,0.95)"}
+            _PTF_STATUS_OPTS = ["—","TP Trade","Away Trade","Direct Trade"]
 
             for idx, row in df_sw.iterrows():
-                _cols = st.columns([0.4, 1.8, 0.7, 0.8, 0.7, 0.9, 0.9, 0.9, 0.9, 0.9, 0.5, 0.5])
-                _cols[0].write(f"{idx+1}")
-                _cols[1].write(row.get("structure",""))
-                _cols[2].write(row.get("expiry",""))
-                _cols[3].write(row.get("tenor",""))
-                _cols[4].write(f"{float(row.get('notional_mm',100)):.0f}mm")
-                _cols[5].write(f"{float(row.get('strike',0)):.4f}")
-                _cols[6].write(f"{float(row.get('forward',0)):.4f}")
-                _cols[7].write(f"{float(row.get('pv_bp',0)):.2f}")
-                _cols[8].write(f"{float(row.get('pv',0))/1000:,.1f}")
-                _cols[9].write(f"{float(row.get('delta',0))/1000:,.1f}")
-
-                _label = row.get("label","")
-                _key_base = f"ptf_{idx}"
-
-                if can_quick_tix() and _cols[10].button("📋", key=f"{_key_base}_tix", help="Quick Tix"):
-                    st.session_state["_ptf_tix_open"] = idx if st.session_state.get("_ptf_tix_open") != idx else -1
-
-                if _cols[11].button("🗑️", key=f"{_key_base}_del", help="Delete"):
-                    st.session_state["portfolio"] = [p for p in portfolio if p.get("label") != _label or p.get("instrument_type") != "Swaption"]
-                    st.session_state["swaption_portfolio"] = [p for p in st.session_state["swaption_portfolio"] if p.get("label") != _label]
-                    st.session_state.pop("_ptf_tix_open", None)
+                _label  = row.get("label","")
+                _expiry = row.get("expiry","")
+                _tenor  = str(row.get("tenor",""))
+                _status_key = f"_ptfsw_status_{idx}"
+                _cur = st.session_state.get(_status_key,"—")
+                _bg  = _PTF_STATUS_COLOURS.get(_cur,"white")
+                _spot = float(row.get('pv_bp_spot', row.get('pv_bp',0)))
+                _fwd  = float(row.get('pv_bp_fwd',  row.get('pv_bp',0)))
+                _rc = st.columns(COLS)
+                _vals = [
+                    f"{idx+1}", row.get("structure",""), _expiry, _tenor,
+                    f"{float(row.get('notional_mm',100)):.0f}mm",
+                    f"{float(row.get('strike',0)):.4f}",
+                    f"{float(row.get('forward',0)):.4f}",
+                    f"{_spot:.2f}", f"{_fwd:.2f}",
+                    f"{float(row.get('pv',0))/1000:,.1f}",
+                ]
+                _prem_colours = {7:"#22c55e", 8:"#38bdf8"}
+                for _ci, _val in enumerate(_vals):
+                    _c = _prem_colours.get(_ci,"#1e293b")
+                    _fw = "700" if _ci in _prem_colours else "400"
+                    _rc[_ci].markdown(f"<div style='background:{_bg};padding:5px 3px;font-size:12px;color:{_c};font-weight:{_fw};border-bottom:1px solid #e2e8f0'>{_val}</div>", unsafe_allow_html=True)
+                _new = _rc[10].selectbox("",_PTF_STATUS_OPTS, index=_PTF_STATUS_OPTS.index(_cur) if _cur in _PTF_STATUS_OPTS else 0, key=f"ptfsw_st_{idx}", label_visibility="collapsed")
+                if _new != _cur: st.session_state[_status_key]=_new; st.rerun()
+                if can_quick_tix() and _rc[11].button("📋",key=f"ptfsw_tix_{idx}",help="Quick Tix"):
+                    st.session_state["_ptf_tix_open"] = idx if st.session_state.get("_ptf_tix_open")!=idx else -1
+                if _rc[12].button("🗑️",key=f"ptfsw_del_{idx}",help="Delete"):
+                    st.session_state["portfolio"] = [p for p in portfolio if p.get("label")!=_label or p.get("instrument_type")!="Swaption"]
+                    st.session_state["swaption_portfolio"] = [p for p in st.session_state["swaption_portfolio"] if p.get("label")!=_label]
                     _save_portfolio(); st.rerun()
 
                 # Quick Tix inline
@@ -15868,26 +15891,60 @@ def portfolio_tab():
             st.info("No caps/floors in portfolio.")
         else:
             df_cf = pd.DataFrame(_cf_port)
-            st.markdown("---")
-            _cf_cols = ["instrument_type","currency","structure","first_fixing","tenor","notional_mm",
-                        "strike","pv_bp","pv","delta","vega"]
-            _cf_disp = df_cf[[c for c in _cf_cols if c in df_cf.columns]].copy()
-            if "pv" in _cf_disp: _cf_disp["pv"] = (_cf_disp["pv"]/1000).round(1)
-            if "delta" in _cf_disp: _cf_disp["delta"] = (_cf_disp["delta"]/1000).round(1)
-            if "vega" in _cf_disp: _cf_disp["vega"] = (_cf_disp["vega"]/1000).round(1)
-            if "pv_bp" in _cf_disp: _cf_disp["pv_bp"] = _cf_disp["pv_bp"].round(2)
-            st.dataframe(_cf_disp, use_container_width=True)
-            if st.button("🗑️ Clear Cap/Floor", key="ptf_cf_clear"):
-                st.session_state["portfolio"] = [p for p in portfolio if p.get("instrument_type")!="Cap/Floor"]
-                _save_portfolio(); st.rerun()
+            df_cf["_sort"] = df_cf["expiry"].apply(lambda e: label_to_years(str(e)))
+            df_cf = df_cf.sort_values("_sort").reset_index(drop=True)
+
+            GRID = "2.5% 16% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 13.5% 7.0% 6.5%"
+            COLS = [0.25, 1.60, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.35, 0.70, 0.65]
+            st.markdown(
+                f"<div style='display:grid;grid-template-columns:{GRID};"
+                "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
+                "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
+                "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
+                "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot Prem</span>"
+                "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Del</span></div>",
+                unsafe_allow_html=True)
+
+            _CFPTF_STATUS_COLOURS = {"TP Trade":"rgba(220,255,220,0.95)","Away Trade":"rgba(255,210,210,0.95)","Direct Trade":"rgba(255,235,195,0.95)"}
+            _CFPTF_STATUS_OPTS = ["—","TP Trade","Away Trade","Direct Trade"]
+
+            for _ci3, _cr3 in df_cf.iterrows():
+                _lbl3 = _cr3.get("label","")
+                _sk3  = f"_ptfcf_status_{_ci3}"
+                _cur3 = st.session_state.get(_sk3,"—")
+                _bg3  = _CFPTF_STATUS_COLOURS.get(_cur3,"white")
+                _sp3  = float(_cr3.get('pv_bp',0))
+                _fw3  = float(_cr3.get('pv_bp_fwd',_sp3))
+                _rc3  = st.columns(COLS)
+                _v3   = [
+                    f"{_ci3+1}", _cr3.get("structure",""), _cr3.get("expiry",""), str(_cr3.get("tenor","")),
+                    f"{float(_cr3.get('notional_mm',100)):.0f}mm",
+                    f"{float(_cr3.get('strike',0)):.4f}",
+                    f"{float(_cr3.get('forward',0)):.4f}",
+                    f"{_sp3:.2f}", f"{_fw3:.2f}",
+                    f"{float(_cr3.get('pv',0))/1000:,.1f}",
+                ]
+                _pc3 = {7:"#22c55e", 8:"#38bdf8"}
+                for _k3, _vv3 in enumerate(_v3):
+                    _c3  = _pc3.get(_k3,"#1e293b")
+                    _fw3b = "700" if _k3 in _pc3 else "400"
+                    _rc3[_k3].markdown(f"<div style='background:{_bg3};padding:5px 3px;font-size:12px;color:{_c3};font-weight:{_fw3b};border-bottom:1px solid #e2e8f0'>{_vv3}</div>", unsafe_allow_html=True)
+                _new3 = _rc3[10].selectbox("",_CFPTF_STATUS_OPTS,index=_CFPTF_STATUS_OPTS.index(_cur3) if _cur3 in _CFPTF_STATUS_OPTS else 0,key=f"ptfcf_st_{_ci3}",label_visibility="collapsed")
+                if _new3 != _cur3: st.session_state[_sk3]=_new3; st.rerun()
+                if _rc3[11].button("📋",key=f"ptfcf_tix_{_ci3}",help="Quick Tix"):
+                    st.session_state["_ptfcf_tix_open"] = _ci3 if st.session_state.get("_ptfcf_tix_open")!=_ci3 else -1
+                if _rc3[12].button("🗑️",key=f"ptfcf_del_{_ci3}",help="Delete"):
+                    st.session_state["portfolio"] = [p for p in portfolio if not (p.get("instrument_type")=="Cap/Floor" and p.get("label")==_lbl3)]
+                    _save_portfolio(); st.rerun()
 
     elif _ptf_view == "📋 Composite":
         st.markdown("### Combined Portfolio — Swaptions + Caps/Floors")
         st.markdown("---")
 
-        # Full blotter
         _all_rows = []
         for t in portfolio:
+            _sp = float(t.get('pv_bp_spot', t.get('pv_bp',0)))
+            _fp = float(t.get('pv_bp_fwd',  t.get('pv_bp',0)))
             _all_rows.append({
                 "Type": t.get("instrument_type","Swaption"),
                 "CCY": t.get("currency","AUD"),
@@ -15897,7 +15954,8 @@ def portfolio_tab():
                 "Notl (mm)": float(t.get("notional_mm",100)),
                 "Strike (%)": f"{float(t.get('strike',0)):.4f}",
                 "Fwd (%)": f"{float(t.get('forward',0)):.4f}",
-                "PV (bp)": f"{float(t.get('pv_bp',0)):.2f}",
+                "Spot Prem": f"{_sp:.2f}",
+                "Fwd Prem": f"{_fp:.2f}",
                 "PV ($k)": f"{float(t.get('pv',0))/1000:,.1f}",
                 "Δ ($k)": f"{float(t.get('delta',0))/1000:,.1f}",
                 "Vega ($k)": f"{float(t.get('vega',0))/1000:,.1f}",
