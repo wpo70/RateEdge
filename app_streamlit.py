@@ -19176,8 +19176,6 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                      help="Generate overnight review card"):
             if not st.session_state.get("rv_daily_snap_curr"):
                 st.warning("Run Update RV Snapshot (EOD) first.")
-            elif not st.session_state.get("rv_daily_snap_prev"):
-                st.warning("Need two snapshots to show overnight change. Update again tomorrow.")
             else:
                 st.session_state["rv_report_generated"] = True
 
