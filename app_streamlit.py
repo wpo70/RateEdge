@@ -8032,7 +8032,7 @@ def swaptions_tab(vol_mode: str):
 
         # Header row — light grey background
         st.markdown(
-            "<div style='display:grid;grid-template-columns:2.5% 15% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 12.5% 6.0% 6.0% 6.0%;"
+            "<div style='display:grid;grid-template-columns:2.5% 14.9% 5.4% 6.4% 5.4% 6.9% 6.9% 6.9% 6.9% 6.9% 12.4% 5.9% 5.9% 6.4%;"
             "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
             "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
             "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
@@ -9556,7 +9556,7 @@ def caps_floors_tab(vol_mode: str):
         _CF_STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade"]
 
         st.markdown(
-            "<div style='display:grid;grid-template-columns:2.5% 15% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 12.5% 6.0% 6.0% 6.0%;"
+            "<div style='display:grid;grid-template-columns:2.5% 14.9% 5.4% 6.4% 5.4% 6.9% 6.9% 6.9% 6.9% 6.9% 12.4% 5.9% 5.9% 6.4%;"
             "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
             "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
             "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
@@ -15870,7 +15870,7 @@ def portfolio_tab():
             df_sw["_expiry_sort"] = df_sw["expiry"].apply(lambda e: label_to_years(str(e)))
             df_sw = df_sw.sort_values("_expiry_sort").reset_index(drop=True)
 
-            GRID = "2.5% 15% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 12.5% 6.0% 6.0% 6.0%"
+            GRID = "2.5% 14.9% 5.4% 6.4% 5.4% 6.9% 6.9% 6.9% 6.9% 6.9% 12.4% 5.9% 5.9% 6.4%"
             COLS = [0.25, 1.50, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.25, 0.60, 0.60, 0.65]
             st.markdown(
                 f"<div style='display:grid;grid-template-columns:{GRID};"
@@ -16046,7 +16046,7 @@ def portfolio_tab():
             df_cf["_sort"] = df_cf["expiry"].apply(lambda e: label_to_years(str(e)))
             df_cf = df_cf.sort_values("_sort").reset_index(drop=True)
 
-            GRID = "2.5% 15% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 12.5% 6.0% 6.0% 6.0%"
+            GRID = "2.5% 14.9% 5.4% 6.4% 5.4% 6.9% 6.9% 6.9% 6.9% 6.9% 12.4% 5.9% 5.9% 6.4%"
             COLS = [0.25, 1.50, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.25, 0.60, 0.60, 0.65]
             st.markdown(
                 f"<div style='display:grid;grid-template-columns:{GRID};"
