@@ -19102,6 +19102,41 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
     st.markdown("### ⚡ RV Daily Report")
     st.caption("Update snapshot at end of day. Publish at start of next day to see overnight moves + top convictions.")
 
+    _uid_rv = st.session_state.get("username","default")
+
+    # ── Auto-load snapshots from DB on first render ───────────────────
+    if "rv_daily_snap_curr" not in st.session_state and HAS_POSTGRES:
+        _db_curr = load_user_config(_uid_rv, "rv_snap_curr", "AUD")
+        _db_prev = load_user_config(_uid_rv, "rv_snap_prev", "AUD")
+        if _db_curr: st.session_state["rv_daily_snap_curr"] = _db_curr
+        if _db_prev: st.session_state["rv_daily_snap_prev"] = _db_prev
+
+    # ── Seed from vol_history if still empty ─────────────────────────
+    if "rv_daily_snap_curr" not in st.session_state and HAS_POSTGRES:
+        _aud_snaps = list_vol_snapshots(_uid_rv, "AUD")
+        if len(_aud_snaps) >= 2:
+            def _snap_from_vol_history(snap_id, snap_date):
+                _s = load_vol_snapshot(snap_id)
+                if not _s or _s.get("atm") is None: return None
+                _atm_df = _s["atm"]
+                if "Expiry" in _atm_df.columns: _atm_df = _atm_df.set_index("Expiry")
+                _snap = {"date": str(snap_date), "atm": {}, "curve": {}, "ideas": []}
+                for _e in ["1m","3m","6m","1y","2y"]:
+                    for _t in [2.0,5.0,10.0]:
+                        try:
+                            _tc = next((c for c in _atm_df.columns if str(c).replace("Y","").strip()==str(int(_t))), None)
+                            if _tc and _e in _atm_df.index:
+                                _v = float(_atm_df.loc[_e, _tc])
+                                if _v>0: _snap["atm"][f"{_e}_{int(_t)}Y"] = round(_v,1)
+                        except: pass
+                return _snap
+            _s0 = _snap_from_vol_history(_aud_snaps[0]["id"], _aud_snaps[0]["snapshot_date"])
+            _s1 = _snap_from_vol_history(_aud_snaps[1]["id"], _aud_snaps[1]["snapshot_date"])
+            if _s0: st.session_state["rv_daily_snap_curr"] = _s0
+            if _s1: st.session_state["rv_daily_snap_prev"] = _s1
+            if _s0 and _s1:
+                st.info(f"📅 Seeded from vol history: {_s0['date']} vs {_s1['date']}")
+
     _rv_col1, _rv_col2 = st.columns([2, 2])
     with _rv_col1:
         if st.button("🔄 Update RV Snapshot", key="sod_rv_update", type="primary",
@@ -19122,8 +19157,15 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     for _t in [2.0,5.0,10.0]:
                         _snap["curve"][f"{int(_t)}Y"] = round(float(np.interp(_t,_cx,_cy)),4)
                 except Exception: pass
-                st.session_state["rv_daily_snap_prev"] = st.session_state.get("rv_daily_snap_curr")
+                # Rotate: curr → prev
+                _old_curr = st.session_state.get("rv_daily_snap_curr")
+                if _old_curr: st.session_state["rv_daily_snap_prev"] = _old_curr
                 st.session_state["rv_daily_snap_curr"] = _snap
+                # Persist to DB
+                if HAS_POSTGRES:
+                    save_user_config(_uid_rv, "rv_snap_curr", "AUD", _snap)
+                    if _old_curr: save_user_config(_uid_rv, "rv_snap_prev", "AUD", _old_curr)
+                    load_user_config.clear()
                 st.success(f"✅ Snapshot saved — {_snap['date']}")
                 st.rerun()
             else:
