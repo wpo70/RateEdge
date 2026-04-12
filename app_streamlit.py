@@ -18282,6 +18282,24 @@ Use the ρ slider above to stress-test spread vol across the matrix.
 def sod_report_tab():
     """Start-of-Day Report   —   USD overnight moves → implied AUD vol open."""
     import plotly.graph_objects as go
+    import re as _re_pdf
+
+    def _pdf_clean(text):
+        """Strip emojis and non-latin chars for reportlab compatibility."""
+        _em = [
+            ("🔴","[HIGH]"),("⚠️","[WARN]"),("✅","[OK]"),("■",""),
+            ("🟢","[LOW]"),("⚪","[NEU]"),("🟡","[MED]"),
+            ("📋",""),("💾",""),("⬇️",""),("🗑️",""),("📊",""),
+            ("📈",""),("📉",""),("🏆",""),("⚡",""),("🌏",""),
+            ("🎯",""),("💱",""),("🔧",""),("📐",""),("📞",""),
+            ("💡",""),("🔔",""),("📅",""),("📂",""),("💼",""),
+        ]
+        for _e, _r in _em:
+            text = text.replace(_e, _r)
+        text = text.replace("**","").replace("*","")
+        # Strip remaining non-ASCII above latin extended
+        text = _re_pdf.sub(r'[^\x00-\x024F]', '', text)
+        return text.strip()
     st.subheader("📋 Start-of-Day Report   —   USD Overnight → AUD Implied Open")
     st.caption(
         "Compares USD previous close vs the close before that. "
@@ -19098,7 +19116,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                                                   color=colors.HexColor("#3b82f6"), spaceAfter=8))
 
                     # Narrative
-                    _clean_narr = _narrative.replace("**","").replace("\n"," ").strip()
+                    _clean_narr = _pdf_clean(_narrative.replace("\n"," "))
                     _sod_story.append(Paragraph(_clean_narr, _sB))
                     _sod_story.append(Spacer(1, 6))
 
@@ -19712,8 +19730,8 @@ h2{{color:#1e3a5f;margin-top:20px}}
                                           color=colors.HexColor("#3b82f6"), spaceAfter=8))
 
                 # Overnight narrative
-                _narr = (_rate_summary + " " + _vol_summary).strip() or \
-                        "No significant overnight moves detected. Vol surface and rates broadly unchanged."
+                _narr = _pdf_clean((_rate_summary + " " + _vol_summary).strip() or \
+                        "No significant overnight moves detected. Vol surface and rates broadly unchanged.")
                 _story.append(Paragraph(_narr, _body_style))
                 _story.append(Spacer(1, 6))
 
@@ -19726,7 +19744,7 @@ h2{{color:#1e3a5f;margin-top:20px}}
                                    colors.HexColor("#22c55e") if _sc2>20 else \
                                    colors.HexColor("#94a3b8")
                         _idea_tbl = Table([
-                            [Paragraph(f"<b>{_i+1}. {_idea.get('Type','')} — {_idea.get('Structure','')}</b>",
+                            [Paragraph(f"<b>{_i+1}. {_pdf_clean(_idea.get('Type',''))} — {_pdf_clean(_idea.get('Structure',''))}</b>",
                                        _idea_style),
                              Paragraph(f"<b>{_sc2:.0f}</b>", ParagraphStyle("Score",
                                        parent=_styles["Normal"], fontSize=11,
@@ -19741,9 +19759,9 @@ h2{{color:#1e3a5f;margin-top:20px}}
                             ("BOTTOMPADDING",(0,0),(-1,-1), 4),
                         ]))
                         _story.append(_idea_tbl)
-                        _story.append(Paragraph(f"{_idea.get('Signal','')} | {_idea.get('Trade','')}", _idea_style))
+                        _story.append(Paragraph(_pdf_clean(f"{_idea.get('Signal','')} | {_idea.get('Trade','')}"), _idea_style))
                         if _idea.get("Rationale"):
-                            _story.append(Paragraph(_idea["Rationale"],
+                            _story.append(Paragraph(_pdf_clean(_idea["Rationale"]),
                                 ParagraphStyle("Rat", parent=_styles["Normal"],
                                                fontSize=8, textColor=colors.HexColor("#475569"),
                                                leftIndent=8, spaceAfter=6)))
