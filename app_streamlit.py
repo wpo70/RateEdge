@@ -7168,7 +7168,7 @@ def swaptions_tab(vol_mode: str):
                             _updated = 0
                             # Pre-fetch all forwards into a dict to avoid 110 slow curve calls
                             _fwd_cache2 = {}
-                            _ois_rc = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois") or get_basis_curve(ccy, "ois")
+                            _ois_rc = (lambda _x: _x if _x is not None else get_basis_curve(ccy, "ois"))(st.session_state.get("config_basis", {}).get(ccy, {}).get("ois"))
                             for _i, _erow in _new_alpha.iterrows():
                                 _exp_lbl = str(_erow[_exp_col]).strip()
                                 _exp_y2 = label_to_years(_exp_lbl)
@@ -8023,7 +8023,7 @@ def swaptions_tab(vol_mode: str):
 
             # Use stored spot/fwd premiums
             _fwd_bp       = float(row.get('pv_bp_fwd', row.get('pv_bp', 0)))
-            _ois_bl = st.session_state.get('config_basis', {}).get(ccy, {}).get('ois') or get_basis_curve(ccy, 'ois')
+            _ois_bl = (lambda _x: _x if _x is not None else get_basis_curve(ccy, 'ois'))(st.session_state.get('config_basis', {}).get(ccy, {}).get('ois'))
             def _df_exp_bl(ey):
                 try:
                     if _ois_bl is not None:
@@ -9520,7 +9520,7 @@ def caps_floors_tab(vol_mode: str):
             _cf_cur = st.session_state.get(_cf_sk, "—")
             _cf_bg  = _CF_STATUS_COLOURS.get(_cf_cur, "white")
             _cf_fwd  = float(_crow.get('pv_bp_fwd', _crow.get('pv_bp', 0)))
-            _ois_cf = st.session_state.get('config_basis', {}).get(ccy, {}).get('ois') or get_basis_curve(ccy, 'ois')
+            _ois_cf = (lambda _x: _x if _x is not None else get_basis_curve(ccy, 'ois'))(st.session_state.get('config_basis', {}).get(ccy, {}).get('ois'))
             def _df_cf(ey):
                 try:
                     if _ois_cf is not None:
@@ -15799,7 +15799,7 @@ def portfolio_tab():
                 _cur = st.session_state.get(_status_key,"—")
                 _bg  = _PTF_STATUS_COLOURS.get(_cur,"white")
                 _fwd  = float(row.get('pv_bp_fwd', row.get('pv_bp',0)))
-                _ois_ptf = st.session_state.get('config_basis', {}).get(ccy, {}).get('ois') or get_basis_curve(ccy, 'ois')
+                _ois_ptf = (lambda _x: _x if _x is not None else get_basis_curve(ccy, 'ois'))(st.session_state.get('config_basis', {}).get(ccy, {}).get('ois'))
                 def _df_ptf(ey):
                     try:
                         if _ois_ptf is not None:
@@ -15950,7 +15950,7 @@ def portfolio_tab():
                 _cur3 = st.session_state.get(_sk3,"—")
                 _bg3  = _CFPTF_STATUS_COLOURS.get(_cur3,"white")
                 _fw3  = float(_cr3.get('pv_bp_fwd', _cr3.get('pv_bp',0)))
-                _ois_ptfc = st.session_state.get('config_basis', {}).get(ccy, {}).get('ois') or get_basis_curve(ccy, 'ois')
+                _ois_ptfc = (lambda _x: _x if _x is not None else get_basis_curve(ccy, 'ois'))(st.session_state.get('config_basis', {}).get(ccy, {}).get('ois'))
                 def _df_ptfc(ey):
                     try:
                         if _ois_ptfc is not None:
