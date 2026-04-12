@@ -15799,7 +15799,9 @@ def portfolio_tab():
                 _cur = st.session_state.get(_status_key,"—")
                 _bg  = _PTF_STATUS_COLOURS.get(_cur,"white")
                 _fwd  = float(row.get('pv_bp_fwd', row.get('pv_bp',0)))
-                _ois_ptf = (lambda _x: _x if _x is not None else get_basis_curve(ccy, 'ois'))(st.session_state.get('config_basis', {}).get(ccy, {}).get('ois'))
+                _ptf_ccy = row.get('currency','AUD')
+                _ois_ptf_x = st.session_state.get('config_basis',{}).get(_ptf_ccy,{}).get('ois')
+                _ois_ptf = _ois_ptf_x if _ois_ptf_x is not None else get_basis_curve(_ptf_ccy,'ois')
                 def _df_ptf(ey):
                     try:
                         if _ois_ptf is not None:
@@ -15950,7 +15952,9 @@ def portfolio_tab():
                 _cur3 = st.session_state.get(_sk3,"—")
                 _bg3  = _CFPTF_STATUS_COLOURS.get(_cur3,"white")
                 _fw3  = float(_cr3.get('pv_bp_fwd', _cr3.get('pv_bp',0)))
-                _ois_ptfc = (lambda _x: _x if _x is not None else get_basis_curve(ccy, 'ois'))(st.session_state.get('config_basis', {}).get(ccy, {}).get('ois'))
+                _ptfc_ccy = _cr3.get('currency','AUD')
+                _ois_ptfc_x = st.session_state.get('config_basis',{}).get(_ptfc_ccy,{}).get('ois')
+                _ois_ptfc = _ois_ptfc_x if _ois_ptfc_x is not None else get_basis_curve(_ptfc_ccy,'ois')
                 def _df_ptfc(ey):
                     try:
                         if _ois_ptfc is not None:
