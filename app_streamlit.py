@@ -8059,7 +8059,6 @@ def swaptions_tab(vol_mode: str):
             _EXPIRIES = ["1m","3m","6m","1y","2y","3y","5y","7y","10y","15y","20y"]
             _TENORS   = ["1Y","2Y","3Y","5Y","7Y","10Y","15Y","20Y","25Y","30Y"]
 
-
             # Single button — runs check and caches result
             if st.button("▶ Run α Check", key="run_alpha_check_btn", type="secondary"):
                 _rows = []
@@ -8169,6 +8168,67 @@ def swaptions_tab(vol_mode: str):
                         st.rerun()
             with _rc2:
                 st.caption("Updates ~ to match current ATM surface. ~, ρ,ν, × remain locked. Run daily at session start in Sticky-ATM mode.")
+
+        # Recalibrate Alpha always visible when ATM surface loaded
+        if _atm_surf is not None and curve is not None:
+            _rc1, _rc2 = st.columns([2, 4])
+            with _rc1:
+                if st.button("🔄 Recalibrate Alpha (Sticky-ATM)", key="recal_alpha_btn2", type="primary"):
+                    _, _a2, _b2, _r2, _n2 = get_ccy_vol_data(ccy)
+                    _atm2 = get_working_atm_surface(ccy)
+                    if _atm2 is not None:
+                        # If no alpha yet, init with correct formula first
+                        if _a2 is None:
+                            _a2 = _atm2.copy()
+                            for _tc in [c for c in _a2.columns if c != "Expiry"]:
+                                _a2[_tc] = 0.01
+                        with st.spinner("⚙️ Recalibrating α…"):
+                            _new_alpha = _a2.copy()
+                            _exp_col2 = "Expiry" if "Expiry" in _new_alpha.columns else _new_alpha.columns[0]
+                            _tenor_cols2 = [c for c in _new_alpha.columns if c != _exp_col2]
+                            _updated2 = 0
+                            _ois_rc2 = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+                            for _i, _erow in _new_alpha.iterrows():
+                                _exp_lbl2 = str(_erow[_exp_col2]).strip()
+                                _exp_y2 = label_to_years(_exp_lbl2)
+                                if _exp_y2 <= 0: continue
+                                for _tc in _tenor_cols2:
+                                    _ten_y2 = label_to_years(str(_tc))
+                                    _atm_bp2 = get_matrix_value(_atm2, _exp_lbl2, _ten_y2)
+                                    if _atm_bp2 is None: continue
+                                    try:
+                                        _F2, _, _ = forward_and_annuity_from_curve(curve, ccy, _exp_y2, _ten_y2, _ois_rc2)
+                                        _F2 = max(_F2, 0.001)
+                                    except: _F2 = 0.05
+                                    _s2 = get_sabr_params_from_matrices(_a2, _b2, _r2, _n2, _exp_lbl2, _ten_y2)
+                                    _beta2 = _s2["beta"] if _s2 else 0.5
+                                    _rho2  = _s2["rho"]  if _s2 else 0.20
+                                    _nu2   = _s2["nu"]   if _s2 else 0.30
+                                    _new_a2 = sabr_implied_alpha_from_atm(_atm_bp2 / 10000.0, _F2, _exp_y2, _beta2, _rho2, _nu2)
+                                    if _new_a2 > 0:
+                                        _new_alpha.at[_i, _tc] = _new_a2
+                                        _updated2 += 1
+                        _old_atm2, _, _b2, _r2, _n2 = get_ccy_vol_data(ccy)
+                        set_ccy_vol_data(ccy, _old_atm2, _new_alpha, _b2, _r2, _n2)
+                        st.session_state.pop(f"_sabr_init_{ccy}", None)
+                        if HAS_POSTGRES:
+                            try:
+                                _uid2 = st.session_state.get("username", "default")
+                                _a_recs2 = []
+                                _a_sv2 = _new_alpha.copy()
+                                if "Expiry" not in _a_sv2.columns: _a_sv2 = _a_sv2.reset_index()
+                                for _, _row in _a_sv2.iterrows():
+                                    _rec = {"Expiry": _row.get("Expiry","")}
+                                    for _col in _a_sv2.columns:
+                                        if _col != "Expiry": _rec[_col] = _row[_col]
+                                    _a_recs2.append(_rec)
+                                save_user_config(_uid2, "sabr_alpha", ccy, {"values": _a_recs2})
+                                load_user_config.clear()
+                            except Exception: pass
+                        st.success(f"✅ Alpha recalibrated — {_updated2} cells updated.")
+                        st.rerun()
+            with _rc2:
+                st.caption("Updates ~ to match current ATM surface. Run daily at session start in Sticky-ATM mode.")
 
     # Row 1: Structure Type and Model
     col_struct, col_model = st.columns([2, 1])
