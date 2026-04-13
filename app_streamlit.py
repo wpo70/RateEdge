@@ -1660,8 +1660,12 @@ def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Opt
         # Create Excel file in memory
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Write ATM vol surface
-            atm.to_excel(writer, sheet_name=f"ATM_Vols_{currency}", index=False)
+            # Write ATM vol surface — ensure Expiry is first column
+            atm_export = atm.copy()
+            if "Expiry" in atm_export.columns and atm_export.columns[0] != "Expiry":
+                cols = ["Expiry"] + [c for c in atm_export.columns if c != "Expiry"]
+                atm_export = atm_export[cols]
+            atm_export.to_excel(writer, sheet_name=f"ATM_Vols_{currency}", index=False)
 
             # Write ATM forward premium surface
             try:
@@ -1670,6 +1674,9 @@ def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Opt
                 if _curve is None:
                     _curve = get_ccy_curve(currency)
                 _prem_df = surface_vol_to_premium(atm, currency)
+                if "Expiry" in _prem_df.columns and _prem_df.columns[0] != "Expiry":
+                    _pcols = ["Expiry"] + [c for c in _prem_df.columns if c != "Expiry"]
+                    _prem_df = _prem_df[_pcols]
                 _prem_df.to_excel(writer, sheet_name=f"ATM_Prem_{currency}", index=False)
             except Exception:
                 pass
