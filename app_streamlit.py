@@ -5815,6 +5815,15 @@ def vol_config_tab():
                         _par_disp = _p_par.copy()
                         _par_disp["Par Rate (%)"] = _par_disp["Par Rate (%)"].apply(lambda x: round(float(x), 4))
                         st.dataframe(_par_disp.set_index("Tenor").T.style.format("{:.4f}", subset=pd.IndexSlice["Par Rate (%)", :]), use_container_width=True)
+                    elif _pc in ["USD", "NZD"]:
+                        # Show zero curve directly for non-AUD currencies
+                        _cv = st.session_state.get("config_curves", {}).get(_pc)
+                        if _cv is not None and len(_cv) > 0:
+                            st.caption(f"{_pc} SOFR curve loaded from BBG_Feed ({len(_cv)} pts):")
+                            _cv_disp = _cv.copy()
+                            _cv_disp["MaturityY"] = _cv_disp["MaturityY"].apply(lambda x: f"{x:.4f}Y")
+                            _cv_disp["ZeroRatePct"] = _cv_disp["ZeroRatePct"].apply(lambda x: f"{x:.4f}%")
+                            st.dataframe(_cv_disp.rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Rate (%)"}).set_index("Tenor").T, use_container_width=True)
                 # Auto-save to DB so it persists across sessions
                 if HAS_POSTGRES and is_admin():
                     try:
@@ -7967,7 +7976,26 @@ def swaptions_tab(vol_mode: str):
                     for _t in _tc: _dp[_t] = _dv
                     _vd[_pp] = _dp
                 _da = _ar.copy()
-                for _t in _tc: _da[_t] = _da[_t] / 10000.0
+                # For Normal SABR: alpha = σ_N / F^beta
+                # Use correct sabr_implied_alpha_from_atm if curve available
+                _beta_init = 0.5; _rho_init = 0.20; _nu_init = 0.30
+                for _t in _tc:
+                    _ten_y = label_to_years(str(_t))
+                    for _i, _erow in _da.iterrows():
+                        _exp_lbl = str(_erow.get("Expiry","")).strip()
+                        _exp_y = label_to_years(_exp_lbl)
+                        _atm_bp_val = float(_erow.get(_t, 0) or 0)
+                        if _atm_bp_val <= 0 or _exp_y <= 0: continue
+                        _sigma_n = _atm_bp_val / 10000.0
+                        if curve is not None:
+                            try:
+                                _F_init, _, _ = forward_and_annuity_from_curve(curve, ccy, _exp_y, _ten_y, None)
+                                _F_init = max(_F_init, 0.001)
+                            except: _F_init = 0.05
+                        else:
+                            _F_init = 0.05
+                        _alpha_init = sabr_implied_alpha_from_atm(_sigma_n, _F_init, _exp_y, _beta_init, _rho_init, _nu_init)
+                        _da.at[_i, _t] = max(_alpha_init, 1e-6)
                 _vd["alpha"] = _da
                 st.session_state[f"_sabr_init_{ccy}"] = True
                 _, _a, _b, _r, _n = get_ccy_vol_data(ccy)
@@ -8147,8 +8175,12 @@ def swaptions_tab(vol_mode: str):
         swap_tenor = st.selectbox("Swap Tenor", tenor_options, index=4, key="sw_tenor")
         tenor_y = float(swap_tenor[:-1])
     with col_conv:
-        leg_conv = st.radio("Leg Convention", ["Market", "Q/Q", "S/S"], horizontal=True, key="sw_leg_conv")
-        freq_override = None if leg_conv == "Market" else (0.25 if leg_conv == "Q/Q" else 0.5)
+        if ccy == "AUD":
+            leg_conv = st.radio("Leg Convention", ["Market", "Q/Q", "S/S"], horizontal=True, key="sw_leg_conv")
+            freq_override = None if leg_conv == "Market" else (0.25 if leg_conv == "Q/Q" else 0.5)
+        else:
+            leg_conv = "Market"
+            freq_override = None
 
     # Forward rate calculation
     # Vanilla:   fwd = forward_and_annuity(expiry_y, tenor_y)
@@ -12205,8 +12237,8 @@ def vol_surface_editor_tab():
         _vol_surface_editor_legacy()
         return
     
-    # Currency selector - default to sidebar currency
-    default_ccy = st.query_params.get('v3d_ccy', st.session_state.get("sidebar_ccy", SUPPORTED_CURRENCIES[0]))
+    # Currency selector - use v3d_ccy from query params if coming back from Apply
+    default_ccy = st.query_params.get('v3d_ccy', SUPPORTED_CURRENCIES[0])
     if default_ccy not in SUPPORTED_CURRENCIES:
         default_ccy = SUPPORTED_CURRENCIES[0]
     default_idx = SUPPORTED_CURRENCIES.index(default_ccy)
