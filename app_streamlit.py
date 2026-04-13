@@ -6220,15 +6220,26 @@ def vol_config_tab():
                 st.caption(f"Found {len(snapshots)} snapshot(s)")
                 
                 for snap in snapshots:
-                    with st.expander(f"📸 {snap['currency']} - {snap['label']} ({snap['snapshot_date'].strftime('%Y-%m-%d %H:%M')})", expanded=False):
+                    try:
+                        import pytz as _pytz_s; _syd_s = _pytz_s.timezone('Australia/Sydney')
+                        _cat_s = snap['created_at'].replace(tzinfo=__import__('datetime').timezone.utc).astimezone(_syd_s)
+                        _snap_time_lbl = _cat_s.strftime('%Y-%m-%d %H:%M AEST')
+                    except:
+                        _snap_time_lbl = snap['snapshot_date'].strftime('%Y-%m-%d %H:%M UTC')
+                    with st.expander(f"📸 {snap['currency']} - {snap['label']} ({_snap_time_lbl})", expanded=False):
                         col1, col2, col3 = st.columns([3, 1, 1])
                         
                         with col1:
                             st.markdown(f"**Currency:** {snap['currency']}")
-                            st.markdown(f"**Date:** {snap['snapshot_date'].strftime('%Y-%m-%d %H:%M:%S')}")
+                            st.markdown(f"**Date:** {_snap_time_lbl}")
                             if snap['notes']:
                                 st.markdown(f"**Notes:** {snap['notes']}")
-                            st.caption(f"Created: {snap['created_at'].strftime('%Y-%m-%d %H:%M:%S')}")
+                            try:
+                                import pytz as _pytz; _syd = _pytz.timezone('Australia/Sydney')
+                                _cat = snap['created_at'].replace(tzinfo=__import__('datetime').timezone.utc).astimezone(_syd)
+                                st.caption(f"Created: {_cat.strftime('%Y-%m-%d %H:%M:%S AEST')}")
+                            except:
+                                st.caption(f"Created: {snap['created_at'].strftime('%Y-%m-%d %H:%M:%S')} UTC")
                         
                         with col2:
                             if st.button("📂 Load", key=f"load_snap_{snap['id']}", use_container_width=True):
@@ -19669,8 +19680,11 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
 
                     _sod_story = []
                     _ts = pd.Timestamp.now(tz='Australia/Sydney').strftime('%Y-%m-%d %H:%M')
+                    _tz_lbl_pdf = "AEDT" if pd.Timestamp.now(tz='Australia/Sydney').dst().seconds > 0 else "AEST"
                     _sod_story.append(Paragraph("RateEdge — Start of Day Report", _sT))
-                    _sod_story.append(Paragraph(f"{_ts} AEST   |   USD T-1: {_usd_t1_sel[:50]}   |   AUD: {_aud_sel[:40]}", _sSub))
+                    _sod_story.append(Paragraph(
+                        f"{_ts} {_tz_lbl_pdf}   |   USD T-1: {_usd_t1_sel[:50]}   |   USD T-2: {_usd_t2_sel[:40]}<br/>"
+                        f"AUD prev close: {_aud_sel[:40]}", _sSub))
                     _sod_story.append(HRFlowable(width="100%", thickness=1.5,
                                                   color=colors.HexColor("#3b82f6"), spaceAfter=8))
 
@@ -19698,7 +19712,16 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     ]))
                     _sod_story.append(_usd_t)
 
-                    # Implied AUD Changes table
+                    # USD Fwd Premium Changes
+                    if not _usd_prem_chg.empty:
+                        _sod_story.append(Paragraph("USD Fwd Premium Changes (bp)", _sH2))
+                        _usd_p_r = _usd_prem_chg.reset_index()
+                        _usd_p_data = [["Expiry"] + list(_usd_p_r.columns[1:])]
+                        for _, _row in _usd_p_r.iterrows():
+                            _usd_p_data.append([str(_row.iloc[0])] + [f"{float(v):+.2f}" if v==v else "—" for v in _row.iloc[1:]])
+                        _usd_pt = Table(_usd_p_data)
+                        _usd_pt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#1e293b")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTSIZE",(0,0),(-1,-1),7),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#e2e8f0")),("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2)]))
+                        _sod_story.append(_usd_pt)
                     _sod_story.append(Paragraph("Implied AUD Vol Change at Open (bp)", _sH2))
                     _aud_chg_r = _implied_chg.astype(float).reset_index()
                     _aud_tbl_data = [["Expiry"] + list(_aud_chg_r.columns[1:])]
@@ -19717,7 +19740,26 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     ]))
                     _sod_story.append(_aud_t)
 
-                    # CFS rows
+                    # Implied AUD Vol Open Level
+                    _sod_story.append(Paragraph("Implied AUD Vol Open Level (bp)", _sH2))
+                    _aud_op_r = _implied_open.astype(float).reset_index()
+                    _aud_op_data = [["Expiry"] + list(_aud_op_r.columns[1:])]
+                    for _, _row in _aud_op_r.iterrows():
+                        _aud_op_data.append([str(_row.iloc[0])] + [f"{float(v):.2f}" if v==v else "—" for v in _row.iloc[1:]])
+                    _aud_op_t = Table(_aud_op_data)
+                    _aud_op_t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#1e3a5f")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTSIZE",(0,0),(-1,-1),7),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#e2e8f0")),("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2)]))
+                    _sod_story.append(_aud_op_t)
+
+                    # Implied AUD Fwd Premium Change
+                    if not _aud_prem_chg.empty:
+                        _sod_story.append(Paragraph("Implied AUD Fwd Premium Change (bp)", _sH2))
+                        _aud_pc_r = _aud_prem_chg.reset_index()
+                        _aud_pc_data = [["Expiry"] + list(_aud_pc_r.columns[1:])]
+                        for _, _row in _aud_pc_r.iterrows():
+                            _aud_pc_data.append([str(_row.iloc[0])] + [f"{float(v):+.2f}" if v==v else "—" for v in _row.iloc[1:]])
+                        _aud_pc_t = Table(_aud_pc_data)
+                        _aud_pc_t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#1e3a5f")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTSIZE",(0,0),(-1,-1),7),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#e2e8f0")),("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2)]))
+                        _sod_story.append(_aud_pc_t)
                     if _cfs_rows:
                         _sod_story.append(Paragraph("Implied AUD CFS Open Levels (bp fwd prem)", _sH2))
                         _cfs_pdf_df = pd.DataFrame(_cfs_rows)[["CFS Tenor","CFS Total (prev)","CFS Total (open)","> CFS"]]
