@@ -4821,7 +4821,7 @@ def sdr_live_tab():
 
     # ── Platform code → full name ─────────────────────────────────────────────
     PLATFORM_NAMES = {
-        "BILT": "Bloomberg SEF",
+        "BILT": "Bilateral",
         "ISWV": "ICAP SEF",
         "BGCD": "BGC Derivatives SEF",
         "BGCO": "BGC OTC",
@@ -4831,14 +4831,17 @@ def sdr_live_tab():
         "TPSE": "Tullett Prebon SEF",
         "TPAU": "Tullett Prebon Australia",
         "GSEF": "GFI Group SEF",
-        "RTSX": "Refinitiv SEF",
+        "RTSX": "RTX SEF",
+        "RTXS": "RTX SEF",
         "MKTX": "MarketAxess SEF",
         "TRWB": "Tradeweb SEF",
         "BBSF": "Bloomberg Swap Facility",
+        "BLOM": "Bloomberg SEF",
         "ICSE": "ICE SEF",
         "GLPX": "Globalplex SEF",
         "FUSF": "TP ICAP Fusion",
         "NSEF": "NEX SEF",
+        "DWSF": "Dealerweb SEF",
     }
 
     if not HAS_POSTGRES:
