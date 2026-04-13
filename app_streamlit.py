@@ -4742,108 +4742,102 @@ def auto_populate_morning_rates_from_bbg_feed(xl: pd.ExcelFile) -> dict:
                         st.session_state["config_basis"]["USD"]["sofr_ff_basis"] = _usd_sofr_ff_basis
                         loaded["basis"] += 1
 
+        # 6v3 basis curve
+        basis_6v3_name = f"Basis_{ccy}_6v3"
+        if basis_6v3_name in xl.sheet_names:
+            raw_basis = pd.read_excel(xl, sheet_name=basis_6v3_name, usecols=[0, 1])
+            try:
+                basis_df = load_basis_curve_flexible(raw_basis, basis_6v3_name)
+                set_basis_curve(ccy, "6v3", basis_df)
+                if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
+                if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
+                st.session_state["config_basis"][ccy]["6v3"] = basis_df
+                loaded["basis"] += 1
+            except Exception as e:
+                pass  # Basis loading is optional
+        
+        # 3v1 basis curve (if exists)
+        basis_3v1_name = f"Basis_{ccy}_3v1"
+        if basis_3v1_name in xl.sheet_names:
+            raw_basis = pd.read_excel(xl, sheet_name=basis_3v1_name, usecols=[0, 1])
+            try:
+                basis_df = load_basis_curve_flexible(raw_basis, basis_3v1_name)
+                set_basis_curve(ccy, "3v1", basis_df)
+                if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
+                if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
+                st.session_state["config_basis"][ccy]["3v1"] = basis_df
+                loaded["basis"] += 1
+            except:
+                pass
+        
+        # OIS curve — read Zeros_OIS_AUD if present (clean, clipped to 30Y)
+        _ois_found = False
+        if ccy == "AUD" and "Zeros_OIS_AUD" in xl.sheet_names:
+            try:
+                raw_ois_z = pd.read_excel(xl, sheet_name="Zeros_OIS_AUD", usecols=[0, 1])
+                ois_df = load_curve_flexible(raw_ois_z, "Zeros_OIS_AUD")
+                if ois_df is not None and len(ois_df) >= 8:
+                    set_basis_curve(ccy, "ois", ois_df)
+                    if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
+                    if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
+                    st.session_state["config_basis"][ccy]["ois"] = ois_df
+                    if "basis_curves" not in st.session_state: st.session_state["basis_curves"] = {}
+                    if ccy not in st.session_state["basis_curves"]: st.session_state["basis_curves"][ccy] = {}
+                    st.session_state["basis_curves"][ccy]["ois"] = ois_df
+                    _ois_found = True
+                    loaded["basis"] += 1
+            except Exception:
+                pass
 
-        # Auto-populate morning rates from BBG_Feed after all curves loaded
-        if load_type in ["curves", "all"] and "BBG_Feed" in xl.sheet_names:
-            _mr_auto = auto_populate_morning_rates_from_bbg_feed(xl)
-            if _mr_auto:
-                _mr_existing = st.session_state.get("morning_rates_today", {})
-                st.session_state["morning_rates_today"] = _mr_existing
+        # OIS fallback — build from BBG_Feed ADSO tickers
+        if not _ois_found and ccy == "AUD" and "BBG_Feed" in xl.sheet_names:
+            try:
+                ois_df = build_aud_ois_from_bbg_feed(xl)
+                if ois_df is not None and len(ois_df) >= 8:
+                    set_basis_curve(ccy, "ois", ois_df)
+                    if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
+                    if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
+                    st.session_state["config_basis"][ccy]["ois"] = ois_df
+                    if "basis_curves" not in st.session_state: st.session_state["basis_curves"] = {}
+                    if ccy not in st.session_state["basis_curves"]: st.session_state["basis_curves"][ccy] = {}
+                    st.session_state["basis_curves"][ccy]["ois"] = ois_df
+                    _ois_found = True
+                    loaded["basis"] += 1
+            except Exception:
+                pass
 
-            if not _ois_found and ccy == "AUD":
-                st.session_state[f"_ois_missing_{ccy}"] = True
+        if not _ois_found:
+            for ois_name in [f"OIS_{ccy}", f"OIS {ccy}", f"AONIA_{ccy}", "AONIA", f"ois_{ccy}"]:
+                if ois_name in xl.sheet_names:
+                    raw_ois = pd.read_excel(xl, sheet_name=ois_name, usecols=[0, 1])
+                    try:
+                        ois_df = load_curve_flexible(raw_ois, ois_name)
+                        set_basis_curve(ccy, "ois", ois_df)
+                        if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
+                        if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
+                        st.session_state["config_basis"][ccy]["ois"] = ois_df
+                        if "basis_curves" not in st.session_state: st.session_state["basis_curves"] = {}
+                        if ccy not in st.session_state["basis_curves"]: st.session_state["basis_curves"][ccy] = {}
+                        st.session_state["basis_curves"][ccy]["ois"] = ois_df
+                        _ois_found = True
+                        loaded["basis"] += 1
+                    except:
+                        pass
+                    break
+        if not _ois_found and ccy == "AUD":
+            st.session_state[f"_ois_missing_{ccy}"] = True
     
     # Auto-populate morning rates from BBG_Feed after all curves loaded
     if load_type in ["curves", "all"] and "BBG_Feed" in xl.sheet_names:
-        _mr_auto = auto_populate_morning_rates_from_bbg_feed(xl)
-        if _mr_auto:
-            _mr_existing = st.session_state.get("morning_rates_today", {})
-            _mr_existing.update(_mr_auto)
-            st.session_state["morning_rates_today"] = _mr_existing
+        try:
+            _mr_auto = auto_populate_morning_rates_from_bbg_feed(xl)
+            if _mr_auto:
+                _mr_existing = st.session_state.get("morning_rates_today", {})
+                _mr_existing.update(_mr_auto)
+                st.session_state["morning_rates_today"] = _mr_existing
+        except Exception:
+            pass
 
-            if basis_6v3_name in xl.sheet_names:
-                raw_basis = pd.read_excel(xl, sheet_name=basis_6v3_name, usecols=[0, 1])
-                try:
-                    basis_df = load_basis_curve_flexible(raw_basis, basis_6v3_name)
-                    set_basis_curve(ccy, "6v3", basis_df)
-                    if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
-                    if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
-                    st.session_state["config_basis"][ccy]["6v3"] = basis_df
-                    loaded["basis"] += 1
-                except Exception as e:
-                    pass  # Basis loading is optional
-            
-            # 3v1 basis curve (if exists)
-            basis_3v1_name = f"Basis_{ccy}_3v1"
-            if basis_3v1_name in xl.sheet_names:
-                raw_basis = pd.read_excel(xl, sheet_name=basis_3v1_name, usecols=[0, 1])
-                try:
-                    basis_df = load_basis_curve_flexible(raw_basis, basis_3v1_name)
-                    set_basis_curve(ccy, "3v1", basis_df)
-                    if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
-                    if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
-                    st.session_state["config_basis"][ccy]["3v1"] = basis_df
-                    loaded["basis"] += 1
-                except:
-                    pass
-            
-            # OIS curve — read Zeros_OIS_AUD if present (clean, clipped to 30Y)
-            _ois_found = False
-            if ccy == "AUD" and "Zeros_OIS_AUD" in xl.sheet_names:
-                try:
-                    raw_ois_z = pd.read_excel(xl, sheet_name="Zeros_OIS_AUD", usecols=[0, 1])
-                    ois_df = load_curve_flexible(raw_ois_z, "Zeros_OIS_AUD")
-                    if ois_df is not None and len(ois_df) >= 8:
-                        set_basis_curve(ccy, "ois", ois_df)
-                        if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
-                        if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
-                        st.session_state["config_basis"][ccy]["ois"] = ois_df
-                        if "basis_curves" not in st.session_state: st.session_state["basis_curves"] = {}
-                        if ccy not in st.session_state["basis_curves"]: st.session_state["basis_curves"][ccy] = {}
-                        st.session_state["basis_curves"][ccy]["ois"] = ois_df
-                        _ois_found = True
-                        loaded["basis"] += 1
-                except Exception:
-                    pass
-
-            # OIS fallback — build from BBG_Feed ADSO tickers
-            if not _ois_found and ccy == "AUD" and "BBG_Feed" in xl.sheet_names:
-                try:
-                    ois_df = build_aud_ois_from_bbg_feed(xl)
-                    if ois_df is not None and len(ois_df) >= 8:
-                        set_basis_curve(ccy, "ois", ois_df)
-                        if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
-                        if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
-                        st.session_state["config_basis"][ccy]["ois"] = ois_df
-                        if "basis_curves" not in st.session_state: st.session_state["basis_curves"] = {}
-                        if ccy not in st.session_state["basis_curves"]: st.session_state["basis_curves"][ccy] = {}
-                        st.session_state["basis_curves"][ccy]["ois"] = ois_df
-                        _ois_found = True
-                        loaded["basis"] += 1
-                except Exception:
-                    pass
-
-            if not _ois_found:
-                for ois_name in [f"OIS_{ccy}", f"OIS {ccy}", f"AONIA_{ccy}", "AONIA", f"ois_{ccy}"]:
-                    if ois_name in xl.sheet_names:
-                        raw_ois = pd.read_excel(xl, sheet_name=ois_name, usecols=[0, 1])
-                        try:
-                            ois_df = load_curve_flexible(raw_ois, ois_name)
-                            set_basis_curve(ccy, "ois", ois_df)
-                            if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
-                            if ccy not in st.session_state["config_basis"]: st.session_state["config_basis"][ccy] = {}
-                            st.session_state["config_basis"][ccy]["ois"] = ois_df
-                            if "basis_curves" not in st.session_state: st.session_state["basis_curves"] = {}
-                            if ccy not in st.session_state["basis_curves"]: st.session_state["basis_curves"][ccy] = {}
-                            st.session_state["basis_curves"][ccy]["ois"] = ois_df
-                            _ois_found = True
-                            loaded["basis"] += 1
-                        except:
-                            pass
-                        break
-            if not _ois_found and ccy == "AUD":
-                st.session_state[f"_ois_missing_{ccy}"] = True
-    
     return loaded
 
 
