@@ -20400,7 +20400,7 @@ h2{{color:#1e3a5f;margin-top:20px}}
                     ]))
                     _story.append(_rates_tbl)
 
-                # Overnight vol changes
+                # Overnight vol changes + chart
                 if _chg_rows:
                     _story.append(Paragraph("Overnight ATM Vol Changes", _h2_style))
                     _vchg_data = [["Tenor","Prev (bp)","Now (bp)","Chg"]]
@@ -20422,6 +20422,39 @@ h2{{color:#1e3a5f;margin-top:20px}}
                         ("BOTTOMPADDING",(0,0),(-1,-1), 2),
                     ]))
                     _story.append(_vchg_tbl)
+                    # Vol bar chart
+                    try:
+                        import plotly.io as _pio
+                        import io as _cio
+                        from reportlab.platypus import Image as _RLImage
+                        _v_df2 = pd.DataFrame(_chg_rows)
+                        _fig_v2 = go.Figure(go.Bar(
+                            x=_v_df2["Tenor"], y=_v_df2["Chg"],
+                            marker_color=["#22c55e" if v>=0 else "#ef4444" for v in _v_df2["Chg"]],
+                            text=[f"{v:+.1f}" for v in _v_df2["Chg"]], textposition="outside"))
+                        _fig_v2.update_layout(title="Overnight ATM Vol Δ (bp)", template="plotly_white",
+                                              height=220, margin=dict(t=35,b=35,l=40,r=20), showlegend=False)
+                        _img_bytes_v = _pio.to_image(_fig_v2, format="png", width=700, height=220, scale=2)
+                        _story.append(_RLImage(_cio.BytesIO(_img_bytes_v), width=17*cm, height=6*cm))
+                    except Exception: pass
+
+                # Overnight rate changes + chart
+                if _rate_chg_rows:
+                    _story.append(Paragraph("Overnight Swap Rate Changes (bp)", _h2_style))
+                    try:
+                        import plotly.io as _pio
+                        import io as _cio
+                        from reportlab.platypus import Image as _RLImage
+                        _r_df2 = pd.DataFrame(_rate_chg_rows)
+                        _fig_r2 = go.Figure(go.Bar(
+                            x=_r_df2["Tenor"], y=_r_df2["Chg (bp)"],
+                            marker_color=["#38bdf8" if v>=0 else "#a78bfa" for v in _r_df2["Chg (bp)"]],
+                            text=[f"{v:+.1f}" for v in _r_df2["Chg (bp)"]], textposition="outside"))
+                        _fig_r2.update_layout(title="Overnight Swap Rate Δ (bp)", template="plotly_white",
+                                              height=200, margin=dict(t=35,b=35,l=40,r=20), showlegend=False)
+                        _img_bytes_r = _pio.to_image(_fig_r2, format="png", width=700, height=200, scale=2)
+                        _story.append(_RLImage(_cio.BytesIO(_img_bytes_r), width=17*cm, height=5.5*cm))
+                    except Exception: pass
 
                 # Footer
                 _story.append(Spacer(1, 16))
