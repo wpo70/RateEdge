@@ -19786,12 +19786,14 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     _sod_doc.build(_sod_story)
                     _sod_pdf_bytes = _sod_buf.getvalue()
 
-                    st.download_button(
-                        "⬇️ Download (PDF)",
-                        data=_sod_pdf_bytes,
-                        file_name=f"RateEdge_SOD_{pd.Timestamp.now(tz='Australia/Sydney').strftime('%Y%m%d_%H%M')}.pdf",
-                        mime="application/pdf",
-                        key="sod_dl_pdf"
+                    import base64 as _b64s
+                    _sod_b64 = _b64s.b64encode(_sod_pdf_bytes).decode()
+                    st.markdown(
+                        f'<a href="data:application/pdf;base64,{_sod_b64}" '
+                        f'target="_blank" style="display:inline-block;padding:8px 16px;'
+                        f'background:#dc2626;color:white;border-radius:6px;text-decoration:none;'
+                        f'font-weight:600">⬇️ Open PDF (new tab)</a>',
+                        unsafe_allow_html=True
                     )
                 except Exception as _sod_pdf_err:
                     st.caption(f"PDF unavailable: {_sod_pdf_err}")
@@ -20467,12 +20469,14 @@ h2{{color:#1e3a5f;margin-top:20px}}
                 _doc.build(_story)
                 _pdf_bytes = _pdf_buf.getvalue()
 
-                st.download_button(
-                    "⬇️ Download (PDF)",
-                    data=_pdf_bytes,
-                    file_name=f"RateEdge_Daily_{_today_str}.pdf",
-                    mime="application/pdf",
-                    key="sod_rv_dl_pdf"
+                import base64 as _b64
+                _pdf_b64 = _b64.b64encode(_pdf_bytes).decode()
+                st.markdown(
+                    f'<a href="data:application/pdf;base64,{_pdf_b64}" '
+                    f'target="_blank" style="display:inline-block;padding:8px 16px;'
+                    f'background:#dc2626;color:white;border-radius:6px;text-decoration:none;'
+                    f'font-weight:600">⬇️ Open PDF (new tab)</a>',
+                    unsafe_allow_html=True
                 )
             except Exception as _pdf_err:
                 import traceback
