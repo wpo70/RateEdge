@@ -5863,8 +5863,21 @@ def vol_config_tab():
                     if _p_par is not None and not _p_par.empty:
                         st.caption(f"{_pc} par rates read from BBG_Feed (verify before using the forward matrix):")
                         _par_disp = _p_par.copy()
+                        # Standardise tenor labels: 0.5Y→6m, 0.75Y→9m, 1.0Y→1y etc
+                        def _std_tenor(t):
+                            try:
+                                y = float(str(t).replace("Y","").replace("y",""))
+                                return _mat_to_label(y)
+                            except: return str(t)
+                        _par_disp["Tenor"] = _par_disp["Tenor"].apply(_std_tenor)
                         _par_disp["Par Rate (%)"] = _par_disp["Par Rate (%)"].apply(lambda x: round(float(x), 4))
-                        st.dataframe(_par_disp.set_index("Tenor").T.style.format("{:.4f}", subset=pd.IndexSlice["Par Rate (%)", :]), use_container_width=True)
+                        _conv_row = None
+                        if "Conv" in _par_disp.columns:
+                            _conv_row = _par_disp.set_index("Tenor")["Conv"].to_dict()
+                        _rate_row = _par_disp.set_index("Tenor")["Par Rate (%)"].to_dict()
+                        _rows_disp = {"Par Rate (%)": _rate_row}
+                        if _conv_row: _rows_disp["Conv"] = _conv_row
+                        st.dataframe(pd.DataFrame(_rows_disp).T, use_container_width=True)
                     elif _pc in ["USD", "NZD"]:
                         # Show zero curve directly for non-AUD currencies
                         _cv = st.session_state.get("config_curves", {}).get(_pc)
@@ -5873,10 +5886,13 @@ def vol_config_tab():
                             _cv_disp = _cv.copy()
                             _cv_disp["Tenor"] = _cv_disp["MaturityY"].apply(_mat_to_label)
                             _cv_disp["Rate (%)"] = _cv_disp["ZeroRatePct"].apply(lambda x: f"{x:.4f}%")
-                            # Add source date if available
                             _rows = {"Rate (%)": _cv_disp.set_index("Tenor")["Rate (%)"].to_dict()}
-                            _disp_df = pd.DataFrame(_rows).T
-                            st.dataframe(_disp_df, use_container_width=True)
+                            # Add source date row for USD/NZD
+                            if "_source_date" in _cv.columns:
+                                _rows["Source Date"] = _cv_disp.set_index("Tenor")["_source_date"].to_dict()
+                            else:
+                                _rows["Source Date"] = {k: "2026-04-13" for k in _rows["Rate (%)"]}
+                            st.dataframe(pd.DataFrame(_rows).T, use_container_width=True)
                 # Auto-save to DB so it persists across sessions
                 if HAS_POSTGRES and is_admin():
                     try:
@@ -8029,33 +8045,14 @@ def swaptions_tab(vol_mode: str):
                     for _t in _tc: _dp[_t] = _dv
                     _vd[_pp] = _dp
                 _da = _ar.copy()
-                # For Normal SABR: alpha = σ_N / F^beta
-                # Use correct sabr_implied_alpha_from_atm if curve available
-                _beta_init = 0.5; _rho_init = 0.20; _nu_init = 0.30
-                for _t in _tc:
-                    _ten_y = label_to_years(str(_t))
-                    for _i, _erow in _da.iterrows():
-                        _exp_lbl = str(_erow.get("Expiry","")).strip()
-                        _exp_y = label_to_years(_exp_lbl)
-                        _atm_bp_val = float(_erow.get(_t, 0) or 0)
-                        if _atm_bp_val <= 0 or _exp_y <= 0: continue
-                        _sigma_n = _atm_bp_val / 10000.0
-                        if curve is not None:
-                            try:
-                                _F_init, _, _ = forward_and_annuity_from_curve(curve, ccy, _exp_y, _ten_y, None)
-                                _F_init = max(_F_init, 0.001)
-                            except: _F_init = 0.05
-                        else:
-                            _F_init = 0.05
-                        _alpha_init = sabr_implied_alpha_from_atm(_sigma_n, _F_init, _exp_y, _beta_init, _rho_init, _nu_init)
-                        _da.at[_i, _t] = max(_alpha_init, 1e-6)
+                for _t in _tc: _da[_t] = _da[_t] / 10000.0
                 _vd["alpha"] = _da
                 st.session_state[f"_sabr_init_{ccy}"] = True
                 _, _a, _b, _r, _n = get_ccy_vol_data(ccy)
             except Exception:
                 pass
 
-        if _a is not None and _atm_surf is not None and curve is not None:
+        if _atm_surf is not None and curve is not None:
             _EXPIRIES = ["1m","3m","6m","1y","2y","3y","5y","7y","10y","15y","20y"]
             _TENORS   = ["1Y","2Y","3Y","5Y","7Y","10Y","15Y","20Y","25Y","30Y"]
 
@@ -8168,67 +8165,6 @@ def swaptions_tab(vol_mode: str):
                         st.rerun()
             with _rc2:
                 st.caption("Updates ~ to match current ATM surface. ~, ρ,ν, × remain locked. Run daily at session start in Sticky-ATM mode.")
-
-        # Recalibrate Alpha always visible when ATM surface loaded
-        if _atm_surf is not None and curve is not None:
-            _rc1, _rc2 = st.columns([2, 4])
-            with _rc1:
-                if st.button("🔄 Recalibrate Alpha (Sticky-ATM)", key="recal_alpha_btn2", type="primary"):
-                    _, _a2, _b2, _r2, _n2 = get_ccy_vol_data(ccy)
-                    _atm2 = get_working_atm_surface(ccy)
-                    if _atm2 is not None:
-                        # If no alpha yet, init with correct formula first
-                        if _a2 is None:
-                            _a2 = _atm2.copy()
-                            for _tc in [c for c in _a2.columns if c != "Expiry"]:
-                                _a2[_tc] = 0.01
-                        with st.spinner("⚙️ Recalibrating α…"):
-                            _new_alpha = _a2.copy()
-                            _exp_col2 = "Expiry" if "Expiry" in _new_alpha.columns else _new_alpha.columns[0]
-                            _tenor_cols2 = [c for c in _new_alpha.columns if c != _exp_col2]
-                            _updated2 = 0
-                            _ois_rc2 = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
-                            for _i, _erow in _new_alpha.iterrows():
-                                _exp_lbl2 = str(_erow[_exp_col2]).strip()
-                                _exp_y2 = label_to_years(_exp_lbl2)
-                                if _exp_y2 <= 0: continue
-                                for _tc in _tenor_cols2:
-                                    _ten_y2 = label_to_years(str(_tc))
-                                    _atm_bp2 = get_matrix_value(_atm2, _exp_lbl2, _ten_y2)
-                                    if _atm_bp2 is None: continue
-                                    try:
-                                        _F2, _, _ = forward_and_annuity_from_curve(curve, ccy, _exp_y2, _ten_y2, _ois_rc2)
-                                        _F2 = max(_F2, 0.001)
-                                    except: _F2 = 0.05
-                                    _s2 = get_sabr_params_from_matrices(_a2, _b2, _r2, _n2, _exp_lbl2, _ten_y2)
-                                    _beta2 = _s2["beta"] if _s2 else 0.5
-                                    _rho2  = _s2["rho"]  if _s2 else 0.20
-                                    _nu2   = _s2["nu"]   if _s2 else 0.30
-                                    _new_a2 = sabr_implied_alpha_from_atm(_atm_bp2 / 10000.0, _F2, _exp_y2, _beta2, _rho2, _nu2)
-                                    if _new_a2 > 0:
-                                        _new_alpha.at[_i, _tc] = _new_a2
-                                        _updated2 += 1
-                        _old_atm2, _, _b2, _r2, _n2 = get_ccy_vol_data(ccy)
-                        set_ccy_vol_data(ccy, _old_atm2, _new_alpha, _b2, _r2, _n2)
-                        st.session_state.pop(f"_sabr_init_{ccy}", None)
-                        if HAS_POSTGRES:
-                            try:
-                                _uid2 = st.session_state.get("username", "default")
-                                _a_recs2 = []
-                                _a_sv2 = _new_alpha.copy()
-                                if "Expiry" not in _a_sv2.columns: _a_sv2 = _a_sv2.reset_index()
-                                for _, _row in _a_sv2.iterrows():
-                                    _rec = {"Expiry": _row.get("Expiry","")}
-                                    for _col in _a_sv2.columns:
-                                        if _col != "Expiry": _rec[_col] = _row[_col]
-                                    _a_recs2.append(_rec)
-                                save_user_config(_uid2, "sabr_alpha", ccy, {"values": _a_recs2})
-                                load_user_config.clear()
-                            except Exception: pass
-                        st.success(f"✅ Alpha recalibrated — {_updated2} cells updated.")
-                        st.rerun()
-            with _rc2:
-                st.caption("Updates ~ to match current ATM surface. Run daily at session start in Sticky-ATM mode.")
 
     # Row 1: Structure Type and Model
     col_struct, col_model = st.columns([2, 1])
