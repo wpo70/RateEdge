@@ -1673,7 +1673,7 @@ def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Opt
                 _curve = st.session_state.get("config_curves", {}).get(currency)
                 if _curve is None:
                     _curve = get_ccy_curve(currency)
-                _prem_df = surface_vol_to_premium(atm, currency)
+                _prem_df = surface_vol_to_premium(atm_export, currency)
                 if "Expiry" in _prem_df.columns and _prem_df.columns[0] != "Expiry":
                     _pcols = ["Expiry"] + [c for c in _prem_df.columns if c != "Expiry"]
                     _prem_df = _prem_df[_pcols]
