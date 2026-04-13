@@ -17059,11 +17059,15 @@ def portfolio_tab():
         st.info("Trade Blotter is empty. Price swaptions or caps/floors to add trades.")
         return
 
-    # Currency filter
+    # Currency filter — default to whichever currency is active on Swaptions/Caps tab
     _all_ccys = sorted(set(t.get("ccy","AUD") for t in portfolio))
+    _active_ccy = st.session_state.get("sw_ccy", "AUD").split(" ")[0]
+    if _active_ccy not in _all_ccys:
+        _active_ccy = "All"
+    _default_idx = (["All"] + _all_ccys).index(_active_ccy) if _active_ccy in _all_ccys else 0
     _blot_ccy_col, _ = st.columns([1,3])
     with _blot_ccy_col:
-        _blot_ccy = st.selectbox("Currency", ["All"] + _all_ccys, key="blotter_ccy_filter")
+        _blot_ccy = st.selectbox("Currency", ["All"] + _all_ccys, index=_default_idx, key="blotter_ccy_filter")
     if _blot_ccy != "All":
         portfolio = [t for t in portfolio if t.get("ccy","AUD") == _blot_ccy]
     if not portfolio:
