@@ -5154,7 +5154,7 @@ def sdr_live_tab():
         rows_html = []
         for _, r in disp.iterrows():
             strike = f"{r['strike_pct']:.5f}%" if pd.notna(r.get("strike_pct")) else "—"
-            prem   = _fmt_notional(r.get("premium_amount")) if pd.notna(r.get("premium_amount")) else "—"
+            prem   = _fmt_premium(r.get("premium_amount")) if pd.notna(r.get("premium_amount")) else "—"
             not1   = _fmt_notional(r.get("notional_leg1"))
             und    = (r.get("upi_underlier_name") or "—").replace("NA/Swap ","").replace(" Compound","")
             rows_html.append({
@@ -5239,7 +5239,7 @@ def _sdr_get_distinct(column: str, order_by_tenor: bool = False) -> list:
         return []
 
 def _fmt_notional(v) -> str:
-    """Format a notional/premium number to readable string."""
+    """Format a notional number to readable string."""
     try:
         v = float(v)
     except (TypeError, ValueError):
@@ -5249,6 +5249,15 @@ def _fmt_notional(v) -> str:
     if v >= 1e6:  return f"{v/1e6:.0f}M"
     if v >= 1e3:  return f"{v/1e3:.0f}K"
     return f"{v:.0f}"
+
+
+def _fmt_premium(v) -> str:
+    """Format premium as full number with commas."""
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return "—"
+    return f"{v:,.0f}"
 
 
 def vol_config_tab():
@@ -17648,6 +17657,7 @@ def main():
                                     for _tk, _tv in _tprefs.items():
                                         if _tk in _known_tabs:
                                             st.session_state[_tk] = _tv
+                                            st.session_state[f"cb_{_tk}"] = _tv
                     except Exception: pass
                 except Exception:
                     pass
