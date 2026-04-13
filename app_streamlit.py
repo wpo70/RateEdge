@@ -19,7 +19,7 @@ try:
     NEW_YORK_TZ = ZoneInfo("America/New_York")
 except ImportError:
     from datetime import timezone, timedelta
-    SYDNEY_TZ = timezone(timedelta(hours=11))      # AEDT approx
+    SYDNEY_TZ = timezone(timedelta(hours=10))      # AEST (Apr-Sep)
     WELLINGTON_TZ = timezone(timedelta(hours=13))  # NZDT approx
     NEW_YORK_TZ = timezone(timedelta(hours=-4))    # EDT approx
 
@@ -6159,7 +6159,17 @@ def vol_config_tab():
                 _utc_now = _dt_sl.now(_tz_sl.utc)
                 # Sydney: AEDT=UTC+11 (Oct-Apr), AEST=UTC+10 (Apr-Oct)
                 _month = _utc_now.month
-                _syd_off = 11 if (_month >= 10 or _month <= 4) else 10
+                import calendar as _cal
+                def _syd_aedt(_d):
+                    def _fs(_y,_m):
+                        _c=_cal.monthcalendar(_y,_m)
+                        return _c[0][6] if _c[0][6]!=0 else _c[1][6]
+                    _y,_m,_day=_d.year,_d.month,_d.day
+                    if _m>=10: return True
+                    if _m<=3: return True
+                    if _m==4 and _day<_fs(_y,4): return True
+                    return False
+                _syd_off = 11 if _syd_aedt(_utc_now) else 10
                 _syd_tz2 = _tz_sl(timedelta(hours=_syd_off))
                 _now_syd = _utc_now.astimezone(_syd_tz2)
                 _tz_lbl2 = "AEDT" if _syd_off == 11 else "AEST"
@@ -6701,7 +6711,17 @@ def curves_tab():
                                 from datetime import datetime as _dtnow2
                                 from datetime import datetime as _dtnow2, timezone as _tz_pub, timedelta as _td_pub
                                 _utc_now2 = _dtnow2.now(_tz_pub.utc)
-                                _syd_off2 = 11 if (_utc_now2.month >= 10 or _utc_now2.month <= 4) else 10
+                                import calendar as _cal2
+                                def _syd_aedt2(_d):
+                                    def _fs2(_y,_m):
+                                        _c=_cal2.monthcalendar(_y,_m)
+                                        return _c[0][6] if _c[0][6]!=0 else _c[1][6]
+                                    _y,_m,_day=_d.year,_d.month,_d.day
+                                    if _m>=10: return True
+                                    if _m<=3: return True
+                                    if _m==4 and _day<_fs2(_y,4): return True
+                                    return False
+                                _syd_off2 = 11 if _syd_aedt2(_utc_now2) else 10
                                 _now_local = _utc_now2.astimezone(_tz_pub(timedelta(hours=_syd_off2)))
                                 _tz_lbl = "AEDT" if _syd_off2 == 11 else "AEST"
                                 _slbl = f"{_pub_ccy} {_now_local.strftime('%d-%b-%Y %H:%M')} {_tz_lbl}"
