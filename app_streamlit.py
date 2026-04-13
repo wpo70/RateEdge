@@ -1667,17 +1667,39 @@ def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Opt
                 atm_export = atm_export[cols]
             atm_export.to_excel(writer, sheet_name=f"ATM_Vols_{currency}", index=False)
 
-            # Write ATM forward premium surface
+            # Write ATM forward premium surface — use the pre-computed matrix from Curves tab
             try:
-                from vol_editor import surface_vol_to_premium
-                _curve = st.session_state.get("config_curves", {}).get(currency)
-                if _curve is None:
-                    _curve = get_ccy_curve(currency)
-                _prem_df = surface_vol_to_premium(atm_export, currency)
-                if "Expiry" in _prem_df.columns and _prem_df.columns[0] != "Expiry":
-                    _pcols = ["Expiry"] + [c for c in _prem_df.columns if c != "Expiry"]
-                    _prem_df = _prem_df[_pcols]
-                _prem_df.to_excel(writer, sheet_name=f"ATM_Prem_{currency}", index=False)
+                _prem_store = st.session_state.get("atm_prem_matrix", {}).get(currency, {})
+                _prem_df = _prem_store.get("prem")
+                if _prem_df is not None and not _prem_df.empty:
+                    _prem_export = _prem_df.copy()
+                    if _prem_export.index.name == "Expiry" or (len(_prem_export) > 0 and isinstance(_prem_export.index[0], str)):
+                        _prem_export = _prem_export.reset_index()
+                    if "Expiry" in _prem_export.columns and _prem_export.columns[0] != "Expiry":
+                        _pcols = ["Expiry"] + [c for c in _prem_export.columns if c != "Expiry"]
+                        _prem_export = _prem_export[_pcols]
+                    _prem_export.to_excel(writer, sheet_name=f"ATM_Prem_{currency}", index=False)
+                else:
+                    from vol_editor import surface_vol_to_premium
+                    _prem_df2 = surface_vol_to_premium(atm_export, currency)
+                    if "Expiry" in _prem_df2.columns and _prem_df2.columns[0] != "Expiry":
+                        _pcols2 = ["Expiry"] + [c for c in _prem_df2.columns if c != "Expiry"]
+                        _prem_df2 = _prem_df2[_pcols2]
+                    _prem_df2.to_excel(writer, sheet_name=f"ATM_Prem_{currency}", index=False)
+            except Exception:
+                pass
+
+            # Write ATM forward swap rates
+            try:
+                _fwd_df = st.session_state.get("fwd_matrix", {}).get(currency)
+                if _fwd_df is not None and not _fwd_df.empty:
+                    _fwd_export = _fwd_df.copy()
+                    if _fwd_export.index.name:
+                        _fwd_export = _fwd_export.reset_index()
+                    if "Expiry" in _fwd_export.columns and _fwd_export.columns[0] != "Expiry":
+                        _fcols = ["Expiry"] + [c for c in _fwd_export.columns if c != "Expiry"]
+                        _fwd_export = _fwd_export[_fcols]
+                    _fwd_export.to_excel(writer, sheet_name=f"ATM_Fwd_{currency}", index=False)
             except Exception:
                 pass
 
