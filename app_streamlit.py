@@ -4503,60 +4503,109 @@ def load_usd_sofr_basis_from_config(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
 
 def auto_populate_morning_rates_from_bbg_feed(xl: pd.ExcelFile) -> dict:
     """
-    Read BBG_Feed col E (MID) and map to morning_rates_today keys.
+    Read BBG_Feed and map all morning rate fields from col E (MID, index 4)
+    and BTMM columns (col 13 = BTMM AUD Last, col 21 = BTMM USD Last).
     Returns dict of {key: value} for all mappable rates.
     """
     if "BBG_Feed" not in xl.sheet_names:
         return {}
     try:
         raw = pd.read_excel(xl, sheet_name="BBG_Feed", header=None)
-        # Map BBG_Feed instrument label (col A) → morning rate key
-        # Using label matching since AUD IRS has no tickers for short end
-        _LABEL_MAP = {
-            # AUD IRS (par rates from col E MID)
-            "aud irs 2y qq":   "swap_2y",
-            "aud irs 3y qq":   "swap_3y",
-            "aud irs 5y ss":   "swap_5y",
-            "aud irs 10y ss":  "swap_10y",
-            "aud irs 20y ss":  "swap_20y",
+        rates = {}
+
+        # Helper to safely get float from cell
+        def _f(row, col):
+            try:
+                v = row.iloc[col] if len(row) > col else None
+                return float(v) if v is not None and str(v) not in ('#VALUE!','#N/A N/A','#N/A Invalid Security','#N/A Real Time','nan') else None
+            except: return None
+
+        # Ticker → key mapping for col 1 (BBG ticker) + col 4 (MID)
+        _TICKER_COL4 = {
+            # AUD IRS par rates
+            "ADSWAP2Q": "swap_2y",    # AUD 2Y QQ swap
+            "ADSWAP3Q": "swap_3y",    # AUD 3Y QQ
+            "ADSWAP5":  "swap_5y",    # AUD 5Y SS (ADSWAP5 Curncy)
+            "ADSWAP10": "swap_10y",   # AUD 10Y SS
+            "ADSWAP20": "swap_20y",   # AUD 20Y SS
             # AUD OIS
-            "ois 1m":          "ois_1m",   # will match first occurrence (AUD)
-            "ois 3m":          "ois_3m",
-            "ois 6m":          "ois_6m",
-        }
-        # Ticker map for USD rates (more reliable than label)
-        _TICKER_MAP = {
-            "USOSFRA BGN":  "sofr_1m",
-            "USOSFRC BGN":  "sofr_3m",
+            "ADSOA CMPN": "ois_1m",
+            "ADSOC CMPN": "ois_3m",
+            "ADSOF CMPN": "ois_6m",
+            # USD SOFR IRS (col 4 = MID in BBG_Feed main section)
+            "USOSFRA BGN": "sofr_1m",
+            "USOSFRC BGN": "sofr_3m",
             "USOSFR6 Curncy": "sofr_6m",
             "USOSFR2 Curncy": "usdswap_2y",
-            "USOSFR10 Curncy":"usdswap_10y",
-            "USOSFR30 Curncy":"usdswap_30y",
+            "USOSFR10 Curncy": "usdswap_10y",
+            "USOSFR30 Curncy": "usdswap_30y",
         }
-        rates = {}
-        _aud_ois_done = set()
+
+        # BBG ticker → key for BTMM cols (col 11 = ticker, col 13 = last price)
+        _BTMM_AUD_COL13 = {
+            "BBSW3M Index": "bbsw_3m",
+            "BBSW6M Index": "bbsw_6m",
+            "BBSW1M Index": "bbsw_1m",
+            "XP1 Index":    "spi",
+            "AS51 Index":   "asx200",
+            "AUD Curncy":   "audusd",
+            "FDTR Index":   "fed_funds",
+            "DISCPRIM Index": "usd_prime",
+        }
+
+        # BTMM USD col 19 = ticker, col 21 = last price
+        _BTMM_USD_COL21 = {
+            "SOFRRATE Index": "sofr_fix",
+            "TSFR1M Index":   "sofr_1m",
+            "TSFR3M Index":   "sofr_3m",
+            "TSFR6M Index":   "sofr_6m",
+            "SPX Index":      "sp500",
+            "PRIMBB Index":   "usd_prime",
+            "USOSFR3 Curncy": "usdswap_3y",
+            "USOSFR5 Curncy": "usdswap_5y",
+            "USOSFR10 Curncy": "usdswap_10y",
+            "USOSFR30 Curncy": "usdswap_30y",
+        }
+
         for _, r in raw.iterrows():
-            lbl    = str(r.iloc[0]).strip().lower() if r.iloc[0] is not None else ""
-            ticker = str(r.iloc[1]).strip()         if len(r) > 1 else ""
-            try: mid = float(r.iloc[4])
-            except: mid = None
-            if mid is None or mid != mid: continue
-
-            # Label-based AUD matches
-            for lbl_key, rate_key in _LABEL_MAP.items():
-                if lbl_key in lbl and rate_key not in rates:
-                    # Disambiguate OIS: only take AUD ones (before USD section row 87)
-                    if rate_key in ("ois_1m","ois_3m","ois_6m") and rate_key in _aud_ois_done:
-                        continue
-                    rates[rate_key] = mid
-                    if rate_key in ("ois_1m","ois_3m","ois_6m"):
-                        _aud_ois_done.add(rate_key)
-
-            # Ticker-based USD matches
-            for ticker_pfx, rate_key in _TICKER_MAP.items():
-                if ticker.startswith(ticker_pfx.strip()) and rate_key not in rates:
-                    rates[rate_key] = mid
+            # Col 1 ticker → col 4 MID
+            ticker = str(r.iloc[1]).strip() if len(r) > 1 else ""
+            for pfx, key in _TICKER_COL4.items():
+                if ticker.startswith(pfx) and key not in rates:
+                    v = _f(r, 4)
+                    if v: rates[key] = v
                     break
+
+            # BTMM AUD: col 11 = ticker, col 13 = last
+            btmm_aud_ticker = str(r.iloc[11]).strip() if len(r) > 11 and r.iloc[11] else ""
+            for pfx, key in _BTMM_AUD_COL13.items():
+                if btmm_aud_ticker == pfx and key not in rates:
+                    v = _f(r, 13)
+                    if v: rates[key] = v
+                    break
+
+            # BTMM USD: col 20 = ticker desc, col 19 = ticker, col 21 = last
+            btmm_usd_ticker = str(r.iloc[19]).strip() if len(r) > 19 and r.iloc[19] else ""
+            for pfx, key in _BTMM_USD_COL21.items():
+                if btmm_usd_ticker == pfx and key not in rates:
+                    v = _f(r, 21)
+                    if v: rates[key] = v
+                    break
+
+        # Also read AUD IRS from label-based col 4 as fallback
+        _LABEL_FALLBACK = {
+            "aud irs 2y qq": "swap_2y",
+            "aud irs 3y qq": "swap_3y",
+            "aud irs 5y ss": "swap_5y",
+            "aud irs 10y ss": "swap_10y",
+            "aud irs 20y ss": "swap_20y",
+        }
+        for _, r in raw.iterrows():
+            lbl = str(r.iloc[0]).strip().lower() if r.iloc[0] else ""
+            for lbl_key, rate_key in _LABEL_FALLBACK.items():
+                if lbl_key in lbl and rate_key not in rates:
+                    v = _f(r, 4)
+                    if v: rates[rate_key] = v
 
         return rates
     except Exception:
