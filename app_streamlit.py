@@ -4742,16 +4742,25 @@ def auto_populate_morning_rates_from_bbg_feed(xl: pd.ExcelFile) -> dict:
                         st.session_state["config_basis"]["USD"]["sofr_ff_basis"] = _usd_sofr_ff_basis
                         loaded["basis"] += 1
 
+
         # Auto-populate morning rates from BBG_Feed after all curves loaded
         if load_type in ["curves", "all"] and "BBG_Feed" in xl.sheet_names:
             _mr_auto = auto_populate_morning_rates_from_bbg_feed(xl)
             if _mr_auto:
                 _mr_existing = st.session_state.get("morning_rates_today", {})
-                _mr_existing.update(_mr_auto)
                 st.session_state["morning_rates_today"] = _mr_existing
-            
-            # 6v3 basis curve
-            basis_6v3_name = f"Basis_{ccy}_6v3"
+
+            if not _ois_found and ccy == "AUD":
+                st.session_state[f"_ois_missing_{ccy}"] = True
+    
+    # Auto-populate morning rates from BBG_Feed after all curves loaded
+    if load_type in ["curves", "all"] and "BBG_Feed" in xl.sheet_names:
+        _mr_auto = auto_populate_morning_rates_from_bbg_feed(xl)
+        if _mr_auto:
+            _mr_existing = st.session_state.get("morning_rates_today", {})
+            _mr_existing.update(_mr_auto)
+            st.session_state["morning_rates_today"] = _mr_existing
+
             if basis_6v3_name in xl.sheet_names:
                 raw_basis = pd.read_excel(xl, sheet_name=basis_6v3_name, usecols=[0, 1])
                 try:
