@@ -4822,7 +4822,8 @@ def sdr_live_tab():
     # ── Platform code → full name ─────────────────────────────────────────────
     PLATFORM_NAMES = {
         "BILT": "Bilateral",
-        "ISWV": "ICAP SEF",
+        "XXXX": "Bilateral",
+        "TSIG": "Tradition Singapore",
         "BGCD": "BGC Derivatives SEF",
         "BGCO": "BGC OTC",
         "TWSF": "Tradition SEF",
@@ -4922,7 +4923,7 @@ def sdr_live_tab():
         with col1:
             st.markdown("**Date range**")
             date_from = st.date_input(
-                "From", value=date.today() - timedelta(days=7),
+                "From", value=date.today() - timedelta(days=30),
                 key="sdr_date_from", label_visibility="collapsed",
                 on_change=_save_sdr_filters
             )
@@ -5093,7 +5094,7 @@ def sdr_live_tab():
         FROM dtcc_sdr
         {where}
         ORDER BY event_timestamp DESC
-        LIMIT 2000
+        LIMIT 5000
     """
 
     # ── Load data ─────────────────────────────────────────────────────────────
