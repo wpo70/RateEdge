@@ -1660,11 +1660,14 @@ def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Opt
         # Create Excel file in memory
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Write ATM vol surface — ensure Expiry is first column
+            # Write ATM vol surface — ensure Expiry is first column, round to 2dp
             atm_export = atm.copy()
             if "Expiry" in atm_export.columns and atm_export.columns[0] != "Expiry":
                 cols = ["Expiry"] + [c for c in atm_export.columns if c != "Expiry"]
                 atm_export = atm_export[cols]
+            for _c in atm_export.columns:
+                if _c != "Expiry":
+                    atm_export[_c] = atm_export[_c].round(2)
             atm_export.to_excel(writer, sheet_name=f"ATM_Vols_{currency}", index=False)
 
             # Write ATM forward premium surface — use the pre-computed matrix from Curves tab
@@ -1673,19 +1676,16 @@ def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Opt
                 _prem_df = _prem_store.get("prem")
                 if _prem_df is not None and not _prem_df.empty:
                     _prem_export = _prem_df.copy()
-                    if _prem_export.index.name == "Expiry" or (len(_prem_export) > 0 and isinstance(_prem_export.index[0], str)):
-                        _prem_export = _prem_export.reset_index()
+                    # prem_df has Expiry as index — reset it to column
+                    _prem_export = _prem_export.reset_index()
                     if "Expiry" in _prem_export.columns and _prem_export.columns[0] != "Expiry":
                         _pcols = ["Expiry"] + [c for c in _prem_export.columns if c != "Expiry"]
                         _prem_export = _prem_export[_pcols]
+                    # Round to 2dp
+                    for _c in _prem_export.columns:
+                        if _c != "Expiry":
+                            _prem_export[_c] = _prem_export[_c].round(2)
                     _prem_export.to_excel(writer, sheet_name=f"ATM_Prem_{currency}", index=False)
-                else:
-                    from vol_editor import surface_vol_to_premium
-                    _prem_df2 = surface_vol_to_premium(atm_export, currency)
-                    if "Expiry" in _prem_df2.columns and _prem_df2.columns[0] != "Expiry":
-                        _pcols2 = ["Expiry"] + [c for c in _prem_df2.columns if c != "Expiry"]
-                        _prem_df2 = _prem_df2[_pcols2]
-                    _prem_df2.to_excel(writer, sheet_name=f"ATM_Prem_{currency}", index=False)
             except Exception:
                 pass
 
@@ -1699,6 +1699,10 @@ def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Opt
                     if "Expiry" in _fwd_export.columns and _fwd_export.columns[0] != "Expiry":
                         _fcols = ["Expiry"] + [c for c in _fwd_export.columns if c != "Expiry"]
                         _fwd_export = _fwd_export[_fcols]
+                    # Round fwd rates to 4dp
+                    for _c in _fwd_export.columns:
+                        if _c != "Expiry":
+                            _fwd_export[_c] = _fwd_export[_c].round(4)
                     _fwd_export.to_excel(writer, sheet_name=f"ATM_Fwd_{currency}", index=False)
             except Exception:
                 pass
