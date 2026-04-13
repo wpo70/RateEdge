@@ -4612,7 +4612,7 @@ def auto_populate_morning_rates_from_bbg_feed(xl: pd.ExcelFile) -> dict:
         return {}
 
 
-
+def load_config_excel(upload, load_type: str = "all") -> dict:
     """
     Load config from Excel with selective loading.
     load_type: "atm", "sabr", "curves", or "all"
