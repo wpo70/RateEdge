@@ -6315,7 +6315,7 @@ def curves_tab():
     import plotly.graph_objects as go
     st.subheader("📐 IRS Curves & Forward Matrix")
 
-    ccy = st.selectbox("Currency", SUPPORTED_CURRENCIES, key="curve_ccy")
+    ccy = st.selectbox("Currency", SUPPORTED_CURRENCIES, index=SUPPORTED_CURRENCIES.index(st.session_state.get("sidebar_ccy","AUD")) if st.session_state.get("sidebar_ccy","AUD") in SUPPORTED_CURRENCIES else 0, key="curve_ccy")
 
     curve     = st.session_state.get("config_curves", {}).get(ccy)
     basis_6v3 = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
@@ -10517,7 +10517,7 @@ def exotics_tab(vol_mode: str):
     # Currency selector
     col_ccy, col_spacer = st.columns([1, 3])
     with col_ccy:
-        ccy_select = st.selectbox("📎 Currency", ALL_CURRENCIES, key="ex_ccy")
+        ccy_select = st.selectbox("📎 Currency", ALL_CURRENCIES, index=ALL_CURRENCIES.index(st.session_state.get("sidebar_ccy","AUD")) if st.session_state.get("sidebar_ccy","AUD") in ALL_CURRENCIES else 0, key="ex_ccy")
     ccy = ccy_select.split(" ")[0]
     if "PENDING" in ccy_select:
         st.warning(f"├ö├àÔöé {ccy} pricing coming soon. Currently supported: AUD, NZD, USD")
@@ -12205,8 +12205,8 @@ def vol_surface_editor_tab():
         _vol_surface_editor_legacy()
         return
     
-    # Currency selector - use v3d_ccy from query params if coming back from Apply
-    default_ccy = st.query_params.get('v3d_ccy', SUPPORTED_CURRENCIES[0])
+    # Currency selector - default to sidebar currency
+    default_ccy = st.query_params.get('v3d_ccy', st.session_state.get("sidebar_ccy", SUPPORTED_CURRENCIES[0]))
     if default_ccy not in SUPPORTED_CURRENCIES:
         default_ccy = SUPPORTED_CURRENCIES[0]
     default_idx = SUPPORTED_CURRENCIES.index(default_ccy)
@@ -12503,7 +12503,7 @@ def _vol_surface_editor_legacy():
         st.error("Install streamlit-plotly-events to use the interactive 3D editor: pip install streamlit-plotly-events")
         return
 
-    ccy = st.selectbox("Currency", SUPPORTED_CURRENCIES, key="vol_ccy")
+    ccy = st.selectbox("Currency", SUPPORTED_CURRENCIES, index=SUPPORTED_CURRENCIES.index(st.session_state.get("sidebar_ccy","AUD")) if st.session_state.get("sidebar_ccy","AUD") in SUPPORTED_CURRENCIES else 0, key="vol_ccy")
     atm = get_working_atm_surface(ccy)
     if atm is None or atm.empty:
         st.info("No ATM vol surface loaded for this currency yet.")
@@ -17059,9 +17059,9 @@ def portfolio_tab():
         st.info("Trade Blotter is empty. Price swaptions or caps/floors to add trades.")
         return
 
-    # Currency filter — default to whichever currency is active on Swaptions/Caps tab
+    # Currency filter — default to sidebar currency
     _all_ccys = sorted(set(t.get("ccy","AUD") for t in portfolio))
-    _active_ccy = st.session_state.get("sw_ccy", "AUD").split(" ")[0]
+    _active_ccy = st.session_state.get("sidebar_ccy", "AUD").split(" ")[0]
     if _active_ccy not in _all_ccys:
         _active_ccy = "All"
     _default_idx = (["All"] + _all_ccys).index(_active_ccy) if _active_ccy in _all_ccys else 0
