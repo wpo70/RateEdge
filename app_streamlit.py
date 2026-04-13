@@ -13851,7 +13851,7 @@ def rv_tab():
     st.markdown("---")
     _rv_src_col, _rv_snap_col = st.columns([2, 4])
     with _rv_src_col:
-        _rv_src = st.radio("Historical Data", ["Saved Database", "LIVE (Realtime Feed)", "Local (Demo)"],
+        _rv_src = st.radio("Historical Data", ["Saved Database", "LIVE (Realtime Feed)"],
                            horizontal=False, key="rv_data_src")
     
     df_vols_hist = pd.DataFrame()
