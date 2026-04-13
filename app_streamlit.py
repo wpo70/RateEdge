@@ -1424,14 +1424,14 @@ def list_vol_snapshots(user_id: str, currency: str = None):
                 SELECT id, currency, snapshot_date, label, notes, created_at
                 FROM vol_history
                 WHERE (user_id = %s OR user_id = %s OR user_id = 'shared') AND currency = %s
-                ORDER BY snapshot_date DESC
+                ORDER BY snapshot_date DESC, created_at DESC
             """, ('wpo@rateedge.au', 'wpo70@icloud.com', currency))
         else:
             cur.execute("""
                 SELECT id, currency, snapshot_date, label, notes, created_at
                 FROM vol_history
                 WHERE (user_id = %s OR user_id = %s OR user_id = 'shared')
-                ORDER BY snapshot_date DESC
+                ORDER BY snapshot_date DESC, created_at DESC
             """, ('wpo@rateedge.au', 'wpo70@icloud.com',))
         
         snapshots = cur.fetchall()
@@ -5977,7 +5977,7 @@ def vol_config_tab():
                     SELECT DISTINCT ON (currency) currency, snapshot_date, label
                     FROM vol_history
                     WHERE (user_id = %s OR user_id = %s OR user_id = 'shared')
-                    ORDER BY currency, snapshot_date DESC
+                    ORDER BY currency, snapshot_date DESC, created_at DESC
                 """, ('wpo@rateedge.au', 'wpo70@icloud.com',))
                 for _row in _scur.fetchall():
                     try:
@@ -18002,7 +18002,7 @@ def main():
                             SELECT id FROM vol_history
                             WHERE currency=%s AND atm_vols IS NOT NULL
                             AND (user_id = %s OR user_id = %s OR user_id = 'shared')
-                            ORDER BY snapshot_date DESC LIMIT 1
+                            ORDER BY snapshot_date DESC, created_at DESC LIMIT 1
                         """, (_cy, 'wpo@rateedge.au', 'wpo70@icloud.com'))
                         _row = _cur.fetchone()
                         if _row:
