@@ -4421,31 +4421,49 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
 
 def load_usd_sofr_from_config(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
     """
-    Load USD SOFR IRS curve from BBG_Feed col E (MID), USOSFR tickers.
-    Falls back to new sheet name 'Curves_USD SOFR Overnight Index' col 2.
+    Load USD SOFR IRS curve from BBG_Feed col A (label) + col E (MID).
+    Reads the USD SOFR IRS section by label parsing — avoids duplicate ticker issues.
     """
     if "BBG_Feed" not in xl.sheet_names:
         return None
     try:
         raw = pd.read_excel(xl, sheet_name="BBG_Feed", header=None)
-        USOSFR_MAP = {
-            "USOSFR1Z":1/52, "USOSFRA":1/12,  "USOSFRB":2/12,  "USOSFRC":3/12,
-            "USOSFR6 ":6/12, "USOSFR1 ":1.0,  "USOSFR2 ":2.0,  "USOSFR3 ":3.0,
-            "USOSFR4 ":4.0,  "USOSFR5 ":5.0,  "USOSFR6Z":6.0,  "USOSFR7 ":7.0,
-            "USOSFR8 ":8.0,  "USOSFR9 ":9.0,  "USOSFR10":10.0, "USOSFR12":12.0,
-            "USOSFR15":15.0, "USOSFR20":20.0, "USOSFR25":25.0, "USOSFR30":30.0,
-            "USOSFR40":40.0, "USOSFR50":50.0,
-        }
+        import re as _re
         pts = {}
+        _in_sofr = False
         for _, r in raw.iterrows():
-            ticker = str(r.iloc[1]).strip() if len(r) > 1 else ""
-            for prefix, mat in USOSFR_MAP.items():
-                if ticker.startswith(prefix.strip()):
-                    try:
-                        mid = float(r.iloc[4])
-                        if mid > 0: pts[mat] = mid
-                    except: pass
-                    break
+            lbl = str(r.iloc[0]).strip() if r.iloc[0] is not None else ""
+            # Detect start of USD SOFR section
+            if "USD SOFR IRS" in lbl or "USD SOFR Overnight Index" in lbl:
+                _in_sofr = True
+                continue
+            # Detect end of USD SOFR section (next header)
+            if _in_sofr and ("USD OIS" in lbl or "Fed Funds" in lbl or "NZD" in lbl):
+                break
+            if not _in_sofr:
+                continue
+            # Parse maturity from label e.g. "USD IRS 1W", "USD IRS 1M", "USD IRS 2.0Y"
+            try:
+                mid = float(r.iloc[4])
+                if not mid or mid != mid or mid <= 0:
+                    continue
+            except:
+                continue
+            # Match label patterns
+            m_w  = _re.search(r'(\d+)W', lbl, _re.I)
+            m_m  = _re.search(r'(\d+)M', lbl, _re.I)
+            m_y  = _re.search(r'([\d.]+)Y', lbl, _re.I)
+            if m_w:
+                mat = float(m_w.group(1)) / 52.0
+            elif m_m and not m_y:
+                mat = float(m_m.group(1)) / 12.0
+            elif m_y:
+                mat = float(m_y.group(1))
+            else:
+                continue
+            if mat > 0 and mat not in pts:
+                pts[mat] = mid
+
         if len(pts) < 5:
             return None
         xs = sorted(pts)
@@ -4456,31 +4474,47 @@ def load_usd_sofr_from_config(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
 
 def load_usd_fedfunds_ois_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
     """
-    Load USD Fed Funds OIS curve from BBG_Feed col E (MID), USSO BGN tickers.
+    Load USD Fed Funds OIS curve from BBG_Feed col A (label) + col E (MID).
+    Reads the USD OIS/Fed Funds section by label parsing.
     """
     if "BBG_Feed" not in xl.sheet_names:
         return None
     try:
         raw = pd.read_excel(xl, sheet_name="BBG_Feed", header=None)
-        USSO_MAP = {
-            "USSO1Z":1/52,   "USSO1 ":1/12,  "USSO2 ":2/12,  "USSO3 ":3/12,
-            "USSO6 ":6/12,
-            "USSO1 BGN":1.0,  "USSO2 BGN":2.0,  "USSO3 BGN":3.0,  "USSO4 BGN":4.0,
-            "USSO5 BGN":5.0,  "USSO6 BGN":6.0,  "USSO7 BGN":7.0,  "USSO8 BGN":8.0,
-            "USSO9 BGN":9.0,  "USSO10 BGN":10.0,"USSO12 BGN":12.0,"USSO15 BGN":15.0,
-            "USSO20 BGN":20.0,"USSO25 BGN":25.0,"USSO30 BGN":30.0,
-            "USSO40 BGN":40.0,"USSO50 BGN":50.0,
-        }
+        import re as _re
         pts = {}
+        _in_ff = False
         for _, r in raw.iterrows():
-            ticker = str(r.iloc[1]).strip() if len(r) > 1 else ""
-            for prefix, mat in USSO_MAP.items():
-                if ticker.startswith(prefix.strip()):
-                    try:
-                        mid = float(r.iloc[4])
-                        if mid > 0: pts[mat] = mid
-                    except: pass
-                    break
+            lbl = str(r.iloc[0]).strip() if r.iloc[0] is not None else ""
+            # Detect start of Fed Funds OIS section
+            if "USD OIS" in lbl and "Fed Funds" in lbl:
+                _in_ff = True
+                continue
+            # Detect end (next section)
+            if _in_ff and ("USD Basis" in lbl or "NZD" in lbl or "AUD" in lbl):
+                break
+            if not _in_ff:
+                continue
+            try:
+                mid = float(r.iloc[4])
+                if not mid or mid != mid or mid <= 0:
+                    continue
+            except:
+                continue
+            m_w = _re.search(r'(\d+)W', lbl, _re.I)
+            m_m = _re.search(r'(\d+)M', lbl, _re.I)
+            m_y = _re.search(r'([\d.]+)Y', lbl, _re.I)
+            if m_w:
+                mat = float(m_w.group(1)) / 52.0
+            elif m_m and not m_y:
+                mat = float(m_m.group(1)) / 12.0
+            elif m_y:
+                mat = float(m_y.group(1))
+            else:
+                continue
+            if mat > 0 and mat not in pts:
+                pts[mat] = mid
+
         if len(pts) < 5:
             return None
         xs = sorted(pts)
@@ -4735,6 +4769,9 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                 # NZD/USD: read from BBG_Feed for USD, sheet for NZD
                 if ccy == "USD":
                     curve_df = load_usd_sofr_from_config(xl)
+                    if curve_df is not None and len(curve_df) > 0:
+                        import datetime as _dt2
+                        curve_df["_source_date"] = str(_dt2.date.today())
                 else:
                     curve_name = f"Curves_{ccy}"
                     if curve_name in xl.sheet_names:
@@ -5770,13 +5807,14 @@ def vol_config_tab():
                 _bwarn = st.session_state.get("_bootstrap_warnings", [])
                 for _bw in _bwarn:
                     st.error(f"🔴 BOOTSTRAP ERROR — {_bw}")
-                # Show AUD par rates parsed from BBG_Feed for visual confirmation
-                _aud_par = st.session_state.get("_irs_par_rates", {}).get("AUD")
-                if _aud_par is not None and not _aud_par.empty:
-                    st.caption("AUD par rates read from BBG_Feed (verify these are correct before using the forward matrix):")
-                    _par_disp = _aud_par.copy()
-                    _par_disp["Par Rate (%)"] = _par_disp["Par Rate (%)"].apply(lambda x: round(float(x), 4))
-                    st.dataframe(_par_disp.set_index("Tenor").T.style.format("{:.4f}", subset=pd.IndexSlice["Par Rate (%)", :]), use_container_width=True)
+                # Show par rates parsed from BBG_Feed for visual confirmation
+                for _pc in SUPPORTED_CURRENCIES:
+                    _p_par = st.session_state.get("_irs_par_rates", {}).get(_pc)
+                    if _p_par is not None and not _p_par.empty:
+                        st.caption(f"{_pc} par rates read from BBG_Feed (verify before using the forward matrix):")
+                        _par_disp = _p_par.copy()
+                        _par_disp["Par Rate (%)"] = _par_disp["Par Rate (%)"].apply(lambda x: round(float(x), 4))
+                        st.dataframe(_par_disp.set_index("Tenor").T.style.format("{:.4f}", subset=pd.IndexSlice["Par Rate (%)", :]), use_container_width=True)
                 # Auto-save to DB so it persists across sessions
                 if HAS_POSTGRES and is_admin():
                     try:
@@ -5823,8 +5861,14 @@ def vol_config_tab():
                                 for _, _row in _cdf.iterrows():
                                     _mat = float(_row.get("MaturityY", 0))
                                     _rate = float(_row.get("ZeroRatePct", 0))
-                                    _months = round(_mat * 12)
-                                    if _mat < 1.0:
+                                    # Convert maturity to tenor label
+                                    _days = _mat * 365.25
+                                    if _days < 10:
+                                        _tenor = "1W"
+                                    elif _days < 25:
+                                        _tenor = "2W"
+                                    elif _mat < 1.0:
+                                        _months = max(1, round(_mat * 12))
                                         _tenor = f"{_months}M"
                                     else:
                                         _tenor = f"{int(round(_mat))}Y"
@@ -5836,7 +5880,7 @@ def vol_config_tab():
                                     _cur.execute("""
                                         INSERT INTO swap_rates (date, currency, tenor, floating_rate, rate)
                                         VALUES (%s, %s, %s, %s, %s)
-                                        ON CONFLICT (date, currency, tenor, floating_rate) DO NOTHING
+                                        ON CONFLICT (date, currency, tenor, floating_rate) DO UPDATE SET rate = EXCLUDED.rate
                                     """, (_today, _ccy, _tenor, _fr, _rate))
                                     _swap_rows_saved += 1
                             # Show commit sanity warnings BEFORE success message
