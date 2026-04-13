@@ -4392,7 +4392,106 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
         return None
 
 
-def load_config_excel(upload, load_type: str = "all") -> dict:
+def load_usd_sofr_from_config(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
+    """
+    Load USD SOFR IRS curve from BBG_Feed col E (MID), USOSFR tickers rows 88-110.
+    Returns DataFrame(MaturityY, ZeroRatePct) or None.
+    """
+    if "BBG_Feed" not in xl.sheet_names:
+        return None
+    try:
+        raw = pd.read_excel(xl, sheet_name="BBG_Feed", header=None)
+        # USOSFR tickers → maturity mapping
+        USOSFR_MAP = {
+            "USOSFR1Z":1/52, "USOSFRA":1/12,  "USOSFRB":2/12,  "USOSFRC":3/12,
+            "USOSFR6 ":6/12, "USOSFR1 ":1.0,  "USOSFR2 ":2.0,  "USOSFR3 ":3.0,
+            "USOSFR4 ":4.0,  "USOSFR5 ":5.0,  "USOSFR6Z":6.0,  "USOSFR7 ":7.0,
+            "USOSFR8 ":8.0,  "USOSFR9 ":9.0,  "USOSFR10":10.0, "USOSFR12":12.0,
+            "USOSFR15":15.0, "USOSFR20":20.0, "USOSFR25":25.0, "USOSFR30":30.0,
+            "USOSFR40":40.0, "USOSFR50":50.0,
+        }
+        pts = {}
+        for _, r in raw.iterrows():
+            ticker = str(r.iloc[1]).strip() if len(r) > 1 else ""
+            for prefix, mat in USOSFR_MAP.items():
+                if ticker.startswith(prefix.strip()):
+                    try:
+                        mid = float(r.iloc[4])
+                        if mid > 0:
+                            pts[mat] = mid
+                    except: pass
+                    break
+        if len(pts) < 5:
+            return None
+        xs = sorted(pts)
+        return pd.DataFrame({"MaturityY": xs, "ZeroRatePct": [pts[t] for t in xs]})
+    except Exception:
+        return None
+
+
+def load_usd_fedfunds_ois_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
+    """
+    Load USD Fed Funds OIS curve from BBG_Feed col E (MID), USSO BGN tickers rows 112-133.
+    Returns DataFrame(MaturityY, ZeroRatePct) or None.
+    """
+    if "BBG_Feed" not in xl.sheet_names:
+        return None
+    try:
+        raw = pd.read_excel(xl, sheet_name="BBG_Feed", header=None)
+        USSO_MAP = {
+            "USSO1Z":1/52,  "USSO1 ":1/12,  "USSO2 ":2/12,  "USSO3 ":3/12,
+            "USSO6 ":6/12,
+            "USSO1 BGN":1.0, "USSO2 BGN":2.0,  "USSO3 BGN":3.0,  "USSO4 BGN":4.0,
+            "USSO5 BGN":5.0, "USSO6 BGN":6.0,  "USSO7 BGN":7.0,  "USSO8 BGN":8.0,
+            "USSO9 BGN":9.0, "USSO10 BGN":10.0,"USSO12 BGN":12.0,"USSO15 BGN":15.0,
+            "USSO20 BGN":20.0,"USSO25 BGN":25.0,"USSO30 BGN":30.0,
+            "USSO40 BGN":40.0,"USSO50 BGN":50.0,
+        }
+        pts = {}
+        for _, r in raw.iterrows():
+            ticker = str(r.iloc[1]).strip() if len(r) > 1 else ""
+            for prefix, mat in USSO_MAP.items():
+                if ticker.startswith(prefix.strip()):
+                    try:
+                        mid = float(r.iloc[4])
+                        if mid > 0:
+                            pts[mat] = mid
+                    except: pass
+                    break
+        if len(pts) < 5:
+            return None
+        xs = sorted(pts)
+        return pd.DataFrame({"MaturityY": xs, "ZeroRatePct": [pts[t] for t in xs]})
+    except Exception:
+        return None
+
+
+def load_usd_sofr_basis_from_config(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
+    """
+    Load USD SOFR 3m basis from Basis_USD_SOFR_3m sheet (static, not in BBG_Feed).
+    Returns DataFrame(MaturityY, BasisBp) or None.
+    """
+    if "Basis_USD_SOFR_3m" not in xl.sheet_names:
+        return None
+    try:
+        raw = pd.read_excel(xl, sheet_name="Basis_USD_SOFR_3m", header=0)
+        pts = {}
+        for _, row in raw.iterrows():
+            try:
+                mat = float(row.iloc[0])
+                val = float(row.iloc[1])
+                if mat > 0:
+                    pts[mat] = val
+            except: pass
+        if len(pts) < 3:
+            return None
+        xs = sorted(pts)
+        return pd.DataFrame({"MaturityY": xs, "BasisBp": [pts[t] for t in xs]})
+    except Exception:
+        return None
+
+
+
     """
     Load config from Excel with selective loading.
     load_type: "atm", "sabr", "curves", or "all"
@@ -4485,14 +4584,17 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                         set_timestamp("curves", ccy)
                         loaded["curves"] += 1
             else:
-                # NZD/USD: read from Curves_{ccy} sheet
-                curve_name = f"Curves_{ccy}"
-                if curve_name in xl.sheet_names:
-                    raw_curve = pd.read_excel(xl, sheet_name=curve_name, usecols=[0, 1])
-                    try:
-                        curve_df = load_curve_flexible(raw_curve, curve_name)
-                    except Exception:
-                        curve_df = load_curve(raw_curve, curve_name)
+                # NZD/USD: read from BBG_Feed for USD, sheet for NZD
+                if ccy == "USD":
+                    curve_df = load_usd_sofr_from_config(xl)
+                else:
+                    curve_name = f"Curves_{ccy}"
+                    if curve_name in xl.sheet_names:
+                        raw_curve = pd.read_excel(xl, sheet_name=curve_name, usecols=[0, 1])
+                        try:
+                            curve_df = load_curve_flexible(raw_curve, curve_name)
+                        except Exception:
+                            curve_df = load_curve(raw_curve, curve_name)
 
                 if curve_df is not None and len(curve_df) > 0:
                     set_ccy_curve(ccy, curve_df)
@@ -4501,6 +4603,23 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                     st.session_state["config_curves"][ccy] = curve_df
                     set_timestamp("curves", ccy)
                     loaded["curves"] += 1
+
+                # USD: also load Fed Funds OIS and SOFR basis
+                if ccy == "USD":
+                    _usd_ff_ois = load_usd_fedfunds_ois_from_bbg_feed(xl)
+                    if _usd_ff_ois is not None and len(_usd_ff_ois) >= 5:
+                        if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
+                        if "USD" not in st.session_state["config_basis"]: st.session_state["config_basis"]["USD"] = {}
+                        st.session_state["config_basis"]["USD"]["ois"] = _usd_ff_ois
+                        st.session_state["config_basis"]["USD"]["fedfunds_ois"] = _usd_ff_ois
+                        set_basis_curve("USD", "ois", _usd_ff_ois)
+                        loaded["basis"] += 1
+                    _usd_sofr_basis = load_usd_sofr_basis_from_config(xl)
+                    if _usd_sofr_basis is not None and len(_usd_sofr_basis) >= 3:
+                        if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
+                        if "USD" not in st.session_state["config_basis"]: st.session_state["config_basis"]["USD"] = {}
+                        st.session_state["config_basis"]["USD"]["sofr_3m_basis"] = _usd_sofr_basis
+                        loaded["basis"] += 1
             
             # 6v3 basis curve
             basis_6v3_name = f"Basis_{ccy}_6v3"
@@ -5517,17 +5636,21 @@ def vol_config_tab():
                             _cur = _conn.cursor()
                             _swap_rows_saved = 0
                             _curve_saves = [
-                                ("AUD", "6M BBSW", None),
-                                ("AUD", "3M BBSW", None),
-                                ("AUD", "AONIA",   "ois"),
-                                ("NZD", "3M BKBM", None),
-                                ("NZD", "NZONIA",  "ois"),
-                                ("USD", "SOFR",    None),
+                                ("AUD", "6M BBSW",   None),
+                                ("AUD", "3M BBSW",   None),
+                                ("AUD", "AONIA",     "ois"),
+                                ("NZD", "3M BKBM",   None),
+                                ("NZD", "NZONIA",    "ois"),
+                                ("USD", "SOFR",      None),
+                                ("USD", "FEDFUNDS",  "ois"),
                             ]
                             _commit_sanity_warns = []
                             for _ccy, _fr, _basis_type in _curve_saves:
                                 if _basis_type:
                                     _cdf = st.session_state.get("config_basis", {}).get(_ccy, {}).get(_basis_type)
+                                    # USD FEDFUNDS stored under ois key
+                                    if _cdf is None and _fr == "FEDFUNDS":
+                                        _cdf = st.session_state.get("config_basis", {}).get(_ccy, {}).get("fedfunds_ois")
                                 else:
                                     _cdf = st.session_state.get("config_curves", {}).get(_ccy)
                                 if _cdf is None or len(_cdf) == 0:
