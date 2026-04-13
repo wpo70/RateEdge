@@ -4675,8 +4675,8 @@ def auto_populate_morning_rates_from_bbg_feed(xl: pd.ExcelFile) -> dict:
                     if v: rates[key] = v
                     break
 
-            # BTMM AUD: col 11 = ticker, col 13 = last
-            btmm_aud_ticker = str(r.iloc[11]).strip() if len(r) > 11 and r.iloc[11] else ""
+            # BTMM AUD: col 10 = ticker, col 13 = last
+            btmm_aud_ticker = str(r.iloc[10]).strip() if len(r) > 10 and r.iloc[10] else ""
             for pfx, key in _BTMM_AUD_COL13.items():
                 if btmm_aud_ticker == pfx and key not in rates:
                     v = _f(r, 13)
@@ -18923,91 +18923,6 @@ def sod_report_tab():
         st.warning("Database not connected   —   SOD Report requires saved vol snapshots.")
         return
 
-    # ── Dev Tool: Seed dummy USD snapshots for testing ────────────
-    with st.expander("🛠️ Seed Test Data (Dev)", expanded=len(_snaps_usd) < 2):
-        st.caption("Seeds dummy USD vol snapshots based on the currently loaded USD vol surface, "
-                   "with randomised daily moves. Use this to test the SOD Report without real EOD data.")
-        _seed_c1, _seed_c2, _seed_c3 = st.columns([2, 2, 2])
-        with _seed_c1:
-            _seed_days = st.number_input("Days of history to seed", min_value=2, max_value=90,
-                                         value=45, key="sod_seed_days")
-        with _seed_c2:
-            _seed_vol_sigma = st.number_input("Daily vol move ┬ñ├ó (bp)", min_value=0.5, max_value=10.0,
-                                              value=2.0, step=0.5, key="sod_seed_sigma")
-        with _seed_c3:
-            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            _seed_btn = st.button("🌱 Seed Dummy USD Snapshots", key="sod_seed_btn", type="primary")
-
-        if _seed_btn:
-            _usd_vol_data = st.session_state.get("vol_data", {}).get("USD", {})
-            _usd_atm_live = _usd_vol_data.get("atm")
-
-            if _usd_atm_live is None:
-                st.error("No USD ATM vol surface loaded. Load USD data in Vol/SABR tab first.")
-            else:
-                import json as _json
-                from datetime import datetime as _dt, timedelta as _td
-                import random as _rnd
-
-                _atm_base = _usd_atm_live.copy()
-                if "Expiry" in _atm_base.columns:
-                    _atm_base = _atm_base.set_index("Expiry")
-                _tenor_cols = [c for c in _atm_base.columns]
-                _exp_rows   = list(_atm_base.index)
-
-                conn = get_db_connection()
-                if not conn:
-                    st.error("Cannot connect to database.")
-                else:
-                    cur = conn.cursor()
-                    _seeded = 0
-                    _rnd.seed(42)
-
-                    # Walk backwards from yesterday, one snapshot per business day
-                    _day = _dt.now().replace(hour=21, minute=0, second=0, microsecond=0)
-                    _running = _atm_base.copy().astype(float)
-
-                    for _d in range(int(_seed_days)):
-                        _day -= _td(days=1)
-                        # Skip weekends
-                        if _day.weekday() >= 5:
-                            _day -= _td(days=_day.weekday() - 4)
-
-                        # Apply random daily move to each cell
-                        for _e in _exp_rows:
-                            for _t in _tenor_cols:
-                                try:
-                                    _mv = _rnd.gauss(0, _seed_vol_sigma)
-                                    _running.loc[_e, _t] = max(
-                                        float(_running.loc[_e, _t]) + _mv, 1.0
-                                    )
-                                except Exception:
-                                    pass
-
-                        _snap_records = _running.reset_index().rename(columns={"index": "Expiry"}).to_dict(orient="records")
-                        _label = f"USD EOD {_day.strftime('%Y-%m-%d')} [DUMMY]"
-
-                        try:
-                            cur.execute("""
-                                INSERT INTO vol_history
-                                (user_id, currency, snapshot_date, label, atm_vols, notes)
-                                VALUES (%s, %s, %s, %s, %s, %s)
-                            """, (
-                                user_id, "USD", _day,
-                                _label,
-                                Json({"values": _snap_records}),
-                                "Seeded dummy data for SOD Report testing"
-                            ))
-                            _seeded += 1
-                        except Exception as _e:
-                            pass
-
-                    conn.commit()
-                    cur.close()
-                    conn.close()
-                    st.success(f"✅ Seeded {_seeded} dummy USD snapshots. Reload the page to see them.")
-                    st.rerun()
-
     if len(_snaps_usd) < 2:
         st.info(
             "Need at least 2 USD vol snapshots to compute overnight changes. "
@@ -19599,13 +19514,24 @@ def sod_report_tab():
             st.markdown("### 📝 SOD Summary")
 
             # Build narrative
-            _usd_avg_chg = float(_usd_chg.values.astype(float).mean())
-            _usd_max_chg = float(_usd_chg.values.astype(float).max())
-            _usd_min_chg = float(_usd_chg.values.astype(float).min())
-            _usd_direction = "higher" if _usd_avg_chg > 0 else "lower"
+            _usd_vals = _usd_chg.values.astype(float)
+            _usd_avg_chg = float(_usd_vals.mean())           # signed mean for direction
+            _usd_avg_abs_chg = float(abs(_usd_vals).mean())  # mean absolute for magnitude
+            _usd_max_chg = float(_usd_vals.max())
+            _usd_min_chg = float(_usd_vals.min())
+            # Direction: use signed mean, but if near zero use max abs move direction
+            if abs(_usd_avg_chg) < 0.5:
+                _usd_direction = "mixed" 
+            else:
+                _usd_direction = "higher" if _usd_avg_chg > 0 else "lower"
 
-            _aud_avg_chg = float(_implied_chg.values.astype(float).mean())
-            _aud_direction = "higher" if _aud_avg_chg > 0 else "lower"
+            _aud_vals = _implied_chg.values.astype(float)
+            _aud_avg_chg = float(_aud_vals.mean())
+            _aud_avg_abs_chg = float(abs(_aud_vals).mean())
+            if abs(_aud_avg_chg) < 0.3:
+                _aud_direction = "mixed"
+            else:
+                _aud_direction = "higher" if _aud_avg_chg > 0 else "lower"
 
             # Find biggest USD moves
             _usd_flat = _usd_chg.stack().reset_index()
@@ -19651,13 +19577,13 @@ def sod_report_tab():
 
             _narrative = f"""
 **USD overnight vol session (T-2 → T-1 NYC close):** USD ATM vols moved broadly {_usd_direction} \
-overnight, with the surface averaging {abs(_usd_avg_chg):.1f}bp change. \
+overnight, with an average absolute move of {_usd_avg_abs_chg:.1f}bp across the surface. \
 The largest moves were in {_usd_move_str}. \
 The range across the surface was {_usd_min_chg:+.1f}bp to {_usd_max_chg:+.1f}bp.{_usd_prem_ctx}
 
 **Implied AUD open (vs yesterday's 4:30pm Sydney close):** Applying USD/AUD vol betas \
 (short-end {int(_beta_short*100)}%, mid {int(_beta_mid*100)}%, long-end {int(_beta_long*100)}%), \
-AUD vols are implied to open broadly {_aud_direction}, averaging {abs(_aud_avg_chg):.1f}bp change. \
+AUD vols are implied to open broadly {_aud_direction}, with an average absolute implied move of {_aud_avg_abs_chg:.1f}bp. \
 Key AUD moves to watch: {_aud_move_str}.{_aud_prem_ctx}
 
 **Tactical note:** {"🔴 Significant overnight move — short-dated AUD gamma likely repriced at open. Priority: review 3m-6m expiry positions before first trades." if abs(float(_implied_chg.values.astype(float).max() if _implied_chg.values.astype(float).max() > abs(_implied_chg.values.astype(float).min()) else _implied_chg.values.astype(float).min())) > 4.0 else ("⚠️ Moderate moves — short-dated AUD gamma affected. Monitor 3m-6m expiry trades at open." if abs(float(_implied_chg.values.astype(float).max() if _implied_chg.values.astype(float).max() > abs(_implied_chg.values.astype(float).min()) else _implied_chg.values.astype(float).min())) > 2.0 else "✅ Moves are modest — no urgent repricing expected at the AUD open. Monitor live market confirmation.")} \
