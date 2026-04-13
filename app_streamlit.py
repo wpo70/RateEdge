@@ -1725,12 +1725,11 @@ def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Opt
             
             # Add metadata sheet
             metadata = pd.DataFrame({
-                "Property": ["Currency", "Export Date", "Export Time", "Includes SABR"],
+                "Property": ["Currency", "Export Date", "Export Time"],
                 "Value": [
                     currency,
                     pd.Timestamp.now().strftime('%Y-%m-%d'),
                     pd.Timestamp.now().strftime('%H:%M:%S'),
-                    "Yes" if include_sabr else "No"
                 ]
             })
             metadata.to_excel(writer, sheet_name="Metadata", index=False)
@@ -5824,6 +5823,24 @@ def vol_config_tab():
             
             if msgs:
                 _cdebug = []
+                def _mat_to_label(y):
+                    """Convert MaturityY float to human-readable tenor label."""
+                    days = y * 365.25
+                    if days < 10: return "1w"
+                    if days < 20: return "2w"
+                    m = round(y * 12)
+                    if m == 0: return "1w"
+                    if m == 1: return "1m"
+                    if m == 2: return "2m"
+                    if m == 3: return "3m"
+                    if m == 4: return "4m"
+                    if m == 5: return "5m"
+                    if m == 6: return "6m"
+                    if m == 9: return "9m"
+                    if m == 12: return "1y"
+                    if m == 18: return "18m"
+                    yr = round(y)
+                    return f"{yr}y"
                 for _c in SUPPORTED_CURRENCIES:
                     _cv = st.session_state.get("config_curves", {}).get(_c)
                     if _cv is not None and len(_cv) > 0:
@@ -5831,7 +5848,7 @@ def vol_config_tab():
                         _z1 = _cv[_cv["MaturityY"].sub(1.0).abs() < 0.01]["ZeroRatePct"]
                         z025 = float(_z025.iloc[0]) if len(_z025) else 0
                         z1 = float(_z1.iloc[0]) if len(_z1) else 0
-                        _cdebug.append(f"{_c}: {len(_cv)} pts | 0.25Y={z025:.4f}% | 1Y={z1:.4f}%")
+                        _cdebug.append(f"{_c}: {len(_cv)} pts | 3m={z025:.4f}% | 1Y={z1:.4f}%")
                 st.success(f" Loaded: {', '.join(msgs)}")
                 if _cdebug:
                     for _cd in _cdebug:
@@ -5854,9 +5871,12 @@ def vol_config_tab():
                         if _cv is not None and len(_cv) > 0:
                             st.caption(f"{_pc} SOFR curve loaded from BBG_Feed ({len(_cv)} pts):")
                             _cv_disp = _cv.copy()
-                            _cv_disp["MaturityY"] = _cv_disp["MaturityY"].apply(lambda x: f"{x:.4f}Y")
-                            _cv_disp["ZeroRatePct"] = _cv_disp["ZeroRatePct"].apply(lambda x: f"{x:.4f}%")
-                            st.dataframe(_cv_disp.rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Rate (%)"}).set_index("Tenor").T, use_container_width=True)
+                            _cv_disp["Tenor"] = _cv_disp["MaturityY"].apply(_mat_to_label)
+                            _cv_disp["Rate (%)"] = _cv_disp["ZeroRatePct"].apply(lambda x: f"{x:.4f}%")
+                            # Add source date if available
+                            _rows = {"Rate (%)": _cv_disp.set_index("Tenor")["Rate (%)"].to_dict()}
+                            _disp_df = pd.DataFrame(_rows).T
+                            st.dataframe(_disp_df, use_container_width=True)
                 # Auto-save to DB so it persists across sessions
                 if HAS_POSTGRES and is_admin():
                     try:
