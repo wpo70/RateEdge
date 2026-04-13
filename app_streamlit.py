@@ -17059,17 +17059,15 @@ def portfolio_tab():
         st.info("Trade Blotter is empty. Price swaptions or caps/floors to add trades.")
         return
 
-    # Currency filter — sync to sidebar currency
+    # Currency filter — tied to sidebar currency, resets when sidebar changes
     _all_ccys = sorted(set(t.get("ccy","AUD") for t in portfolio))
     _sidebar_ccy = st.session_state.get("sidebar_ccy", "AUD").split(" ")[0]
-    # Force widget to match sidebar if it differs
-    if st.session_state.get("blotter_ccy_filter") != _sidebar_ccy and _sidebar_ccy in _all_ccys:
-        st.session_state["blotter_ccy_filter"] = _sidebar_ccy
     _active_ccy = _sidebar_ccy if _sidebar_ccy in _all_ccys else "All"
     _default_idx = (["All"] + _all_ccys).index(_active_ccy) if _active_ccy in _all_ccys else 0
     _blot_ccy_col, _ = st.columns([1,3])
     with _blot_ccy_col:
-        _blot_ccy = st.selectbox("Currency", ["All"] + _all_ccys, index=_default_idx, key="blotter_ccy_filter")
+        _blot_ccy = st.selectbox("Currency", ["All"] + _all_ccys, index=_default_idx,
+                                 key=f"blotter_ccy_filter_{_sidebar_ccy}")
     if _blot_ccy != "All":
         portfolio = [t for t in portfolio if t.get("ccy","AUD") == _blot_ccy]
     if not portfolio:
