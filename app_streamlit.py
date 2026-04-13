@@ -4105,18 +4105,24 @@ def build_aud_ois_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
         if len(ois_pts) < 5:
             return None
 
-        # Add 40Y and 50Y OIS by label (no ADSO ticker, value in col E)
+        # Add 40Y and 50Y OIS by label — only take first match (AUD, before USD section)
+        _ois_40_done = False
+        _ois_50_done = False
         for _, row in raw.iterrows():
             lbl = str(row.iloc[0]).strip().lower()
-            if 'ois 40' in lbl or 'ois40' in lbl:
+            ticker = str(row.iloc[1]).strip() if row.iloc[1] is not None else ""
+            # Skip USD USSO tickers
+            if ticker.upper().startswith("USSO"):
+                continue
+            if ('ois 40' in lbl or 'ois40' in lbl) and not _ois_40_done:
                 try:
                     v = float(row.iloc[4])
-                    if v > 0: ois_pts[40.0] = v
+                    if v > 0: ois_pts[40.0] = v; _ois_40_done = True
                 except: pass
-            if 'ois 50' in lbl or 'ois50' in lbl:
+            if ('ois 50' in lbl or 'ois50' in lbl) and not _ois_50_done:
                 try:
                     v = float(row.iloc[4])
-                    if v > 0: ois_pts[50.0] = v
+                    if v > 0: ois_pts[50.0] = v; _ois_50_done = True
                 except: pass
 
         xs = sorted(ois_pts)
@@ -8181,6 +8187,7 @@ def swaptions_tab(vol_mode: str):
                                 load_user_config.clear()
                             except Exception:
                                 pass
+                        st.session_state.pop("_alpha_check_result", None)
                         st.success(f"✅ Alpha recalibrated   —   {_updated} cells updated. ~, ρ,ν, × unchanged.")
                         st.rerun()
             with _rc2:
