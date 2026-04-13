@@ -2084,6 +2084,33 @@ def build_aud_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]
     return _build_date_schedule(fwd_start, tenor, months_per)
 
 
+def _act360(d1: "date", d2: "date") -> float:
+    """Act/360 day count — USD SOFR convention."""
+    return (d2 - d1).days / 360.0
+
+
+def build_usd_sofr_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]:
+    """
+    USD SOFR swaption: T+2 NY BD spot, mod-fol, Act/360, annual payments both legs.
+    Returns list of (time_in_years_from_today, act360_accrual).
+    """
+    today = _pricing_date()
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=2)
+    months_per_period = 12  # annual
+    total_months = int(round(tenor * 12))
+    n = int(round(tenor * (12 / months_per_period)))
+    schedule = []
+    prev = fwd_start
+    for i in range(1, n + 1):
+        raw = _add_months(fwd_start, i * months_per_period if i < n else total_months)
+        pay = _mod_fol(raw)
+        accrual = _act360(prev, pay)   # Act/360 for USD SOFR
+        t_years = _act365(today, pay)  # time to payment in years (365 basis for discounting)
+        schedule.append((t_years, accrual))
+        prev = pay
+    return schedule
+
+
 def build_generic_schedule(expiry: float, tenor: float, freq: float = 0.5, spot_lag: float = 1.0) -> List[Tuple[float, float]]:
     """T+2BD spot (NZD/USD), mod-fol, Act/365. freq: 0.25=Q/Q, 0.5=S/S."""
     months_per = int(round(freq * 12))
@@ -2124,7 +2151,7 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         freq_nzd = 0.25 if tenor <= 2.0 else 0.5
         sched = build_generic_schedule(expiry, tenor, freq=freq_nzd, spot_lag=2.0)
     elif ccy == "USD":
-        sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=2.0)
+        sched = build_usd_sofr_schedule(expiry, tenor)
     else:
         sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=1.0)
 
@@ -7832,6 +7859,24 @@ def swaptions_tab(vol_mode: str):
     ois_curve = _cbo if _cbo is not None else get_basis_curve(ccy, "ois")
     _cc = st.session_state.get("config_curves", {}).get(ccy)
     curve = _cc if _cc is not None else get_ccy_curve(ccy)
+
+    # USD-specific convention display
+    if ccy == "USD":
+        with st.expander("📐 USD SOFR Conventions", expanded=False):
+            st.markdown("""
+| | Convention |
+|---|---|
+| **Underlying** | SOFR compounded in arrears |
+| **Fixed leg** | Annual, Act/360 |
+| **Float leg** | Annual, Act/360 |
+| **Settlement** | Cash (ICE SOFR Swap Rate) or Physical (LCH/CME) |
+| **Spot** | T+2 New York BD |
+| **Discounting** | SOFR flat |
+| **Premium** | bp of notional, T+2 |
+| **Vol** | Normal (bp/annum) |
+""")
+        _usd_settle = st.radio("Settlement", ["Cash (ICE SOFR Swap Rate)", "Physical (LCH/CME)"],
+                               horizontal=True, key="usd_swpn_settle")
 
     # ── SABR Smile Mode & Alpha Monitor ──────────────────────────────
     _sabr_visible = st.session_state.get("sabr_panel_visible", True)
