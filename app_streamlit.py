@@ -20422,38 +20422,62 @@ h2{{color:#1e3a5f;margin-top:20px}}
                         ("BOTTOMPADDING",(0,0),(-1,-1), 2),
                     ]))
                     _story.append(_vchg_tbl)
-                    # Vol bar chart
+                    # Vol bar chart — matplotlib (no kaleido needed)
                     try:
-                        import plotly.io as _pio
+                        import matplotlib
+                        matplotlib.use("Agg")
+                        import matplotlib.pyplot as _plt
                         import io as _cio
                         from reportlab.platypus import Image as _RLImage
                         _v_df2 = pd.DataFrame(_chg_rows)
-                        _fig_v2 = go.Figure(go.Bar(
-                            x=_v_df2["Tenor"], y=_v_df2["Chg"],
-                            marker_color=["#22c55e" if v>=0 else "#ef4444" for v in _v_df2["Chg"]],
-                            text=[f"{v:+.1f}" for v in _v_df2["Chg"]], textposition="outside"))
-                        _fig_v2.update_layout(title="Overnight ATM Vol Δ (bp)", template="plotly_white",
-                                              height=220, margin=dict(t=35,b=35,l=40,r=20), showlegend=False)
-                        _img_bytes_v = _pio.to_image(_fig_v2, format="png", width=700, height=220, scale=2)
-                        _story.append(_RLImage(_cio.BytesIO(_img_bytes_v), width=17*cm, height=6*cm))
+                        _fig_v2, _ax_v = _plt.subplots(figsize=(9, 2.8))
+                        _colors_v = ["#22c55e" if v>=0 else "#ef4444" for v in _v_df2["Chg"]]
+                        _bars = _ax_v.bar(_v_df2["Tenor"], _v_df2["Chg"], color=_colors_v)
+                        for _bar, _val in zip(_bars, _v_df2["Chg"]):
+                            _ax_v.text(_bar.get_x()+_bar.get_width()/2,
+                                       _bar.get_height() + (0.05 if _val>=0 else -0.12),
+                                       f"{_val:+.1f}", ha="center", va="bottom", fontsize=7)
+                        _ax_v.axhline(0, color="#94a3b8", linewidth=0.5)
+                        _ax_v.set_title("Overnight ATM Vol Δ (bp)", fontsize=9, pad=4)
+                        _ax_v.tick_params(axis="x", labelsize=7, rotation=30)
+                        _ax_v.tick_params(axis="y", labelsize=7)
+                        _ax_v.set_facecolor("#f8fafc"); _fig_v2.patch.set_facecolor("#ffffff")
+                        _plt.tight_layout()
+                        _img_buf_v = _cio.BytesIO()
+                        _fig_v2.savefig(_img_buf_v, format="png", dpi=150, bbox_inches="tight")
+                        _plt.close(_fig_v2)
+                        _img_buf_v.seek(0)
+                        _story.append(_RLImage(_img_buf_v, width=17*cm, height=6*cm))
                     except Exception: pass
 
                 # Overnight rate changes + chart
                 if _rate_chg_rows:
                     _story.append(Paragraph("Overnight Swap Rate Changes (bp)", _h2_style))
                     try:
-                        import plotly.io as _pio
+                        import matplotlib
+                        matplotlib.use("Agg")
+                        import matplotlib.pyplot as _plt
                         import io as _cio
                         from reportlab.platypus import Image as _RLImage
                         _r_df2 = pd.DataFrame(_rate_chg_rows)
-                        _fig_r2 = go.Figure(go.Bar(
-                            x=_r_df2["Tenor"], y=_r_df2["Chg (bp)"],
-                            marker_color=["#38bdf8" if v>=0 else "#a78bfa" for v in _r_df2["Chg (bp)"]],
-                            text=[f"{v:+.1f}" for v in _r_df2["Chg (bp)"]], textposition="outside"))
-                        _fig_r2.update_layout(title="Overnight Swap Rate Δ (bp)", template="plotly_white",
-                                              height=200, margin=dict(t=35,b=35,l=40,r=20), showlegend=False)
-                        _img_bytes_r = _pio.to_image(_fig_r2, format="png", width=700, height=200, scale=2)
-                        _story.append(_RLImage(_cio.BytesIO(_img_bytes_r), width=17*cm, height=5.5*cm))
+                        _fig_r2, _ax_r = _plt.subplots(figsize=(9, 2.5))
+                        _colors_r = ["#38bdf8" if v>=0 else "#a78bfa" for v in _r_df2["Chg (bp)"]]
+                        _rbars = _ax_r.bar(_r_df2["Tenor"], _r_df2["Chg (bp)"], color=_colors_r)
+                        for _bar, _val in zip(_rbars, _r_df2["Chg (bp)"]):
+                            _ax_r.text(_bar.get_x()+_bar.get_width()/2,
+                                       _bar.get_height() + (0.05 if _val>=0 else -0.2),
+                                       f"{_val:+.1f}", ha="center", va="bottom", fontsize=7)
+                        _ax_r.axhline(0, color="#94a3b8", linewidth=0.5)
+                        _ax_r.set_title("Overnight Swap Rate Δ (bp)", fontsize=9, pad=4)
+                        _ax_r.tick_params(axis="x", labelsize=7, rotation=30)
+                        _ax_r.tick_params(axis="y", labelsize=7)
+                        _ax_r.set_facecolor("#f8fafc"); _fig_r2.patch.set_facecolor("#ffffff")
+                        _plt.tight_layout()
+                        _img_buf_r = _cio.BytesIO()
+                        _fig_r2.savefig(_img_buf_r, format="png", dpi=150, bbox_inches="tight")
+                        _plt.close(_fig_r2)
+                        _img_buf_r.seek(0)
+                        _story.append(_RLImage(_img_buf_r, width=17*cm, height=5.5*cm))
                     except Exception: pass
 
                 # Footer
