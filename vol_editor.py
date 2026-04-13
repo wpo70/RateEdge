@@ -765,38 +765,41 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
         try:
             import base64
             payload = json.loads(base64.b64decode(paste_data).decode())
-            if payload.get('ccy') == ccy:
-                updated = payload['vals']
-                mode = payload.get('mode', 'vol')
-                tcols = [c for c in working.columns[1:] if c.lower() != "expiry" and str(c).upper() not in ("AUD","USD","NZD","EUR","GBP","JPY")]
-                expiries = working[working.columns[0]].tolist()
-                
-                _push_history(ccy)
-                if mode == "fwd_premium":
-                    for i, row in enumerate(updated):
-                        if i >= len(expiries): break
-                        T = label_to_years(str(expiries[i]))
-                        for j, v in enumerate(row[:len(tcols)]):
-                            tenor_y = label_to_years(tcols[j])
-                            working.iloc[i, j+1] = round(premium_to_vol(float(v), T, tenor_y), 2)
-                else:
-                    for i, row in enumerate(updated):
-                        if i >= len(expiries): break
-                        _col_offset = 0
-                        for j2, v2 in enumerate(row):
-                            if _col_offset >= len(tcols): break
-                            try:
-                                working.iloc[i, _col_offset+1] = round(float(v2), 2)
-                                _col_offset += 1
-                            except (ValueError, TypeError):
-                                pass  # skip non-numeric (e.g. 'AUD' currency col)
-                ed["working"][ccy] = working
-                # Clear paste data after successful confirmation
-                ed["paste_data"][ccy] = ""
-                st.success("✅ Changes applied!")
-                st.rerun()
+            # Use currency from payload, not selectbox — avoids mismatch after page reload
+            payload_ccy = payload.get('ccy', ccy)
+            updated = payload['vals']
+            mode = payload.get('mode', 'vol')
+            # Use working surface for payload currency
+            _work_ccy = ed.get("working", {}).get(payload_ccy)
+            if _work_ccy is None:
+                _work_ccy = working
+            tcols = [c for c in _work_ccy.columns[1:] if c.lower() != "expiry" and str(c).upper() not in ("AUD","USD","NZD","EUR","GBP","JPY")]
+            expiries = _work_ccy[_work_ccy.columns[0]].tolist()
+            
+            _push_history(payload_ccy)
+            if mode == "fwd_premium":
+                for i, row in enumerate(updated):
+                    if i >= len(expiries): break
+                    T = label_to_years(str(expiries[i]))
+                    for j, v in enumerate(row[:len(tcols)]):
+                        tenor_y = label_to_years(tcols[j])
+                        _work_ccy.iloc[i, j+1] = round(premium_to_vol(float(v), T, tenor_y), 2)
             else:
-                st.error(f"Currency mismatch")
+                for i, row in enumerate(updated):
+                    if i >= len(expiries): break
+                    _col_offset = 0
+                    for j2, v2 in enumerate(row):
+                        if _col_offset >= len(tcols): break
+                        try:
+                            _work_ccy.iloc[i, _col_offset+1] = round(float(v2), 2)
+                            _col_offset += 1
+                        except (ValueError, TypeError):
+                            pass  # skip non-numeric (e.g. 'AUD' currency col)
+            ed["working"][payload_ccy] = _work_ccy
+            # Clear paste data after successful confirmation
+            ed["paste_data"][payload_ccy] = ""
+            st.success("✅ Changes applied!")
+            st.rerun()
         except Exception as e:
             st.error(f"Invalid data: {e}. Use the Apply button above the 3D chart to generate pasteable data, then paste here.")
     elif confirm_btn:
