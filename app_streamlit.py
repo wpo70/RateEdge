@@ -17059,6 +17059,17 @@ def portfolio_tab():
         st.info("Trade Blotter is empty. Price swaptions or caps/floors to add trades.")
         return
 
+    # Currency filter
+    _all_ccys = sorted(set(t.get("ccy","AUD") for t in portfolio))
+    _blot_ccy_col, _ = st.columns([1,3])
+    with _blot_ccy_col:
+        _blot_ccy = st.selectbox("Currency", ["All"] + _all_ccys, key="blotter_ccy_filter")
+    if _blot_ccy != "All":
+        portfolio = [t for t in portfolio if t.get("ccy","AUD") == _blot_ccy]
+    if not portfolio:
+        st.info(f"No {_blot_ccy} trades in blotter.")
+        return
+
     _sw_port  = [t for t in portfolio if t.get("instrument_type","Swaption") == "Swaption"]
     _cf_port  = [t for t in portfolio if t.get("instrument_type") == "Cap/Floor"]
 
