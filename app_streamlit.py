@@ -5176,11 +5176,11 @@ def sdr_live_tab():
         with col2:
             st.markdown("**Type & CCY**")
             _type_options = {
-                "Call (C)":              "CALL",
-                "Put (P)":               "PUT",
+                "Payer (C)":             "CALL",
+                "Receiver (P)":          "PUT",
                 "Straddle (D/EC)":       "STR",
                 "Euro Swn (EC/OPET)":    "EC",
-                "Bermudan Call":         "BCALL",
+                "Bermudan Payer":        "BCALL",
                 "Non-standard":          "NSTD",
                 "XCCY Swn":              "XCS",
                 "XCCY+MDET":             "XCS-M",
@@ -5188,13 +5188,15 @@ def sdr_live_tab():
                 "Mand. Term (MDET)":     "MDET",
                 "Other":                 "OTH",
             }
-            _type_defaults = ["Call (C)", "Put (P)", "Straddle (D/EC)", "Euro Swn (EC/OPET)"]
+            _type_defaults = ["Payer (C)", "Receiver (P)", "Straddle (D/EC)", "Euro Swn (EC/OPET)"]
             sel_type_labels = st.multiselect("P/C", list(_type_options.keys()),
                 default=_type_defaults, key="sdr_type",
                 label_visibility="collapsed", on_change=_save_sdr_filters)
             sel_type = [_type_options[l] for l in sel_type_labels]
             ccy_opts = _sdr_get_distinct("notional_ccy")
-            sel_ccy = st.selectbox("CCY", ["All"] + ccy_opts, key="sdr_ccy", label_visibility="collapsed", on_change=_save_sdr_filters)
+            sel_ccy = st.multiselect("CCY", ccy_opts,
+                default=[c for c in ["USD","AUD","EUR","GBP","JPY"] if c in ccy_opts],
+                key="sdr_ccy", label_visibility="collapsed", on_change=_save_sdr_filters)
 
         with col3:
             st.markdown("**Tenor filters**")
@@ -5205,8 +5207,20 @@ def sdr_live_tab():
 
         with col4:
             st.markdown("**Platform & Action**")
-            platforms = _sdr_get_distinct("platform_identifier")
-            sel_platform = st.selectbox("Platform", ["All"] + platforms, key="sdr_platform", label_visibility="collapsed", on_change=_save_sdr_filters)
+            _platform_names = {
+                "BGCD": "BGC", "TWSF": "Tradition", "TSEF": "Tradition",
+                "TPSE": "Tullett Prebon", "GSEF": "GFI", "RTSX": "RTX",
+                "RTXS": "RTX", "MKTX": "MarketAxess", "TRWB": "Tradeweb",
+                "BLOM": "Bloomberg", "ICSE": "ICE", "GLPX": "Globalplex", "NSEF": "NEX",
+            }
+            _all_platforms = _sdr_get_distinct("platform_identifier")
+            _platform_labels = {p: _platform_names.get(p, p) for p in _all_platforms}
+            _platform_display = [f"{_platform_names.get(p,p)} ({p})" for p in _all_platforms]
+            _platform_map = {f"{_platform_names.get(p,p)} ({p})": p for p in _all_platforms}
+            sel_platform_labels = st.multiselect("Platform", _platform_display,
+                default=_platform_display, key="sdr_platform",
+                label_visibility="collapsed", on_change=_save_sdr_filters)
+            sel_platform = [_platform_map[l] for l in sel_platform_labels]
             action_opts = ["All", "NEWT", "MODI", "CORR", "CANC"]
             sel_action = st.selectbox("Action", action_opts, key="sdr_action", label_visibility="collapsed", on_change=_save_sdr_filters)
 
@@ -5303,18 +5317,20 @@ def sdr_live_tab():
         placeholders = ",".join(["%s"] * len(sel_type))
         filters.append(f"option_type_decoded IN ({placeholders})")
         params.extend(sel_type)
-    if sel_ccy != "All":
-        filters.append("notional_ccy = %s")
-        params.append(sel_ccy)
+    if sel_ccy:
+        placeholders = ",".join(["%s"] * len(sel_ccy))
+        filters.append(f"notional_ccy IN ({placeholders})")
+        params.extend(sel_ccy)
     if sel_opt_tenor != "All":
         filters.append("opt_tenor = %s")
         params.append(sel_opt_tenor)
     if sel_swp_tenor != "All":
         filters.append("swp_tenor = %s")
         params.append(sel_swp_tenor)
-    if sel_platform != "All":
-        filters.append("platform_identifier = %s")
-        params.append(sel_platform)
+    if sel_platform:
+        placeholders = ",".join(["%s"] * len(sel_platform))
+        filters.append(f"platform_identifier IN ({placeholders})")
+        params.extend(sel_platform)
     if sel_action != "All":
         filters.append("action_type = %s")
         params.append(sel_action)
@@ -5404,8 +5420,8 @@ def sdr_live_tab():
         for col, label, value, color in [
             (mc1, "Total trades",    f"{total:,}",                "#f1f5f9"),
             (mc2, "New (NEWT)",      f"{newt:,}",                 "#4ade80"),
-            (mc3, "Calls",           f"{calls:,}",                "#4ade80"),
-            (mc4, "Puts",            f"{puts:,}",                 "#f87171"),
+            (mc3, "Payers",           f"{calls:,}",                "#4ade80"),
+            (mc4, "Receivers",         f"{puts:,}",                 "#f87171"),
             (mc5, "Total Notional",  _fmt_notional(total_not),    "#60a5fa"),
         ]:
             with col:
@@ -5451,11 +5467,11 @@ def sdr_live_tab():
 
     # ── Type display formatter ────────────────────────────────────────────────
     _TYPE_LABELS = {
-        "CALL":  "Call",
-        "PUT":   "Put",
+        "CALL":  "Payer",
+        "PUT":   "Receiver",
         "STR":   "Straddle",
         "EC":    "Euro Swn",
-        "BCALL": "Berm Call",
+        "BCALL": "Berm Payer",
         "NSTD":  "Non-std",
         "XCS":   "XCCY Swn",
         "XCS-M": "XCCY+MDET",
