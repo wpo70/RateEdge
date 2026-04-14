@@ -3052,53 +3052,52 @@ def apply_rateedge_theme(theme_name: str):
         [data-testid="stSidebar"] .stMarkdown {{
             color: {text} !important;
         }}
-        /* Sidebar expand/collapse arrow — all known Streamlit versions */
+        /* Sidebar collapse/expand button — nuclear visibility fix */
         [data-testid="collapsedControl"],
         [data-testid="collapsedControl"] button,
-        button[kind="header"],
         [data-testid="stSidebarCollapseButton"],
-        [data-testid="stSidebarCollapseButton"] button {{
+        [data-testid="stSidebarCollapseButton"] button,
+        [data-testid="baseButton-headerNoPadding"],
+        button[kind="header"],
+        section[data-testid="stSidebarContent"] + div button,
+        .st-emotion-cache-1cypcdb,
+        .st-emotion-cache-czk5ss {{
             background-color: {accent} !important;
             border-radius: 0 6px 6px 0 !important;
-            width: 28px !important;
-            min-width: 28px !important;
+            width: 32px !important;
+            min-width: 32px !important;
+            height: 48px !important;
+            min-height: 48px !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+            display: flex !important;
+            position: fixed !important;
+            left: 0 !important;
+            top: 50% !important;
+            z-index: 999999 !important;
         }}
         [data-testid="collapsedControl"] svg,
         [data-testid="collapsedControl"] button svg,
         [data-testid="stSidebarCollapseButton"] svg,
+        [data-testid="stSidebarCollapseButton"] button svg,
+        [data-testid="baseButton-headerNoPadding"] svg,
         button[kind="header"] svg,
-        [data-testid="stSidebar"] > div:first-child button svg {{
+        .st-emotion-cache-1cypcdb svg,
+        .st-emotion-cache-czk5ss svg,
+        section[data-testid="stSidebarContent"] + div button svg {{
             fill: white !important;
             stroke: white !important;
             color: white !important;
             width: 20px !important;
             height: 20px !important;
+            opacity: 1 !important;
         }}
-        /* The arrow that appears when sidebar IS collapsed */
-        section[data-testid="stSidebarContent"] + div button,
-        .st-emotion-cache-1cypcdb,
-        .st-emotion-cache-czk5ss {{
-            background-color: {accent} !important;
-        }}
-        .st-emotion-cache-1cypcdb svg,
-        .st-emotion-cache-czk5ss svg {{
-            fill: white !important;
-            stroke: white !important;
-        }}
-        /* Collapsed sidebar button */
+        /* Collapsed sidebar button legacy */
         .css-1rs6os {{
             color: {sidebar_arrow} !important;
         }}
         .css-1rs6os svg {{
             fill: {sidebar_arrow} !important;
-        }}
-        /* Alternative selectors for sidebar toggle */
-        [data-testid="baseButton-headerNoPadding"] {{
-            color: {sidebar_arrow} !important;
-        }}
-        [data-testid="baseButton-headerNoPadding"] svg {{
-            fill: {sidebar_arrow} !important;
-            stroke: {sidebar_arrow} !important;
         }}
         /* Tabs - readable text */
         .stTabs [data-baseweb="tab-list"] {{
