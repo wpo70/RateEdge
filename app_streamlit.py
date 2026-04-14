@@ -6632,10 +6632,10 @@ def curves_tab():
                     _par_x = list(par_rates["Tenor"].apply(
                         lambda x: float(x[:-1]) if str(x).endswith("Y") else float(str(x)[:-1])/12))
                     _par_y = list(par_rates["Par Rate (%)"])
-                    # Add 40Y/50Y from Curves_AUD (single source, no duplicates)
+                    # Add 40Y/50Y from Curves_AUD only if genuinely absent — normalise float comparison
                     for _, _cr in curve_c.iterrows():
                         _m = float(_cr["MaturityY"])
-                        if _m in [40.0, 50.0] and _m not in _par_x:
+                        if _m in [40.0, 50.0] and not any(abs(_m - _px) < 0.01 for _px in _par_x):
                             _par_x.append(_m); _par_y.append(float(_cr["ZeroRatePct"]))
                     _ext_pairs = sorted(zip(_par_x, _par_y))
                     fig.add_trace(go.Scatter(
@@ -6690,18 +6690,18 @@ def curves_tab():
         _cols_to_show = []
         if _show_par:
             if par_rates is not None and not par_rates.empty:
-                _par_table = par_rates.copy()
-                # Add 40Y/50Y from curve_c (Curves_AUD) - single source, no duplicates
                 import pandas as _pd2
-                _existing_tenors = set(_par_table["Tenor"].astype(str).str.upper())
+                # Strip 40Y/50Y from par_ss spread rows — always replace with bootstrapped curve_c values
+                def _norm_t(t):
+                    try: return float(str(t).strip().upper().replace(".0Y","Y").replace("Y",""))
+                    except: return None
+                _par_table = par_rates[par_rates["Tenor"].apply(lambda t: _norm_t(t) not in [40.0, 50.0])].copy()
+                # Always add 40Y/50Y from bootstrapped curve_c
                 _extra_rows = []
                 for _, _cr in curve_c.iterrows():
                     _m = float(_cr["MaturityY"])
                     if _m in [40.0, 50.0]:
-                        _tk = f"{int(_m)}Y"
-                        if _tk not in _existing_tenors:
-                            _extra_rows.append({"Tenor": _tk, "Par Rate (%)": round(float(_cr["ZeroRatePct"]),4), "Conv": "S/S"})
-                            _existing_tenors.add(_tk)
+                        _extra_rows.append({"Tenor": f"{int(_m)}Y", "Par Rate (%)": round(float(_cr["ZeroRatePct"]),4), "Conv": "S/S"})
                 if _extra_rows:
                     _par_table = _pd2.concat([_par_table, _pd2.DataFrame(_extra_rows)], ignore_index=True)
             else:
