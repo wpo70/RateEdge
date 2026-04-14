@@ -3053,12 +3053,18 @@ def apply_rateedge_theme(theme_name: str):
             color: {text} !important;
         }}
         /* Sidebar expand/collapse button - make arrow bright red and visible */
+        [data-testid="collapsedControl"],
+        [data-testid="collapsedControl"] button {{
+            background-color: {accent} !important;
+            border-radius: 0 6px 6px 0 !important;
+            width: 28px !important;
+        }}
         [data-testid="collapsedControl"] svg,
         [data-testid="stSidebar"] button svg {{
-            fill: {accent} !important;
-            stroke: {accent} !important;
-            width: 24px !important;
-            height: 24px !important;
+            fill: white !important;
+            stroke: white !important;
+            width: 20px !important;
+            height: 20px !important;
         }}
         /* Collapsed sidebar button */
         .css-1rs6os {{
