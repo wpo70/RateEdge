@@ -4012,7 +4012,7 @@ def _set_aud_dual_proj_curves(curve_df: pd.DataFrame):
                 ann = sum(_dfi(ti) * freq for ti in times[:-1])
                 df_end = (1.0 - c * ann) / (1.0 + c * freq)
                 if df_end > 0: dfs[te] = df_end
-            MATS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30]
+            MATS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30, 40, 50]
             result = {}
             for m in MATS:
                 d = _dfi(m)
@@ -5736,11 +5736,15 @@ def sdr_live_tab():
     _refresh_map = {"Off": 0, "30s": 30, "1 min": 60, "2 min": 120, "5 min": 300}
     _interval = _refresh_map.get(auto_refresh, 0)
     if _interval > 0:
-        time.sleep(0.1)  # yield to Streamlit
-        st.markdown(
-            f'<meta http-equiv="refresh" content="{_interval}">',
-            unsafe_allow_html=True
-        )
+        import time as _time_rf
+        _last_rf = st.session_state.get("_sdr_last_refresh", 0)
+        _now_rf  = _time_rf.time()
+        if _now_rf - _last_rf >= _interval:
+            st.session_state["_sdr_last_refresh"] = _now_rf
+            st.rerun()
+        else:
+            _remaining = max(0, int(_interval - (_now_rf - _last_rf)))
+            st.caption(f"🔄 Next refresh in ~{_remaining}s")
 
 
 # ── SDR helper functions (add alongside sdr_live_tab) ─────────────────────────
