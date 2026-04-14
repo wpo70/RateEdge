@@ -20308,30 +20308,39 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
     # ── Historical Rates Lookup ───────────────────────────────────────────
     if HAS_POSTGRES:
         with st.expander("📅 Historical Rates Lookup", expanded=False):
-            # Query available dated snapshots from user_configs
+            # Query available dated snapshots — try all likely user_id values
             _hist_dates = []
+            _hist_uid_found = None
             try:
                 _hconn = get_db_connection()
                 if _hconn:
                     _hcur = _hconn.cursor()
-                    _hcur.execute("""
-                        SELECT config_type, updated_at
-                        FROM user_configs
-                        WHERE user_id = %s
-                          AND config_type LIKE 'morning_rates_____-__-__'
-                          AND currency = 'AUD'
-                        ORDER BY config_type DESC
-                        LIMIT 90
-                    """, (_uid_rv,))
-                    _hist_rows = _hcur.fetchall()
+                    # Try current user_id and common fallbacks
+                    _candidate_uids = list({_uid_rv, st.session_state.get("username",""), "default", "wpo@rateedge.au", "wpo70@icloud.com"} - {""})
+                    for _cuid in _candidate_uids:
+                        _hcur.execute("""
+                            SELECT config_type, updated_at
+                            FROM user_configs
+                            WHERE user_id = %s
+                              AND config_type ~ '^morning_rates_[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+                              AND currency = 'AUD'
+                            ORDER BY config_type DESC
+                            LIMIT 90
+                        """, (_cuid,))
+                        _hist_rows = _hcur.fetchall()
+                        if _hist_rows:
+                            _hist_dates = [r[0].replace("morning_rates_", "") for r in _hist_rows]
+                            _hist_uid_found = _cuid
+                            break
                     _hcur.close(); _hconn.close()
-                    _hist_dates = [r[0].replace("morning_rates_", "") for r in _hist_rows]
             except Exception as _he:
                 st.caption(f"Could not load history: {_he}")
 
             if not _hist_dates:
-                st.caption("No dated snapshots yet — save morning rates today to begin building history.")
+                st.caption("No dated snapshots found. Save morning rates to begin building history.")
+                st.caption(f"(Searching as user: `{_uid_rv}`)")
             else:
+                st.caption(f"Found {len(_hist_dates)} snapshot(s) | user: `{_hist_uid_found}`")
                 _sel_date = st.selectbox(
                     "Select date", _hist_dates,
                     format_func=lambda d: d,
@@ -20339,23 +20348,32 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 )
                 if _sel_date:
                     _hist_key = f"morning_rates_{_sel_date}"
-                    _hist_data = load_user_config(_uid_rv, _hist_key, "AUD")
+                    _hist_data = load_user_config(_hist_uid_found or _uid_rv, _hist_key, "AUD")
                     if _hist_data:
-                        # Build display table same structure as today's table
+                        # ── Set as Prev button — restores lost baseline ──────────
+                        _col_btn1, _col_btn2 = st.columns([2,5])
+                        with _col_btn1:
+                            if st.button(f"📌 Set {_sel_date} as Prev", key="mr_set_as_prev", type="primary"):
+                                st.session_state["morning_rates_prev"] = _hist_data
+                                if HAS_POSTGRES:
+                                    save_user_config(_uid_rv, "morning_rates_prev", "AUD", _hist_data)
+                                    load_user_config.clear()
+                                st.success(f"✅ Prev baseline set to {_sel_date} — moves will now calculate correctly.")
+                                st.rerun()
+
+                        # ── Comparison table ─────────────────────────────────────
                         _hist_display = _hist_data.copy()
                         for _dk, _dlbl, _a, _b, _mult in _DERIVED:
                             if _hist_data.get(_a) and _hist_data.get(_b):
                                 _hist_display[_dk] = round((_hist_data[_a] - _hist_data[_b]) * _mult, 1)
                         _all_fields_h = _RATE_FIELDS + [(_dk, _dlbl, "Spreads") for _dk, _dlbl, _a, _b, _mult in _DERIVED]
 
-                        # Also load today for comparison
-                        _htbl_rows = []
-                        _mr_today_cmp = _mr_today.copy()
                         _mr_today_cmp_disp = _mr_today.copy()
                         for _dk, _dlbl, _a, _b, _mult in _DERIVED:
                             if _mr_today.get(_a) and _mr_today.get(_b):
                                 _mr_today_cmp_disp[_dk] = round((_mr_today[_a] - _mr_today[_b]) * _mult, 1)
 
+                        _htbl_rows = []
                         for _k, _lbl, _grp in _all_fields_h:
                             _hv = _hist_display.get(_k)
                             _tv = _mr_today_cmp_disp.get(_k)
@@ -20403,6 +20421,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                                 _hrc[4].markdown(f"<div style='font-size:12px;font-weight:600;color:{_mv_col_h}'>{_hrow['Move']}</div>", unsafe_allow_html=True)
                     else:
                         st.caption(f"No data found for {_sel_date}.")
+
 
     # ── Report ───────────────────────────────────────────────────────────
     if st.session_state.get("rv_report_generated"):
@@ -20506,7 +20525,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 x=_v_df["Tenor"], y=_v_df["Chg"],
                 marker_color=["#22c55e" if v>=0 else "#ef4444" for v in _v_df["Chg"]],
                 text=[f"{v:+.1f}" for v in _v_df["Chg"]], textposition="outside"))
-            _fig_v.update_layout(title="Overnight ATM Vol Δ (bp)", template="plotly_dark",
+            _fig_v.update_layout(title="AUD Overnight ATM Vol Δ (bp)", template="plotly_dark",
                                   height=260, margin=dict(t=35,b=35,l=40,r=20), showlegend=False)
             st.plotly_chart(_fig_v, use_container_width=True)
 
@@ -20516,7 +20535,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 x=_r_df["Tenor"], y=_r_df["Chg (bp)"],
                 marker_color=["#38bdf8" if v>=0 else "#a78bfa" for v in _r_df["Chg (bp)"]],
                 text=[f"{v:+.1f}" for v in _r_df["Chg (bp)"]], textposition="outside"))
-            _fig_r.update_layout(title="Overnight Swap Rate Δ (bp)", template="plotly_dark",
+            _fig_r.update_layout(title="AUD Overnight Swap Rate Δ (bp)", template="plotly_dark",
                                   height=230, margin=dict(t=35,b=35,l=40,r=20), showlegend=False)
             st.plotly_chart(_fig_r, use_container_width=True)
 
