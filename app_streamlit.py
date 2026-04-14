@@ -3052,52 +3052,13 @@ def apply_rateedge_theme(theme_name: str):
         [data-testid="stSidebar"] .stMarkdown {{
             color: {text} !important;
         }}
-        /* Sidebar collapse/expand button — nuclear visibility fix */
+        /* Hide native sidebar collapse button — custom JS button used instead */
         [data-testid="collapsedControl"],
         [data-testid="collapsedControl"] button,
         [data-testid="stSidebarCollapseButton"],
         [data-testid="stSidebarCollapseButton"] button,
-        [data-testid="baseButton-headerNoPadding"],
-        button[kind="header"],
-        section[data-testid="stSidebarContent"] + div button,
-        .st-emotion-cache-1cypcdb,
-        .st-emotion-cache-czk5ss {{
-            background-color: {accent} !important;
-            border-radius: 0 6px 6px 0 !important;
-            width: 32px !important;
-            min-width: 32px !important;
-            height: 48px !important;
-            min-height: 48px !important;
-            opacity: 1 !important;
-            visibility: visible !important;
-            display: flex !important;
-            position: fixed !important;
-            left: 0 !important;
-            top: 50% !important;
-            z-index: 999999 !important;
-        }}
-        [data-testid="collapsedControl"] svg,
-        [data-testid="collapsedControl"] button svg,
-        [data-testid="stSidebarCollapseButton"] svg,
-        [data-testid="stSidebarCollapseButton"] button svg,
-        [data-testid="baseButton-headerNoPadding"] svg,
-        button[kind="header"] svg,
-        .st-emotion-cache-1cypcdb svg,
-        .st-emotion-cache-czk5ss svg,
-        section[data-testid="stSidebarContent"] + div button svg {{
-            fill: white !important;
-            stroke: white !important;
-            color: white !important;
-            width: 20px !important;
-            height: 20px !important;
-            opacity: 1 !important;
-        }}
-        /* Collapsed sidebar button legacy */
-        .css-1rs6os {{
-            color: {sidebar_arrow} !important;
-        }}
-        .css-1rs6os svg {{
-            fill: {sidebar_arrow} !important;
+        button[kind="header"] {{
+            display: none !important;
         }}
         /* Tabs - readable text */
         .stTabs [data-baseweb="tab-list"] {{
