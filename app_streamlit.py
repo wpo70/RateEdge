@@ -20215,11 +20215,11 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             with _btn_col2:
                 # ── PDF generation ─────────────────────────────────
                 try:
-                    from reportlab.lib.pagesizes import A4
+                    from reportlab.lib.pagesizes import A4, landscape
                     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
                     from reportlab.lib.units import cm
                     from reportlab.lib import colors
-                    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+                    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, KeepTogether, PageBreak
                     import io as _sod_io
 
                     _sod_buf = _sod_io.BytesIO()
@@ -20247,78 +20247,84 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     _sod_story.append(HRFlowable(width="100%", thickness=1.5,
                                                   color=colors.HexColor("#3b82f6"), spaceAfter=8))
 
-                    # Narrative
-                    _clean_narr = _pdf_clean(_narrative.replace("\n"," "))
-                    _sod_story.append(Paragraph(_clean_narr, _sB))
+                    # Narrative - split into 3 paragraphs
+                    import re as _re_pdf
+                    _narr_parts = [p.strip() for p in _narrative.strip().split("\n\n") if p.strip()]
+                    _sBold = ParagraphStyle("sBold", parent=_sB, leading=13, spaceAfter=5)
+                    for _np in _narr_parts:
+                        _sod_story.append(Paragraph(_pdf_clean(_np), _sBold))
                     _sod_story.append(Spacer(1, 6))
 
-                    # USD Vol Changes table
-                    _sod_story.append(Paragraph("USD Vol Changes (bp)", _sH2))
+                    # Table style helper
+                    def _mk_tbl(data, hdr_col="#1e293b", font_sz=6.5):
+                        ncols = len(data[0])
+                        # Col widths: first col wider (expiry), rest equal
+                        _pw = 17*cm  # printable width
+                        _c0 = 1.2*cm
+                        _cn = (_pw - _c0) / max(ncols-1, 1)
+                        _cws = [_c0] + [_cn]*(ncols-1)
+                        t = Table(data, colWidths=_cws, repeatRows=1)
+                        t.setStyle(TableStyle([
+                            ("BACKGROUND",(0,0),(-1,0), colors.HexColor(hdr_col)),
+                            ("TEXTCOLOR",(0,0),(-1,0), colors.white),
+                            ("FONTSIZE",(0,0),(-1,-1), font_sz),
+                            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+                            ("FONTNAME",(0,1),(-1,-1),"Helvetica"),
+                            ("ALIGN",(1,0),(-1,-1),"RIGHT"),
+                            ("ALIGN",(0,0),(0,-1),"LEFT"),
+                            ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),
+                            ("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#e2e8f0")),
+                            ("LEFTPADDING",(0,0),(-1,-1),2),("RIGHTPADDING",(0,0),(-1,-1),2),
+                            ("TOPPADDING",(0,0),(-1,-1),1),("BOTTOMPADDING",(0,0),(-1,-1),1),
+                        ]))
+                        return t
+
+                    # USD Vol Changes table - KeepTogether prevents mid-table page break
                     _usd_chg_r = _usd_chg.reset_index()
                     _usd_tbl_data = [["Expiry"] + list(_usd_chg_r.columns[1:])]
                     for _, _row in _usd_chg_r.iterrows():
                         _usd_tbl_data.append([str(_row.iloc[0])] + [f"{float(v):+.2f}" if v==v else "—" for v in _row.iloc[1:]])
-                    _usd_t = Table(_usd_tbl_data)
-                    _usd_t.setStyle(TableStyle([
-                        ("BACKGROUND",(0,0),(-1,0), colors.HexColor("#1e293b")),
-                        ("TEXTCOLOR",(0,0),(-1,0), colors.white),
-                        ("FONTSIZE",(0,0),(-1,-1), 7),
-                        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
-                        ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),
-                        ("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#e2e8f0")),
-                        ("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),
-                        ("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2),
+                    _sod_story.append(KeepTogether([
+                        Paragraph("USD Vol Changes (bp)", _sH2),
+                        _mk_tbl(_usd_tbl_data, "#1e293b"),
                     ]))
-                    _sod_story.append(_usd_t)
 
-                    # USD Fwd Premium Changes
                     if not _usd_prem_chg.empty:
-                        _sod_story.append(Paragraph("USD Fwd Premium Changes (bp)", _sH2))
                         _usd_p_r = _usd_prem_chg.reset_index()
                         _usd_p_data = [["Expiry"] + list(_usd_p_r.columns[1:])]
                         for _, _row in _usd_p_r.iterrows():
                             _usd_p_data.append([str(_row.iloc[0])] + [f"{float(v):+.2f}" if v==v else "—" for v in _row.iloc[1:]])
-                        _usd_pt = Table(_usd_p_data)
-                        _usd_pt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#1e293b")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTSIZE",(0,0),(-1,-1),7),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#e2e8f0")),("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2)]))
-                        _sod_story.append(_usd_pt)
-                    _sod_story.append(Paragraph("Implied AUD Vol Change at Open (bp)", _sH2))
+                        _sod_story.append(KeepTogether([
+                            Paragraph("USD Fwd Premium Changes (bp)", _sH2),
+                            _mk_tbl(_usd_p_data, "#1e293b"),
+                        ]))
                     _aud_chg_r = _implied_chg.astype(float).reset_index()
                     _aud_tbl_data = [["Expiry"] + list(_aud_chg_r.columns[1:])]
                     for _, _row in _aud_chg_r.iterrows():
                         _aud_tbl_data.append([str(_row.iloc[0])] + [f"{float(v):+.2f}" if v==v else "—" for v in _row.iloc[1:]])
-                    _aud_t = Table(_aud_tbl_data)
-                    _aud_t.setStyle(TableStyle([
-                        ("BACKGROUND",(0,0),(-1,0), colors.HexColor("#1e3a5f")),
-                        ("TEXTCOLOR",(0,0),(-1,0), colors.white),
-                        ("FONTSIZE",(0,0),(-1,-1), 7),
-                        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
-                        ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),
-                        ("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#e2e8f0")),
-                        ("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),
-                        ("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2),
+                    _sod_story.append(KeepTogether([
+                        Paragraph("Implied AUD Vol Change at Open (bp)", _sH2),
+                        _mk_tbl(_aud_tbl_data, "#1e3a5f"),
                     ]))
-                    _sod_story.append(_aud_t)
 
-                    # Implied AUD Vol Open Level
-                    _sod_story.append(Paragraph("Implied AUD Vol Open Level (bp)", _sH2))
                     _aud_op_r = _implied_open.astype(float).reset_index()
                     _aud_op_data = [["Expiry"] + list(_aud_op_r.columns[1:])]
                     for _, _row in _aud_op_r.iterrows():
                         _aud_op_data.append([str(_row.iloc[0])] + [f"{float(v):.2f}" if v==v else "—" for v in _row.iloc[1:]])
-                    _aud_op_t = Table(_aud_op_data)
-                    _aud_op_t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#1e3a5f")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTSIZE",(0,0),(-1,-1),7),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#e2e8f0")),("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2)]))
-                    _sod_story.append(_aud_op_t)
+                    _sod_story.append(KeepTogether([
+                        Paragraph("Implied AUD Vol Open Level (bp)", _sH2),
+                        _mk_tbl(_aud_op_data, "#1e3a5f"),
+                    ]))
 
-                    # Implied AUD Fwd Premium Change
                     if not _aud_prem_chg.empty:
-                        _sod_story.append(Paragraph("Implied AUD Fwd Premium Change (bp)", _sH2))
                         _aud_pc_r = _aud_prem_chg.reset_index()
                         _aud_pc_data = [["Expiry"] + list(_aud_pc_r.columns[1:])]
                         for _, _row in _aud_pc_r.iterrows():
                             _aud_pc_data.append([str(_row.iloc[0])] + [f"{float(v):+.2f}" if v==v else "—" for v in _row.iloc[1:]])
-                        _aud_pc_t = Table(_aud_pc_data)
-                        _aud_pc_t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#1e3a5f")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTSIZE",(0,0),(-1,-1),7),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#e2e8f0")),("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2)]))
-                        _sod_story.append(_aud_pc_t)
+                        _sod_story.append(KeepTogether([
+                            Paragraph("Implied AUD Fwd Premium Change (bp)", _sH2),
+                            _mk_tbl(_aud_pc_data, "#1e3a5f"),
+                        ]))
                     if _cfs_rows:
                         _sod_story.append(Paragraph("Implied AUD CFS Open Levels (bp fwd prem)", _sH2))
                         _cfs_pdf_df = pd.DataFrame(_cfs_rows)[["CFS Tenor","CFS Total (prev)","CFS Total (open)","> CFS"]]
