@@ -4023,9 +4023,40 @@ def _set_aud_dual_proj_curves(curve_df: pd.DataFrame):
         zc_qq, dfs_qq = _bootstrap(par_qq, 0.25)
 
         # Step 2: Bootstrap SS from SS par rates seeded with QQ DFs at junction
-        # This is correct: SS short-end anchored by QQ curve, SS par rates drive 4Y+
+        # Cap at 30Y — 40/50Y have too many coupon periods for stable bootstrap
+        par_ss_30 = {t: r for t, r in par_ss.items() if t <= 30.0}
         seed = {t: d for t, d in dfs_qq.items() if t <= 3.1}
-        zc_ss, _ = _bootstrap(par_ss, 0.5, seed_dfs=seed)
+        zc_ss, dfs_ss = _bootstrap(par_ss_30, 0.5, seed_dfs=seed)
+        # Extend 40Y/50Y from bootstrapped anchor, chained: 50Y uses 40Y as anchor
+        _z30ss = zc_ss.get(30.0, 0)
+        _df30ss = math.exp(-_z30ss / 100.0 * 30.0) if _z30ss else 0
+        _anc2_t  = 30.0; _anc2_df = _df30ss; _anc2_z = _z30ss
+        for _ext_t in [40.0, 50.0]:
+            _par_ext = par_ss.get(_ext_t)
+            if not _par_ext or _anc2_df <= 0: continue
+            _c = _par_ext / 100.0
+            _df_t = _anc2_df * math.exp(-_anc2_z / 100.0 * (_ext_t - _anc2_t))
+            for _ in range(80):
+                _ann_ext = 0.0
+                _ti = SPOT + 0.5
+                while _ti <= _ext_t + SPOT - 0.5 + 1e-9:
+                    _ti_r = round(_ti, 8)
+                    _last_known2 = max(dfs_ss.keys())
+                    if _ti_r <= _last_known2 + 0.25:
+                        _ts2 = sorted(dfs_ss.keys()); _dfv2 = [dfs_ss[x] for x in _ts2]
+                        _df_i = math.exp(float(np.interp(_ti_r, _ts2, np.log(np.maximum(_dfv2, 1e-10)))))
+                    else:
+                        _fwd_z2 = -math.log(max(_df_t, 1e-10) / _anc2_df) / (_ext_t - _anc2_t)
+                        _df_i = _anc2_df * math.exp(-_fwd_z2 * (_ti_r - _anc2_t))
+                    _ann_ext += _df_i * 0.5
+                    _ti += 0.5
+                _df_new = (1.0 - _c * _ann_ext) / (1.0 + _c * 0.5)
+                if abs(_df_new - _df_t) < 1e-12: break
+                _df_t = _df_new
+            if _df_t > 0:
+                zc_ss[_ext_t] = round(-math.log(_df_t) / _ext_t * 100, 6)
+                dfs_ss[_ext_t + SPOT] = _df_t
+                _anc2_t = _ext_t; _anc2_df = _df_t; _anc2_z = zc_ss[_ext_t]
 
         # Step 3: Store separately for forward calculations
         st.session_state["_aud_zc_qq"] = zc_qq
@@ -4401,8 +4432,50 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
                 # Step 1: Bootstrap QQ from QQ par rates only
                 _zc_qq_clean, _dfs_qq = _bootstrap_clean(par_qq, 0.25)
                 # Step 2: Bootstrap SS seeded with QQ DFs at junction
+                # Only bootstrap up to 30Y — 40Y/50Y have too many coupon periods for stable bootstrap
+                _par_ss_30 = {_t: _r for _t, _r in par_ss.items() if _t <= 30.0}
                 _seed_ss = {_t: _d for _t, _d in _dfs_qq.items() if _t <= 3.1}
-                _zc_ss_clean, _ = _bootstrap_clean(par_ss, 0.5, seed_dfs=_seed_ss)
+                _zc_ss_clean, _dfs_ss = _bootstrap_clean(_par_ss_30, 0.5, seed_dfs=_seed_ss)
+                # Extend 40Y/50Y: bootstrap from 30Y zero using par rate directly
+                # z(T) solved from par swap equation, chained: 40Y anchors on 30Y, 50Y anchors on 40Y
+                _z30 = _zc_ss_clean.get(30.0, 0)
+                _df30 = math.exp(-_z30 / 100.0 * 30.0) if _z30 else 0
+                _anc_t  = 30.0   # anchor tenor (latest computed)
+                _anc_df = _df30  # anchor DF
+                _anc_z  = _z30   # anchor zero
+                for _ext_t in [40.0, 50.0]:
+                    _par_ext = par_ss.get(_ext_t)
+                    if not _par_ext or _anc_df <= 0:
+                        continue
+                    _c = _par_ext / 100.0
+                    _df_t = _anc_df * math.exp(-_anc_z / 100.0 * (_ext_t - _anc_t))
+                    for _ in range(80):
+                        # annuity = sum df(ti)*0.5 for ti in [0.5 .. T-0.5] — EXCLUDE final T
+                        _ann_ext = 0.0
+                        _ti = SPOT + 0.5
+                        while _ti <= _ext_t + SPOT - 0.5 + 1e-9:
+                            _ti_r = round(_ti, 8)
+                            # Use interpolated DF for any point already in _dfs_ss
+                            _last_known = max(_dfs_ss.keys())
+                            if _ti_r <= _last_known + 0.25:
+                                _ts = sorted(_dfs_ss.keys()); _dfv = [_dfs_ss[x] for x in _ts]
+                                _df_i = math.exp(float(np.interp(_ti_r, _ts, np.log(np.maximum(_dfv, 1e-10)))))
+                            else:
+                                # flat fwd from anchor
+                                _fwd_z = -math.log(max(_df_t, 1e-10) / _anc_df) / (_ext_t - _anc_t)
+                                _df_i = _anc_df * math.exp(-_fwd_z * (_ti_r - _anc_t))
+                            _ann_ext += _df_i * 0.5
+                            _ti += 0.5
+                        _df_new = (1.0 - _c * _ann_ext) / (1.0 + _c * 0.5)
+                        if abs(_df_new - _df_t) < 1e-12: break
+                        _df_t = _df_new
+                    if _df_t > 0:
+                        _zc_ss_clean[_ext_t] = round(-math.log(_df_t) / _ext_t * 100, 6)
+                        _dfs_ss[_ext_t + SPOT] = _df_t
+                        # Update anchor for next tenor
+                        _anc_t  = _ext_t
+                        _anc_df = _df_t
+                        _anc_z  = _zc_ss_clean[_ext_t]
                 # Step 3: Build full QQ curve (extended with SS-basis) for smooth single-curve fwd matrix
                 # pqq_long = SS par rates adjusted down by 6v3 basis = QQ-equivalent par rates
                 _pqq_long = {}
