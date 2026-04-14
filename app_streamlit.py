@@ -8609,18 +8609,13 @@ def swaptions_tab(vol_mode: str):
         st.info(f"ATM Strike: **{fwd_pct:.4f}%**")
         
     elif structure in ["Payer", "Receiver"]:
-        _sk = "p" if structure == "Payer" else "r"
         strike_mode = st.radio("Strike Mode", ["ATM", "10 bp", "25 bp", "50 bp", "100 bp", "Manual"], 
-                               horizontal=True, key=f"sw_strike_mode_{_sk}")
+                               horizontal=True, key="sw_strike_mode")
         offset_map = {"ATM": 0, "10 bp": 10, "25 bp": 25, "50 bp": 50, "100 bp": 100, "Manual": None}
         offset = offset_map[strike_mode]
         if strike_mode == "Manual":
-            _sk_key = f"sw_strike_pr_{_sk}"
-            # Seed with fwd_pct only on first render (key not yet in session state)
-            if _sk_key not in st.session_state:
-                st.session_state[_sk_key] = round(fwd_pct, 4) if fwd_pct and fwd_pct == fwd_pct and fwd_pct > 0 else 4.0
-            strike_pct = st.number_input("Strike (%)", min_value=0.0, max_value=20.0,
-                                         format="%.4f", key=_sk_key)
+            strike_pct = st.number_input("Strike (%)", min_value=0.0, max_value=20.0, 
+                                         value=round(fwd_pct, 4), format="%.4f", key="sw_strike_pr")
         else:
             strike_pct = fwd_pct + (offset/100.0 if structure == "Payer" else -offset/100.0)
             st.info(f"Strike: **{strike_pct:.4f}%** ({strike_mode} {'OTM' if offset > 0 else ''})")
