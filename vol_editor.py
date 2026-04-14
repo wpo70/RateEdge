@@ -741,22 +741,19 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
     st.caption("After clicking Apply above, paste the data here (Ctrl+V)")
     
     # Initialize paste data if not exists
-    if "paste_data" not in ed or ccy not in ed["paste_data"]:
-        if "paste_data" not in ed:
-            ed["paste_data"] = {}
-        ed["paste_data"][ccy] = ""
+    _paste_key = f"paste_{ccy}"
+    # Only seed the paste widget if it has never been set — never overwrite with value= once key exists
+    if _paste_key not in st.session_state:
+        st.session_state[_paste_key] = ""
     
     col1, col2 = st.columns([4, 1])
     with col1:
         paste_data = st.text_input(
             "Paste data here:",
-            value=ed["paste_data"][ccy],
-            key=f"paste_{ccy}",
+            key=_paste_key,
             placeholder="Paste here (Ctrl+V)",
             label_visibility="collapsed"
         )
-        # Update session state
-        ed["paste_data"][ccy] = paste_data
     with col2:
         st.markdown("<div style='padding-top:8px;'></div>", unsafe_allow_html=True)
         confirm_btn = st.button("✅ CONFIRM", key=f"confirm_btn_{ccy}", type="primary", use_container_width=True)
@@ -797,7 +794,9 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
                             pass  # skip non-numeric (e.g. 'AUD' currency col)
             ed["working"][payload_ccy] = _work_ccy
             # Clear paste data after successful confirmation
-            ed["paste_data"][payload_ccy] = ""
+            # Clear paste box via session state
+            if f"paste_{payload_ccy}" in st.session_state:
+                st.session_state[f"paste_{payload_ccy}"] = ""
             st.success("✅ Changes applied!")
             st.rerun()
         except Exception as e:
