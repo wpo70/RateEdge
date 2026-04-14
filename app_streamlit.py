@@ -5181,7 +5181,7 @@ def sdr_live_tab():
         except Exception:
             pass
         # Always force end date to today — never restore a stale saved date
-        st.session_state["sdr_date_to"] = date.today()
+        st.session_state["sdr_date_to"] = datetime.now(SYDNEY_TZ).date()
         st.session_state["sdr_filters_loaded"] = True
 
     # ── Check table exists ────────────────────────────────────────────────────
@@ -20613,7 +20613,8 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 save_user_config(_uid_rv, "morning_rates_prev",  "AUD", _mr_today)
                 # Also write dated snapshot for historical lookup
                 import datetime as _dt_mr
-                _mr_dated_key = f"morning_rates_{_dt_mr.date.today().strftime('%Y-%m-%d')}"
+                _sydney_now = _dt_mr.datetime.now(SYDNEY_TZ)
+                _mr_dated_key = f"morning_rates_{_sydney_now.strftime('%Y-%m-%d')}"
                 save_user_config(_uid_rv, _mr_dated_key, "AUD", _new_rates)
                 load_user_config.clear()
             st.success("✅ Morning rates saved")
