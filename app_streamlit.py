@@ -5226,16 +5226,9 @@ def sdr_live_tab():
 
         with col4:
             st.markdown("**Platform & Action**")
-            _platform_names = {
-                "BGCD": "BGC", "TWSF": "Tradition", "TSEF": "Tradition",
-                "TPSE": "Tullett Prebon", "GSEF": "GFI", "RTSX": "RTX",
-                "RTXS": "RTX", "MKTX": "MarketAxess", "TRWB": "Tradeweb",
-                "BLOM": "Bloomberg", "ICSE": "ICE", "GLPX": "Globalplex", "NSEF": "NEX",
-            }
             _all_platforms = _sdr_get_distinct("platform_identifier")
-            _platform_labels = {p: _platform_names.get(p, p) for p in _all_platforms}
-            _platform_display = [f"{_platform_names.get(p,p)} ({p})" for p in _all_platforms]
-            _platform_map = {f"{_platform_names.get(p,p)} ({p})": p for p in _all_platforms}
+            _platform_display = [f"{PLATFORM_NAMES.get(p, p)} ({p})" for p in _all_platforms]
+            _platform_map = {f"{PLATFORM_NAMES.get(p, p)} ({p})": p for p in _all_platforms}
             sel_platform_labels = st.multiselect("Platform", _platform_display,
                 default=_platform_display, key="sdr_platform",
                 label_visibility="collapsed", on_change=_save_sdr_filters)
