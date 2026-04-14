@@ -6653,11 +6653,11 @@ def curves_tab():
                 _proj = st.session_state["_aud_proj_curve"]
                 _zx = list(_proj["MaturityY"].astype(float))
                 _zy = list(_proj["ZeroRatePct"].astype(float))
-                # Extend to 40Y/50Y using SS zeros
+                # Extend to 40Y/50Y using bootstrapped SS zeros — NOT curve_c which holds par rates
                 _zc_ss_ext = st.session_state.get("_aud_zc_ss") or {}
                 for _et in [40.0, 50.0]:
-                    if _et in _zc_ss_ext and _et not in _zx:
-                        _zx.append(_et); _zy.append(_zc_ss_ext[_et])
+                    if _et in _zc_ss_ext and not any(abs(_et - _zxi) < 0.01 for _zxi in _zx):
+                        _zx.append(_et); _zy.append(round(float(_zc_ss_ext[_et]), 4))
             else:
                 _zx = list(curve_c["MaturityY"].astype(float))
                 _zy = list(curve_c["ZeroRatePct"].astype(float))
@@ -6700,14 +6700,15 @@ def curves_tab():
         if _show_irs:
             if ccy == "AUD" and st.session_state.get("_aud_proj_curve") is not None:
                 _proj_disp = st.session_state["_aud_proj_curve"].copy()
-                # Extend to 40/50Y from curve_c (Curves_AUD has 40/50Y par rates)
+                # Extend to 40/50Y using bootstrapped SS zeros — NOT curve_c which holds par rates
                 import pandas as _pd2
                 _existing_m = set(_proj_disp["MaturityY"].astype(float).tolist())
+                _zc_ss_tbl = st.session_state.get("_aud_zc_ss") or {}
                 _extra = []
-                for _, _cr in curve_c.iterrows():
-                    _m = float(_cr["MaturityY"])
-                    if _m in [40.0, 50.0] and _m not in _existing_m:
-                        _extra.append({"MaturityY": _m, "ZeroRatePct": float(_cr["ZeroRatePct"])})
+                for _et in [40.0, 50.0]:
+                    if _et not in _existing_m:
+                        if _et in _zc_ss_tbl:
+                            _extra.append({"MaturityY": _et, "ZeroRatePct": round(float(_zc_ss_tbl[_et]), 4)})
                 if _extra:
                     _proj_disp = _pd2.concat([_proj_disp, _pd2.DataFrame(_extra)], ignore_index=True)
                 _cols_to_show.append(("IRS Zero Curve (%)", _proj_disp))
