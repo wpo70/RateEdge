@@ -5713,9 +5713,12 @@ def sdr_live_tab():
                 _pr_tenor = _newt_pr.groupby(["swp_tenor","option_type_decoded"])["notional_leg1"].sum().unstack(fill_value=0)
                 _pr_tenor.columns.name = None
                 if "CALL" in _pr_tenor.columns and "PUT" in _pr_tenor.columns:
-                    _pr_tenor["Payer %"] = (100 * _pr_tenor["CALL"] / (_pr_tenor["CALL"] + _pr_tenor["PUT"])).round(0).astype(int).astype(str) + "%"
-                    _pr_tenor["Payer $M"] = (_pr_tenor["CALL"] / 1e6).round(0).astype(int)
-                    _pr_tenor["Receiver $M"] = (_pr_tenor["PUT"] / 1e6).round(0).astype(int)
+                    _pr_tenor["CALL"] = _pr_tenor["CALL"].fillna(0)
+                    _pr_tenor["PUT"] = _pr_tenor["PUT"].fillna(0)
+                    _denom = _pr_tenor["CALL"] + _pr_tenor["PUT"]
+                    _pr_tenor["Payer %"] = (_denom.where(_denom > 0).pipe(lambda d: (100 * _pr_tenor["CALL"] / d))).round(1).fillna(0).astype(str) + "%"
+                    _pr_tenor["Payer $M"] = (_pr_tenor["CALL"] / 1e6).round(0).fillna(0).astype(int)
+                    _pr_tenor["Receiver $M"] = (_pr_tenor["PUT"] / 1e6).round(0).fillna(0).astype(int)
                     _pr_tenor = _pr_tenor[["Payer $M","Receiver $M","Payer %"]].rename_axis("Swap Tenor")
                     st.dataframe(_pr_tenor, use_container_width=True)
                     st.caption("Notional in $M · Payer % = Payer / (Payer + Receiver) by swap tenor")
