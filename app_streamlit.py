@@ -14197,10 +14197,326 @@ def _compute_fwd_vol_surface_stats(ccy: str) -> dict:
         return {}
 
 
+def _render_realised_delivered_vol():
+    """Realised & Delivered Vol sub-tab — 5d/21d/3m windows."""
+    import plotly.graph_objects as go
+    import math as _math
+    from datetime import timedelta as _td
+
+    st.markdown("#### 📈 Realised & Delivered Vol")
+    st.caption("Realised vol = close-to-close log returns ×√252 (bp/annum). Delivered = ATM vol surface from EOD snapshots.")
+
+    ccy = "AUD"
+
+    # ── Expiry / Tenor grid (matches ATM vol surface) ─────────────────────────
+    _EXP_LABELS  = ["1m","3m","6m","1y","2y","3y","5y","7y","10y","15y","20y"]
+    _TEN_LABELS  = ["1Y","2Y","3Y","5Y","7Y","10Y","15Y","20Y","25Y","30Y"]
+    _EXP_YRS     = [label_to_years(e) for e in _EXP_LABELS]
+    _TEN_YRS     = [label_to_years(t) for t in _TEN_LABELS]
+    _WINDOWS     = {"5d": 5, "21d": 21, "3m": 63}
+
+    if not HAS_POSTGRES:
+        st.warning("Database not connected.")
+        return
+
+    # ── Load vol snapshots ────────────────────────────────────────────────────
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _load_atm_history(ccy: str, days: int = 90):
+        """Load last N days of ATM vol snapshots from vol_history."""
+        conn = get_db_connection()
+        if not conn: return []
+        try:
+            cur = conn.cursor()
+            cutoff = (pd.Timestamp.today() - pd.Timedelta(days=days)).date()
+            cur.execute("""
+                SELECT snapshot_date, atm_vols
+                FROM vol_history
+                WHERE (user_id = 'shared' OR user_id = 'wpo@rateedge.au' OR user_id = 'wpo70@icloud.com')
+                  AND currency = %s AND snapshot_date >= %s
+                ORDER BY snapshot_date DESC
+            """, (ccy, cutoff))
+            rows = cur.fetchall()
+            cur.close(); conn.close()
+            return [(r[0], r[1]) for r in rows if r[1]]
+        except Exception:
+            return []
+
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _load_swap_history(ccy: str, days: int = 90):
+        """Load swap_rates for last N days."""
+        conn = get_db_connection()
+        if not conn: return pd.DataFrame()
+        try:
+            cur = conn.cursor()
+            cutoff = (pd.Timestamp.today() - pd.Timedelta(days=days)).date()
+            cur.execute("""
+                SELECT date, tenor, rate FROM swap_rates
+                WHERE currency = %s AND date >= %s
+                ORDER BY date DESC
+            """, (ccy, cutoff))
+            rows = cur.fetchall()
+            cur.close(); conn.close()
+            if not rows: return pd.DataFrame()
+            df = pd.DataFrame(rows, columns=["date","tenor","rate"])
+            df["date"] = pd.to_datetime(df["date"])
+            return df
+        except Exception:
+            return pd.DataFrame()
+
+    with st.spinner("Loading historical data..."):
+        _snap_rows  = _load_atm_history(ccy, 90)
+        _swap_df_raw = _load_swap_history(ccy, 90)
+
+    if not _snap_rows:
+        st.info("No EOD vol snapshots found. Save snapshots from the Vol Export tab to populate this view.")
+        return
+
+    # ── Build vol history DataFrame ────────────────────────────────────────────
+    # Rows = dates, cols = "expiry×tenor" e.g. "3m×5Y"
+    _vol_records = []
+    for _snap_date, _atm_vols in _snap_rows:
+        if not isinstance(_atm_vols, dict): continue
+        _rec = {"date": pd.Timestamp(_snap_date)}
+        # atm_vols is dict keyed by expiry label, values = dict of tenor→vol
+        for _ei, _exp in enumerate(_EXP_LABELS):
+            _exp_data = _atm_vols.get(_exp) or _atm_vols.get(_exp.upper())
+            if not _exp_data: continue
+            for _ti, _ten in enumerate(_TEN_LABELS):
+                _v = _exp_data.get(_ten) or _exp_data.get(_ten.lower())
+                if _v is not None:
+                    try: _rec[f"{_exp}×{_ten}"] = float(_v)
+                    except: pass
+        _vol_records.append(_rec)
+
+    if not _vol_records:
+        st.info("Vol snapshots found but no data could be parsed.")
+        return
+
+    _vol_df = pd.DataFrame(_vol_records).sort_values("date").set_index("date")
+    _vol_df = _vol_df.dropna(axis=1, how="all")
+
+    # ── Build fwd swap history ─────────────────────────────────────────────────
+    _fwd_records = {}
+    if not _swap_df_raw.empty:
+        import re as _re2
+        def _tenor_to_y(t):
+            m = _re2.match(r"([\d.]+)(Y|M)", str(t).strip().upper())
+            if not m: return None
+            v, u = float(m.group(1)), m.group(2)
+            return v if u == "Y" else v/12
+
+        _swap_df_raw["mat_y"] = _swap_df_raw["tenor"].apply(_tenor_to_y)
+        _swap_df_raw = _swap_df_raw.dropna(subset=["mat_y"])
+
+        # Build wide pivot: date × maturity
+        _par_wide = _swap_df_raw.pivot_table(index="date", columns="mat_y", values="rate", aggfunc="last")
+        _par_wide = _par_wide.sort_index()
+
+        # Compute forward swap rates for each expiry×tenor combination
+        # Using simple approximation: fwd(exp, ten) ≈ (par(exp+ten)*(exp+ten) - par(exp)*exp) / ten
+        for _ei, (_exp_lbl, _exp_y) in enumerate(zip(_EXP_LABELS, _EXP_YRS)):
+            for _ti, (_ten_lbl, _ten_y) in enumerate(zip(_TEN_LABELS, _TEN_YRS)):
+                _end_y = _exp_y + _ten_y
+                _col = f"{_exp_lbl}×{_ten_lbl}"
+                _fwd_series = []
+                for _dt, _row in _par_wide.iterrows():
+                    try:
+                        _xs = _par_wide.columns.to_numpy(dtype=float)
+                        _ys = _row.values.astype(float)
+                        _mask = ~pd.isna(_ys)
+                        if _mask.sum() < 3: continue
+                        _p_exp = float(np.interp(_exp_y, _xs[_mask], _ys[_mask]))
+                        _p_end = float(np.interp(_end_y, _xs[_mask], _ys[_mask]))
+                        _fwd = (_p_end * _end_y - _p_exp * _exp_y) / _ten_y if _ten_y > 0 else _p_end
+                        _fwd_series.append({"date": _dt, "fwd": _fwd})
+                    except: pass
+                if _fwd_series:
+                    _fwd_records[_col] = pd.DataFrame(_fwd_series).set_index("date")["fwd"]
+
+        _fwd_df = pd.DataFrame(_fwd_records).sort_index() if _fwd_records else pd.DataFrame()
+    else:
+        _fwd_df = pd.DataFrame()
+
+    # ── Helper: compute realised vol ──────────────────────────────────────────
+    def _realised_vol_bp(series: pd.Series, window_days: int) -> float:
+        """Annualised close-to-close realised vol in bp/annum (normal vol approximation)."""
+        _s = series.dropna().sort_index()
+        if len(_s) < window_days + 1: return float('nan')
+        _recent = _s.iloc[-window_days-1:]
+        _moves = _recent.diff().dropna() * 100  # convert % to bp moves
+        if len(_moves) < 3: return float('nan')
+        return float(_moves.std() * _math.sqrt(252))
+
+    # ── Helper: build colour matrix ───────────────────────────────────────────
+    def _colour_matrix(matrix_df, fmt="{:.1f}", title="", low_is_green=False):
+        if matrix_df.empty: return
+        _vals = matrix_df.values.astype(float)
+        _vmin = float(np.nanmin(_vals))
+        _vmax = float(np.nanmax(_vals))
+        _fig = go.Figure(data=go.Heatmap(
+            z=_vals,
+            x=list(matrix_df.columns),
+            y=list(matrix_df.index),
+            colorscale="RdYlGn" if not low_is_green else "RdYlGn_r",
+            zmin=_vmin, zmax=_vmax,
+            text=[[fmt.format(v) if not _math.isnan(v) else "—" for v in row] for row in _vals],
+            texttemplate="%{text}",
+            textfont={"size": 10},
+            showscale=True,
+            colorbar=dict(thickness=12, len=0.8)
+        ))
+        _fig.update_layout(
+            title=dict(text=title, font=dict(size=13, color="#e2e8f0")),
+            height=320, template="plotly_dark",
+            margin=dict(l=60, r=40, t=40, b=40),
+            xaxis=dict(title="Swap Tenor"),
+            yaxis=dict(title="Option Expiry", autorange="reversed")
+        )
+        st.plotly_chart(_fig, use_container_width=True)
+
+    # ── Section 1: Realised Vol ───────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 🎯 Realised ATM Vol (bp/annum)")
+    st.caption("Close-to-close log returns of ATM vol surface, annualised ×√252")
+
+    _rv_window = st.radio("Window", list(_WINDOWS.keys()), horizontal=True, key="rdv_rv_window")
+    _rv_days = _WINDOWS[_rv_window]
+
+    _rv_matrix = {}
+    for _exp in _EXP_LABELS:
+        _row = {}
+        for _ten in _TEN_LABELS:
+            _col = f"{_exp}×{_ten}"
+            if _col in _vol_df.columns:
+                _row[_ten] = _realised_vol_bp(_vol_df[_col], _rv_days)
+        if any(not _math.isnan(v) for v in _row.values()):
+            _rv_matrix[_exp] = _row
+
+    if _rv_matrix:
+        _rv_mat_df = pd.DataFrame(_rv_matrix).T.reindex(index=_EXP_LABELS, columns=_TEN_LABELS)
+        _colour_matrix(_rv_mat_df, fmt="{:.1f}", title=f"Realised ATM Vol ({_rv_window}) — bp/annum", low_is_green=False)
+
+        # Also show current ATM vs realised
+        _atm_surf = get_working_atm_surface(ccy)
+        if _atm_surf is not None and not _atm_surf.empty:
+            st.markdown("#### 📊 ATM Vol vs Realised (bp)")
+            st.caption("ATM vol − Realised vol. Positive = vol rich vs realised (sell signal). Negative = cheap (buy signal).")
+            _diff_matrix = {}
+            _exp_col = _atm_surf.columns[0]
+            for _exp in _EXP_LABELS:
+                _row_d = {}
+                _atm_row = _atm_surf[_atm_surf[_exp_col].astype(str).str.lower() == _exp]
+                for _ten in _TEN_LABELS:
+                    _col = f"{_exp}×{_ten}"
+                    _rv_v = _rv_matrix.get(_exp, {}).get(_ten, float('nan'))
+                    if _atm_row.empty or _ten not in _atm_surf.columns:
+                        _row_d[_ten] = float('nan')
+                        continue
+                    try:
+                        _atm_v = float(_atm_row[_ten].iloc[0])
+                        _row_d[_ten] = _atm_v - _rv_v if not _math.isnan(_rv_v) else float('nan')
+                    except: _row_d[_ten] = float('nan')
+                if any(not _math.isnan(v) for v in _row_d.values()):
+                    _diff_matrix[_exp] = _row_d
+
+            if _diff_matrix:
+                _diff_df = pd.DataFrame(_diff_matrix).T.reindex(index=_EXP_LABELS, columns=_TEN_LABELS)
+                _colour_matrix(_diff_df, fmt="{:+.1f}", title=f"ATM − Realised ({_rv_window}) — bp  |  Green=cheap  Red=rich", low_is_green=True)
+    else:
+        st.info("Not enough vol snapshots to compute realised vol for this window.")
+
+    # ── Section 2: Delivered Vol (ATM vs Prior) ───────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 📦 Delivered Vol — ATM Surface Change")
+    st.caption("ATM vol change vs N days ago from EOD snapshots.")
+
+    _dv_window = st.radio("Window", list(_WINDOWS.keys()), horizontal=True, key="rdv_dv_window")
+    _dv_days = _WINDOWS[_dv_window]
+
+    _dv_matrix = {}
+    _today_vols = _vol_df.iloc[-1] if len(_vol_df) >= 1 else pd.Series()
+    _prior_vols = _vol_df.iloc[-_dv_days-1] if len(_vol_df) >= _dv_days+1 else pd.Series()
+
+    if not _today_vols.empty and not _prior_vols.empty:
+        for _exp in _EXP_LABELS:
+            _row = {}
+            for _ten in _TEN_LABELS:
+                _col = f"{_exp}×{_ten}"
+                _t = _today_vols.get(_col, float('nan'))
+                _p = _prior_vols.get(_col, float('nan'))
+                if not _math.isnan(_t) and not _math.isnan(_p):
+                    _row[_ten] = _t - _p
+            if any(not _math.isnan(v) for v in _row.values()):
+                _dv_matrix[_exp] = _row
+
+        if _dv_matrix:
+            _dv_df = pd.DataFrame(_dv_matrix).T.reindex(index=_EXP_LABELS, columns=_TEN_LABELS)
+            _colour_matrix(_dv_df, fmt="{:+.1f}", title=f"ATM Vol Change ({_dv_window}) — bp  |  Green=lower  Red=higher", low_is_green=True)
+            # Show dates used
+            _t_date = _vol_df.index[-1].strftime("%d-%b-%y")
+            _p_date = _vol_df.index[-_dv_days-1].strftime("%d-%b-%y") if len(_vol_df) >= _dv_days+1 else "N/A"
+            st.caption(f"Today: {_t_date} | Prior: {_p_date}")
+        else:
+            st.info("Not enough data for delivered vol comparison.")
+    else:
+        st.info("Insufficient snapshots for this window.")
+
+    # ── Section 3: Fwd Swap Moves ─────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 📐 Forward Swap Rate Moves (bp)")
+    st.caption("Change in forward swap rate vs N days ago and average absolute move over window.")
+
+    if _fwd_df.empty:
+        st.info("No swap rate history found in database.")
+        return
+
+    _fw_window = st.radio("Window", list(_WINDOWS.keys()), horizontal=True, key="rdv_fw_window")
+    _fw_days = _WINDOWS[_fw_window]
+
+    _fwd_change = {}
+    _fwd_avgmove = {}
+    _fwd_today = _fwd_df.iloc[-1] if len(_fwd_df) >= 1 else pd.Series()
+    _fwd_prior  = _fwd_df.iloc[-_fw_days-1] if len(_fwd_df) >= _fw_days+1 else pd.Series()
+
+    for _exp in _EXP_LABELS:
+        _rc, _ra = {}, {}
+        for _ten in _TEN_LABELS:
+            _col = f"{_exp}×{_ten}"
+            _t = _fwd_today.get(_col, float('nan'))
+            _p = _fwd_prior.get(_col, float('nan'))
+            _rc[_ten] = (_t - _p) * 100 if not (_math.isnan(_t) or _math.isnan(_p)) else float('nan')
+            # Average absolute daily move over window
+            if _col in _fwd_df.columns:
+                _recent_fwd = _fwd_df[_col].dropna().sort_index().iloc[-_fw_days:]
+                _daily_moves = _recent_fwd.diff().dropna().abs() * 100
+                _ra[_ten] = float(_daily_moves.mean()) if len(_daily_moves) >= 2 else float('nan')
+            else:
+                _ra[_ten] = float('nan')
+        if any(not _math.isnan(v) for v in _rc.values()): _fwd_change[_exp] = _rc
+        if any(not _math.isnan(v) for v in _ra.values()): _fwd_avgmove[_exp] = _ra
+
+    _fc1, _fc2 = st.columns(2)
+    with _fc1:
+        if _fwd_change:
+            _fc_df = pd.DataFrame(_fwd_change).T.reindex(index=_EXP_LABELS, columns=_TEN_LABELS)
+            _colour_matrix(_fc_df, fmt="{:+.1f}", title=f"Fwd Swap Rate Change ({_fw_window}) — bp", low_is_green=True)
+    with _fc2:
+        if _fwd_avgmove:
+            _fa_df = pd.DataFrame(_fwd_avgmove).T.reindex(index=_EXP_LABELS, columns=_TEN_LABELS)
+            _colour_matrix(_fa_df, fmt="{:.1f}", title=f"Avg Daily Move ({_fw_window}) — bp", low_is_green=False)
+
+
 def rv_tab():
     import plotly.graph_objects as go
     st.subheader("📊 Relative Value   —   Swaption & Cap/Floor Trade Ideas")
-    st.caption("Live vol surface + IRS curve for richness/cheapness signals.")
+
+    _rv_main_tab, _rv_rdv_tab = st.tabs(["📊 RV Ideas", "📈 Realised & Delivered Vol"])
+
+    with _rv_rdv_tab:
+        _render_realised_delivered_vol()
+
+    with _rv_main_tab:
+        st.caption("Live vol surface + IRS curve for richness/cheapness signals.")
 
     ccy = "AUD"
     curve     = get_ccy_curve(ccy)
