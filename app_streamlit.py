@@ -6691,19 +6691,9 @@ def curves_tab():
         if _show_par:
             if par_rates is not None and not par_rates.empty:
                 import pandas as _pd2
-                # Strip 40Y/50Y from par_ss spread rows — always replace with bootstrapped curve_c values
-                def _norm_t(t):
-                    try: return float(str(t).strip().upper().replace(".0Y","Y").replace("Y",""))
-                    except: return None
-                _par_table = par_rates[par_rates["Tenor"].apply(lambda t: _norm_t(t) not in [40.0, 50.0])].copy()
-                # Always add 40Y/50Y from bootstrapped curve_c
-                _extra_rows = []
-                for _, _cr in curve_c.iterrows():
-                    _m = float(_cr["MaturityY"])
-                    if _m in [40.0, 50.0]:
-                        _extra_rows.append({"Tenor": f"{int(_m)}Y", "Par Rate (%)": round(float(_cr["ZeroRatePct"]),4), "Conv": "S/S"})
-                if _extra_rows:
-                    _par_table = _pd2.concat([_par_table, _pd2.DataFrame(_extra_rows)], ignore_index=True)
+                # Normalise tenor labels: "40.0Y" → "40Y", "50.0Y" → "50Y"
+                _par_table = par_rates.copy()
+                _par_table["Tenor"] = _par_table["Tenor"].astype(str).str.replace(r"^(\d+)\.0Y$", lambda m: f"{int(m.group(1))}Y", regex=True)
             else:
                 _par_table = curve_c
             _cols_to_show.append(("IRS Par Rates (%)", _par_table))
