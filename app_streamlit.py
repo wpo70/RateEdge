@@ -5604,40 +5604,47 @@ def sdr_live_tab():
 
             # Build strike buckets (25bp increments)
             if not _hm_df.empty and "strike_pct" in _hm_df.columns:
-                _hm_data = _hm_df.dropna(subset=["strike_pct","swp_tenor"])
+                _hm_data = _hm_df.dropna(subset=["strike_pct","swp_tenor"]).copy()
+                # Normalise strike: if stored >20 it's in hundredths (e.g. 382.5 → 3.825%)
+                _hm_data["strike_norm"] = _hm_data["strike_pct"].apply(
+                    lambda x: float(x)/100 if float(x) > 20 else float(x))
+                # Filter to sane strike range 0–10%
+                _hm_data = _hm_data[(_hm_data["strike_norm"] > 0) & (_hm_data["strike_norm"] <= 10)]
                 if not _hm_data.empty:
-                    # Round strike to nearest 0.25%
-                    _hm_data = _hm_data.copy()
-                    _hm_data["strike_bucket"] = (_hm_data["strike_pct"] * 4).round() / 4
-                    _hm_data["strike_bucket"] = _hm_data["strike_bucket"].apply(lambda x: f"{x:.2f}%")
+                    # Round to nearest 25bp bucket
+                    _hm_data["strike_bucket"] = (_hm_data["strike_norm"] * 4).round() / 4
+                    _hm_data["strike_label"] = _hm_data["strike_bucket"].apply(lambda x: f"{x:.2f}%")
                     _hm_data["notional_m"] = _hm_data["notional_leg1"].fillna(0) / 1e6
+
+                    _ccy_label = ", ".join(sel_ccy) if sel_ccy else "All CCY"
+                    st.caption(f"Currency: **{_ccy_label}** · {_hm_view} · {_hm_metric}")
 
                     if _hm_metric == "Notional ($M)":
                         _pivot = _hm_data.pivot_table(
-                            index="strike_bucket", columns="swp_tenor",
+                            index="strike_label", columns="swp_tenor",
                             values="notional_m", aggfunc="sum", fill_value=0
                         )
                     else:
                         _pivot = _hm_data.pivot_table(
-                            index="strike_bucket", columns="swp_tenor",
+                            index="strike_label", columns="swp_tenor",
                             values="notional_m", aggfunc="count", fill_value=0
                         )
 
-                    # Sort strike descending, tenor by years
                     def _tnr(t):
                         import re
-                        m = re.match(r"(\d+)Y", str(t) or ""); return int(m.group(1)) if m else 999
-                    _pivot = _pivot.reindex(
-                        sorted(_pivot.columns, key=_tnr), axis=1
-                    ).sort_index(ascending=False)
+                        m = re.match(r"(\d+)Y", str(t)); return int(m.group(1)) if m else 999
+                    _pivot = _pivot.reindex(sorted(_pivot.columns, key=_tnr), axis=1)
+                    # Sort strikes descending
+                    _pivot = _pivot.reindex(sorted(_pivot.index, key=lambda x: -float(x.replace('%',''))))
 
                     st.dataframe(
-                        _pivot.style.background_gradient(cmap="YlOrRd", axis=None)
+                        _pivot.style.background_gradient(cmap="Reds", axis=None)
                               .format("{:,.0f}"),
-                        use_container_width=True
+                        use_container_width=True,
+                        height=min(600, 40 + len(_pivot) * 35)
                     )
-                    st.caption("Rows = strike bucket (25bp increments) · Columns = swap tenor · Values = " +
-                               ("notional $M" if _hm_metric == "Notional ($M)" else "trade count"))
+                    st.caption("Rows = strike (25bp buckets) · Columns = swap tenor · " +
+                               ("Notional $M" if _hm_metric == "Notional ($M)" else "Trade count"))
                 else:
                     st.info("No trades with strike data in current filter.")
             else:
