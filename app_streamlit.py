@@ -8616,8 +8616,9 @@ def swaptions_tab(vol_mode: str):
         offset_map = {"ATM": 0, "10 bp": 10, "25 bp": 25, "50 bp": 50, "100 bp": 100, "Manual": None}
         offset = offset_map[strike_mode]
         if strike_mode == "Manual":
+            _strike_default = round(fwd_pct, 4) if fwd_pct and not (fwd_pct != fwd_pct) and fwd_pct > 0 else 4.0
             strike_pct = st.number_input("Strike (%)", min_value=0.0, max_value=20.0, 
-                                         value=round(fwd_pct, 4), format="%.4f", key="sw_strike_pr")
+                                         value=_strike_default, format="%.4f", key="sw_strike_pr")
         else:
             strike_pct = fwd_pct + (offset/100.0 if structure == "Payer" else -offset/100.0)
             st.info(f"Strike: **{strike_pct:.4f}%** ({strike_mode} {'OTM' if offset > 0 else ''})")
