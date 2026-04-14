@@ -5589,6 +5589,149 @@ def sdr_live_tab():
 
         st.caption(f"Showing {len(disp_df):,} trades · Last loaded: {datetime.utcnow().strftime('%H:%M UTC')} · Alert count this session: {st.session_state['sdr_alert_count']}")
 
+    # ── Analytics ─────────────────────────────────────────────────────────────
+    if not df.empty:
+        st.markdown("---")
+        st.markdown("#### 📊 Analytics")
+        _atab1, _atab2, _atab3 = st.tabs(["Strike Heatmap", "Straddle Detection", "P/R Ratio"])
+
+        with _atab1:
+            # ── Strike Heatmap ──────────────────────────────────────────────
+            _hm_newt = df[df["action_type"] == "NEWT"].copy()
+            _hm_col1, _hm_col2 = st.columns([2, 1])
+            with _hm_col1:
+                _hm_view = st.radio("View", ["All", "Payers", "Receivers", "Straddles"],
+                                    horizontal=True, key="sdr_hm_view")
+            with _hm_col2:
+                _hm_metric = st.radio("Metric", ["Notional ($M)", "Trade Count"],
+                                      horizontal=True, key="sdr_hm_metric")
+            if _hm_view == "Payers":
+                _hm_df = _hm_newt[_hm_newt["option_type_decoded"] == "CALL"]
+            elif _hm_view == "Receivers":
+                _hm_df = _hm_newt[_hm_newt["option_type_decoded"] == "PUT"]
+            elif _hm_view == "Straddles":
+                _hm_df = _hm_newt[_hm_newt["option_type_decoded"].isin(["STR","EC"])]
+            else:
+                _hm_df = _hm_newt
+
+            # Build strike buckets (25bp increments)
+            if not _hm_df.empty and "strike_pct" in _hm_df.columns:
+                _hm_data = _hm_df.dropna(subset=["strike_pct","swp_tenor"])
+                if not _hm_data.empty:
+                    # Round strike to nearest 0.25%
+                    _hm_data = _hm_data.copy()
+                    _hm_data["strike_bucket"] = (_hm_data["strike_pct"] * 4).round() / 4
+                    _hm_data["strike_bucket"] = _hm_data["strike_bucket"].apply(lambda x: f"{x:.2f}%")
+                    _hm_data["notional_m"] = _hm_data["notional_leg1"].fillna(0) / 1e6
+
+                    if _hm_metric == "Notional ($M)":
+                        _pivot = _hm_data.pivot_table(
+                            index="strike_bucket", columns="swp_tenor",
+                            values="notional_m", aggfunc="sum", fill_value=0
+                        )
+                    else:
+                        _pivot = _hm_data.pivot_table(
+                            index="strike_bucket", columns="swp_tenor",
+                            values="notional_m", aggfunc="count", fill_value=0
+                        )
+
+                    # Sort strike descending, tenor by years
+                    def _tnr(t):
+                        import re
+                        m = re.match(r"(\d+)Y", str(t) or ""); return int(m.group(1)) if m else 999
+                    _pivot = _pivot.reindex(
+                        sorted(_pivot.columns, key=_tnr), axis=1
+                    ).sort_index(ascending=False)
+
+                    st.dataframe(
+                        _pivot.style.background_gradient(cmap="YlOrRd", axis=None)
+                              .format("{:,.0f}"),
+                        use_container_width=True
+                    )
+                    st.caption("Rows = strike bucket (25bp increments) · Columns = swap tenor · Values = " +
+                               ("notional $M" if _hm_metric == "Notional ($M)" else "trade count"))
+                else:
+                    st.info("No trades with strike data in current filter.")
+            else:
+                st.info("No strike data available.")
+
+        with _atab2:
+            # ── Straddle Detection ───────────────────────────────────────────
+            st.caption("Identifies Payer+Receiver pairs with same tenor/strike executed within 2 minutes — "
+                       "DTCC no longer reports type 'D-' so straddles appear as separate legs.")
+            _newt_only = df[df["action_type"] == "NEWT"].copy()
+            _payers = _newt_only[_newt_only["option_type_decoded"] == "CALL"].copy()
+            _rcvrs  = _newt_only[_newt_only["option_type_decoded"] == "PUT"].copy()
+
+            _straddles = []
+            if not _payers.empty and not _rcvrs.empty and "strike_pct" in df.columns:
+                for _, _p in _payers.iterrows():
+                    _s_p = round(float(_p.get("strike_pct") or 0), 2)
+                    _t_p = str(_p.get("swp_tenor",""))
+                    _e_p = str(_p.get("opt_tenor",""))
+                    _ccy_p = str(_p.get("notional_ccy",""))
+                    _time_p = pd.to_datetime(_p.get("execution_timestamp"), errors="coerce")
+
+                    _match = _rcvrs[
+                        (_rcvrs["swp_tenor"] == _t_p) &
+                        (_rcvrs["opt_tenor"] == _e_p) &
+                        (_rcvrs["notional_ccy"] == _ccy_p) &
+                        (_rcvrs["strike_pct"].apply(lambda x: abs(float(x or 0) - _s_p) < 0.01))
+                    ]
+                    if not _match.empty and _time_p is not pd.NaT:
+                        for _, _r in _match.iterrows():
+                            _time_r = pd.to_datetime(_r.get("execution_timestamp"), errors="coerce")
+                            if _time_r is not pd.NaT and abs((_time_p - _time_r).total_seconds()) <= 120:
+                                _straddles.append({
+                                    "Time": _time_p.strftime("%H:%M:%S") if _time_p else "—",
+                                    "CCY": _ccy_p,
+                                    "Opt Expiry": _e_p,
+                                    "Swp Tenor": _t_p,
+                                    "Strike": f"{_s_p:.2f}%",
+                                    "Notional": _fmt_notional(float(_p.get("notional_leg1") or 0)),
+                                    "Platform": PLATFORM_NAMES.get(str(_p.get("platform_identifier","")), str(_p.get("platform_identifier",""))),
+                                })
+                            break  # one match per payer
+
+            if _straddles:
+                st.dataframe(pd.DataFrame(_straddles), use_container_width=True, hide_index=True)
+                st.caption(f"{len(_straddles)} probable straddle(s) detected in current filter period.")
+            else:
+                st.info("No straddle pairs detected. Widen date range or remove filters.")
+
+        with _atab3:
+            # ── P/R Ratio ───────────────────────────────────────────────────
+            _newt_pr = df[df["action_type"] == "NEWT"].copy()
+            _pr_payers = _newt_pr[_newt_pr["option_type_decoded"] == "CALL"]
+            _pr_rcvrs  = _newt_pr[_newt_pr["option_type_decoded"] == "PUT"]
+            _pr_strd   = _newt_pr[_newt_pr["option_type_decoded"].isin(["STR","EC"])]
+
+            _tot_not = _newt_pr["notional_leg1"].fillna(0).sum()
+            _pay_not = _pr_payers["notional_leg1"].fillna(0).sum()
+            _rcv_not = _pr_rcvrs["notional_leg1"].fillna(0).sum()
+            _str_not = _pr_strd["notional_leg1"].fillna(0).sum()
+
+            _pr1, _pr2, _pr3, _pr4 = st.columns(4)
+            for _c, _lbl, _val, _col in [
+                (_pr1, "Payers %",    f"{100*_pay_not/_tot_not:.0f}%" if _tot_not else "—", "#4ade80"),
+                (_pr2, "Receivers %", f"{100*_rcv_not/_tot_not:.0f}%" if _tot_not else "—", "#f87171"),
+                (_pr3, "Straddles %", f"{100*_str_not/_tot_not:.0f}%" if _tot_not else "—", "#60a5fa"),
+                (_pr4, "P/R Ratio",   f"{_pay_not/_rcv_not:.2f}x" if _rcv_not else "—",     "#f59e0b"),
+            ]:
+                _c.metric(_lbl, _val)
+
+            # P/R by tenor
+            if not _newt_pr.empty and "swp_tenor" in _newt_pr.columns:
+                _pr_tenor = _newt_pr.groupby(["swp_tenor","option_type_decoded"])["notional_leg1"].sum().unstack(fill_value=0)
+                _pr_tenor.columns.name = None
+                if "CALL" in _pr_tenor.columns and "PUT" in _pr_tenor.columns:
+                    _pr_tenor["Payer %"] = (100 * _pr_tenor["CALL"] / (_pr_tenor["CALL"] + _pr_tenor["PUT"])).round(0).astype(int).astype(str) + "%"
+                    _pr_tenor["Payer $M"] = (_pr_tenor["CALL"] / 1e6).round(0).astype(int)
+                    _pr_tenor["Receiver $M"] = (_pr_tenor["PUT"] / 1e6).round(0).astype(int)
+                    _pr_tenor = _pr_tenor[["Payer $M","Receiver $M","Payer %"]].rename_axis("Swap Tenor")
+                    st.dataframe(_pr_tenor, use_container_width=True)
+                    st.caption("Notional in $M · Payer % = Payer / (Payer + Receiver) by swap tenor")
+
     # ── Auto-refresh ──────────────────────────────────────────────────────────
     _refresh_map = {"Off": 0, "30s": 30, "1 min": 60, "2 min": 120, "5 min": 300}
     _interval = _refresh_map.get(auto_refresh, 0)
