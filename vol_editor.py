@@ -694,8 +694,8 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
     with cols[0]:
         if st.button("✅ PUBLISH", key=f"pub_{ccy}", type="primary", disabled=not has_changes, use_container_width=True):
             _publish(ccy)
-            # Clear paste data after publish
-            ed["paste_data"][ccy] = ""
+            # Flag paste box to clear on next rerun
+            st.session_state[f"_clear_paste_{ccy}"] = True
             st.success("Published!")
             st.rerun()
     with cols[1]:
@@ -742,7 +742,10 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
     
     # Initialize paste data if not exists
     _paste_key = f"paste_{ccy}"
-    # Only seed the paste widget if it has never been set — never overwrite with value= once key exists
+    # Apply pending clear before widget renders
+    if st.session_state.pop(f"_clear_paste_{ccy}", False):
+        st.session_state[_paste_key] = ""
+    # Only seed the paste widget if it has never been set
     if _paste_key not in st.session_state:
         st.session_state[_paste_key] = ""
     
@@ -794,9 +797,8 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
                             pass  # skip non-numeric (e.g. 'AUD' currency col)
             ed["working"][payload_ccy] = _work_ccy
             # Clear paste data after successful confirmation
-            # Clear paste box via session state
-            if f"paste_{payload_ccy}" in st.session_state:
-                st.session_state[f"paste_{payload_ccy}"] = ""
+            # Flag paste box to clear on next rerun
+            st.session_state[f"_clear_paste_{payload_ccy}"] = True
             st.success("✅ Changes applied!")
             st.rerun()
         except Exception as e:
