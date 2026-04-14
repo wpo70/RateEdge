@@ -5214,7 +5214,7 @@ def sdr_live_tab():
 
         with col4:
             st.markdown("**Platform & Action**")
-            _all_platforms = _sdr_get_distinct("platform_identifier")
+            _all_platforms = [p for p in _sdr_get_distinct("platform_identifier") if p in PLATFORM_NAMES]
             _platform_display = [f"{PLATFORM_NAMES.get(p, p)} ({p})" for p in _all_platforms]
             _platform_map = {f"{PLATFORM_NAMES.get(p, p)} ({p})": p for p in _all_platforms}
             sel_platform_labels = st.multiselect("Platform", _platform_display,
