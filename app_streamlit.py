@@ -5107,6 +5107,8 @@ def sdr_live_tab():
                         st.session_state[_k] = _v
         except Exception:
             pass
+        # Always force end date to today — never restore a stale saved date
+        st.session_state["sdr_date_to"] = date.today()
         st.session_state["sdr_filters_loaded"] = True
 
     # ── Check table exists ────────────────────────────────────────────────────
