@@ -20227,6 +20227,10 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             if HAS_POSTGRES:
                 save_user_config(_uid_rv, "morning_rates_today", "AUD", _new_rates)
                 save_user_config(_uid_rv, "morning_rates_prev",  "AUD", _mr_today)
+                # Also write dated snapshot for historical lookup
+                import datetime as _dt_mr
+                _mr_dated_key = f"morning_rates_{_dt_mr.date.today().strftime('%Y-%m-%d')}"
+                save_user_config(_uid_rv, _mr_dated_key, "AUD", _new_rates)
                 load_user_config.clear()
             st.success("✅ Morning rates saved")
             st.rerun()
@@ -20300,6 +20304,105 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 _rc[3].markdown(f"<div style='font-size:12px;color:#64748b'>{_row['Prev']}</div>", unsafe_allow_html=True)
                 _mv_col = "#22c55e" if _row["_chg"] > 0 else "#ef4444" if _row["_chg"] < 0 else "#64748b"
                 _rc[4].markdown(f"<div style='font-size:12px;font-weight:600;color:{_mv_col}'>{_row['Move']}</div>", unsafe_allow_html=True)
+
+    # ── Historical Rates Lookup ───────────────────────────────────────────
+    if HAS_POSTGRES:
+        with st.expander("📅 Historical Rates Lookup", expanded=False):
+            # Query available dated snapshots from user_configs
+            _hist_dates = []
+            try:
+                _hconn = get_db_connection()
+                if _hconn:
+                    _hcur = _hconn.cursor()
+                    _hcur.execute("""
+                        SELECT config_type, updated_at
+                        FROM user_configs
+                        WHERE user_id = %s
+                          AND config_type LIKE 'morning_rates_____-__-__'
+                          AND currency = 'AUD'
+                        ORDER BY config_type DESC
+                        LIMIT 90
+                    """, (_uid_rv,))
+                    _hist_rows = _hcur.fetchall()
+                    _hcur.close(); _hconn.close()
+                    _hist_dates = [r[0].replace("morning_rates_", "") for r in _hist_rows]
+            except Exception as _he:
+                st.caption(f"Could not load history: {_he}")
+
+            if not _hist_dates:
+                st.caption("No dated snapshots yet — save morning rates today to begin building history.")
+            else:
+                _sel_date = st.selectbox(
+                    "Select date", _hist_dates,
+                    format_func=lambda d: d,
+                    key="mr_hist_date_sel"
+                )
+                if _sel_date:
+                    _hist_key = f"morning_rates_{_sel_date}"
+                    _hist_data = load_user_config(_uid_rv, _hist_key, "AUD")
+                    if _hist_data:
+                        # Build display table same structure as today's table
+                        _hist_display = _hist_data.copy()
+                        for _dk, _dlbl, _a, _b, _mult in _DERIVED:
+                            if _hist_data.get(_a) and _hist_data.get(_b):
+                                _hist_display[_dk] = round((_hist_data[_a] - _hist_data[_b]) * _mult, 1)
+                        _all_fields_h = _RATE_FIELDS + [(_dk, _dlbl, "Spreads") for _dk, _dlbl, _a, _b, _mult in _DERIVED]
+
+                        # Also load today for comparison
+                        _htbl_rows = []
+                        _mr_today_cmp = _mr_today.copy()
+                        _mr_today_cmp_disp = _mr_today.copy()
+                        for _dk, _dlbl, _a, _b, _mult in _DERIVED:
+                            if _mr_today.get(_a) and _mr_today.get(_b):
+                                _mr_today_cmp_disp[_dk] = round((_mr_today[_a] - _mr_today[_b]) * _mult, 1)
+
+                        for _k, _lbl, _grp in _all_fields_h:
+                            _hv = _hist_display.get(_k)
+                            _tv = _mr_today_cmp_disp.get(_k)
+                            if _hv is not None:
+                                _is_bp_h = _grp in ("AUD Money", "AUD OIS", "AUD Swaps", "USD Rates")
+                                _is_sp_h = _grp == "Spreads"
+                                if _tv is not None:
+                                    _chg_h = round(_tv - _hv, 4)
+                                    _chg_disp_h = (
+                                        f"{_chg_h*100:+.1f}bp" if _is_bp_h else
+                                        f"{_chg_h:+.1f}bp" if _is_sp_h else
+                                        f"{_chg_h:+.4f}"
+                                    )
+                                else:
+                                    _chg_h = None
+                                    _chg_disp_h = "—"
+                                _fmt_hv = f"{_hv:.4f}" if isinstance(_hv, float) and _hv < 20 and "spi" not in _k and "sp500" not in _k else f"{_hv:.2f}" if isinstance(_hv, float) else str(_hv)
+                                _fmt_tv = (f"{_tv:.4f}" if isinstance(_tv, float) and _tv < 20 and "spi" not in _k and "sp500" not in _k else f"{_tv:.2f}" if isinstance(_tv, float) else str(_tv)) if _tv is not None else "—"
+                                _htbl_rows.append({
+                                    "Group": _grp, "Rate": _lbl,
+                                    _sel_date: _fmt_hv,
+                                    "Today": _fmt_tv,
+                                    "Move": _chg_disp_h,
+                                    "_chg": _chg_h or 0
+                                })
+
+                        if _htbl_rows:
+                            st.markdown(f"<div style='font-size:11px;color:#64748b;margin-bottom:6px'>Comparing <b style='color:#38bdf8'>{_sel_date}</b> → Today | {len(_htbl_rows)} fields</div>", unsafe_allow_html=True)
+                            _hcols = st.columns([1, 2, 1.2, 1.2, 1.2])
+                            for _hgc, _hgh in zip(_hcols, ["Group", "Rate", _sel_date, "Today", "Move"]):
+                                _hgc.markdown(f"<div style='font-size:11px;font-weight:700;color:#64748b'>{_hgh}</div>", unsafe_allow_html=True)
+                            st.markdown("<hr style='margin:4px 0;border-color:#1e3050'>", unsafe_allow_html=True)
+                            _prev_hgrp = None
+                            for _hrow in _htbl_rows:
+                                if _hrow["Group"] != _prev_hgrp:
+                                    if _prev_hgrp:
+                                        st.markdown("<hr style='margin:2px 0;border-color:#1e3050'>", unsafe_allow_html=True)
+                                    _prev_hgrp = _hrow["Group"]
+                                _hrc = st.columns([1, 2, 1.2, 1.2, 1.2])
+                                _hrc[0].markdown(f"<div style='font-size:10px;color:#475569'>{_hrow['Group']}</div>", unsafe_allow_html=True)
+                                _hrc[1].markdown(f"<div style='font-size:12px;color:#e2e8f0'>{_hrow['Rate']}</div>", unsafe_allow_html=True)
+                                _hrc[2].markdown(f"<div style='font-size:12px;color:#94a3b8'>{_hrow[_sel_date]}</div>", unsafe_allow_html=True)
+                                _hrc[3].markdown(f"<div style='font-size:12px;font-weight:600;color:#f8fafc'>{_hrow['Today']}</div>", unsafe_allow_html=True)
+                                _mv_col_h = "#22c55e" if _hrow["_chg"] > 0 else "#ef4444" if _hrow["_chg"] < 0 else "#64748b"
+                                _hrc[4].markdown(f"<div style='font-size:12px;font-weight:600;color:{_mv_col_h}'>{_hrow['Move']}</div>", unsafe_allow_html=True)
+                    else:
+                        st.caption(f"No data found for {_sel_date}.")
 
     # ── Report ───────────────────────────────────────────────────────────
     if st.session_state.get("rv_report_generated"):
