@@ -20244,8 +20244,10 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             _p = _mr_prev_disp.get(_k)
             if _v:
                 _chg = round(_v - _p, 4) if _p else None
-                _is_bp = _grp in ("AUD Money","AUD OIS","AUD Swaps","USD Rates","Spreads")
+                _is_bp = _grp in ("AUD Money","AUD OIS","AUD Swaps","USD Rates")
+                _is_spread = _grp == "Spreads"
                 _chg_disp = (f"{_chg*100:+.1f}bp" if _is_bp and _chg is not None else
+                             f"{_chg:+.1f}bp" if _is_spread and _chg is not None else
                              f"{_chg:+.4f}" if _chg is not None else "—")
                 _tbl_rows.append({
                     "": _grp, "Rate": _lbl,
