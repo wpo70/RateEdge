@@ -600,19 +600,18 @@ const payload = btoa(JSON.stringify({{
   mode: D.viewMode,
   ts: Date.now()
 }}));
-// Set query params to trigger Python reload (primary path)
-const url = new URL(window.location.href);
-url.searchParams.set('v3d_ccy', D.ccy);
-url.searchParams.set('v3d_data', payload);
-url.searchParams.set('v3d_mode', D.viewMode);
-url.searchParams.set('v3d_ts', Date.now());
-window.parent.location.href = url.toString();
-// Also copy to clipboard as backup
+// Copy to clipboard
 if(navigator.clipboard){{
   navigator.clipboard.writeText(payload).then(()=>{{
-    btn.textContent='✓ Applied!';
+    btn.textContent='✓ Copied! Paste below';
     btn.style.background='#22c55e';
-  }}).catch(()=>{{}});
+    st.textContent='Paste in box below & click CONFIRM';
+    st.style.color='#22c55e';
+  }}).catch(()=>{{
+    prompt('Copy this (Ctrl+A, Ctrl+C):', payload);
+  }});
+}}else{{
+  prompt('Copy this (Ctrl+A, Ctrl+C):', payload);
 }}
 }}catch(e){{alert('Error: '+e);}}
 }};
