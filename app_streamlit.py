@@ -8279,8 +8279,6 @@ def swaptions_tab(vol_mode: str):
 | **Premium** | bp of notional, T+2 |
 | **Vol** | Normal (bp/annum) |
 """)
-        _usd_settle = st.radio("Settlement", ["Cash (ICE SOFR Swap Rate)", "Physical (LCH/CME)"],
-                               horizontal=True, key="usd_swpn_settle")
 
     # ── SABR Smile Mode & Alpha Monitor ──────────────────────────────
     _sabr_visible = st.session_state.get("sabr_panel_visible", True)
