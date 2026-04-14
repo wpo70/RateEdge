@@ -19,7 +19,7 @@ try:
     NEW_YORK_TZ = ZoneInfo("America/New_York")
 except ImportError:
     from datetime import timezone, timedelta
-    SYDNEY_TZ = timezone(timedelta(hours=10))      # AEST (Apr-Sep)
+    SYDNEY_TZ = timezone(timedelta(hours=11))      # AEDT approx
     WELLINGTON_TZ = timezone(timedelta(hours=13))  # NZDT approx
     NEW_YORK_TZ = timezone(timedelta(hours=-4))    # EDT approx
 
@@ -1660,14 +1660,11 @@ def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Opt
         # Create Excel file in memory
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Write ATM vol surface — ensure Expiry is first column, round to 2dp
+            # Write ATM vol surface — ensure Expiry is first column
             atm_export = atm.copy()
             if "Expiry" in atm_export.columns and atm_export.columns[0] != "Expiry":
                 cols = ["Expiry"] + [c for c in atm_export.columns if c != "Expiry"]
                 atm_export = atm_export[cols]
-            for _c in atm_export.columns:
-                if _c != "Expiry":
-                    atm_export[_c] = atm_export[_c].round(2)
             atm_export.to_excel(writer, sheet_name=f"ATM_Vols_{currency}", index=False)
 
             # Write ATM forward premium surface — use the pre-computed matrix from Curves tab
@@ -1676,16 +1673,19 @@ def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Opt
                 _prem_df = _prem_store.get("prem")
                 if _prem_df is not None and not _prem_df.empty:
                     _prem_export = _prem_df.copy()
-                    # prem_df has Expiry as index — reset it to column
-                    _prem_export = _prem_export.reset_index()
+                    if _prem_export.index.name == "Expiry" or (len(_prem_export) > 0 and isinstance(_prem_export.index[0], str)):
+                        _prem_export = _prem_export.reset_index()
                     if "Expiry" in _prem_export.columns and _prem_export.columns[0] != "Expiry":
                         _pcols = ["Expiry"] + [c for c in _prem_export.columns if c != "Expiry"]
                         _prem_export = _prem_export[_pcols]
-                    # Round to 2dp
-                    for _c in _prem_export.columns:
-                        if _c != "Expiry":
-                            _prem_export[_c] = _prem_export[_c].round(2)
                     _prem_export.to_excel(writer, sheet_name=f"ATM_Prem_{currency}", index=False)
+                else:
+                    from vol_editor import surface_vol_to_premium
+                    _prem_df2 = surface_vol_to_premium(atm_export, currency)
+                    if "Expiry" in _prem_df2.columns and _prem_df2.columns[0] != "Expiry":
+                        _pcols2 = ["Expiry"] + [c for c in _prem_df2.columns if c != "Expiry"]
+                        _prem_df2 = _prem_df2[_pcols2]
+                    _prem_df2.to_excel(writer, sheet_name=f"ATM_Prem_{currency}", index=False)
             except Exception:
                 pass
 
@@ -1699,10 +1699,6 @@ def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Opt
                     if "Expiry" in _fwd_export.columns and _fwd_export.columns[0] != "Expiry":
                         _fcols = ["Expiry"] + [c for c in _fwd_export.columns if c != "Expiry"]
                         _fwd_export = _fwd_export[_fcols]
-                    # Round fwd rates to 4dp
-                    for _c in _fwd_export.columns:
-                        if _c != "Expiry":
-                            _fwd_export[_c] = _fwd_export[_c].round(4)
                     _fwd_export.to_excel(writer, sheet_name=f"ATM_Fwd_{currency}", index=False)
             except Exception:
                 pass
@@ -1725,11 +1721,12 @@ def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Opt
             
             # Add metadata sheet
             metadata = pd.DataFrame({
-                "Property": ["Currency", "Export Date", "Export Time"],
+                "Property": ["Currency", "Export Date", "Export Time", "Includes SABR"],
                 "Value": [
                     currency,
                     pd.Timestamp.now().strftime('%Y-%m-%d'),
                     pd.Timestamp.now().strftime('%H:%M:%S'),
+                    "Yes" if include_sabr else "No"
                 ]
             })
             metadata.to_excel(writer, sheet_name="Metadata", index=False)
@@ -3052,52 +3049,28 @@ def apply_rateedge_theme(theme_name: str):
         [data-testid="stSidebar"] .stMarkdown {{
             color: {text} !important;
         }}
-        /* Sidebar collapse/expand button — nuclear visibility fix */
-        [data-testid="collapsedControl"],
-        [data-testid="collapsedControl"] button,
-        [data-testid="stSidebarCollapseButton"],
-        [data-testid="stSidebarCollapseButton"] button,
-        [data-testid="baseButton-headerNoPadding"],
-        button[kind="header"],
-        section[data-testid="stSidebarContent"] + div button,
-        .st-emotion-cache-1cypcdb,
-        .st-emotion-cache-czk5ss {{
-            background-color: {accent} !important;
-            border-radius: 0 6px 6px 0 !important;
-            width: 32px !important;
-            min-width: 32px !important;
-            height: 48px !important;
-            min-height: 48px !important;
-            opacity: 1 !important;
-            visibility: visible !important;
-            display: flex !important;
-            position: fixed !important;
-            left: 0 !important;
-            top: 50% !important;
-            z-index: 999999 !important;
-        }}
+        /* Sidebar expand/collapse button - make arrow bright red and visible */
         [data-testid="collapsedControl"] svg,
-        [data-testid="collapsedControl"] button svg,
-        [data-testid="stSidebarCollapseButton"] svg,
-        [data-testid="stSidebarCollapseButton"] button svg,
-        [data-testid="baseButton-headerNoPadding"] svg,
-        button[kind="header"] svg,
-        .st-emotion-cache-1cypcdb svg,
-        .st-emotion-cache-czk5ss svg,
-        section[data-testid="stSidebarContent"] + div button svg {{
-            fill: white !important;
-            stroke: white !important;
-            color: white !important;
-            width: 20px !important;
-            height: 20px !important;
-            opacity: 1 !important;
+        [data-testid="stSidebar"] button svg {{
+            fill: {accent} !important;
+            stroke: {accent} !important;
+            width: 24px !important;
+            height: 24px !important;
         }}
-        /* Collapsed sidebar button legacy */
+        /* Collapsed sidebar button */
         .css-1rs6os {{
             color: {sidebar_arrow} !important;
         }}
         .css-1rs6os svg {{
             fill: {sidebar_arrow} !important;
+        }}
+        /* Alternative selectors for sidebar toggle */
+        [data-testid="baseButton-headerNoPadding"] {{
+            color: {sidebar_arrow} !important;
+        }}
+        [data-testid="baseButton-headerNoPadding"] svg {{
+            fill: {sidebar_arrow} !important;
+            stroke: {sidebar_arrow} !important;
         }}
         /* Tabs - readable text */
         .stTabs [data-baseweb="tab-list"] {{
@@ -4129,24 +4102,18 @@ def build_aud_ois_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
         if len(ois_pts) < 5:
             return None
 
-        # Add 40Y and 50Y OIS by label — only take first match (AUD, before USD section)
-        _ois_40_done = False
-        _ois_50_done = False
+        # Add 40Y and 50Y OIS by label (no ADSO ticker, value in col E)
         for _, row in raw.iterrows():
             lbl = str(row.iloc[0]).strip().lower()
-            ticker = str(row.iloc[1]).strip() if row.iloc[1] is not None else ""
-            # Skip USD USSO tickers
-            if ticker.upper().startswith("USSO"):
-                continue
-            if ('ois 40' in lbl or 'ois40' in lbl) and not _ois_40_done:
+            if 'ois 40' in lbl or 'ois40' in lbl:
                 try:
                     v = float(row.iloc[4])
-                    if v > 0: ois_pts[40.0] = v; _ois_40_done = True
+                    if v > 0: ois_pts[40.0] = v
                 except: pass
-            if ('ois 50' in lbl or 'ois50' in lbl) and not _ois_50_done:
+            if 'ois 50' in lbl or 'ois50' in lbl:
                 try:
                     v = float(row.iloc[4])
-                    if v > 0: ois_pts[50.0] = v; _ois_50_done = True
+                    if v > 0: ois_pts[50.0] = v
                 except: pass
 
         xs = sorted(ois_pts)
@@ -4699,8 +4666,8 @@ def auto_populate_morning_rates_from_bbg_feed(xl: pd.ExcelFile) -> dict:
                     if v: rates[key] = v
                     break
 
-            # BTMM AUD: col 10 = ticker, col 13 = last
-            btmm_aud_ticker = str(r.iloc[10]).strip() if len(r) > 10 and r.iloc[10] else ""
+            # BTMM AUD: col 11 = ticker, col 13 = last
+            btmm_aud_ticker = str(r.iloc[11]).strip() if len(r) > 11 and r.iloc[11] else ""
             for pfx, key in _BTMM_AUD_COL13.items():
                 if btmm_aud_ticker == pfx and key not in rates:
                     v = _f(r, 13)
@@ -4896,11 +4863,12 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
             except:
                 pass
         
-        # OIS curve — BBG_Feed is authoritative for AUD OIS (ADSO tickers, col E)
+        # OIS curve — read Zeros_OIS_AUD if present (clean, clipped to 30Y)
         _ois_found = False
-        if ccy == "AUD" and "BBG_Feed" in xl.sheet_names:
+        if ccy == "AUD" and "Zeros_OIS_AUD" in xl.sheet_names:
             try:
-                ois_df = build_aud_ois_from_bbg_feed(xl)
+                raw_ois_z = pd.read_excel(xl, sheet_name="Zeros_OIS_AUD", usecols=[0, 1])
+                ois_df = load_curve_flexible(raw_ois_z, "Zeros_OIS_AUD")
                 if ois_df is not None and len(ois_df) >= 8:
                     set_basis_curve(ccy, "ois", ois_df)
                     if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
@@ -4914,11 +4882,10 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
             except Exception:
                 pass
 
-        # OIS fallback — Zeros_OIS_AUD sheet if BBG_Feed failed
-        if not _ois_found and ccy == "AUD" and "Zeros_OIS_AUD" in xl.sheet_names:
+        # OIS fallback — build from BBG_Feed ADSO tickers
+        if not _ois_found and ccy == "AUD" and "BBG_Feed" in xl.sheet_names:
             try:
-                raw_ois_z = pd.read_excel(xl, sheet_name="Zeros_OIS_AUD", usecols=[0, 1])
-                ois_df = load_curve_flexible(raw_ois_z, "Zeros_OIS_AUD")
+                ois_df = build_aud_ois_from_bbg_feed(xl)
                 if ois_df is not None and len(ois_df) >= 8:
                     set_basis_curve(ccy, "ois", ois_df)
                     if "config_basis" not in st.session_state: st.session_state["config_basis"] = {}
@@ -5194,11 +5161,11 @@ def sdr_live_tab():
         with col2:
             st.markdown("**Type & CCY**")
             _type_options = {
-                "Payer (C)":             "CALL",
-                "Receiver (P)":          "PUT",
+                "Call (C)":              "CALL",
+                "Put (P)":               "PUT",
                 "Straddle (D/EC)":       "STR",
                 "Euro Swn (EC/OPET)":    "EC",
-                "Bermudan Payer":        "BCALL",
+                "Bermudan Call":         "BCALL",
                 "Non-standard":          "NSTD",
                 "XCCY Swn":              "XCS",
                 "XCCY+MDET":             "XCS-M",
@@ -5206,15 +5173,13 @@ def sdr_live_tab():
                 "Mand. Term (MDET)":     "MDET",
                 "Other":                 "OTH",
             }
-            _type_defaults = ["Payer (C)", "Receiver (P)", "Straddle (D/EC)", "Euro Swn (EC/OPET)"]
+            _type_defaults = ["Call (C)", "Put (P)", "Straddle (D/EC)", "Euro Swn (EC/OPET)"]
             sel_type_labels = st.multiselect("P/C", list(_type_options.keys()),
                 default=_type_defaults, key="sdr_type",
                 label_visibility="collapsed", on_change=_save_sdr_filters)
             sel_type = [_type_options[l] for l in sel_type_labels]
             ccy_opts = _sdr_get_distinct("notional_ccy")
-            sel_ccy = st.multiselect("CCY", ccy_opts,
-                default=[c for c in ["USD","AUD","EUR","GBP","JPY"] if c in ccy_opts],
-                key="sdr_ccy", label_visibility="collapsed", on_change=_save_sdr_filters)
+            sel_ccy = st.selectbox("CCY", ["All"] + ccy_opts, key="sdr_ccy", label_visibility="collapsed", on_change=_save_sdr_filters)
 
         with col3:
             st.markdown("**Tenor filters**")
@@ -5225,13 +5190,8 @@ def sdr_live_tab():
 
         with col4:
             st.markdown("**Platform & Action**")
-            _all_platforms = _sdr_get_distinct("platform_identifier")
-            _platform_display = [f"{PLATFORM_NAMES.get(p, p)} ({p})" for p in _all_platforms]
-            _platform_map = {f"{PLATFORM_NAMES.get(p, p)} ({p})": p for p in _all_platforms}
-            sel_platform_labels = st.multiselect("Platform", _platform_display,
-                default=_platform_display, key="sdr_platform",
-                label_visibility="collapsed", on_change=_save_sdr_filters)
-            sel_platform = [_platform_map[l] for l in sel_platform_labels]
+            platforms = _sdr_get_distinct("platform_identifier")
+            sel_platform = st.selectbox("Platform", ["All"] + platforms, key="sdr_platform", label_visibility="collapsed", on_change=_save_sdr_filters)
             action_opts = ["All", "NEWT", "MODI", "CORR", "CANC"]
             sel_action = st.selectbox("Action", action_opts, key="sdr_action", label_visibility="collapsed", on_change=_save_sdr_filters)
 
@@ -5328,20 +5288,18 @@ def sdr_live_tab():
         placeholders = ",".join(["%s"] * len(sel_type))
         filters.append(f"option_type_decoded IN ({placeholders})")
         params.extend(sel_type)
-    if sel_ccy:
-        placeholders = ",".join(["%s"] * len(sel_ccy))
-        filters.append(f"notional_ccy IN ({placeholders})")
-        params.extend(sel_ccy)
+    if sel_ccy != "All":
+        filters.append("notional_ccy = %s")
+        params.append(sel_ccy)
     if sel_opt_tenor != "All":
         filters.append("opt_tenor = %s")
         params.append(sel_opt_tenor)
     if sel_swp_tenor != "All":
         filters.append("swp_tenor = %s")
         params.append(sel_swp_tenor)
-    if sel_platform:
-        placeholders = ",".join(["%s"] * len(sel_platform))
-        filters.append(f"platform_identifier IN ({placeholders})")
-        params.extend(sel_platform)
+    if sel_platform != "All":
+        filters.append("platform_identifier = %s")
+        params.append(sel_platform)
     if sel_action != "All":
         filters.append("action_type = %s")
         params.append(sel_action)
@@ -5431,8 +5389,8 @@ def sdr_live_tab():
         for col, label, value, color in [
             (mc1, "Total trades",    f"{total:,}",                "#f1f5f9"),
             (mc2, "New (NEWT)",      f"{newt:,}",                 "#4ade80"),
-            (mc3, "Payers",           f"{calls:,}",                "#4ade80"),
-            (mc4, "Receivers",         f"{puts:,}",                 "#f87171"),
+            (mc3, "Calls",           f"{calls:,}",                "#4ade80"),
+            (mc4, "Puts",            f"{puts:,}",                 "#f87171"),
             (mc5, "Total Notional",  _fmt_notional(total_not),    "#60a5fa"),
         ]:
             with col:
@@ -5478,11 +5436,11 @@ def sdr_live_tab():
 
     # ── Type display formatter ────────────────────────────────────────────────
     _TYPE_LABELS = {
-        "CALL":  "Payer",
-        "PUT":   "Receiver",
+        "CALL":  "Call",
+        "PUT":   "Put",
         "STR":   "Straddle",
         "EC":    "Euro Swn",
-        "BCALL": "Berm Payer",
+        "BCALL": "Berm Call",
         "NSTD":  "Non-std",
         "XCS":   "XCCY Swn",
         "XCS-M": "XCCY+MDET",
@@ -5587,149 +5545,6 @@ def sdr_live_tab():
         )
 
         st.caption(f"Showing {len(disp_df):,} trades · Last loaded: {datetime.utcnow().strftime('%H:%M UTC')} · Alert count this session: {st.session_state['sdr_alert_count']}")
-
-    # ── Analytics ─────────────────────────────────────────────────────────────
-    if not df.empty:
-        st.markdown("---")
-        st.markdown("#### 📊 Analytics")
-        _atab1, _atab2, _atab3 = st.tabs(["Strike Heatmap", "Straddle Detection", "P/R Ratio"])
-
-        with _atab1:
-            # ── Strike Heatmap ──────────────────────────────────────────────
-            _hm_newt = df[df["action_type"] == "NEWT"].copy()
-            _hm_col1, _hm_col2 = st.columns([2, 1])
-            with _hm_col1:
-                _hm_view = st.radio("View", ["All", "Payers", "Receivers", "Straddles"],
-                                    horizontal=True, key="sdr_hm_view")
-            with _hm_col2:
-                _hm_metric = st.radio("Metric", ["Notional ($M)", "Trade Count"],
-                                      horizontal=True, key="sdr_hm_metric")
-            if _hm_view == "Payers":
-                _hm_df = _hm_newt[_hm_newt["option_type_decoded"] == "CALL"]
-            elif _hm_view == "Receivers":
-                _hm_df = _hm_newt[_hm_newt["option_type_decoded"] == "PUT"]
-            elif _hm_view == "Straddles":
-                _hm_df = _hm_newt[_hm_newt["option_type_decoded"].isin(["STR","EC"])]
-            else:
-                _hm_df = _hm_newt
-
-            # Build strike buckets (25bp increments)
-            if not _hm_df.empty and "strike_pct" in _hm_df.columns:
-                _hm_data = _hm_df.dropna(subset=["strike_pct","swp_tenor"])
-                if not _hm_data.empty:
-                    # Round strike to nearest 0.25%
-                    _hm_data = _hm_data.copy()
-                    _hm_data["strike_bucket"] = (_hm_data["strike_pct"] * 4).round() / 4
-                    _hm_data["strike_bucket"] = _hm_data["strike_bucket"].apply(lambda x: f"{x:.2f}%")
-                    _hm_data["notional_m"] = _hm_data["notional_leg1"].fillna(0) / 1e6
-
-                    if _hm_metric == "Notional ($M)":
-                        _pivot = _hm_data.pivot_table(
-                            index="strike_bucket", columns="swp_tenor",
-                            values="notional_m", aggfunc="sum", fill_value=0
-                        )
-                    else:
-                        _pivot = _hm_data.pivot_table(
-                            index="strike_bucket", columns="swp_tenor",
-                            values="notional_m", aggfunc="count", fill_value=0
-                        )
-
-                    # Sort strike descending, tenor by years
-                    def _tnr(t):
-                        import re
-                        m = re.match(r"(\d+)Y", str(t) or ""); return int(m.group(1)) if m else 999
-                    _pivot = _pivot.reindex(
-                        sorted(_pivot.columns, key=_tnr), axis=1
-                    ).sort_index(ascending=False)
-
-                    st.dataframe(
-                        _pivot.style.background_gradient(cmap="YlOrRd", axis=None)
-                              .format("{:,.0f}"),
-                        use_container_width=True
-                    )
-                    st.caption("Rows = strike bucket (25bp increments) · Columns = swap tenor · Values = " +
-                               ("notional $M" if _hm_metric == "Notional ($M)" else "trade count"))
-                else:
-                    st.info("No trades with strike data in current filter.")
-            else:
-                st.info("No strike data available.")
-
-        with _atab2:
-            # ── Straddle Detection ───────────────────────────────────────────
-            st.caption("Identifies Payer+Receiver pairs with same tenor/strike executed within 2 minutes — "
-                       "DTCC no longer reports type 'D-' so straddles appear as separate legs.")
-            _newt_only = df[df["action_type"] == "NEWT"].copy()
-            _payers = _newt_only[_newt_only["option_type_decoded"] == "CALL"].copy()
-            _rcvrs  = _newt_only[_newt_only["option_type_decoded"] == "PUT"].copy()
-
-            _straddles = []
-            if not _payers.empty and not _rcvrs.empty and "strike_pct" in df.columns:
-                for _, _p in _payers.iterrows():
-                    _s_p = round(float(_p.get("strike_pct") or 0), 2)
-                    _t_p = str(_p.get("swp_tenor",""))
-                    _e_p = str(_p.get("opt_tenor",""))
-                    _ccy_p = str(_p.get("notional_ccy",""))
-                    _time_p = pd.to_datetime(_p.get("execution_timestamp"), errors="coerce")
-
-                    _match = _rcvrs[
-                        (_rcvrs["swp_tenor"] == _t_p) &
-                        (_rcvrs["opt_tenor"] == _e_p) &
-                        (_rcvrs["notional_ccy"] == _ccy_p) &
-                        (_rcvrs["strike_pct"].apply(lambda x: abs(float(x or 0) - _s_p) < 0.01))
-                    ]
-                    if not _match.empty and _time_p is not pd.NaT:
-                        for _, _r in _match.iterrows():
-                            _time_r = pd.to_datetime(_r.get("execution_timestamp"), errors="coerce")
-                            if _time_r is not pd.NaT and abs((_time_p - _time_r).total_seconds()) <= 120:
-                                _straddles.append({
-                                    "Time": _time_p.strftime("%H:%M:%S") if _time_p else "—",
-                                    "CCY": _ccy_p,
-                                    "Opt Expiry": _e_p,
-                                    "Swp Tenor": _t_p,
-                                    "Strike": f"{_s_p:.2f}%",
-                                    "Notional": _fmt_notional(float(_p.get("notional_leg1") or 0)),
-                                    "Platform": PLATFORM_NAMES.get(str(_p.get("platform_identifier","")), str(_p.get("platform_identifier",""))),
-                                })
-                            break  # one match per payer
-
-            if _straddles:
-                st.dataframe(pd.DataFrame(_straddles), use_container_width=True, hide_index=True)
-                st.caption(f"{len(_straddles)} probable straddle(s) detected in current filter period.")
-            else:
-                st.info("No straddle pairs detected. Widen date range or remove filters.")
-
-        with _atab3:
-            # ── P/R Ratio ───────────────────────────────────────────────────
-            _newt_pr = df[df["action_type"] == "NEWT"].copy()
-            _pr_payers = _newt_pr[_newt_pr["option_type_decoded"] == "CALL"]
-            _pr_rcvrs  = _newt_pr[_newt_pr["option_type_decoded"] == "PUT"]
-            _pr_strd   = _newt_pr[_newt_pr["option_type_decoded"].isin(["STR","EC"])]
-
-            _tot_not = _newt_pr["notional_leg1"].fillna(0).sum()
-            _pay_not = _pr_payers["notional_leg1"].fillna(0).sum()
-            _rcv_not = _pr_rcvrs["notional_leg1"].fillna(0).sum()
-            _str_not = _pr_strd["notional_leg1"].fillna(0).sum()
-
-            _pr1, _pr2, _pr3, _pr4 = st.columns(4)
-            for _c, _lbl, _val, _col in [
-                (_pr1, "Payers %",    f"{100*_pay_not/_tot_not:.0f}%" if _tot_not else "—", "#4ade80"),
-                (_pr2, "Receivers %", f"{100*_rcv_not/_tot_not:.0f}%" if _tot_not else "—", "#f87171"),
-                (_pr3, "Straddles %", f"{100*_str_not/_tot_not:.0f}%" if _tot_not else "—", "#60a5fa"),
-                (_pr4, "P/R Ratio",   f"{_pay_not/_rcv_not:.2f}x" if _rcv_not else "—",     "#f59e0b"),
-            ]:
-                _c.metric(_lbl, _val)
-
-            # P/R by tenor
-            if not _newt_pr.empty and "swp_tenor" in _newt_pr.columns:
-                _pr_tenor = _newt_pr.groupby(["swp_tenor","option_type_decoded"])["notional_leg1"].sum().unstack(fill_value=0)
-                _pr_tenor.columns.name = None
-                if "CALL" in _pr_tenor.columns and "PUT" in _pr_tenor.columns:
-                    _pr_tenor["Payer %"] = (100 * _pr_tenor["CALL"] / (_pr_tenor["CALL"] + _pr_tenor["PUT"])).round(0).astype(int).astype(str) + "%"
-                    _pr_tenor["Payer $M"] = (_pr_tenor["CALL"] / 1e6).round(0).astype(int)
-                    _pr_tenor["Receiver $M"] = (_pr_tenor["PUT"] / 1e6).round(0).astype(int)
-                    _pr_tenor = _pr_tenor[["Payer $M","Receiver $M","Payer %"]].rename_axis("Swap Tenor")
-                    st.dataframe(_pr_tenor, use_container_width=True)
-                    st.caption("Notional in $M · Payer % = Payer / (Payer + Receiver) by swap tenor")
 
     # ── Auto-refresh ──────────────────────────────────────────────────────────
     _refresh_map = {"Off": 0, "30s": 30, "1 min": 60, "2 min": 120, "5 min": 300}
@@ -6005,24 +5820,6 @@ def vol_config_tab():
             
             if msgs:
                 _cdebug = []
-                def _mat_to_label(y):
-                    """Convert MaturityY float to human-readable tenor label."""
-                    days = y * 365.25
-                    if days < 10: return "1w"
-                    if days < 20: return "2w"
-                    m = round(y * 12)
-                    if m == 0: return "1w"
-                    if m == 1: return "1m"
-                    if m == 2: return "2m"
-                    if m == 3: return "3m"
-                    if m == 4: return "4m"
-                    if m == 5: return "5m"
-                    if m == 6: return "6m"
-                    if m == 9: return "9m"
-                    if m == 12: return "1y"
-                    if m == 18: return "18m"
-                    yr = round(y)
-                    return f"{yr}y"
                 for _c in SUPPORTED_CURRENCIES:
                     _cv = st.session_state.get("config_curves", {}).get(_c)
                     if _cv is not None and len(_cv) > 0:
@@ -6030,7 +5827,7 @@ def vol_config_tab():
                         _z1 = _cv[_cv["MaturityY"].sub(1.0).abs() < 0.01]["ZeroRatePct"]
                         z025 = float(_z025.iloc[0]) if len(_z025) else 0
                         z1 = float(_z1.iloc[0]) if len(_z1) else 0
-                        _cdebug.append(f"{_c}: {len(_cv)} pts | 3m={z025:.4f}% | 1Y={z1:.4f}%")
+                        _cdebug.append(f"{_c}: {len(_cv)} pts | 0.25Y={z025:.4f}% | 1Y={z1:.4f}%")
                 st.success(f" Loaded: {', '.join(msgs)}")
                 if _cdebug:
                     for _cd in _cdebug:
@@ -6045,36 +5842,17 @@ def vol_config_tab():
                     if _p_par is not None and not _p_par.empty:
                         st.caption(f"{_pc} par rates read from BBG_Feed (verify before using the forward matrix):")
                         _par_disp = _p_par.copy()
-                        # Standardise tenor labels: 0.5Y→6m, 0.75Y→9m, 1.0Y→1y etc
-                        def _std_tenor(t):
-                            try:
-                                y = float(str(t).replace("Y","").replace("y",""))
-                                return _mat_to_label(y)
-                            except: return str(t)
-                        _par_disp["Tenor"] = _par_disp["Tenor"].apply(_std_tenor)
                         _par_disp["Par Rate (%)"] = _par_disp["Par Rate (%)"].apply(lambda x: round(float(x), 4))
-                        _conv_row = None
-                        if "Conv" in _par_disp.columns:
-                            _conv_row = _par_disp.set_index("Tenor")["Conv"].to_dict()
-                        _rate_row = _par_disp.set_index("Tenor")["Par Rate (%)"].to_dict()
-                        _rows_disp = {"Par Rate (%)": _rate_row}
-                        if _conv_row: _rows_disp["Conv"] = _conv_row
-                        st.dataframe(pd.DataFrame(_rows_disp).T, use_container_width=True)
+                        st.dataframe(_par_disp.set_index("Tenor").T.style.format("{:.4f}", subset=pd.IndexSlice["Par Rate (%)", :]), use_container_width=True)
                     elif _pc in ["USD", "NZD"]:
                         # Show zero curve directly for non-AUD currencies
                         _cv = st.session_state.get("config_curves", {}).get(_pc)
                         if _cv is not None and len(_cv) > 0:
                             st.caption(f"{_pc} SOFR curve loaded from BBG_Feed ({len(_cv)} pts):")
                             _cv_disp = _cv.copy()
-                            _cv_disp["Tenor"] = _cv_disp["MaturityY"].apply(_mat_to_label)
-                            _cv_disp["Rate (%)"] = _cv_disp["ZeroRatePct"].apply(lambda x: f"{x:.4f}%")
-                            _rows = {"Rate (%)": _cv_disp.set_index("Tenor")["Rate (%)"].to_dict()}
-                            # Add source date row for USD/NZD
-                            if "_source_date" in _cv.columns:
-                                _rows["Source Date"] = _cv_disp.set_index("Tenor")["_source_date"].to_dict()
-                            else:
-                                _rows["Source Date"] = {k: "2026-04-13" for k in _rows["Rate (%)"]}
-                            st.dataframe(pd.DataFrame(_rows).T, use_container_width=True)
+                            _cv_disp["MaturityY"] = _cv_disp["MaturityY"].apply(lambda x: f"{x:.4f}Y")
+                            _cv_disp["ZeroRatePct"] = _cv_disp["ZeroRatePct"].apply(lambda x: f"{x:.4f}%")
+                            st.dataframe(_cv_disp.rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Rate (%)"}).set_index("Tenor").T, use_container_width=True)
                 # Auto-save to DB so it persists across sessions
                 if HAS_POSTGRES and is_admin():
                     try:
@@ -6341,17 +6119,7 @@ def vol_config_tab():
                 _utc_now = _dt_sl.now(_tz_sl.utc)
                 # Sydney: AEDT=UTC+11 (Oct-Apr), AEST=UTC+10 (Apr-Oct)
                 _month = _utc_now.month
-                import calendar as _cal
-                def _syd_aedt(_d):
-                    def _fs(_y,_m):
-                        _c=_cal.monthcalendar(_y,_m)
-                        return _c[0][6] if _c[0][6]!=0 else _c[1][6]
-                    _y,_m,_day=_d.year,_d.month,_d.day
-                    if _m>=10: return True
-                    if _m<=3: return True
-                    if _m==4 and _day<_fs(_y,4): return True
-                    return False
-                _syd_off = 11 if _syd_aedt(_utc_now) else 10
+                _syd_off = 11 if (_month >= 10 or _month <= 4) else 10
                 _syd_tz2 = _tz_sl(timedelta(hours=_syd_off))
                 _now_syd = _utc_now.astimezone(_syd_tz2)
                 _tz_lbl2 = "AEDT" if _syd_off == 11 else "AEST"
@@ -6396,26 +6164,15 @@ def vol_config_tab():
                 st.caption(f"Found {len(snapshots)} snapshot(s)")
                 
                 for snap in snapshots:
-                    try:
-                        import pytz as _pytz_s; _syd_s = _pytz_s.timezone('Australia/Sydney')
-                        _cat_s = snap['created_at'].replace(tzinfo=__import__('datetime').timezone.utc).astimezone(_syd_s)
-                        _snap_time_lbl = _cat_s.strftime('%Y-%m-%d %H:%M AEST')
-                    except:
-                        _snap_time_lbl = snap['snapshot_date'].strftime('%Y-%m-%d %H:%M UTC')
-                    with st.expander(f"📸 {snap['currency']} - {snap['label']} ({_snap_time_lbl})", expanded=False):
+                    with st.expander(f"📸 {snap['currency']} - {snap['label']} ({snap['snapshot_date'].strftime('%Y-%m-%d %H:%M')})", expanded=False):
                         col1, col2, col3 = st.columns([3, 1, 1])
                         
                         with col1:
                             st.markdown(f"**Currency:** {snap['currency']}")
-                            st.markdown(f"**Date:** {_snap_time_lbl}")
+                            st.markdown(f"**Date:** {snap['snapshot_date'].strftime('%Y-%m-%d %H:%M:%S')}")
                             if snap['notes']:
                                 st.markdown(f"**Notes:** {snap['notes']}")
-                            try:
-                                import pytz as _pytz; _syd = _pytz.timezone('Australia/Sydney')
-                                _cat = snap['created_at'].replace(tzinfo=__import__('datetime').timezone.utc).astimezone(_syd)
-                                st.caption(f"Created: {_cat.strftime('%Y-%m-%d %H:%M:%S AEST')}")
-                            except:
-                                st.caption(f"Created: {snap['created_at'].strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                            st.caption(f"Created: {snap['created_at'].strftime('%Y-%m-%d %H:%M:%S')}")
                         
                         with col2:
                             if st.button("📂 Load", key=f"load_snap_{snap['id']}", use_container_width=True):
@@ -6904,17 +6661,7 @@ def curves_tab():
                                 from datetime import datetime as _dtnow2
                                 from datetime import datetime as _dtnow2, timezone as _tz_pub, timedelta as _td_pub
                                 _utc_now2 = _dtnow2.now(_tz_pub.utc)
-                                import calendar as _cal2
-                                def _syd_aedt2(_d):
-                                    def _fs2(_y,_m):
-                                        _c=_cal2.monthcalendar(_y,_m)
-                                        return _c[0][6] if _c[0][6]!=0 else _c[1][6]
-                                    _y,_m,_day=_d.year,_d.month,_d.day
-                                    if _m>=10: return True
-                                    if _m<=3: return True
-                                    if _m==4 and _day<_fs2(_y,4): return True
-                                    return False
-                                _syd_off2 = 11 if _syd_aedt2(_utc_now2) else 10
+                                _syd_off2 = 11 if (_utc_now2.month >= 10 or _utc_now2.month <= 4) else 10
                                 _now_local = _utc_now2.astimezone(_tz_pub(timedelta(hours=_syd_off2)))
                                 _tz_lbl = "AEDT" if _syd_off2 == 11 else "AEST"
                                 _slbl = f"{_pub_ccy} {_now_local.strftime('%d-%b-%Y %H:%M')} {_tz_lbl}"
@@ -8258,16 +8005,36 @@ def swaptions_tab(vol_mode: str):
                     for _t in _tc: _dp[_t] = _dv
                     _vd[_pp] = _dp
                 _da = _ar.copy()
-                for _t in _tc: _da[_t] = _da[_t] / 10000.0
+                # For Normal SABR: alpha = σ_N / F^beta
+                # Use correct sabr_implied_alpha_from_atm if curve available
+                _beta_init = 0.5; _rho_init = 0.20; _nu_init = 0.30
+                for _t in _tc:
+                    _ten_y = label_to_years(str(_t))
+                    for _i, _erow in _da.iterrows():
+                        _exp_lbl = str(_erow.get("Expiry","")).strip()
+                        _exp_y = label_to_years(_exp_lbl)
+                        _atm_bp_val = float(_erow.get(_t, 0) or 0)
+                        if _atm_bp_val <= 0 or _exp_y <= 0: continue
+                        _sigma_n = _atm_bp_val / 10000.0
+                        if curve is not None:
+                            try:
+                                _F_init, _, _ = forward_and_annuity_from_curve(curve, ccy, _exp_y, _ten_y, None)
+                                _F_init = max(_F_init, 0.001)
+                            except: _F_init = 0.05
+                        else:
+                            _F_init = 0.05
+                        _alpha_init = sabr_implied_alpha_from_atm(_sigma_n, _F_init, _exp_y, _beta_init, _rho_init, _nu_init)
+                        _da.at[_i, _t] = max(_alpha_init, 1e-6)
                 _vd["alpha"] = _da
                 st.session_state[f"_sabr_init_{ccy}"] = True
                 _, _a, _b, _r, _n = get_ccy_vol_data(ccy)
             except Exception:
                 pass
 
-        if _atm_surf is not None and curve is not None:
+        if _a is not None and _atm_surf is not None and curve is not None:
             _EXPIRIES = ["1m","3m","6m","1y","2y","3y","5y","7y","10y","15y","20y"]
             _TENORS   = ["1Y","2Y","3Y","5Y","7Y","10Y","15Y","20Y","25Y","30Y"]
+
 
             # Single button — runs check and caches result
             if st.button("▶ Run α Check", key="run_alpha_check_btn", type="secondary"):
@@ -8374,7 +8141,6 @@ def swaptions_tab(vol_mode: str):
                                 load_user_config.clear()
                             except Exception:
                                 pass
-                        st.session_state.pop("_alpha_check_result", None)
                         st.success(f"✅ Alpha recalibrated   —   {_updated} cells updated. ~, ρ,ν, × unchanged.")
                         st.rerun()
             with _rc2:
@@ -19110,6 +18876,91 @@ def sod_report_tab():
         st.warning("Database not connected   —   SOD Report requires saved vol snapshots.")
         return
 
+    # ── Dev Tool: Seed dummy USD snapshots for testing ────────────
+    with st.expander("🛠️ Seed Test Data (Dev)", expanded=len(_snaps_usd) < 2):
+        st.caption("Seeds dummy USD vol snapshots based on the currently loaded USD vol surface, "
+                   "with randomised daily moves. Use this to test the SOD Report without real EOD data.")
+        _seed_c1, _seed_c2, _seed_c3 = st.columns([2, 2, 2])
+        with _seed_c1:
+            _seed_days = st.number_input("Days of history to seed", min_value=2, max_value=90,
+                                         value=45, key="sod_seed_days")
+        with _seed_c2:
+            _seed_vol_sigma = st.number_input("Daily vol move ┬ñ├ó (bp)", min_value=0.5, max_value=10.0,
+                                              value=2.0, step=0.5, key="sod_seed_sigma")
+        with _seed_c3:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            _seed_btn = st.button("🌱 Seed Dummy USD Snapshots", key="sod_seed_btn", type="primary")
+
+        if _seed_btn:
+            _usd_vol_data = st.session_state.get("vol_data", {}).get("USD", {})
+            _usd_atm_live = _usd_vol_data.get("atm")
+
+            if _usd_atm_live is None:
+                st.error("No USD ATM vol surface loaded. Load USD data in Vol/SABR tab first.")
+            else:
+                import json as _json
+                from datetime import datetime as _dt, timedelta as _td
+                import random as _rnd
+
+                _atm_base = _usd_atm_live.copy()
+                if "Expiry" in _atm_base.columns:
+                    _atm_base = _atm_base.set_index("Expiry")
+                _tenor_cols = [c for c in _atm_base.columns]
+                _exp_rows   = list(_atm_base.index)
+
+                conn = get_db_connection()
+                if not conn:
+                    st.error("Cannot connect to database.")
+                else:
+                    cur = conn.cursor()
+                    _seeded = 0
+                    _rnd.seed(42)
+
+                    # Walk backwards from yesterday, one snapshot per business day
+                    _day = _dt.now().replace(hour=21, minute=0, second=0, microsecond=0)
+                    _running = _atm_base.copy().astype(float)
+
+                    for _d in range(int(_seed_days)):
+                        _day -= _td(days=1)
+                        # Skip weekends
+                        if _day.weekday() >= 5:
+                            _day -= _td(days=_day.weekday() - 4)
+
+                        # Apply random daily move to each cell
+                        for _e in _exp_rows:
+                            for _t in _tenor_cols:
+                                try:
+                                    _mv = _rnd.gauss(0, _seed_vol_sigma)
+                                    _running.loc[_e, _t] = max(
+                                        float(_running.loc[_e, _t]) + _mv, 1.0
+                                    )
+                                except Exception:
+                                    pass
+
+                        _snap_records = _running.reset_index().rename(columns={"index": "Expiry"}).to_dict(orient="records")
+                        _label = f"USD EOD {_day.strftime('%Y-%m-%d')} [DUMMY]"
+
+                        try:
+                            cur.execute("""
+                                INSERT INTO vol_history
+                                (user_id, currency, snapshot_date, label, atm_vols, notes)
+                                VALUES (%s, %s, %s, %s, %s, %s)
+                            """, (
+                                user_id, "USD", _day,
+                                _label,
+                                Json({"values": _snap_records}),
+                                "Seeded dummy data for SOD Report testing"
+                            ))
+                            _seeded += 1
+                        except Exception as _e:
+                            pass
+
+                    conn.commit()
+                    cur.close()
+                    conn.close()
+                    st.success(f"✅ Seeded {_seeded} dummy USD snapshots. Reload the page to see them.")
+                    st.rerun()
+
     if len(_snaps_usd) < 2:
         st.info(
             "Need at least 2 USD vol snapshots to compute overnight changes. "
@@ -19701,24 +19552,13 @@ def sod_report_tab():
             st.markdown("### 📝 SOD Summary")
 
             # Build narrative
-            _usd_vals = _usd_chg.values.astype(float)
-            _usd_avg_chg = float(_usd_vals.mean())           # signed mean for direction
-            _usd_avg_abs_chg = float(abs(_usd_vals).mean())  # mean absolute for magnitude
-            _usd_max_chg = float(_usd_vals.max())
-            _usd_min_chg = float(_usd_vals.min())
-            # Direction: use signed mean, but if near zero use max abs move direction
-            if abs(_usd_avg_chg) < 0.5:
-                _usd_direction = "mixed" 
-            else:
-                _usd_direction = "higher" if _usd_avg_chg > 0 else "lower"
+            _usd_avg_chg = float(_usd_chg.values.astype(float).mean())
+            _usd_max_chg = float(_usd_chg.values.astype(float).max())
+            _usd_min_chg = float(_usd_chg.values.astype(float).min())
+            _usd_direction = "higher" if _usd_avg_chg > 0 else "lower"
 
-            _aud_vals = _implied_chg.values.astype(float)
-            _aud_avg_chg = float(_aud_vals.mean())
-            _aud_avg_abs_chg = float(abs(_aud_vals).mean())
-            if abs(_aud_avg_chg) < 0.3:
-                _aud_direction = "mixed"
-            else:
-                _aud_direction = "higher" if _aud_avg_chg > 0 else "lower"
+            _aud_avg_chg = float(_implied_chg.values.astype(float).mean())
+            _aud_direction = "higher" if _aud_avg_chg > 0 else "lower"
 
             # Find biggest USD moves
             _usd_flat = _usd_chg.stack().reset_index()
@@ -19764,13 +19604,13 @@ def sod_report_tab():
 
             _narrative = f"""
 **USD overnight vol session (T-2 → T-1 NYC close):** USD ATM vols moved broadly {_usd_direction} \
-overnight, with an average absolute move of {_usd_avg_abs_chg:.1f}bp across the surface. \
+overnight, with the surface averaging {abs(_usd_avg_chg):.1f}bp change. \
 The largest moves were in {_usd_move_str}. \
 The range across the surface was {_usd_min_chg:+.1f}bp to {_usd_max_chg:+.1f}bp.{_usd_prem_ctx}
 
 **Implied AUD open (vs yesterday's 4:30pm Sydney close):** Applying USD/AUD vol betas \
 (short-end {int(_beta_short*100)}%, mid {int(_beta_mid*100)}%, long-end {int(_beta_long*100)}%), \
-AUD vols are implied to open broadly {_aud_direction}, with an average absolute implied move of {_aud_avg_abs_chg:.1f}bp. \
+AUD vols are implied to open broadly {_aud_direction}, averaging {abs(_aud_avg_chg):.1f}bp change. \
 Key AUD moves to watch: {_aud_move_str}.{_aud_prem_ctx}
 
 **Tactical note:** {"🔴 Significant overnight move — short-dated AUD gamma likely repriced at open. Priority: review 3m-6m expiry positions before first trades." if abs(float(_implied_chg.values.astype(float).max() if _implied_chg.values.astype(float).max() > abs(_implied_chg.values.astype(float).min()) else _implied_chg.values.astype(float).min())) > 4.0 else ("⚠️ Moderate moves — short-dated AUD gamma affected. Monitor 3m-6m expiry trades at open." if abs(float(_implied_chg.values.astype(float).max() if _implied_chg.values.astype(float).max() > abs(_implied_chg.values.astype(float).min()) else _implied_chg.values.astype(float).min())) > 2.0 else "✅ Moves are modest — no urgent repricing expected at the AUD open. Monitor live market confirmation.")} \
@@ -19856,11 +19696,8 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
 
                     _sod_story = []
                     _ts = pd.Timestamp.now(tz='Australia/Sydney').strftime('%Y-%m-%d %H:%M')
-                    _tz_lbl_pdf = "AEDT" if pd.Timestamp.now(tz='Australia/Sydney').dst().seconds > 0 else "AEST"
                     _sod_story.append(Paragraph("RateEdge — Start of Day Report", _sT))
-                    _sod_story.append(Paragraph(
-                        f"{_ts} {_tz_lbl_pdf}   |   USD T-1: {_usd_t1_sel[:50]}   |   USD T-2: {_usd_t2_sel[:40]}<br/>"
-                        f"AUD prev close: {_aud_sel[:40]}", _sSub))
+                    _sod_story.append(Paragraph(f"{_ts} AEST   |   USD T-1: {_usd_t1_sel[:50]}   |   AUD: {_aud_sel[:40]}", _sSub))
                     _sod_story.append(HRFlowable(width="100%", thickness=1.5,
                                                   color=colors.HexColor("#3b82f6"), spaceAfter=8))
 
@@ -19888,16 +19725,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     ]))
                     _sod_story.append(_usd_t)
 
-                    # USD Fwd Premium Changes
-                    if not _usd_prem_chg.empty:
-                        _sod_story.append(Paragraph("USD Fwd Premium Changes (bp)", _sH2))
-                        _usd_p_r = _usd_prem_chg.reset_index()
-                        _usd_p_data = [["Expiry"] + list(_usd_p_r.columns[1:])]
-                        for _, _row in _usd_p_r.iterrows():
-                            _usd_p_data.append([str(_row.iloc[0])] + [f"{float(v):+.2f}" if v==v else "—" for v in _row.iloc[1:]])
-                        _usd_pt = Table(_usd_p_data)
-                        _usd_pt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#1e293b")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTSIZE",(0,0),(-1,-1),7),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#e2e8f0")),("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2)]))
-                        _sod_story.append(_usd_pt)
+                    # Implied AUD Changes table
                     _sod_story.append(Paragraph("Implied AUD Vol Change at Open (bp)", _sH2))
                     _aud_chg_r = _implied_chg.astype(float).reset_index()
                     _aud_tbl_data = [["Expiry"] + list(_aud_chg_r.columns[1:])]
@@ -19916,26 +19744,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     ]))
                     _sod_story.append(_aud_t)
 
-                    # Implied AUD Vol Open Level
-                    _sod_story.append(Paragraph("Implied AUD Vol Open Level (bp)", _sH2))
-                    _aud_op_r = _implied_open.astype(float).reset_index()
-                    _aud_op_data = [["Expiry"] + list(_aud_op_r.columns[1:])]
-                    for _, _row in _aud_op_r.iterrows():
-                        _aud_op_data.append([str(_row.iloc[0])] + [f"{float(v):.2f}" if v==v else "—" for v in _row.iloc[1:]])
-                    _aud_op_t = Table(_aud_op_data)
-                    _aud_op_t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#1e3a5f")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTSIZE",(0,0),(-1,-1),7),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#e2e8f0")),("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2)]))
-                    _sod_story.append(_aud_op_t)
-
-                    # Implied AUD Fwd Premium Change
-                    if not _aud_prem_chg.empty:
-                        _sod_story.append(Paragraph("Implied AUD Fwd Premium Change (bp)", _sH2))
-                        _aud_pc_r = _aud_prem_chg.reset_index()
-                        _aud_pc_data = [["Expiry"] + list(_aud_pc_r.columns[1:])]
-                        for _, _row in _aud_pc_r.iterrows():
-                            _aud_pc_data.append([str(_row.iloc[0])] + [f"{float(v):+.2f}" if v==v else "—" for v in _row.iloc[1:]])
-                        _aud_pc_t = Table(_aud_pc_data)
-                        _aud_pc_t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#1e3a5f")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTSIZE",(0,0),(-1,-1),7),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#e2e8f0")),("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2)]))
-                        _sod_story.append(_aud_pc_t)
+                    # CFS rows
                     if _cfs_rows:
                         _sod_story.append(Paragraph("Implied AUD CFS Open Levels (bp fwd prem)", _sH2))
                         _cfs_pdf_df = pd.DataFrame(_cfs_rows)[["CFS Tenor","CFS Total (prev)","CFS Total (open)","> CFS"]]
@@ -20576,7 +20385,7 @@ h2{{color:#1e3a5f;margin-top:20px}}
                     ]))
                     _story.append(_rates_tbl)
 
-                # Overnight vol changes + chart
+                # Overnight vol changes
                 if _chg_rows:
                     _story.append(Paragraph("Overnight ATM Vol Changes", _h2_style))
                     _vchg_data = [["Tenor","Prev (bp)","Now (bp)","Chg"]]
@@ -20598,63 +20407,6 @@ h2{{color:#1e3a5f;margin-top:20px}}
                         ("BOTTOMPADDING",(0,0),(-1,-1), 2),
                     ]))
                     _story.append(_vchg_tbl)
-                    # Vol bar chart — matplotlib (no kaleido needed)
-                    try:
-                        import matplotlib
-                        matplotlib.use("Agg")
-                        import matplotlib.pyplot as _plt
-                        import io as _cio
-                        from reportlab.platypus import Image as _RLImage
-                        _v_df2 = pd.DataFrame(_chg_rows)
-                        _fig_v2, _ax_v = _plt.subplots(figsize=(9, 2.8))
-                        _colors_v = ["#22c55e" if v>=0 else "#ef4444" for v in _v_df2["Chg"]]
-                        _bars = _ax_v.bar(_v_df2["Tenor"], _v_df2["Chg"], color=_colors_v)
-                        for _bar, _val in zip(_bars, _v_df2["Chg"]):
-                            _ax_v.text(_bar.get_x()+_bar.get_width()/2,
-                                       _bar.get_height() + (0.05 if _val>=0 else -0.12),
-                                       f"{_val:+.1f}", ha="center", va="bottom", fontsize=7)
-                        _ax_v.axhline(0, color="#94a3b8", linewidth=0.5)
-                        _ax_v.set_title("Overnight ATM Vol Δ (bp)", fontsize=9, pad=4)
-                        _ax_v.tick_params(axis="x", labelsize=7, rotation=30)
-                        _ax_v.tick_params(axis="y", labelsize=7)
-                        _ax_v.set_facecolor("#f8fafc"); _fig_v2.patch.set_facecolor("#ffffff")
-                        _plt.tight_layout()
-                        _img_buf_v = _cio.BytesIO()
-                        _fig_v2.savefig(_img_buf_v, format="png", dpi=150, bbox_inches="tight")
-                        _plt.close(_fig_v2)
-                        _img_buf_v.seek(0)
-                        _story.append(_RLImage(_img_buf_v, width=17*cm, height=6*cm))
-                    except Exception: pass
-
-                # Overnight rate changes + chart
-                if _rate_chg_rows:
-                    _story.append(Paragraph("Overnight Swap Rate Changes (bp)", _h2_style))
-                    try:
-                        import matplotlib
-                        matplotlib.use("Agg")
-                        import matplotlib.pyplot as _plt
-                        import io as _cio
-                        from reportlab.platypus import Image as _RLImage
-                        _r_df2 = pd.DataFrame(_rate_chg_rows)
-                        _fig_r2, _ax_r = _plt.subplots(figsize=(9, 2.5))
-                        _colors_r = ["#38bdf8" if v>=0 else "#a78bfa" for v in _r_df2["Chg (bp)"]]
-                        _rbars = _ax_r.bar(_r_df2["Tenor"], _r_df2["Chg (bp)"], color=_colors_r)
-                        for _bar, _val in zip(_rbars, _r_df2["Chg (bp)"]):
-                            _ax_r.text(_bar.get_x()+_bar.get_width()/2,
-                                       _bar.get_height() + (0.05 if _val>=0 else -0.2),
-                                       f"{_val:+.1f}", ha="center", va="bottom", fontsize=7)
-                        _ax_r.axhline(0, color="#94a3b8", linewidth=0.5)
-                        _ax_r.set_title("Overnight Swap Rate Δ (bp)", fontsize=9, pad=4)
-                        _ax_r.tick_params(axis="x", labelsize=7, rotation=30)
-                        _ax_r.tick_params(axis="y", labelsize=7)
-                        _ax_r.set_facecolor("#f8fafc"); _fig_r2.patch.set_facecolor("#ffffff")
-                        _plt.tight_layout()
-                        _img_buf_r = _cio.BytesIO()
-                        _fig_r2.savefig(_img_buf_r, format="png", dpi=150, bbox_inches="tight")
-                        _plt.close(_fig_r2)
-                        _img_buf_r.seek(0)
-                        _story.append(_RLImage(_img_buf_r, width=17*cm, height=5.5*cm))
-                    except Exception: pass
 
                 # Footer
                 _story.append(Spacer(1, 16))
