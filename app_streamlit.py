@@ -3052,19 +3052,38 @@ def apply_rateedge_theme(theme_name: str):
         [data-testid="stSidebar"] .stMarkdown {{
             color: {text} !important;
         }}
-        /* Sidebar expand/collapse button - make arrow bright red and visible */
+        /* Sidebar expand/collapse arrow — all known Streamlit versions */
         [data-testid="collapsedControl"],
-        [data-testid="collapsedControl"] button {{
+        [data-testid="collapsedControl"] button,
+        button[kind="header"],
+        [data-testid="stSidebarCollapseButton"],
+        [data-testid="stSidebarCollapseButton"] button {{
             background-color: {accent} !important;
             border-radius: 0 6px 6px 0 !important;
             width: 28px !important;
+            min-width: 28px !important;
         }}
         [data-testid="collapsedControl"] svg,
-        [data-testid="stSidebar"] button svg {{
+        [data-testid="collapsedControl"] button svg,
+        [data-testid="stSidebarCollapseButton"] svg,
+        button[kind="header"] svg,
+        [data-testid="stSidebar"] > div:first-child button svg {{
             fill: white !important;
             stroke: white !important;
+            color: white !important;
             width: 20px !important;
             height: 20px !important;
+        }}
+        /* The arrow that appears when sidebar IS collapsed */
+        section[data-testid="stSidebarContent"] + div button,
+        .st-emotion-cache-1cypcdb,
+        .st-emotion-cache-czk5ss {{
+            background-color: {accent} !important;
+        }}
+        .st-emotion-cache-1cypcdb svg,
+        .st-emotion-cache-czk5ss svg {{
+            fill: white !important;
+            stroke: white !important;
         }}
         /* Collapsed sidebar button */
         .css-1rs6os {{
