@@ -20161,6 +20161,8 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         ("swap_20y",   "Swap 20Y",         "AUD Swaps"),
         ("aud_fut_3y", "AGB 3Y Fut",       "AUD Futures"),
         ("aud_fut_10y","AGB 10Y Fut",      "AUD Futures"),
+        ("efp_3y",     "3Y EFP (bp)",      "AUD EFP"),
+        ("efp_10y",    "10Y EFP (bp)",     "AUD EFP"),
         ("spi",        "SPI 200 Fut",      "Equities"),
         ("sp500",      "S&P 500",          "Equities"),
         ("audusd",     "AUD/USD",          "FX"),
@@ -20177,15 +20179,21 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         ("sofr_6m",    "SOFR 6M",          "USD Money"),
     ]
 
+    # Keys that use 4dp format regardless of magnitude
+    _FOURDP_KEYS = {"aud_fut_3y", "aud_fut_10y"}
+    # Keys already in bp — show raw change not ×100
+    _BP_KEYS = {"efp_3y", "efp_10y"}
+
     _DERIVED = [
-        ("aud_2s10s",  "AUD 2s10s",  "swap_10y",   "swap_2y",    100),
-        ("aud_3s10s",  "AUD 3s10s",  "swap_10y",   "swap_3y",    100),
-        ("aud_10s20s", "AUD 10s20s", "swap_20y",   "swap_10y",   100),
-        ("usd_2s10s",  "UST 2s10s",  "usd_10y",    "usd_2y",     100),
-        ("usd_2s30s",  "UST 2s30s",  "usd_30y",    "usd_2y",     100),
-        ("usd_ss_2y",  "USD SS 2Y",  "usdswap_2y", "usd_2y",    100),
-        ("usd_ss_10y", "USD SS 10Y", "usdswap_10y","usd_10y",   100),
-        ("usd_ss_30y", "USD SS 30Y", "usdswap_30y","usd_30y",   100),
+        ("aud_2s10s",    "AUD 2s10s",       "swap_10y",  "swap_2y",    100),
+        ("aud_3s10s",    "AUD 3s10s",       "swap_10y",  "swap_3y",    100),
+        ("aud_10s20s",   "AUD 10s20s",      "swap_20y",  "swap_10y",   100),
+        ("aud_3s10s_box","AUD 3s10s EFP Box","efp_10y",  "efp_3y",       1),
+        ("usd_2s10s",    "UST 2s10s",       "usd_10y",   "usd_2y",     100),
+        ("usd_2s30s",    "UST 2s30s",       "usd_30y",   "usd_2y",     100),
+        ("usd_ss_2y",    "USD SS 2Y",       "usdswap_2y","usd_2y",     100),
+        ("usd_ss_10y",   "USD SS 10Y",      "usdswap_10y","usd_10y",   100),
+        ("usd_ss_30y",   "USD SS 30Y",      "usdswap_30y","usd_30y",   100),
     ]
 
     # Load stored rates
@@ -20203,9 +20211,13 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             _gcols = st.columns(len(_fields))
             for _gi, (_k, _lbl) in enumerate(_fields):
                 _def = _mr_today.get(_k, 0.0)
+                _is_fut = _k in _FOURDP_KEYS
+                _is_bp_field = _k in _BP_KEYS
+                _is_big = _k in ("spi","sp500")
+                _fmt = "%.4f" if (_is_fut or (_def < 10 and not _is_big)) else "%.2f"
+                _stp = 0.0001 if (_is_fut or (_def < 10 and not _is_big)) else (0.1 if _is_bp_field else 0.01)
                 _new_rates[_k] = _gcols[_gi].number_input(
-                    _lbl, value=float(_def), format="%.4f" if _def < 10 and "spi" not in _k and "sp500" not in _k else "%.2f",
-                    step=0.0001 if _def < 10 and "spi" not in _k and "sp500" not in _k else 0.01,
+                    _lbl, value=float(_def), format=_fmt, step=_stp,
                     key=f"mr_{_k}", label_visibility="visible")
             st.markdown("")
 
@@ -20245,7 +20257,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             if _v:
                 _chg = round(_v - _p, 4) if _p else None
                 _is_bp = _grp in ("AUD Money","AUD OIS","AUD Swaps","USD Rates")
-                _is_spread = _grp == "Spreads"
+                _is_spread = _grp in ("Spreads",)
                 _chg_disp = (f"{_chg*100:+.1f}bp" if _is_bp and _chg is not None else
                              f"{_chg:+.1f}bp" if _is_spread and _chg is not None else
                              f"{_chg:+.4f}" if _chg is not None else "—")
