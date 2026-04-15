@@ -45,6 +45,9 @@ import requests
 import scipy.optimize
 from scipy.interpolate import PchipInterpolator
 
+# RateEdge logo (base64 PNG) — used in PDF headers
+_RATEEDGE_LOGO_B64 = "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"
+
 # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
 # AFMA AUSTRALIAN BUSINESS DAY CALENDAR
 # Sydney/NSW calendar   —   national + NSW state holidays.
@@ -18817,12 +18820,10 @@ def main():
     # Sidebar for settings
     with st.sidebar:
         st.markdown(
-            """
-            <div style="text-align:center;padding:1rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
-                <div style="font-size:1.4rem;font-weight:700;">
-                    <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
-                </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v1504w  |  UAT</div>
+            f"""
+            <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
+                <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505a  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -20312,12 +20313,29 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     _sod_story = []
                     _ts = pd.Timestamp.now(tz='Australia/Sydney').strftime('%Y-%m-%d %H:%M')
                     _tz_lbl_pdf = "AEDT" if pd.Timestamp.now(tz='Australia/Sydney').dst().seconds > 0 else "AEST"
-                    _sod_story.append(Paragraph("RateEdge — Start of Day Report", _sT))
+                    # Logo header
+                    import base64 as _b64_sod, io as _logo_io_sod
+                    from reportlab.platypus import Image as _RLImg_sod
+                    _logo_bytes_sod = _b64_sod.b64decode(_RATEEDGE_LOGO_B64)
+                    _logo_img_sod = _RLImg_sod(_logo_io_sod.BytesIO(_logo_bytes_sod), width=4*cm, height=1.2*cm)
+                    _logo_img_sod.hAlign = "LEFT"
+                    _hdr_data = [[_logo_img_sod,
+                                  Paragraph("<b>Start-of-Day Report</b><br/>"
+                                            f"<font size=7 color='#64748b'>{_ts} {_tz_lbl_pdf}</font>", _sT)]]
+                    _hdr_tbl = Table(_hdr_data, colWidths=[5*cm, None])
+                    _hdr_tbl.setStyle(TableStyle([
+                        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                        ("ALIGN", (1,0), (1,0), "RIGHT"),
+                        ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+                    ]))
+                    _sod_story.append(_hdr_tbl)
+                    _sod_story.append(HRFlowable(width="100%", thickness=2,
+                                                  color=colors.HexColor("#1e3a5f"), spaceAfter=4))
                     _sod_story.append(Paragraph(
-                        f"{_ts} {_tz_lbl_pdf}   |   USD T-1: {_usd_t1_sel[:50]}   |   USD T-2: {_usd_t2_sel[:40]}<br/>"
-                        f"AUD prev close: {_aud_sel[:40]}", _sSub))
-                    _sod_story.append(HRFlowable(width="100%", thickness=1.5,
-                                                  color=colors.HexColor("#3b82f6"), spaceAfter=8))
+                        f"<font color='#64748b'>USD T-1: {_usd_t1_sel[:60]}   |   "
+                        f"USD T-2: {_usd_t2_sel[:50]}   |   AUD: {_aud_sel[:40]}</font>", _sSub))
+                    _sod_story.append(HRFlowable(width="100%", thickness=0.5,
+                                                  color=colors.HexColor("#e2e8f0"), spaceAfter=8))
 
                     # Narrative - split into 3 paragraphs
                     import re as _re_pdf
@@ -20416,8 +20434,13 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
 
                     _sod_story.append(Spacer(1, 16))
                     _sod_story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#e2e8f0")))
+                    _sod_story.append(Spacer(1, 12))
+                    _sod_story.append(HRFlowable(width="100%", thickness=0.5,
+                                                  color=colors.HexColor("#e2e8f0"), spaceAfter=4))
                     _sod_story.append(Paragraph(
-                        f"RateEdge Options Platform | {_ts} | Confidential | For internal use only",
+                        f"<font color='#94a3b8'>RateEdge Options Platform (Aust.)  |  "
+                        f"ABN 95 601 693 766  |  {_ts} {_tz_lbl_pdf}  |  "
+                        "CONFIDENTIAL — For internal use only. Not for distribution.</font>",
                         _sCap))
 
                     _sod_doc.build(_sod_story)
@@ -21206,10 +21229,27 @@ h2{{color:#1e3a5f;margin-top:20px}}
                 _story = []
 
                 # Header
-                _story.append(Paragraph("RateEdge AUD IRO — Daily Brief", _title_style))
-                _story.append(Paragraph(f"{_today_str} SOD   |   vs {_prev_date}", _sub_style))
-                _story.append(HRFlowable(width="100%", thickness=1.5,
-                                          color=colors.HexColor("#3b82f6"), spaceAfter=8))
+                # Logo header
+                import base64 as _b64_rv, io as _logo_io_rv
+                from reportlab.platypus import Image as _RLImg_rv
+                _logo_bytes_rv = _b64_rv.b64decode(_RATEEDGE_LOGO_B64)
+                _logo_img_rv = _RLImg_rv(_logo_io_rv.BytesIO(_logo_bytes_rv), width=4*cm, height=1.2*cm)
+                _logo_img_rv.hAlign = "LEFT"
+                _hdr_rv_data = [[_logo_img_rv,
+                                  Paragraph("<b>AUD IRO — Daily Brief</b><br/>"
+                                            f"<font size=7 color='#64748b'>{_today_str} SOD  |  vs {_prev_date}</font>",
+                                            _title_style)]]
+                _hdr_rv_tbl = Table(_hdr_rv_data, colWidths=[5*cm, None])
+                _hdr_rv_tbl.setStyle(TableStyle([
+                    ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                    ("ALIGN", (1,0), (1,0), "RIGHT"),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+                ]))
+                _story.append(_hdr_rv_tbl)
+                _story.append(HRFlowable(width="100%", thickness=2,
+                                          color=colors.HexColor("#1e3a5f"), spaceAfter=4))
+                _story.append(HRFlowable(width="100%", thickness=0.5,
+                                          color=colors.HexColor("#e2e8f0"), spaceAfter=8))
 
                 # Overnight narrative
                 _narr = _pdf_clean((_rate_summary + " " + _vol_summary).strip() or \
@@ -21366,7 +21406,8 @@ h2{{color:#1e3a5f;margin-top:20px}}
                 _story.append(HRFlowable(width="100%", thickness=0.5,
                                           color=colors.HexColor("#e2e8f0")))
                 _story.append(Paragraph(
-                    f"Generated by RateEdge Options Platform | {_today_str} | Confidential",
+                    f"RateEdge Options Platform (Aust.)  |  ABN 95 601 693 766  |  "
+                    f"{_today_str}  |  CONFIDENTIAL — For internal use only. Not for distribution.",
                     _caption_style))
 
                 _doc.build(_story)
