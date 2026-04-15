@@ -20633,16 +20633,22 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         ("usd_ss_30y",   "USD SS 30Y",      "usdswap_30y","usd_30y",   100),
     ]
 
-    # Load stored rates
+    # Load stored rates — try both admin IDs
     _mr_today = st.session_state.get("morning_rates_today", {})
     _mr_prev  = st.session_state.get("morning_rates_prev", {})
 
     # Auto-load from DB BEFORE rendering inputs
     if not _mr_today and HAS_POSTGRES:
-        _db_mr = load_user_config(_uid_rv, "morning_rates_today", "AUD")
-        _db_mr_p = load_user_config(_uid_rv, "morning_rates_prev", "AUD")
-        if _db_mr:  st.session_state["morning_rates_today"] = _db_mr;  _mr_today = _db_mr
-        if _db_mr_p: st.session_state["morning_rates_prev"] = _db_mr_p; _mr_prev  = _db_mr_p
+        for _try_uid in ["wpo@rateedge.au", "wpo70@icloud.com", _uid_rv]:
+            _db_mr = load_user_config(_try_uid, "morning_rates_today", "AUD")
+            if _db_mr:
+                st.session_state["morning_rates_today"] = _db_mr
+                _mr_today = _db_mr
+                _db_mr_p = load_user_config(_try_uid, "morning_rates_prev", "AUD")
+                if _db_mr_p:
+                    st.session_state["morning_rates_prev"] = _db_mr_p
+                    _mr_prev = _db_mr_p
+                break
 
     with st.expander("📝 Enter Morning Rates", expanded=not bool(_mr_today)):
         _new_rates = {}
