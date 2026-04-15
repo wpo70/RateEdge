@@ -21820,27 +21820,55 @@ h2{{color:#1e3a5f;margin-top:20px}}
                     _pnl_data = [[Paragraph(h, _pnl_hdr) for h in
                                   ["Structure","Entry Date","Entry Vol","Now","Δ bp","P&amp;L (A$)","Score"]]]
                     for _bid, _bpos in _pdf_book.items():
-                        _ev2 = _bpos.get("entry_vol")
-                        _cv2 = (_curr.get("atm") or {}).get(_bpos.get("vol_key",""))
-                        if not _cv2:
-                            for _ak in (_curr.get("atm") or {}):
-                                if _ak.upper() == _bpos.get("vol_key","").upper():
-                                    _cv2 = (_curr.get("atm") or {})[_ak]; break
-                        if _ev2 and _cv2:
-                            _bp2 = round(float(_cv2) - float(_ev2), 1)
-                            _usd2 = round(_bp2 * 25000, 0)
-                            _pnl_col2 = colors.HexColor("#22c55e") if _usd2 >= 0 else colors.HexColor("#ef4444")
-                            _pnl_str = f"A${'+'if _usd2>=0 else ''}{_usd2/1000:.0f}k"
-                            _chg_str = f"{_bp2:+.1f}"
+                        _bp2 = 0; _usd2 = 0; _pnl_str = "—"; _chg_str = "—"
+                        _entry_disp = "—"; _now_disp = "—"
+                        _is_cal = (_bpos.get("trade_type") == "calendar" and
+                                   _bpos.get("entry_ratio") and
+                                   _bpos.get("short_key") and _bpos.get("long_key"))
+                        if _is_cal:
+                            # Calendar spread: P&L = (entry_ratio − current_ratio) × avg_vol × $25k
+                            def _pdf_get_vol(_key):
+                                _v = (_curr.get("atm") or {}).get(_key)
+                                if not _v:
+                                    for _ak in (_curr.get("atm") or {}):
+                                        if _ak.upper() == _key.upper():
+                                            _v = (_curr.get("atm") or {})[_ak]; break
+                                return _v
+                            _sv_p = _pdf_get_vol(_bpos["short_key"])
+                            _lv_p = _pdf_get_vol(_bpos["long_key"])
+                            _er_p = float(_bpos["entry_ratio"])
+                            if _sv_p and _lv_p and float(_lv_p) > 0:
+                                _cr_p = float(_sv_p) / float(_lv_p)
+                                _bp2  = round((_er_p - _cr_p) * (float(_sv_p) + float(_lv_p)) / 2, 1)
+                                _usd2 = round(_bp2 * 25000, 0)
+                                _pnl_str = f"A${'+'if _usd2>=0 else ''}{_usd2/1000:.0f}k"
+                                _chg_str = f"{_bp2:+.1f}"
+                                _entry_disp = f"{_er_p:.4f}x"
+                                _now_disp   = f"{_cr_p:.4f}x"
+                            else:
+                                _entry_disp = f"{_er_p:.4f}x"
                         else:
-                            _pnl_col2 = colors.HexColor("#94a3b8")
-                            _pnl_str = "—"
-                            _chg_str = "—"
+                            # Standard single-leg: P&L = (current_vol − entry_vol) × $25k
+                            _ev2 = _bpos.get("entry_vol")
+                            _cv2 = (_curr.get("atm") or {}).get(_bpos.get("vol_key",""))
+                            if not _cv2:
+                                for _ak in (_curr.get("atm") or {}):
+                                    if _ak.upper() == _bpos.get("vol_key","").upper():
+                                        _cv2 = (_curr.get("atm") or {})[_ak]; break
+                            if _ev2 and _cv2:
+                                _bp2  = round(float(_cv2) - float(_ev2), 1)
+                                _usd2 = round(_bp2 * 25000, 0)
+                                _pnl_str = f"A${'+'if _usd2>=0 else ''}{_usd2/1000:.0f}k"
+                                _chg_str = f"{_bp2:+.1f}"
+                                _entry_disp = f"{float(_ev2):.1f}bp"
+                                _now_disp   = f"{float(_cv2):.1f}bp"
+                            else:
+                                _entry_disp = f"{float(_ev2):.1f}bp" if _ev2 else "—"
                         _pnl_data.append([
                             Paragraph(_pdf_clean(_bid[:35]), _pnl_body),
                             Paragraph(_bpos.get("entry_date","—"), _pnl_body),
-                            Paragraph(f"{float(_ev2):.1f}bp" if _ev2 else "—", _pnl_body),
-                            Paragraph(f"{float(_cv2):.1f}bp" if _cv2 else "—", _pnl_body),
+                            Paragraph(_entry_disp, _pnl_body),
+                            Paragraph(_now_disp, _pnl_body),
                             Paragraph(f"<font color='{'#22c55e' if _bp2>=0 else '#ef4444'}'>{_chg_str}</font>" if _chg_str!="—" else "—", _pnl_body),
                             Paragraph(f"<font color='{'#22c55e' if _usd2>=0 else '#ef4444'}'>{_pnl_str}</font>" if _pnl_str!="—" else "—", _pnl_body),
                             Paragraph(str(int(_bpos.get("score",0))), _pnl_body),
