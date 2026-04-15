@@ -14222,8 +14222,8 @@ def _render_realised_delivered_vol():
     ccy = "AUD"
 
     # ── Expiry / Tenor grid (matches ATM vol surface) ─────────────────────────
-    _EXP_LABELS  = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
-    _TEN_LABELS  = ["1Y","2Y","3Y","4Y","5Y","6Y","7Y","10Y","12Y","15Y","20Y","25Y","30Y"]
+    _EXP_LABELS  = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","7y","10y","12y","15y","20y","25y"]
+    _TEN_LABELS  = ["1Y","2Y","3Y","4Y","5Y","7Y","10Y","12Y","15Y","20Y","25Y","30Y"]
     _EXP_YRS     = [label_to_years(e) for e in _EXP_LABELS]
     _TEN_YRS     = [label_to_years(t) for t in _TEN_LABELS]
     _WINDOWS     = {"5d": 5, "21d": 21, "3m": 63}
