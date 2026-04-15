@@ -14280,6 +14280,7 @@ def _render_realised_delivered_vol():
         # Handle {"values": [{"Expiry": "1m", "1Y": 88.4, ...}]} format
         if "values" in _atm_vols:
             _rows_list = _atm_vols["values"]
+            if not isinstance(_rows_list, list): continue
             for _vrow in _rows_list:
                 _exp = str(_vrow.get("Expiry", "")).lower().strip()
                 if _exp not in _EXP_LABELS: continue
