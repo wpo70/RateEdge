@@ -18823,7 +18823,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505j  |  UAT</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505k  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -21611,6 +21611,71 @@ h2{{color:#1e3a5f;margin-top:20px}}
                 else:
                     _story.append(Paragraph("Generate trade ideas on the RV tab first.", _body_style))
 
+                # Conviction trade P&L
+                _pdf_book = st.session_state.get("rv_conviction_book", {})
+                _pdf_closed = st.session_state.get("rv_conviction_closed", [])
+                if _pdf_book or _pdf_closed:
+                    _story.append(Paragraph("Conviction Trade Book — Running P&L", _h2_style))
+                    _pnl_hdr = ParagraphStyle("PnlHdr", parent=_styles["Normal"], fontSize=8,
+                                              fontName="Helvetica-Bold", textColor=colors.white)
+                    _pnl_body = ParagraphStyle("PnlBody", parent=_styles["Normal"], fontSize=8)
+                    _pnl_data = [[Paragraph(h, _pnl_hdr) for h in
+                                  ["Structure","Entry Date","Entry Vol","Now","Δ bp","P&L (A$)","Score"]]]
+                    for _bid, _bpos in _pdf_book.items():
+                        _ev2 = _bpos.get("entry_vol")
+                        _cv2 = (_curr.get("atm") or {}).get(_bpos.get("vol_key",""))
+                        if not _cv2:
+                            for _ak in (_curr.get("atm") or {}):
+                                if _ak.upper() == _bpos.get("vol_key","").upper():
+                                    _cv2 = (_curr.get("atm") or {})[_ak]; break
+                        if _ev2 and _cv2:
+                            _bp2 = round(float(_cv2) - float(_ev2), 1)
+                            _usd2 = round(_bp2 * 25000, 0)
+                            _pnl_col2 = colors.HexColor("#22c55e") if _usd2 >= 0 else colors.HexColor("#ef4444")
+                            _pnl_str = f"A${'+'if _usd2>=0 else ''}{_usd2/1000:.0f}k"
+                            _chg_str = f"{_bp2:+.1f}"
+                        else:
+                            _pnl_col2 = colors.HexColor("#94a3b8")
+                            _pnl_str = "—"
+                            _chg_str = "—"
+                        _pnl_data.append([
+                            Paragraph(_pdf_clean(_bid[:35]), _pnl_body),
+                            Paragraph(_bpos.get("entry_date","—"), _pnl_body),
+                            Paragraph(f"{float(_ev2):.1f}bp" if _ev2 else "—", _pnl_body),
+                            Paragraph(f"{float(_cv2):.1f}bp" if _cv2 else "—", _pnl_body),
+                            Paragraph(f"<font color='{'#22c55e' if _bp2>=0 else '#ef4444'}'>{_chg_str}</font>" if _chg_str!="—" else "—", _pnl_body),
+                            Paragraph(f"<font color='{'#22c55e' if _usd2>=0 else '#ef4444'}'>{_pnl_str}</font>" if _pnl_str!="—" else "—", _pnl_body),
+                            Paragraph(str(int(_bpos.get("score",0))), _pnl_body),
+                        ])
+                    if len(_pnl_data) > 1:
+                        _pnl_tbl = Table(_pnl_data, colWidths=["28%","13%","12%","12%","10%","14%","11%"])
+                        _pnl_tbl.setStyle(TableStyle([
+                            ("BACKGROUND",(0,0),(-1,0), colors.HexColor("#1e293b")),
+                            ("FONTSIZE",(0,0),(-1,-1), 8),
+                            ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),
+                            ("GRID",(0,0),(-1,-1), 0.3, colors.HexColor("#e2e8f0")),
+                            ("LEFTPADDING",(0,0),(-1,-1), 4),("RIGHTPADDING",(0,0),(-1,-1), 4),
+                            ("TOPPADDING",(0,0),(-1,-1), 2),("BOTTOMPADDING",(0,0),(-1,-1), 2),
+                        ]))
+                        _story.append(_pnl_tbl)
+                    # Closed trades
+                    if _pdf_closed:
+                        _story.append(Spacer(1, 6))
+                        _story.append(Paragraph("Closed Positions", ParagraphStyle("ClosedHdr",
+                            parent=_styles["Normal"], fontSize=9, fontName="Helvetica-Bold",
+                            textColor=colors.HexColor("#1e3a5f"), spaceBefore=4, spaceAfter=2)))
+                        for _ct in _pdf_closed[-4:]:
+                            _cpnl = _ct.get("bp_pnl", 0)
+                            _cpnl_col = "#22c55e" if _cpnl >= 0 else "#ef4444"
+                            _story.append(Paragraph(
+                                f"<b>{_pdf_clean(_ct.get('structure','')[:40])}</b>  "
+                                f"<font color='#64748b'>{_ct.get('entry_date','')} → {_ct.get('close_date','')}</font>  "
+                                f"<font color='{_cpnl_col}'><b>{_cpnl:+.1f}bp  "
+                                f"A${'+'if _cpnl>=0 else ''}{_ct.get('usd_pnl',0)/1000:.0f}k</b></font>  "
+                                f"<font color='#64748b' size=7>⬆ replaced by new conviction</font>",
+                                ParagraphStyle("ClosedRow", parent=_styles["Normal"], fontSize=8,
+                                               spaceAfter=2, leftIndent=8)))
+
                 # Morning rates table
                 if _tbl_rows:
                     _story.append(Paragraph("Morning Markets", _h2_style))
@@ -21737,13 +21802,113 @@ h2{{color:#1e3a5f;margin-top:20px}}
                         _story.append(_RLImage(_img_buf_r, width=17*cm, height=5.5*cm))
                     except Exception: pass
 
+                # Realised Vol Matrices — only include if shown in UI
+                _pdf_show_rv  = st.session_state.get("rv_mat_show_rv",  True)
+                _pdf_show_vrp = st.session_state.get("rv_mat_show_vrp", True)
+                _pdf_show_dv  = st.session_state.get("rv_mat_show_dv",  False)
+                _win_rv_pdf   = st.session_state.get("rv_mat_win_rv",  "21d")
+                _win_vrp_pdf  = st.session_state.get("rv_mat_win_vrp", "21d")
+                _WIN_PDF = {"7d":7,"21d":21,"3m":63}
+                _EXPIRIES_PDF = ["1M","3M","6M","1Y","2Y","3Y","5Y"]
+                _TENORS_PDF   = ["2Y","3Y","5Y","7Y","10Y","15Y","20Y"]
+
+                def _rv_matrix_pdf(window_days):
+                    _z = []
+                    for _exp in _EXPIRIES_PDF:
+                        _row = []
+                        for _ten in _TENORS_PDF:
+                            _ten_y = float(_ten.replace("Y",""))
+                            _rv = _compute_realised_vol_db("AUD", _ten_y, window_days)
+                            _row.append(round(_rv,1) if _rv else float("nan"))
+                        _z.append(_row)
+                    return _z
+
+                def _atm_matrix_pdf():
+                    _atm_d = _curr.get("atm", {})
+                    _z = []
+                    for _exp in _EXPIRIES_PDF:
+                        _row = []
+                        for _ten in _TENORS_PDF:
+                            _k = f"{_exp.lower()}_{_ten}"
+                            _v = _atm_d.get(_k) or _atm_d.get(_k.upper())
+                            _row.append(float(_v) if _v else float("nan"))
+                        _z.append(_row)
+                    return _z
+
+                def _pdf_heatmap(z_vals, title, fmt_str, cmap_name, figw=9, figh=2.8):
+                    try:
+                        import matplotlib
+                        matplotlib.use("Agg")
+                        import matplotlib.pyplot as _plt2
+                        import matplotlib.colors as _mcolors
+                        import numpy as _np2, io as _hio
+                        from reportlab.platypus import Image as _RLImg2
+                        _fig2, _ax2 = _plt2.subplots(figsize=(figw, figh))
+                        _zn = _np2.array(z_vals, dtype=float)
+                        _vmin = _np2.nanmin(_zn) if not _np2.all(_np2.isnan(_zn)) else 0
+                        _vmax = _np2.nanmax(_zn) if not _np2.all(_np2.isnan(_zn)) else 1
+                        _im = _ax2.imshow(_zn, cmap=cmap_name, vmin=_vmin, vmax=_vmax, aspect="auto")
+                        _ax2.set_xticks(range(len(_TENORS_PDF))); _ax2.set_xticklabels(_TENORS_PDF, fontsize=7)
+                        _ax2.set_yticks(range(len(_EXPIRIES_PDF))); _ax2.set_yticklabels(_EXPIRIES_PDF, fontsize=7)
+                        _ax2.set_xlabel("Swap Tenor", fontsize=8); _ax2.set_ylabel("Option Expiry", fontsize=8)
+                        _ax2.set_title(title, fontsize=9, pad=4)
+                        for _ri in range(len(_EXPIRIES_PDF)):
+                            for _ci in range(len(_TENORS_PDF)):
+                                _v2 = _zn[_ri,_ci]
+                                if not _np2.isnan(_v2):
+                                    _ax2.text(_ci, _ri, fmt_str.format(_v2), ha="center", va="center",
+                                              fontsize=6.5, color="black" if 0.3<(_v2-_vmin)/max(_vmax-_vmin,0.001)<0.7 else "white")
+                        _plt2.colorbar(_im, ax=_ax2, fraction=0.03, pad=0.02)
+                        _plt2.tight_layout()
+                        _hbuf = _hio.BytesIO()
+                        _fig2.savefig(_hbuf, format="png", dpi=130, bbox_inches="tight")
+                        _plt2.close(_fig2)
+                        _hbuf.seek(0)
+                        return _RLImg2(_hbuf, width=17*cm, height=6*cm)
+                    except Exception:
+                        return None
+
+                _any_mat = _pdf_show_rv or _pdf_show_vrp or _pdf_show_dv
+                if _any_mat:
+                    _story.append(Paragraph("Realised & Delivered Vol Matrices", _h2_style))
+                    if _pdf_show_rv:
+                        with st.spinner("PDF: computing realised vol matrix..."):
+                            _rv_z_pdf = _rv_matrix_pdf(_WIN_PDF.get(_win_rv_pdf, 21))
+                        _hm = _pdf_heatmap(_rv_z_pdf, f"Realised ATM Vol ({_win_rv_pdf}) — bp/annum", "{:.1f}", "RdYlGn")
+                        if _hm: _story.append(_hm)
+                    if _pdf_show_vrp:
+                        _atm_z_pdf = _atm_matrix_pdf()
+                        _rv_z_pdf2 = _rv_matrix_pdf(_WIN_PDF.get(_win_vrp_pdf, 21)) if _pdf_show_vrp else []
+                        import math as _mth_pdf
+                        _vrp_z_pdf = [[(_atm_z_pdf[r][c]-_rv_z_pdf2[r][c])
+                                       if not (_mth_pdf.isnan(_atm_z_pdf[r][c]) or _mth_pdf.isnan(_rv_z_pdf2[r][c]))
+                                       else float("nan")
+                                       for c in range(len(_TENORS_PDF))]
+                                      for r in range(len(_EXPIRIES_PDF))]
+                        _hm2 = _pdf_heatmap(_vrp_z_pdf, f"ATM − Realised VRP ({_win_vrp_pdf}) — bp  |  Red=rich  Green=cheap", "{:+.1f}", "RdYlGn_r")
+                        if _hm2: _story.append(_hm2)
+                    if _pdf_show_dv:
+                        _prev_atm_d = _prev.get("atm", {}) if _prev else {}
+                        _curr_atm_d = _curr.get("atm", {})
+                        _dv_z_pdf = []
+                        for _exp in _EXPIRIES_PDF:
+                            _row = []
+                            for _ten in _TENORS_PDF:
+                                _k = f"{_exp.lower()}_{_ten}"
+                                _c_v = _curr_atm_d.get(_k) or _curr_atm_d.get(_k.upper())
+                                _p_v = _prev_atm_d.get(_k) or _prev_atm_d.get(_k.upper())
+                                _row.append(round(float(_c_v)-float(_p_v),1) if (_c_v and _p_v) else float("nan"))
+                            _dv_z_pdf.append(_row)
+                        _hm3 = _pdf_heatmap(_dv_z_pdf, "1d ATM Vol Change — bp  |  Green=lower  Red=higher", "{:+.1f}", "RdYlGn_r")
+                        if _hm3: _story.append(_hm3)
+
                 # Footer
                 _story.append(Spacer(1, 16))
                 _story.append(HRFlowable(width="100%", thickness=0.5,
                                           color=colors.HexColor("#e2e8f0")))
                 _story.append(Paragraph(
                     f"RateEdge Options Platform (Aust.)  |  ABN 95 601 693 766  |  "
-                    f"{_today_str}  |  CONFIDENTIAL — For internal use only. Not for distribution.",
+                    f"{_ts_curr_clean} AEST  |  CONFIDENTIAL — For internal use only. Not for distribution.",
                     _caption_style))
 
                 _doc.build(_story)
