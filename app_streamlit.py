@@ -18835,7 +18835,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1604c  |  UAT</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1604d  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -19724,7 +19724,7 @@ def sod_report_tab():
         return d.reset_index().rename(columns={"index": "Expiry"})
 
     # Cache USD premium matrices keyed on snapshot IDs to avoid recomputing every rerun
-    _usd_prem_cache_key = f"_sod_usd_prem_{_usd_t1_snap.get('id','')}__{_usd_t2_snap.get('id','')}"
+    _usd_prem_cache_key = f"_sod_usd_prem_{_usd_t1.get('id','') if isinstance(_usd_t1, dict) else ''}__{_usd_t2.get('id','') if isinstance(_usd_t2, dict) else ''}"
     if st.session_state.get("_sod_usd_prem_key") == _usd_prem_cache_key and        st.session_state.get("_sod_usd_prem_t1") is not None:
         _usd_prem_t1 = st.session_state["_sod_usd_prem_t1"]
         _usd_prem_t2 = st.session_state["_sod_usd_prem_t2"]
