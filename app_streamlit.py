@@ -18823,7 +18823,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505o  |  UAT</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505p  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -21604,10 +21604,9 @@ h2{{color:#1e3a5f;margin-top:20px}}
                     _s = str(raw).strip()
                     _m = _re_ts.search(r"(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})", _s)
                     if _m: return f"{_m.group(1)} {_m.group(2)}"
-                    # Date-only: append current Sydney time
-                    _dm = _re_ts.search(r"(\d{4}-\d{2}-\d{2})", _s)
-                    if _dm: return _dm.group(1)
-                    return _s[:16]
+                    # Date-only or label string — use current Sydney time
+                    _now_syd = pd.Timestamp.now(tz="Australia/Sydney").strftime("%Y-%m-%d %H:%M")
+                    return _now_syd
                 _ts_curr_clean = _clean_ts(_today_str)
                 _ts_prev_clean = _clean_ts(_prev_date)
                 _sTitleRV = ParagraphStyle("sTRV", parent=_styles["Normal"], fontSize=17,
