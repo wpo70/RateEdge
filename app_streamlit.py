@@ -6699,7 +6699,20 @@ def curves_tab():
     par_rates = st.session_state.get("_irs_par_rates", {}).get(ccy)
 
     if curve is None:
-        st.warning("⬆️ Upload RateEdge_Config.xlsx in Vol/Upload tab → Commit All")
+        st.info("No curves loaded yet. Upload RateEdge_Config.xlsx and commit below.")
+        # Show the uploader inline so the commit button is always accessible
+        st.markdown("#### Upload Config File")
+        _ci_upload = st.file_uploader("Upload RateEdge_Config.xlsx", type=["xlsx"],
+                                      key="curves_quick_upload")
+        if _ci_upload is not None:
+            _ci_type = st.radio("Commit options",
+                                ["SOD IRS", "All"],
+                                index=0, horizontal=True, key="curves_quick_type")
+            if st.button("✅ Commit Selected Data", key="curves_quick_commit", type="primary"):
+                _ci_map = {"SOD IRS": "curves", "All": "all"}
+                load_config_excel(_ci_upload, _ci_map[_ci_type])
+                st.success("Committed — reload the Curves tab.")
+                st.rerun()
         return
 
     def _clean(df):
@@ -14025,7 +14038,7 @@ def _meetings_in_window(ccy: str, expiry_label: str) -> list:
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def _compute_realised_vol_db(ccy: str, tenor_y: float, window_days: int = 21) -> Optional[float]:
     """Annualised realised normal vol (bp) from swap_rates history.
     Uses daily rate differences × √252 × 10000."""
@@ -18822,7 +18835,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505r  |  UAT</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505s  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -19558,9 +19571,20 @@ def sod_report_tab():
     # ── Load available snapshots ──────────────────────────────────
     if st.button("🔄 Reload Snapshots", key="sod_reload_snaps"):
         list_vol_snapshots.clear()
+        # Also clear session snap cache
+        for _sk in list(st.session_state.keys()):
+            if _sk.startswith("_snap_list_"):
+                del st.session_state[_sk]
         st.rerun()
-    _snaps_usd = list_vol_snapshots(user_id, "USD") if HAS_POSTGRES else []
-    _snaps_aud = list_vol_snapshots(user_id, "AUD") if HAS_POSTGRES else []
+    # Cache snapshot list in session state to avoid repeated DB calls within same render
+    _snap_cache_key = f"_snap_list_{user_id}"
+    if _snap_cache_key not in st.session_state:
+        st.session_state[_snap_cache_key] = {
+            "USD": list_vol_snapshots(user_id, "USD") if HAS_POSTGRES else [],
+            "AUD": list_vol_snapshots(user_id, "AUD") if HAS_POSTGRES else [],
+        }
+    _snaps_usd = st.session_state[_snap_cache_key]["USD"]
+    _snaps_aud = st.session_state[_snap_cache_key]["AUD"]
 
     if not HAS_POSTGRES:
         st.warning("Database not connected   —   SOD Report requires saved vol snapshots.")
@@ -19699,12 +19723,21 @@ def sod_report_tab():
         # numeric index — try to restore from index name or just label it
         return d.reset_index().rename(columns={"index": "Expiry"})
 
-    _usd_prem_t1, _ = calculate_atm_premium_matrix(
-        "USD", _usd_curve, _ensure_expiry_col(_atm1),
-    ) if _usd_curve is not None and not _usd_curve.empty else (pd.DataFrame(), pd.DataFrame())
-    _usd_prem_t2, _ = calculate_atm_premium_matrix(
-        "USD", _usd_curve, _ensure_expiry_col(_atm2),
-    ) if _usd_curve is not None and not _usd_curve.empty else (pd.DataFrame(), pd.DataFrame())
+    # Cache USD premium matrices keyed on snapshot IDs to avoid recomputing every rerun
+    _usd_prem_cache_key = f"_sod_usd_prem_{_usd_t1_snap.get('id','')}__{_usd_t2_snap.get('id','')}"
+    if st.session_state.get("_sod_usd_prem_key") == _usd_prem_cache_key and        st.session_state.get("_sod_usd_prem_t1") is not None:
+        _usd_prem_t1 = st.session_state["_sod_usd_prem_t1"]
+        _usd_prem_t2 = st.session_state["_sod_usd_prem_t2"]
+    else:
+        _usd_prem_t1, _ = calculate_atm_premium_matrix(
+            "USD", _usd_curve, _ensure_expiry_col(_atm1),
+        ) if _usd_curve is not None and not _usd_curve.empty else (pd.DataFrame(), pd.DataFrame())
+        _usd_prem_t2, _ = calculate_atm_premium_matrix(
+            "USD", _usd_curve, _ensure_expiry_col(_atm2),
+        ) if _usd_curve is not None and not _usd_curve.empty else (pd.DataFrame(), pd.DataFrame())
+        st.session_state["_sod_usd_prem_key"] = _usd_prem_cache_key
+        st.session_state["_sod_usd_prem_t1"]  = _usd_prem_t1
+        st.session_state["_sod_usd_prem_t2"]  = _usd_prem_t2
 
     _usd_prem_chg = pd.DataFrame()
     if not _usd_prem_t1.empty and not _usd_prem_t2.empty:
@@ -21365,6 +21398,13 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         _TENORS_RV   = ["2Y","3Y","5Y","7Y","10Y","15Y","20Y"]
         _WIN_OPTS    = {"7d":7, "21d":21, "3m":63}
 
+        # Clear matrix cache when window changes
+        if st.button("🔄 Recompute Matrices", key="rv_recompute_mats"):
+            for _ck in list(st.session_state.keys()):
+                if _ck.startswith("rv_mat_computed_"):
+                    del st.session_state[_ck]
+            st.rerun()
+
         _mca, _mcb, _mcc = st.columns(3)
         with _mca:
             _show_rv  = st.checkbox("Realised ATM Vol", value=True,  key="rv_mat_show_rv")
@@ -21447,16 +21487,22 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             return _z
 
         if _show_rv and _win_rv:
-            with st.spinner(f"Computing {_win_rv} realised vol..."):
-                _rv_z = _build_rv_matrix(_WIN_OPTS[_win_rv])
-            _rv_heatmap_db(_rv_z, _TENORS_RV, _EXPIRIES_RV,
-                           f"Realised ATM Vol ({_win_rv}) — bp/annum", "{:.1f}", False)
+            _rv_key = f"rv_mat_computed_{_win_rv}"
+            if _rv_key not in st.session_state:
+                with st.spinner(f"Computing {_win_rv} realised vol..."):
+                    st.session_state[_rv_key] = _build_rv_matrix(_WIN_OPTS[_win_rv])
+            if st.session_state.get(_rv_key):
+                _rv_heatmap_db(st.session_state[_rv_key], _TENORS_RV, _EXPIRIES_RV,
+                               f"Realised ATM Vol ({_win_rv}) — bp/annum", "{:.1f}", False)
 
         if _show_vrp and _win_vrp:
-            with st.spinner(f"Computing {_win_vrp} VRP..."):
-                _rv_z2  = _build_rv_matrix(_WIN_OPTS[_win_vrp])
-                _atm_z  = _build_atm_matrix()
-                _vrp_z  = [[(_atm_z[r][c] - _rv_z2[r][c])
+            _vrp_rv_key = f"rv_mat_computed_{_win_vrp}"
+            if _vrp_rv_key not in st.session_state:
+                with st.spinner(f"Computing {_win_vrp} VRP..."):
+                    st.session_state[_vrp_rv_key] = _build_rv_matrix(_WIN_OPTS[_win_vrp])
+            _rv_z2  = st.session_state[_vrp_rv_key]
+            _atm_z  = _build_atm_matrix()
+            _vrp_z  = [[(_atm_z[r][c] - _rv_z2[r][c])
                              if not (_mth_rv.isnan(_atm_z[r][c]) or _mth_rv.isnan(_rv_z2[r][c]))
                              else float("nan")
                              for c in range(len(_TENORS_RV))]
