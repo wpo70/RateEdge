@@ -18823,7 +18823,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505k  |  UAT</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505l  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -21389,16 +21389,29 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             return _z
 
         def _build_atm_matrix():
-            """Current ATM surface as matrix matching _EXPIRIES_RV × _TENORS_RV."""
-            _atm_d = _curr.get("atm", {})
-            _exp_map = {"1M":"1M","3M":"3M","6M":"6M","1Y":"1Y","2Y":"2Y","3Y":"3Y","5Y":"5Y"}
+            """Current ATM surface from working surface (full coverage)."""
+            _atm_df = get_working_atm_surface("AUD")
+            # Expiry label → years
+            _exp_y = {"1M":1/12,"3M":0.25,"6M":0.5,"1Y":1.0,"2Y":2.0,"3Y":3.0,"5Y":5.0}
             _z = []
             for _exp in _EXPIRIES_RV:
                 _row = []
+                _exp_yr = _exp_y.get(_exp, 1.0)
                 for _ten in _TENORS_RV:
-                    _k = f"{_exp}_{_ten}"
-                    _v = _atm_d.get(_k)
-                    _row.append(float(_v) if _v else float("nan"))
+                    _ten_y = float(_ten.replace("Y",""))
+                    if _atm_df is not None:
+                        _v = get_matrix_value(_atm_df, _exp.lower(), _ten_y)
+                        _row.append(round(float(_v),1) if _v and float(_v)>0 else float("nan"))
+                    else:
+                        # Fallback to snap dict (case-insensitive)
+                        _atm_d = _curr.get("atm", {})
+                        _v = None
+                        for _ak, _av in _atm_d.items():
+                            _ak_norm = _ak.upper().replace("_","")
+                            _exp_norm = f"{_exp}{_ten}".upper().replace("Y","Y")
+                            if _ak_norm == f"{_exp}{_ten}".upper():
+                                _v = _av; break
+                        _row.append(float(_v) if _v else float("nan"))
                 _z.append(_row)
             return _z
 
@@ -21422,16 +21435,24 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                            "{:+.1f}", True)
 
         if _show_dv and _win_dv:
-            # 1d vol change: compare curr atm to prev atm
+            # 1d vol change: current working surface vs prev snap
             _prev_atm = _prev.get("atm", {}) if _prev else {}
-            _curr_atm = _curr.get("atm", {})
+            _atm_df_dv = get_working_atm_surface("AUD")
+            _exp_y_dv = {"1M":1/12,"3M":0.25,"6M":0.5,"1Y":1.0,"2Y":2.0,"3Y":3.0,"5Y":5.0}
             _dv_z = []
             for _exp in _EXPIRIES_RV:
                 _row = []
                 for _ten in _TENORS_RV:
-                    _k = f"{_exp}_{_ten}"
-                    _c_v = _curr_atm.get(_k)
-                    _p_v = _prev_atm.get(_k)
+                    _ten_y = float(_ten.replace("Y",""))
+                    # Current from working surface
+                    _c_v = None
+                    if _atm_df_dv is not None:
+                        _c_v = get_matrix_value(_atm_df_dv, _exp.lower(), _ten_y)
+                    # Prev from snap (case-insensitive key search)
+                    _p_v = None
+                    _pk_candidates = [f"{_exp.lower()}_{_ten}", f"{_exp}_{_ten}", f"{_exp.lower()}_{_ten}".upper()]
+                    for _pk in _pk_candidates:
+                        if _pk in _prev_atm: _p_v = _prev_atm[_pk]; break
                     _row.append(round(float(_c_v)-float(_p_v),1)
                                 if (_c_v and _p_v) else float("nan"))
                 _dv_z.append(_row)
@@ -21824,14 +21845,20 @@ h2{{color:#1e3a5f;margin-top:20px}}
                     return _z
 
                 def _atm_matrix_pdf():
-                    _atm_d = _curr.get("atm", {})
+                    """Use working ATM surface for full 7×7 coverage."""
+                    _atm_df_p = get_working_atm_surface("AUD")
                     _z = []
                     for _exp in _EXPIRIES_PDF:
                         _row = []
                         for _ten in _TENORS_PDF:
-                            _k = f"{_exp.lower()}_{_ten}"
-                            _v = _atm_d.get(_k) or _atm_d.get(_k.upper())
-                            _row.append(float(_v) if _v else float("nan"))
+                            _ten_y = float(_ten.replace("Y",""))
+                            if _atm_df_p is not None:
+                                _v = get_matrix_value(_atm_df_p, _exp.lower(), _ten_y)
+                                _row.append(round(float(_v),1) if _v and float(_v)>0 else float("nan"))
+                            else:
+                                _atm_d = _curr.get("atm", {})
+                                _v = _atm_d.get(f"{_exp.lower()}_{_ten}") or _atm_d.get(f"{_exp}_{_ten}")
+                                _row.append(float(_v) if _v else float("nan"))
                         _z.append(_row)
                     return _z
 
