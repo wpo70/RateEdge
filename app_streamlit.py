@@ -19536,9 +19536,13 @@ def sod_report_tab():
     if st.button("🔄 Reload Snapshots", key="sod_reload_snaps"):
         st.session_state.pop("sod_snaps_usd", None)
         st.session_state.pop("sod_snaps_aud", None)
-    # Always query fresh - no caching
-    _snaps_usd = list_vol_snapshots(user_id, "USD") if HAS_POSTGRES else []
-    _snaps_aud = list_vol_snapshots(user_id, "AUD") if HAS_POSTGRES else []
+    # Cache in session state — only query on reload or first load
+    if "sod_snaps_usd" not in st.session_state:
+        st.session_state["sod_snaps_usd"] = list_vol_snapshots(user_id, "USD") if HAS_POSTGRES else []
+    if "sod_snaps_aud" not in st.session_state:
+        st.session_state["sod_snaps_aud"] = list_vol_snapshots(user_id, "AUD") if HAS_POSTGRES else []
+    _snaps_usd = st.session_state["sod_snaps_usd"]
+    _snaps_aud = st.session_state["sod_snaps_aud"]
 
     if not HAS_POSTGRES:
         st.warning("Database not connected   —   SOD Report requires saved vol snapshots.")
