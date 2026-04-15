@@ -20983,16 +20983,16 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         _curr  = st.session_state.get("rv_daily_snap_curr", {})
         _prev  = st.session_state.get("rv_daily_snap_prev", {})
         _ideas = st.session_state.get("_rv_ideas_cache", [])
-        _top3  = sorted(_ideas, key=lambda x: x.get("Score",0), reverse=True)[:3] if _ideas else [
-            {"Type":"Vol RV","Structure":"3m×10Y Receiver","Signal":"🟢 Vol CHEAP vs realised","Trade":"Buy 3m×10Y Receiver Straddle","Rationale":"3m10Y ATM 74.8bp vs 21d realised 68bp. VRP 1.10x — modest premium but rates richly priced.","Score":62},
-            {"Type":"Calendar","Structure":"1m vs 3m×5Y","Signal":"🔴 1m RICH vs 3m","Trade":"Sell 1m×5Y / Buy 3m×5Y Straddle","Rationale":"1m5Y at 87.5bp, 3m5Y at 84.2bp. Term structure inverted into RBA meeting — sell near-dated premium.","Score":48},
-            {"Type":"Curve RV","Structure":"2s10s Flattener","Signal":"⚪ Neutral","Trade":"3m×2Y Payer / 3m×10Y Receiver","Rationale":"AUD 2s10s at -43bp. Curve steep relative to USD. Flattener via options benefits from vol richness at 2Y.","Score":31},
-        ] if _sample_mode else []
         _today_str = _curr.get("date", str(_dtnow.today()))
         _prev_date = _prev.get("date","prior EOD") if _prev else "prior EOD"
 
         # If no real prev — inject sample data so layout is visible
         _sample_mode = not _prev or not _prev.get("atm")
+        _top3  = sorted(_ideas, key=lambda x: x.get("Score",0), reverse=True)[:3] if _ideas else [
+            {"Type":"Vol RV","Structure":"3m×10Y Receiver","Signal":"🟢 Vol CHEAP vs realised","Trade":"Buy 3m×10Y Receiver Straddle","Rationale":"3m10Y ATM 74.8bp vs 21d realised 68bp. VRP 1.10x — modest premium but rates richly priced.","Score":62},
+            {"Type":"Calendar","Structure":"1m vs 3m×5Y","Signal":"🔴 1m RICH vs 3m","Trade":"Sell 1m×5Y / Buy 3m×5Y Straddle","Rationale":"1m5Y at 87.5bp, 3m5Y at 84.2bp. Term structure inverted into RBA meeting — sell near-dated premium.","Score":48},
+            {"Type":"Curve RV","Structure":"2s10s Flattener","Signal":"⚪ Neutral","Trade":"3m×2Y Payer / 3m×10Y Receiver","Rationale":"AUD 2s10s at -43bp. Curve steep relative to USD. Flattener via options benefits from vol richness at 2Y.","Score":31},
+        ] if _sample_mode else []
         if _sample_mode:
             _chg_rows = [
                 {"Tenor":"1m×5Y","Prev":85.0,"Now":87.5,"Chg":+2.5},
