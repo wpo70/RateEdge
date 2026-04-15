@@ -5183,8 +5183,9 @@ def sdr_live_tab():
                         st.session_state[_k] = _v
         except Exception:
             pass
-        # Always force end date to today — never restore a stale saved date
-        st.session_state["sdr_date_to"] = datetime.now(SYDNEY_TZ).date()
+        # Always force dates to current defaults — never restore stale saved dates
+        st.session_state["sdr_date_to"]   = datetime.now(SYDNEY_TZ).date()
+        st.session_state["sdr_date_from"] = datetime.now(SYDNEY_TZ).date().replace(day=1)
         st.session_state["sdr_filters_loaded"] = True
 
     # ── Check table exists ────────────────────────────────────────────────────
@@ -5247,13 +5248,15 @@ def sdr_live_tab():
 
         with col1:
             st.markdown("**Date range**")
+            _sdr_month_start = date.today().replace(day=1)
             date_from = st.date_input(
-                "From", value=date.today() - timedelta(days=30),
+                "From", value=_sdr_month_start,
                 key="sdr_date_from", label_visibility="collapsed",
                 on_change=_save_sdr_filters
             )
+            _sdr_today_syd = datetime.now(SYDNEY_TZ).date()
             date_to = st.date_input(
-                "To", value=date.today(),
+                "To", value=_sdr_today_syd,
                 key="sdr_date_to", label_visibility="collapsed",
                 on_change=_save_sdr_filters
             )
@@ -5280,7 +5283,7 @@ def sdr_live_tab():
             sel_type = [_type_options[l] for l in sel_type_labels]
             ccy_opts = _sdr_get_distinct("notional_ccy")
             sel_ccy = st.multiselect("CCY", ccy_opts,
-                default=[c for c in ["USD","AUD","EUR","GBP","JPY"] if c in ccy_opts],
+                default=[c for c in ["AUD"] if c in ccy_opts],
                 key="sdr_ccy", label_visibility="collapsed", on_change=_save_sdr_filters)
 
         with col3:
@@ -5300,7 +5303,7 @@ def sdr_live_tab():
                 label_visibility="collapsed", on_change=_save_sdr_filters)
             sel_platform = [_platform_map[l] for l in sel_platform_labels]
             action_opts = ["All", "NEWT", "MODI", "CORR", "CANC"]
-            sel_action = st.selectbox("Action", action_opts, key="sdr_action", label_visibility="collapsed", on_change=_save_sdr_filters)
+            sel_action = st.selectbox("Action", action_opts, index=1, key="sdr_action", label_visibility="collapsed", on_change=_save_sdr_filters)
 
         st.markdown("---")
         al1, al2, al3, al4, al5 = st.columns(5)
@@ -5321,12 +5324,15 @@ def sdr_live_tab():
             )
         with al4:
             st.markdown("**Alert CCY**")
-            alert_ccy = st.selectbox("Alert CCY filter", ["All"] + ccy_opts, key="sdr_alert_ccy",
-                        label_visibility="collapsed", on_change=_save_sdr_filters)
+            _alert_ccy_opts = ["All"] + ccy_opts
+            _alert_ccy_idx = _alert_ccy_opts.index("AUD") if "AUD" in _alert_ccy_opts else 0
+            alert_ccy = st.selectbox("Alert CCY filter", _alert_ccy_opts, index=_alert_ccy_idx,
+                        key="sdr_alert_ccy", label_visibility="collapsed", on_change=_save_sdr_filters)
         with al5:
             st.markdown("**Auto-refresh**")
             auto_refresh = st.selectbox(
                 "Auto-refresh", ["Off", "30s", "1 min", "2 min", "5 min"],
+                index=1,
                 label_visibility="collapsed",
                 key="sdr_refresh_interval"
             )
@@ -5447,9 +5453,6 @@ def sdr_live_tab():
         except Exception as e:
             conn.close()
             return pd.DataFrame()
-
-    if manual_refresh:
-        st.cache_data.clear()
 
     if manual_refresh:
         load_sdr_data.clear()
@@ -5744,7 +5747,7 @@ def sdr_live_tab():
                     _t_p = str(_p.get("swp_tenor",""))
                     _e_p = str(_p.get("opt_tenor",""))
                     _ccy_p = str(_p.get("notional_ccy",""))
-                    _time_p = pd.to_datetime(_p.get("execution_timestamp"), errors="coerce")
+                    _time_p = pd.to_datetime(_p.get("event_timestamp"), errors="coerce")
 
                     _match = _rcvrs[
                         (_rcvrs["swp_tenor"] == _t_p) &
@@ -5754,7 +5757,7 @@ def sdr_live_tab():
                     ]
                     if not _match.empty and _time_p is not pd.NaT:
                         for _, _r in _match.iterrows():
-                            _time_r = pd.to_datetime(_r.get("execution_timestamp"), errors="coerce")
+                            _time_r = pd.to_datetime(_r.get("event_timestamp"), errors="coerce")
                             if _time_r is not pd.NaT and abs((_time_p - _time_r).total_seconds()) <= 120:
                                 _straddles.append({
                                     "Time": _time_p.strftime("%H:%M:%S") if _time_p else "—",
@@ -18835,7 +18838,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1604g  |  UAT</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1604h  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
