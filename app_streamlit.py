@@ -20597,10 +20597,10 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 _atm_df = _s["atm"]
                 if "Expiry" in _atm_df.columns: _atm_df = _atm_df.set_index("Expiry")
                 _snap = {"date": str(snap_date), "atm": {}, "curve": {}, "ideas": []}
-                for _e in ["1m","3m","6m","1y","2y"]:
-                    for _t in [2.0,5.0,10.0]:
+                for _e in ["1m","3m","6m","1y","2y","3y","5y"]:
+                    for _t in [2.0,3.0,5.0,7.0,10.0,15.0,20.0]:
                         try:
-                            _tc = next((c for c in _atm_df.columns if str(c).replace("Y","").strip()==str(int(_t))), None)
+                            _tc = next((_col for _col in _atm_df.columns if str(_col).replace("Y","").strip()==str(int(_t))), None)
                             if _tc and _e in _atm_df.index:
                                 _v = float(_atm_df.loc[_e, _tc])
                                 if _v>0: _snap["atm"][f"{_e}_{int(_t)}Y"] = round(_v,1)
@@ -20623,8 +20623,8 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 from datetime import date as _dtnow
                 _snap = {"date": str(_dtnow.today()), "atm": {}, "curve": {},
                          "ideas": st.session_state.get("_rv_ideas_cache", [])}
-                for _e in ["1m","3m","6m","1y","2y"]:
-                    for _t in [2.0,5.0,10.0]:
+                for _e in ["1m","3m","6m","1y","2y","3y","5y"]:
+                    for _t in [2.0,3.0,5.0,7.0,10.0,15.0,20.0]:
                         _v = get_matrix_value(_atm_now, _e, _t)
                         if _v: _snap["atm"][f"{_e}_{int(_t)}Y"] = round(_v,1)
                 try:
@@ -21098,8 +21098,45 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         _closed = st.session_state.get(_closed_key, [])   # list of closed trades
 
         # Helper: get ATM vol for a tenor key from current surface
+        _atm_now = _curr.get("atm") or {}
         def _get_atm_vol(tenor_key):
-            return (_curr.get("atm") or {}).get(tenor_key)
+            if not tenor_key: return None
+            if tenor_key in _atm_now: return _atm_now[tenor_key]
+            # Case-insensitive fallback
+            for _k in _atm_now:
+                if _k.upper() == tenor_key.upper(): return _atm_now[_k]
+            return None
+
+        # Repair book entries with missing vol_key (from old entries before regex fix)
+        import re as _re_bk
+        _book_repaired = False
+        for _bid, _bpos in _book.items():
+            if not _bpos.get("vol_key") or not _bpos.get("entry_vol"):
+                _m1 = _re_bk.search(r"(\d+[mM])\s*[×~=/x]\s*(\d+[Yy])", _bid)
+                if not _m1:
+                    _m1 = _re_bk.search(r"(\d+[mM])\s+(\d+[Yy])", _bid)
+                if not _m1:
+                    _mexp = _re_bk.search(r"(\d+[mM])", _bid)
+                    _mten = _re_bk.search(r"~\s*(\d+[Yy])", _bid)
+                    if _mexp and _mten:
+                        _rk = f"{_mexp.group(1).lower()}_{_mten.group(1).upper()}"
+                        _bpos["vol_key"] = _rk
+                        _ev_r = _get_atm_vol(_rk) or _get_atm_vol(_rk.upper())
+                        if _ev_r and not _bpos.get("entry_vol"):
+                            _bpos["entry_vol"] = _ev_r
+                        _book_repaired = True
+                elif _m1:
+                    _rk = f"{_m1.group(1).lower()}_{_m1.group(2).upper()}"
+                    _bpos["vol_key"] = _rk
+                    _ev_r = _get_atm_vol(_rk) or _get_atm_vol(_rk.upper())
+                    if _ev_r and not _bpos.get("entry_vol"):
+                        _bpos["entry_vol"] = _ev_r
+                    _book_repaired = True
+        if _book_repaired:
+            st.session_state[_book_key] = _book
+            if HAS_POSTGRES:
+                _uid_bk = st.session_state.get("username", "wpo@rateedge.au")
+                save_user_config(_uid_bk, _book_key, "AUD", _book)
 
         # Build idea IDs for current top3 (use Structure as stable ID)
         _top3_ids = [_idea.get("Structure","") for _idea in _top3]
@@ -21127,19 +21164,29 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             st.session_state[_closed_key] = _closed
 
         # Open new positions for ideas just entering top3
+        import re as _re_vk
         for _idea in _top3:
             _bid = _idea.get("Structure","")
             if _bid and _bid not in _book:
-                # Guess vol key from structure (e.g. "3m×10Y" → "3M_10Y")
-                _raw = _bid.replace("×","_").replace("x","_").replace(" ","")
-                _vkey = _raw.upper() if _raw else ""
-                # Try to find matching key in curr atm
+                # Extract expiry×tenor from structure using regex
+                # Matches "1m×10Y", "1m~10Y", "1m =2Y", "3m×5Y", "Sell 1m / Buy 3m ~2Y" etc
+                _vm = _re_vk.search(r"(\d+[mM])\s*[×~=/x]\s*(\d+[Yy])", _bid)
+                if not _vm:
+                    # Try patterns like "1m~10Y" with space: "1m 10Y"
+                    _vm = _re_vk.search(r"(\d+[mM])\s+(\d+[Yy])", _bid)
+                if _vm:
+                    _vkey = f"{_vm.group(1).upper()}_{_vm.group(2).upper()}"
+                else:
+                    _vkey = ""
+                # Find matching key in curr atm
                 _ev = None
-                for _ak in (_curr.get("atm") or {}):
-                    if _ak.replace("_","").upper() == _vkey.replace("_","").upper():
-                        _ev = (_curr.get("atm") or {}).get(_ak)
-                        _vkey = _ak
-                        break
+                _atm_now = _curr.get("atm") or {}
+                if _vkey in _atm_now:
+                    _ev = _atm_now[_vkey]
+                else:
+                    for _ak in _atm_now:
+                        if _ak.upper() == _vkey.upper():
+                            _ev = _atm_now[_ak]; _vkey = _ak; break
                 _book[_bid] = {
                     "structure": _bid,
                     "type": _idea.get("Type",""),
@@ -21237,26 +21284,49 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     f"⬆ New conviction replaced this position</span>"
                     f"</div>", unsafe_allow_html=True)
 
-        # ── Charts — only if real data ──────────────────────────────
-        if _chg_rows:
+        # ── Charts — show in real mode (all moves) or sample mode ──
+        if not _sample_mode and _curr.get("atm") and _prev and _prev.get("atm"):
+            # Build full vol change rows regardless of magnitude
+            _chg_rows_full = []
+            for _k, _vc in _curr.get("atm", {}).items():
+                _vp = _prev.get("atm", {}).get(_k)
+                if _vp is not None:
+                    _chg_rows_full.append({"Tenor": _k.replace("_","×"), "Prev": _vp,
+                                           "Now": _vc, "Chg": round(float(_vc)-float(_vp), 1)})
+            _rate_rows_full = []
+            for _k, _vc in _curr.get("curve", {}).items():
+                _vp = _prev.get("curve", {}).get(_k)
+                if _vp is not None:
+                    _chg = round((float(_vc)-float(_vp))*100, 1)
+                    _rate_rows_full.append({"Tenor": _k, "Prev": _vp, "Now": _vc, "Chg (bp)": _chg})
+            if _chg_rows_full:
+                _v_df = pd.DataFrame(_chg_rows_full)
+                _v_df["Tenor"] = _v_df["Tenor"].str.replace("_","×")
+                _fig_v = go.Figure(go.Bar(
+                    x=_v_df["Tenor"], y=_v_df["Chg"],
+                    marker_color=["#22c55e" if v>=0 else "#ef4444" for v in _v_df["Chg"]],
+                    text=[f"{v:+.1f}" for v in _v_df["Chg"]], textposition="outside"))
+                _fig_v.update_layout(title="AUD Overnight ATM Vol Δ (bp)", template="plotly_dark",
+                                      height=280, margin=dict(t=35,b=35,l=40,r=20), showlegend=False)
+                st.plotly_chart(_fig_v, use_container_width=True)
+            if _rate_rows_full:
+                _r_df = pd.DataFrame(_rate_rows_full)
+                _fig_r = go.Figure(go.Bar(
+                    x=_r_df["Tenor"], y=_r_df["Chg (bp)"],
+                    marker_color=["#38bdf8" if v>=0 else "#a78bfa" for v in _r_df["Chg (bp)"]],
+                    text=[f"{v:+.1f}" for v in _r_df["Chg (bp)"]], textposition="outside"))
+                _fig_r.update_layout(title="AUD Overnight Swap Rate Δ (bp)", template="plotly_dark",
+                                      height=250, margin=dict(t=35,b=35,l=40,r=20), showlegend=False)
+                st.plotly_chart(_fig_r, use_container_width=True)
+        elif _chg_rows:
             _v_df = pd.DataFrame(_chg_rows)
             _fig_v = go.Figure(go.Bar(
                 x=_v_df["Tenor"], y=_v_df["Chg"],
                 marker_color=["#22c55e" if v>=0 else "#ef4444" for v in _v_df["Chg"]],
                 text=[f"{v:+.1f}" for v in _v_df["Chg"]], textposition="outside"))
-            _fig_v.update_layout(title="AUD Overnight ATM Vol Δ (bp)", template="plotly_dark",
+            _fig_v.update_layout(title="AUD Overnight ATM Vol Δ (bp) — sample", template="plotly_dark",
                                   height=260, margin=dict(t=35,b=35,l=40,r=20), showlegend=False)
             st.plotly_chart(_fig_v, use_container_width=True)
-
-        if _rate_chg_rows:
-            _r_df = pd.DataFrame(_rate_chg_rows)
-            _fig_r = go.Figure(go.Bar(
-                x=_r_df["Tenor"], y=_r_df["Chg (bp)"],
-                marker_color=["#38bdf8" if v>=0 else "#a78bfa" for v in _r_df["Chg (bp)"]],
-                text=[f"{v:+.1f}" for v in _r_df["Chg (bp)"]], textposition="outside"))
-            _fig_r.update_layout(title="AUD Overnight Swap Rate Δ (bp)", template="plotly_dark",
-                                  height=230, margin=dict(t=35,b=35,l=40,r=20), showlegend=False)
-            st.plotly_chart(_fig_r, use_container_width=True)
 
         # ── Realised Vol Matrices — DB-driven ────────────────────────
         st.markdown("---")
@@ -21469,19 +21539,34 @@ h2{{color:#1e3a5f;margin-top:20px}}
                 _logo_bytes_rv = _b64_rv.b64decode(_RATEEDGE_LOGO_B64)
                 _logo_img_rv = _RLImg_rv(_logo_io_rv.BytesIO(_logo_bytes_rv), width=4*cm, height=1.2*cm)
                 _logo_img_rv.hAlign = "LEFT"
+                # Clean timestamps - strip microseconds and raw snap labels
+                def _clean_ts(raw):
+                    import re as _re_ts
+                    _m = _re_ts.search(r"(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})", str(raw))
+                    return f"{_m.group(1)} {_m.group(2)}" if _m else str(raw)[:16]
+                _ts_curr_clean = _clean_ts(_today_str)
+                _ts_prev_clean = _clean_ts(_prev_date)
+                _sTitleRV = ParagraphStyle("sTRV", parent=_styles["Normal"], fontSize=17,
+                                           fontName="Helvetica-Bold", alignment=2,
+                                           textColor=colors.HexColor("#0f172a"), spaceAfter=0)
                 _hdr_rv_data = [[_logo_img_rv,
-                                  Paragraph("<b>AUD IRO — Daily Brief</b><br/>"
-                                            f"<font size=7 color='#64748b'>{_today_str} SOD  |  vs {_prev_date}</font>",
-                                            _title_style)]]
-                _hdr_rv_tbl = Table(_hdr_rv_data, colWidths=[5*cm, None])
+                                  Paragraph("AUD IRO — Daily Brief", _sTitleRV)]]
+                _hdr_rv_tbl = Table(_hdr_rv_data, colWidths=[4.5*cm, None])
                 _hdr_rv_tbl.setStyle(TableStyle([
-                    ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-                    ("ALIGN", (1,0), (1,0), "RIGHT"),
-                    ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+                    ("VALIGN",  (0,0), (-1,-1), "BOTTOM"),
+                    ("ALIGN",   (1,0), (1,0),   "RIGHT"),
+                    ("TOPPADDING",    (0,0), (-1,-1), 0),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+                    ("LEFTPADDING",   (0,0), (-1,-1), 0),
+                    ("RIGHTPADDING",  (0,0), (-1,-1), 0),
                 ]))
                 _story.append(_hdr_rv_tbl)
-                _story.append(HRFlowable(width="100%", thickness=2,
+                _story.append(HRFlowable(width="100%", thickness=2.5,
                                           color=colors.HexColor("#1e3a5f"), spaceAfter=4))
+                _sTsLineRV = ParagraphStyle("sTsLRV", parent=_styles["Normal"], fontSize=8,
+                                            textColor=colors.HexColor("#64748b"), alignment=1, spaceAfter=4)
+                _story.append(Paragraph(
+                    f"{_ts_curr_clean} AEST  |  vs prev close {_ts_prev_clean}", _sTsLineRV))
                 _story.append(HRFlowable(width="100%", thickness=0.5,
                                           color=colors.HexColor("#e2e8f0"), spaceAfter=8))
 
