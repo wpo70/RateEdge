@@ -13250,7 +13250,7 @@ def _load_vol_snapshots_for_viz(ccy: str, start_date: str, end_date: str) -> lis
         return []
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def _load_fwd_rates_for_viz(ccy: str, start_date: str, end_date: str,
                              floating_rate: str = "6M BBSW") -> pd.DataFrame:
     """Load par swap rates from swap_rates table, return wide DataFrame: date×tenor."""
@@ -14244,7 +14244,7 @@ def _render_realised_delivered_vol():
         return
 
     # ── Load vol snapshots ────────────────────────────────────────────────────
-    @st.cache_data(ttl=1800, show_spinner=False)
+    @st.cache_data(ttl=300, show_spinner=False)
     def _load_atm_history(ccy: str, days: int = 90):
         """Load last N days of ATM vol snapshots from vol_history."""
         conn = get_db_connection()
@@ -14265,7 +14265,7 @@ def _render_realised_delivered_vol():
         except Exception:
             return []
 
-    @st.cache_data(ttl=1800, show_spinner=False)
+    @st.cache_data(ttl=300, show_spinner=False)
     def _load_swap_history(ccy: str, days: int = 90):
         """Load swap_rates for last N days."""
         conn = get_db_connection()
@@ -14287,15 +14287,16 @@ def _render_realised_delivered_vol():
         except Exception:
             return pd.DataFrame()
 
-    _snap_rows   = _load_atm_history(ccy, 180)
-    _swap_df_raw = _load_swap_history(ccy, 180)
+    with st.spinner("Loading historical data..."):
+        _snap_rows  = _load_atm_history(ccy, 180)
+        _swap_df_raw = _load_swap_history(ccy, 180)
 
     if not _snap_rows:
         st.info("No EOD vol snapshots found. Save snapshots from the Vol Export tab to populate this view.")
         return
 
     # ── Build vol history DataFrame (cached) ──────────────────────────────────
-    @st.cache_data(ttl=1800, show_spinner=False)
+    @st.cache_data(ttl=300, show_spinner=False)
     def _build_vol_df(snap_rows_key: int, exp_labels: tuple, ten_labels: tuple):
         _vol_records = []
         for _snap_date, _atm_vols in _snap_rows:
@@ -14605,10 +14606,7 @@ def rv_tab():
             with _rv_snap_col:
                 _snap_opts = ["All snapshots (last 60)"] + [f"{s['snapshot_date']} — {s['label']}" for s in _rv_snaps]
                 _rv_snap_sel = st.selectbox("Snapshot", _snap_opts, key="rv_snap_sel")
-            _rv_db_key = f"_rv_vols_db_{ccy}"
-            if _rv_db_key not in st.session_state:
-                st.session_state[_rv_db_key] = _load_rv_vols_from_db(ccy, limit=60)
-            df_vols_hist = st.session_state[_rv_db_key]
+            df_vols_hist = _load_rv_vols_from_db(ccy, limit=60)
             if _rv_snap_sel != "All snapshots (last 60)":
                 _snap_dt = _rv_snap_sel.split(" — ")[0]
                 df_vols_hist = df_vols_hist[df_vols_hist["date"].dt.strftime("%Y-%m-%d") == _snap_dt]
@@ -15490,11 +15488,10 @@ def rv_tab():
                             st.session_state[_bias_key] = _db_bias["value"]
                     _bias = st.selectbox("Next meeting bias", _bias_opts, key=_bias_key,
                                          help="Changes vol premium estimate for next meeting")
-                    # Only save when value actually changes
-                    if HAS_POSTGRES and st.session_state.get(f"_bias_saved_{_bias_key}") != _bias:
+                    # Persist bias to DB whenever it changes
+                    if HAS_POSTGRES:
                         _uid_cb = st.session_state.get("username", "wpo@rateedge.au")
                         save_user_config(_uid_cb, _bias_key, ccy, {"value": _bias})
-                        st.session_state[f"_bias_saved_{_bias_key}"] = _bias
                     _prem_override = {"Hold": 3.0, "Cut 25bp": 4.0, "Cut 50bp": 6.0,
                                       "Hike 25bp": 4.0, "Hike 50bp": 6.0}
                     _adj_prem = _prem_override.get(_bias, 3.0)
@@ -18834,13 +18831,11 @@ def main():
 
     # Sidebar for settings
     with st.sidebar:
-        if "_logo_data_uri" not in st.session_state:
-            st.session_state["_logo_data_uri"] = f"data:image/png;base64,{_RATEEDGE_LOGO_B64}"
         st.markdown(
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
-                <img src="{st.session_state['_logo_data_uri']}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1604a  |  UAT</div>
+                <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1604c  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -18958,17 +18953,13 @@ def main():
                 st.markdown("---")
                 with st.expander("👑 User Management", expanded=False):
                     try:
-                        if "_user_roles_cache" not in st.session_state:
-                            _rm_conn = get_db_connection()
-                            if _rm_conn:
-                                _rm_cur = _rm_conn.cursor()
-                                _rm_cur.execute("SELECT email, role FROM user_roles ORDER BY email")
-                                st.session_state["_user_roles_cache"] = _rm_cur.fetchall()
-                                _rm_cur.close(); _rm_conn.close()
-                            else:
-                                st.session_state["_user_roles_cache"] = []
-                        _rm_rows = st.session_state.get("_user_roles_cache", [])
-                        if True:
+                        _rm_conn = get_db_connection()
+                        if _rm_conn:
+                            _rm_cur = _rm_conn.cursor()
+                            _rm_cur.execute("SELECT email, role FROM user_roles ORDER BY email")
+                            _rm_rows = _rm_cur.fetchall()
+                            _rm_cur.close()
+                            _rm_conn.close()
                             if _rm_rows:
                                 for _rm_email, _rm_role in _rm_rows:
                                     _rc1, _rc2 = st.columns([2, 1])
@@ -19191,41 +19182,11 @@ def main():
         _tab_names += ["📍 Multi-CCY"]
         _tab_funcs += [lambda: multi_ccy_tab(vol_mode)]
 
-    # ── Tab navigation — single render per rerun ─────────────────────────────
-    # Use horizontal radio for tab selection — only active tab function runs
-    _tab_icons = {
-        "🏡 Home": "🏡", "📡 SDR Live": "📡", "📋 IRS / Vol Upload": "📋",
-        "📏 Curves": "📏", "📈 FWD IRS Analysis": "📈",
-        "📊 Historical VOL Analysis": "📊", "📊 Swaptions": "📊",
-        "🔔 Caps & Floors": "🔔", "💼 Trade Blotter": "💼",
-        "⚛️ RV / Calendar": "⚛️", "🔮 Exotics": "🔮",
-        "📏 SOD Report": "📏", "✅ Vol Editor": "✅",
-        "📑 Vol Export": "📑", "📐 Midcurve & Curve Options": "📐",
-        "🎫 Trade Ticket": "🎫", "📍 Multi-CCY": "📍",
-    }
-    # Short labels for display
-    _short_names = [n.split(" ", 1)[1] if " " in n else n for n in _tab_names]
-    _active_name = st.session_state.get("_active_tab_name", _tab_names[0] if _tab_names else "")
-    if _active_name not in _tab_names:
-        _active_name = _tab_names[0]
-
-    # Top horizontal tab bar using columns with buttons
-    _ncols = len(_tab_names)
-    _tab_cols = st.columns(_ncols)
-    for _ti, (_tname, _tcol) in enumerate(zip(_tab_names, _tab_cols)):
-        _is_active = (_tname == _active_name)
-        _btn_style = "primary" if _is_active else "secondary"
-        _lbl = _tname.split(" ", 1)[1] if " " in _tname else _tname
-        if _tcol.button(_lbl, key=f"_nav_{_ti}", type=_btn_style,
-                        use_container_width=True):
-            st.session_state["_active_tab_name"] = _tname
-            st.rerun()
-
-    st.markdown("<hr style='margin:4px 0 12px 0;border-color:#334155'>", unsafe_allow_html=True)
-
-    # Render ONLY the active tab
-    _active_idx = _tab_names.index(_active_name) if _active_name in _tab_names else 0
-    _tab_funcs[_active_idx]()
+    # Tab navigation — visual tabs, single dispatch per render
+    tabs = st.tabs(_tab_names)
+    for _ti, _tf in enumerate(_tab_funcs):
+        with tabs[_ti]:
+            _tf()
 
 
 
