@@ -18835,7 +18835,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1604f  |  UAT</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1604g  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -21146,10 +21146,41 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 if _k.upper() == tenor_key.upper(): return _atm_now[_k]
             return None
 
-        # Repair book entries with missing vol_key (from old entries before regex fix)
+        # Repair book entries - upgrade to calendar trade_type if missing
         import re as _re_bk
         _book_repaired = False
         for _bid, _bpos in _book.items():
+            # Upgrade existing calendar entries that lack trade_type
+            if _bpos.get("trade_type") != "calendar":
+                _cal_r = _re_bk.search(r"sell\s+(\d+[mM]).+buy\s+(\d+[mM]).+[~×x]\s*(\d+[Yy])", _bid, _re_bk.IGNORECASE)
+                if not _cal_r:
+                    _cal_r = _re_bk.search(r"(\d+[mM])\s*/\s*buy\s+(\d+[mM])\s*[~×x]\s*(\d+[Yy])", _bid, _re_bk.IGNORECASE)
+                if _cal_r:
+                    _se, _le, _ten = _cal_r.group(1), _cal_r.group(2), _cal_r.group(3)
+                    _sk = f"{_se.upper()}_{_ten.upper()}"
+                    _lk = f"{_le.upper()}_{_ten.upper()}"
+                    _sv = _get_atm_vol(_sk)
+                    _lv = _get_atm_vol(_lk)
+                    # Find actual keys case-insensitive
+                    for _ak in (_atm_now if isinstance(_atm_now, dict) else {}):
+                        if _ak.upper() == _sk: _sv = _atm_now[_ak]; _sk = _ak; break
+                    for _ak in (_atm_now if isinstance(_atm_now, dict) else {}):
+                        if _ak.upper() == _lk: _lv = _atm_now[_ak]; _lk = _ak; break
+                    _bpos["trade_type"] = "calendar"
+                    _bpos["short_key"] = _sk
+                    _bpos["long_key"] = _lk
+                    # Preserve original entry vols if already set, else use current as proxy
+                    if not _bpos.get("short_vol_entry"):
+                        _bpos["short_vol_entry"] = _bpos.get("entry_vol") or _sv
+                    if not _bpos.get("long_vol_entry"):
+                        # Estimate from ratio: long = short / ratio if we have it
+                        _ev = _bpos.get("entry_vol")
+                        _bpos["long_vol_entry"] = round(float(_ev) / 1.0, 1) if _ev else _lv
+                    if not _bpos.get("entry_ratio") and _bpos.get("short_vol_entry") and _bpos.get("long_vol_entry"):
+                        _lve = _bpos["long_vol_entry"]
+                        _sve = _bpos["short_vol_entry"]
+                        _bpos["entry_ratio"] = round(float(_sve)/float(_lve), 4) if _lve else None
+                    _book_repaired = True
             if not _bpos.get("vol_key") or not _bpos.get("entry_vol"):
                 _m1 = _re_bk.search(r"(\d+[mM])\s*[×~=/x]\s*(\d+[Yy])", _bid)
                 if not _m1:
