@@ -14222,7 +14222,7 @@ def _render_realised_delivered_vol():
     ccy = "AUD"
 
     # ── Expiry / Tenor grid (matches ATM vol surface) ─────────────────────────
-    _EXP_LABELS  = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","7y","10y","12y","15y","20y","25y"]
+    _EXP_LABELS  = ["1w","1m","2m","3m","6m","1y","2y","3y","4y","5y","7y","10y","12y","15y","20y"]
     _TEN_LABELS  = ["1Y","2Y","3Y","4Y","5Y","7Y","10Y","12Y","15Y","20Y","25Y","30Y"]
     _EXP_YRS     = [label_to_years(e) for e in _EXP_LABELS]
     _TEN_YRS     = [label_to_years(t) for t in _TEN_LABELS]
@@ -14393,10 +14393,10 @@ def _render_realised_delivered_vol():
         ))
         _fig.update_layout(
             title=dict(text=title, font=dict(size=13, color="#e2e8f0")),
-            height=320, template="plotly_dark",
+            height=420, template="plotly_dark",
             margin=dict(l=60, r=40, t=40, b=40),
             xaxis=dict(title="Swap Tenor"),
-            yaxis=dict(title="Option Expiry", autorange="reversed")
+            yaxis=dict(title="Option Expiry", autorange="reversed", tickfont=dict(size=11))
         )
         st.plotly_chart(_fig, use_container_width=True)
 
