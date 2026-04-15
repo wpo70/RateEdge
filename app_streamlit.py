@@ -18823,7 +18823,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505l  |  UAT</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505m  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -21139,14 +21139,23 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 _uid_bk = st.session_state.get("username", "wpo@rateedge.au")
                 save_user_config(_uid_bk, _book_key, "AUD", _book)
 
-        # Build idea IDs for current top3 (use Structure as stable ID)
-        _top3_ids = [_idea.get("Structure","") for _idea in _top3]
+        # Normalize structure name for stable key comparison
+        def _norm_struct(s):
+            import re as _re_n
+            s = str(s).strip().lower()
+            s = s.replace("≈","~").replace("×","x").replace("≠","!=")
+            s = _re_n.sub(r"\s+"," ",s)
+            return s
 
-        # Close positions that have dropped out of top3
+        # Build idea IDs for current top3 (normalized)
+        _top3_ids = [_norm_struct(_idea.get("Structure","")) for _idea in _top3]
+        _top3_raw  = {_norm_struct(_idea.get("Structure","")): _idea.get("Structure","") for _idea in _top3}
+
+        # Close positions that have dropped out of top3 (normalized comparison)
         _new_closed = []
         _book_updated = False
         for _bid, _bpos in list(_book.items()):
-            if _bid not in _top3_ids:
+            if _norm_struct(_bid) not in _top3_ids:
                 # Position closed — compute final P&L
                 _close_vol = _get_atm_vol(_bpos.get("vol_key",""))
                 if _close_vol and _bpos.get("entry_vol"):
@@ -21166,9 +21175,11 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
 
         # Open new positions for ideas just entering top3
         import re as _re_vk
+        _book_norm_keys = {_norm_struct(k): k for k in _book.keys()}
         for _idea in _top3:
             _bid = _idea.get("Structure","")
-            if _bid and _bid not in _book:
+            _bid_norm = _norm_struct(_bid)
+            if _bid and _bid_norm not in _book_norm_keys:
                 # Extract expiry×tenor from structure using regex
                 # Matches "1m×10Y", "1m~10Y", "1m =2Y", "3m×5Y", "Sell 1m / Buy 3m ~2Y" etc
                 _vm = _re_vk.search(r"(\d+[mM])\s*[×~=/x]\s*(\d+[Yy])", _bid)
@@ -21188,7 +21199,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     for _ak in _atm_now:
                         if _ak.upper() == _vkey.upper():
                             _ev = _atm_now[_ak]; _vkey = _ak; break
-                _book[_bid] = {
+                _book[_bid_norm] = {
                     "structure": _bid,
                     "type": _idea.get("Type",""),
                     "trade": _idea.get("Trade",""),
@@ -21215,7 +21226,8 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 _score = _idea.get("Score", 0)
                 _sc = "#f59e0b" if _score>60 else "#22c55e" if _score>30 else "#94a3b8"
                 _bid = _idea.get("Structure","")
-                _pos = _book.get(_bid, {})
+                _bid_norm = _norm_struct(_bid)
+                _pos = _book.get(_bid_norm, _book.get(_bid, {}))
                 _ev  = _pos.get("entry_vol")
                 _cv  = _get_atm_vol(_pos.get("vol_key",""))
                 _is_new = (_pos.get("entry_date") == _today_trade and _bid in _book and
@@ -21284,6 +21296,17 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     f"<span style='display:block;color:#94a3b8;font-size:0.75rem;margin-top:2px'>"
                     f"⬆ New conviction replaced this position</span>"
                     f"</div>", unsafe_allow_html=True)
+
+        # ── Reset book button
+        with st.expander("⚙️ Book Management", expanded=False):
+            if st.button("🗑 Reset Conviction Book", key="rv_reset_book", type="secondary"):
+                st.session_state.pop("rv_conviction_book", None)
+                st.session_state.pop("rv_conviction_closed", None)
+                if HAS_POSTGRES:
+                    _uid_bk = st.session_state.get("username", "wpo@rateedge.au")
+                    save_user_config(_uid_bk, "rv_conviction_book", "AUD", {})
+                    save_user_config(_uid_bk, "rv_conviction_closed", "AUD", [])
+                st.success("Book reset."); st.rerun()
 
         # ── Charts — show in real mode (all moves) or sample mode ──
         if not _sample_mode and _curr.get("atm") and _prev and _prev.get("atm"):
