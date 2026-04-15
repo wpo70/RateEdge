@@ -18823,7 +18823,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505i  |  UAT</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505j  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -21641,11 +21641,27 @@ h2{{color:#1e3a5f;margin-top:20px}}
                     ]))
                     _story.append(_rates_tbl)
 
-                # Overnight vol changes + chart
-                if _chg_rows:
+                # Overnight vol changes + chart — use full rows regardless of magnitude
+                _pdf_chg_rows = _chg_rows if _chg_rows else []
+                if not _pdf_chg_rows and not _sample_mode and _curr.get("atm") and _prev and _prev.get("atm"):
+                    for _k, _vc in _curr.get("atm", {}).items():
+                        _vp = _prev.get("atm", {}).get(_k)
+                        if _vp is not None:
+                            _pdf_chg_rows.append({"Tenor": _k.replace("_","×"),
+                                                  "Prev": round(float(_vp),1),
+                                                  "Now": round(float(_vc),1),
+                                                  "Chg": round(float(_vc)-float(_vp),1)})
+                _pdf_rate_rows = _rate_chg_rows if _rate_chg_rows else []
+                if not _pdf_rate_rows and not _sample_mode and _curr.get("curve") and _prev and _prev.get("curve"):
+                    for _k, _vc in _curr.get("curve", {}).items():
+                        _vp = _prev.get("curve", {}).get(_k)
+                        if _vp is not None:
+                            _pdf_rate_rows.append({"Tenor": _k, "Prev": _vp, "Now": _vc,
+                                                   "Chg (bp)": round((float(_vc)-float(_vp))*100,1)})
+                if _pdf_chg_rows:
                     _story.append(Paragraph("Overnight ATM Vol Changes", _h2_style))
                     _vchg_data = [["Tenor","Prev (bp)","Now (bp)","Chg"]]
-                    for _r in _chg_rows:
+                    for _r in _pdf_chg_rows:
                         _vchg_data.append([_r["Tenor"], str(_r["Prev"]), str(_r["Now"]),
                                            f"{_r['Chg']:+.1f}bp"])
                     _vchg_tbl = Table(_vchg_data, colWidths=["30%","23%","23%","24%"])
@@ -21670,7 +21686,7 @@ h2{{color:#1e3a5f;margin-top:20px}}
                         import matplotlib.pyplot as _plt
                         import io as _cio
                         from reportlab.platypus import Image as _RLImage
-                        _v_df2 = pd.DataFrame(_chg_rows)
+                        _v_df2 = pd.DataFrame(_pdf_chg_rows)
                         _fig_v2, _ax_v = _plt.subplots(figsize=(9, 2.8))
                         _colors_v = ["#22c55e" if v>=0 else "#ef4444" for v in _v_df2["Chg"]]
                         _bars = _ax_v.bar(_v_df2["Tenor"], _v_df2["Chg"], color=_colors_v)
@@ -21692,7 +21708,7 @@ h2{{color:#1e3a5f;margin-top:20px}}
                     except Exception: pass
 
                 # Overnight rate changes + chart
-                if _rate_chg_rows:
+                if _pdf_rate_rows:
                     _story.append(Paragraph("Overnight Swap Rate Changes (bp)", _h2_style))
                     try:
                         import matplotlib
@@ -21700,7 +21716,7 @@ h2{{color:#1e3a5f;margin-top:20px}}
                         import matplotlib.pyplot as _plt
                         import io as _cio
                         from reportlab.platypus import Image as _RLImage
-                        _r_df2 = pd.DataFrame(_rate_chg_rows)
+                        _r_df2 = pd.DataFrame(_pdf_rate_rows)
                         _fig_r2, _ax_r = _plt.subplots(figsize=(9, 2.5))
                         _colors_r = ["#38bdf8" if v>=0 else "#a78bfa" for v in _r_df2["Chg (bp)"]]
                         _rbars = _ax_r.bar(_r_df2["Tenor"], _r_df2["Chg (bp)"], color=_colors_r)
