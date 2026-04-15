@@ -20715,7 +20715,8 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             if _cfg_file and st.button("⚡ Apply Config Rates", key="mr_apply_config"):
                 try:
                     import openpyxl as _oxl
-                    _wb = _oxl.load_workbook(_cfg_file, data_only=True)
+                    with st.spinner("Reading config file..."):
+                        _wb = _oxl.load_workbook(_cfg_file, data_only=True)
                     _ws = _wb["BBG_Feed"]
                     # Cell → field key mapping (skip rba_cash, aud futures, UST yields — manual)
                     _cell_map = {
