@@ -20606,6 +20606,8 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         ("spi",        "SPI 200 Fut",      "Equities"),
         ("sp500",      "S&P 500",          "Equities"),
         ("audusd",     "AUD/USD",          "FX"),
+        ("usdjpy",     "USD/JPY",          "FX"),
+        ("gold_aud",   "Gold (AUD)",       "Commodities"),
         ("usd_2y",     "UST 2Y",           "USD Rates"),
         ("usd_10y",    "UST 10Y",          "USD Rates"),
         ("usd_30y",    "UST 30Y",          "USD Rates"),
@@ -20645,12 +20647,11 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         for _try_uid in ["wpo@rateedge.au", "wpo70@icloud.com", _uid_rv]:
             _db_mr = load_user_config(_try_uid, "morning_rates_today", "AUD")
             if _db_mr:
+                # Clear ALL stale widget keys first so value= parameter takes effect
+                for _rk, _, _ in _RATE_FIELDS:
+                    st.session_state.pop(f"mr_{_rk}", None)
                 st.session_state["morning_rates_today"] = _db_mr
                 _mr_today = _db_mr
-                # Set individual widget keys so number_inputs render with correct values
-                for _k, _v in _db_mr.items():
-                    try: st.session_state[f"mr_{_k}"] = float(_v)
-                    except: pass
                 _db_mr_p = load_user_config(_try_uid, "morning_rates_prev", "AUD")
                 if _db_mr_p:
                     st.session_state["morning_rates_prev"] = _db_mr_p
@@ -20670,13 +20671,68 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 _def = _mr_today.get(_k, 0.0)
                 _is_fut = _k in _FOURDP_KEYS
                 _is_bp_field = _k in _BP_KEYS
-                _is_big = _k in ("spi","sp500")
+                _is_big = _k in ("spi","sp500","gold_aud","usdjpy")
                 _fmt = "%.4f" if (_is_fut or (_def < 10 and not _is_big)) else "%.2f"
                 _stp = 0.0001 if (_is_fut or (_def < 10 and not _is_big)) else (0.1 if _is_bp_field else 0.01)
                 _new_rates[_k] = _gcols[_gi].number_input(
                     _lbl, value=float(_def), format=_fmt, step=_stp,
                     key=f"mr_{_k}", label_visibility="visible")
             st.markdown("")
+
+        # ── Load from Config Sheet ───────────────────────────────────────
+        st.markdown("---")
+        _cfg_col1, _cfg_col2 = st.columns([2, 3])
+        with _cfg_col1:
+            _cfg_file = st.file_uploader("📂 Load rates from Config Sheet", type=["xlsx"],
+                                          key="mr_config_upload", label_visibility="visible")
+        with _cfg_col2:
+            st.markdown("")
+            st.markdown("")
+            if _cfg_file and st.button("⚡ Apply Config Rates", key="mr_apply_config"):
+                try:
+                    import openpyxl as _oxl
+                    _wb = _oxl.load_workbook(_cfg_file, data_only=True)
+                    _ws = _wb["BBG_Feed"]
+                    # Cell → field key mapping (skip rba_cash, aud futures, UST yields — manual)
+                    _cell_map = {
+                        "N42": "bbsw_3m",   "N45": "bbsw_6m",
+                        "N53": "swap_2y",   "N54": "swap_3y",
+                        "N56": "swap_5y",   "N59": "swap_10y",  "N62": "swap_20y",
+                        "N71": "ois_1m",    "N73": "ois_3m",    "N76": "ois_6m",
+                        "N78": "spi",       "N82": "audusd",
+                        "N20": "gold_aud",  "N84": "usdjpy",
+                        "N95": "sp500",
+                        "N108": "efp_3y",   "N109": "efp_10y",
+                        "V44": "fed_funds",
+                        "V47": "usdswap_2y", "V50": "usdswap_10y", "V51": "usdswap_30y",
+                        "V67": "sofr_fix",
+                        "V78": "sofr_1m",   "V79": "sofr_3m",   "V80": "sofr_6m",
+                    }
+                    _loaded = {}
+                    _errors = []
+                    for _cell, _fkey in _cell_map.items():
+                        try:
+                            _v = _ws[_cell].value
+                            if _v is not None and not str(_v).startswith("#"):
+                                _loaded[_fkey] = float(_v)
+                        except Exception as _ce:
+                            _errors.append(f"{_cell}:{_ce}")
+                    # Preserve RBA cash rate and AUD futures (manual fields)
+                    for _keep in ["rba_cash", "aud_fut_3y", "aud_fut_10y", "usd_2y", "usd_10y", "usd_30y"]:
+                        if _keep in _mr_today:
+                            _loaded[_keep] = _mr_today[_keep]
+                    # Clear widget keys so inputs re-render with new values
+                    for _rk, _, _ in _RATE_FIELDS:
+                        st.session_state.pop(f"mr_{_rk}", None)
+                    st.session_state["morning_rates_today"] = _loaded
+                    # Save to DB
+                    if HAS_POSTGRES:
+                        save_user_config(_uid_rv, "morning_rates_today", "AUD", _loaded)
+                    st.success(f"✅ Loaded {len(_loaded)} rates from config sheet")
+                    if _errors: st.caption(f"Skipped: {', '.join(_errors)}")
+                    st.rerun()
+                except Exception as _e:
+                    st.error(f"Failed to read config: {_e}")
 
         if st.button("💾 Save Morning Rates", key="mr_save", type="primary"):
             st.session_state["morning_rates_prev"]  = _mr_today
