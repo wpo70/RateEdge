@@ -18823,7 +18823,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505n  |  UAT</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505o  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -21601,8 +21601,13 @@ h2{{color:#1e3a5f;margin-top:20px}}
                 # Clean timestamps - strip microseconds and raw snap labels
                 def _clean_ts(raw):
                     import re as _re_ts
-                    _m = _re_ts.search(r"(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})", str(raw))
-                    return f"{_m.group(1)} {_m.group(2)}" if _m else str(raw)[:16]
+                    _s = str(raw).strip()
+                    _m = _re_ts.search(r"(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})", _s)
+                    if _m: return f"{_m.group(1)} {_m.group(2)}"
+                    # Date-only: append current Sydney time
+                    _dm = _re_ts.search(r"(\d{4}-\d{2}-\d{2})", _s)
+                    if _dm: return _dm.group(1)
+                    return _s[:16]
                 _ts_curr_clean = _clean_ts(_today_str)
                 _ts_prev_clean = _clean_ts(_prev_date)
                 _sTitleRV = ParagraphStyle("sTRV", parent=_styles["Normal"], fontSize=17,
@@ -21673,12 +21678,12 @@ h2{{color:#1e3a5f;margin-top:20px}}
                 _pdf_book = st.session_state.get("rv_conviction_book", {})
                 _pdf_closed = st.session_state.get("rv_conviction_closed", [])
                 if _pdf_book or _pdf_closed:
-                    _story.append(Paragraph("Conviction Trade Book — Running P&L", _h2_style))
+                    _story.append(Paragraph("Conviction Trade Book — Running P&amp;L", _h2_style))
                     _pnl_hdr = ParagraphStyle("PnlHdr", parent=_styles["Normal"], fontSize=8,
                                               fontName="Helvetica-Bold", textColor=colors.white)
                     _pnl_body = ParagraphStyle("PnlBody", parent=_styles["Normal"], fontSize=8)
                     _pnl_data = [[Paragraph(h, _pnl_hdr) for h in
-                                  ["Structure","Entry Date","Entry Vol","Now","Δ bp","P&L (A$)","Score"]]]
+                                  ["Structure","Entry Date","Entry Vol","Now","Δ bp","P&amp;L (A$)","Score"]]]
                     for _bid, _bpos in _pdf_book.items():
                         _ev2 = _bpos.get("entry_vol")
                         _cv2 = (_curr.get("atm") or {}).get(_bpos.get("vol_key",""))
@@ -21871,12 +21876,15 @@ h2{{color:#1e3a5f;margin-top:20px}}
                 _TENORS_PDF   = ["2Y","3Y","5Y","7Y","10Y","15Y","20Y"]
 
                 def _rv_matrix_pdf(window_days):
+                    """Use expiry-matched lookback for term structure — same as UI."""
+                    _exp_days_pdf = {"1M":21,"3M":63,"6M":126,"1Y":252,"2Y":504,"3Y":756,"5Y":1260}
                     _z = []
                     for _exp in _EXPIRIES_PDF:
                         _row = []
+                        _lookback = max(_exp_days_pdf.get(_exp, window_days), window_days)
                         for _ten in _TENORS_PDF:
                             _ten_y = float(_ten.replace("Y",""))
-                            _rv = _compute_realised_vol_db("AUD", _ten_y, window_days)
+                            _rv = _compute_realised_vol_db("AUD", _ten_y, _lookback)
                             _row.append(round(_rv,1) if _rv else float("nan"))
                         _z.append(_row)
                     return _z
