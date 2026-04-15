@@ -18835,7 +18835,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1604e  |  UAT</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1604f  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -22056,15 +22056,29 @@ h2{{color:#1e3a5f;margin-top:20px}}
                         _hm2 = _pdf_heatmap(_vrp_z_pdf, f"ATM − Realised VRP ({_win_vrp_pdf}) — bp  |  Red=rich  Green=cheap", "{:+.1f}", "RdYlGn_r")
                         if _hm2: _story.append(_hm2)
                     if _pdf_show_dv:
-                        _prev_atm_d = _prev.get("atm", {}) if _prev else {}
-                        _curr_atm_d = _curr.get("atm", {})
+                        # Load full prev ATM from vol_history for full 7x7 coverage
+                        _pdf_prev_atm_df = None
+                        _pdf_prev_snap_id = (_prev or {}).get("id")
+                        if not _pdf_prev_snap_id:
+                            _all_s = list_vol_snapshots(user_id, "AUD")
+                            _td = str(pd.Timestamp.now(tz="Australia/Sydney").date())
+                            for _sp in _all_s[1:]:
+                                if str(_sp.get("snapshot_date",""))[:10] != _td:
+                                    _pdf_prev_snap_id = _sp["id"]; break
+                        if _pdf_prev_snap_id:
+                            _pdf_prev_loaded = load_vol_snapshot(_pdf_prev_snap_id)
+                            if _pdf_prev_loaded and _pdf_prev_loaded.get("atm") is not None:
+                                _pdf_prev_atm_df = _pdf_prev_loaded["atm"]
+                                if "Expiry" in _pdf_prev_atm_df.columns:
+                                    _pdf_prev_atm_df = _pdf_prev_atm_df.set_index("Expiry")
+                        _pdf_curr_atm_df = get_working_atm_surface("AUD")
                         _dv_z_pdf = []
                         for _exp in _EXPIRIES_PDF:
                             _row = []
                             for _ten in _TENORS_PDF:
-                                _k = f"{_exp.lower()}_{_ten}"
-                                _c_v = _curr_atm_d.get(_k) or _curr_atm_d.get(_k.upper())
-                                _p_v = _prev_atm_d.get(_k) or _prev_atm_d.get(_k.upper())
+                                _ten_y = float(_ten.replace("Y",""))
+                                _c_v = get_matrix_value(_pdf_curr_atm_df, _exp.lower(), _ten_y) if _pdf_curr_atm_df is not None else None
+                                _p_v = get_matrix_value(_pdf_prev_atm_df, _exp.lower(), _ten_y) if _pdf_prev_atm_df is not None else None
                                 _row.append(round(float(_c_v)-float(_p_v),1) if (_c_v and _p_v) else float("nan"))
                             _dv_z_pdf.append(_row)
                         _hm3 = _pdf_heatmap(_dv_z_pdf, "1d ATM Vol Change — bp  |  Green=lower  Red=higher", "{:+.1f}", "RdYlGn_r")
