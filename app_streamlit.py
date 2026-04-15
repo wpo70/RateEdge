@@ -20644,6 +20644,10 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             if _db_mr:
                 st.session_state["morning_rates_today"] = _db_mr
                 _mr_today = _db_mr
+                # Set individual widget keys so number_inputs render with correct values
+                for _k, _v in _db_mr.items():
+                    try: st.session_state[f"mr_{_k}"] = float(_v)
+                    except: pass
                 _db_mr_p = load_user_config(_try_uid, "morning_rates_prev", "AUD")
                 if _db_mr_p:
                     st.session_state["morning_rates_prev"] = _db_mr_p
