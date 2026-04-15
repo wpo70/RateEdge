@@ -5188,8 +5188,8 @@ def sdr_live_tab():
         st.session_state["sdr_date_from"]        = datetime.now(SYDNEY_TZ).date().replace(day=1)
         st.session_state["sdr_action"]           = "NEWT"
         st.session_state["sdr_refresh_interval"] = "30s"
-        # Alert CCY — set after ccy_opts known, so just clear it to force default below
         st.session_state.pop("sdr_alert_ccy", None)
+        st.session_state.pop("sdr_ccy", None)  # force AUD default on next render
         st.session_state["sdr_filters_loaded"] = True
 
     # ── Check table exists ────────────────────────────────────────────────────
@@ -5286,8 +5286,9 @@ def sdr_live_tab():
                 label_visibility="collapsed", on_change=_save_sdr_filters)
             sel_type = [_type_options[l] for l in sel_type_labels]
             ccy_opts = _sdr_get_distinct("notional_ccy")
+            _ccy_default = [x for x in ["AUD"] if x in ccy_opts] if ccy_opts else []
             sel_ccy = st.multiselect("CCY", ccy_opts,
-                default=[c for c in ["AUD"] if c in ccy_opts],
+                default=_ccy_default,
                 key="sdr_ccy", label_visibility="collapsed", on_change=_save_sdr_filters)
 
         with col3:
@@ -18842,7 +18843,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1604i  |  UAT</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1604j  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
