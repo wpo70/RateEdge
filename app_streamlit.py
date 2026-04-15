@@ -20313,37 +20313,64 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     _sod_story = []
                     _ts = pd.Timestamp.now(tz='Australia/Sydney').strftime('%Y-%m-%d %H:%M')
                     _tz_lbl_pdf = "AEDT" if pd.Timestamp.now(tz='Australia/Sydney').dst().seconds > 0 else "AEST"
-                    # Logo header
+                    # Logo header — logo left, title right, timestamp centred under rule
                     import base64 as _b64_sod, io as _logo_io_sod
                     from reportlab.platypus import Image as _RLImg_sod
                     _logo_bytes_sod = _b64_sod.b64decode(_RATEEDGE_LOGO_B64)
-                    _logo_img_sod = _RLImg_sod(_logo_io_sod.BytesIO(_logo_bytes_sod), width=4*cm, height=1.2*cm)
-                    _logo_img_sod.hAlign = "LEFT"
+                    _logo_img_sod = _RLImg_sod(_logo_io_sod.BytesIO(_logo_bytes_sod), width=3.8*cm, height=1.15*cm)
+                    _sTitleR = ParagraphStyle("sTR", parent=_ss["Normal"], fontSize=17,
+                                              textColor=colors.HexColor("#0f172a"),
+                                              fontName="Helvetica-Bold", alignment=2, spaceAfter=0)
                     _hdr_data = [[_logo_img_sod,
-                                  Paragraph("<b>Start-of-Day Report</b><br/>"
-                                            f"<font size=7 color='#64748b'>{_ts} {_tz_lbl_pdf}</font>", _sT)]]
-                    _hdr_tbl = Table(_hdr_data, colWidths=[5*cm, None])
+                                  Paragraph("Start-of-Day Report", _sTitleR)]]
+                    _hdr_tbl = Table(_hdr_data, colWidths=[4.5*cm, None])
                     _hdr_tbl.setStyle(TableStyle([
-                        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-                        ("ALIGN", (1,0), (1,0), "RIGHT"),
-                        ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+                        ("VALIGN",  (0,0), (-1,-1), "BOTTOM"),
+                        ("ALIGN",   (1,0), (1,0),   "RIGHT"),
+                        ("TOPPADDING",    (0,0), (-1,-1), 0),
+                        ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+                        ("LEFTPADDING",   (0,0), (-1,-1), 0),
+                        ("RIGHTPADDING",  (0,0), (-1,-1), 0),
                     ]))
                     _sod_story.append(_hdr_tbl)
-                    _sod_story.append(HRFlowable(width="100%", thickness=2,
+                    _sod_story.append(HRFlowable(width="100%", thickness=2.5,
                                                   color=colors.HexColor("#1e3a5f"), spaceAfter=4))
+                    _sTsLine = ParagraphStyle("sTsL", parent=_ss["Normal"], fontSize=8,
+                                              textColor=colors.HexColor("#64748b"), alignment=1, spaceAfter=4)
+                    _sod_story.append(Paragraph(f"{_ts} {_tz_lbl_pdf}", _sTsLine))
+                    _sod_story.append(HRFlowable(width="100%", thickness=0.5,
+                                                  color=colors.HexColor("#cbd5e1"), spaceAfter=4))
+                    _sMeta = ParagraphStyle("sMeta", parent=_ss["Normal"], fontSize=7,
+                                            textColor=colors.HexColor("#64748b"), spaceAfter=8)
                     _sod_story.append(Paragraph(
-                        f"<font color='#64748b'>USD T-1: {_usd_t1_sel[:60]}   |   "
-                        f"USD T-2: {_usd_t2_sel[:50]}   |   AUD: {_aud_sel[:40]}</font>", _sSub))
+                        f"USD T-1: {_usd_t1_sel[:60]}   |   "
+                        f"USD T-2: {_usd_t2_sel[:50]}   |   AUD: {_aud_sel[:40]}", _sMeta))
                     _sod_story.append(HRFlowable(width="100%", thickness=0.5,
                                                   color=colors.HexColor("#e2e8f0"), spaceAfter=8))
 
-                    # Narrative - split into 3 paragraphs
+                    # Narrative - split paragraphs; Tactical note gets bold heading + italic body
                     import re as _re_pdf
                     _narr_parts = [p.strip() for p in _narrative.strip().split("\n\n") if p.strip()]
-                    _sBold = ParagraphStyle("sBold", parent=_sB, leading=13, spaceAfter=5)
+                    _sPara  = ParagraphStyle("sPara",  parent=_sB, leading=13, spaceAfter=6)
+                    _sTacHd = ParagraphStyle("sTacHd", parent=_sB, fontName="Helvetica-Bold",
+                                             fontSize=8.5, textColor=colors.HexColor("#1e3a5f"),
+                                             spaceBefore=6, spaceAfter=2)
+                    _sTacBd = ParagraphStyle("sTacBd", parent=_sB, fontName="Helvetica-Oblique",
+                                             fontSize=8, leading=12, spaceAfter=6,
+                                             textColor=colors.HexColor("#334155"))
                     for _np in _narr_parts:
-                        _sod_story.append(Paragraph(_pdf_clean(_np), _sBold))
-                    _sod_story.append(Spacer(1, 6))
+                        _clean = _pdf_clean(_np)
+                        if _clean.lower().startswith("tactical note"):
+                            # Split "Tactical note: rest of text"
+                            _colon = _clean.find(":")
+                            if _colon > 0:
+                                _sod_story.append(Paragraph(_clean[:_colon+1], _sTacHd))
+                                _sod_story.append(Paragraph(_clean[_colon+1:].strip(), _sTacBd))
+                            else:
+                                _sod_story.append(Paragraph(_clean, _sTacHd))
+                        else:
+                            _sod_story.append(Paragraph(_clean, _sPara))
+                    _sod_story.append(Spacer(1, 4))
 
                     # Table style helper
                     def _mk_tbl(data, hdr_col="#1e293b", font_sz=6.5):
