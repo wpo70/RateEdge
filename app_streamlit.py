@@ -1410,7 +1410,7 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
         return False
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def list_vol_snapshots(user_id: str, currency: str = None):
     """List all historical vol snapshots for a user"""
     # Normalise: both admin emails share the same snapshots
@@ -18823,7 +18823,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505g  |  UAT</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505h  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -19558,6 +19558,7 @@ def sod_report_tab():
 
     # ── Load available snapshots ──────────────────────────────────
     if st.button("🔄 Reload Snapshots", key="sod_reload_snaps"):
+        list_vol_snapshots.clear()
         st.rerun()
     _snaps_usd = list_vol_snapshots(user_id, "USD") if HAS_POSTGRES else []
     _snaps_aud = list_vol_snapshots(user_id, "AUD") if HAS_POSTGRES else []
@@ -21957,6 +21958,7 @@ RateEdge Options Platform""",
                 if _sid: _saved.append(_ccy)
                 else: _failed.append(_ccy)
             if _saved:
+                list_vol_snapshots.clear()
                 st.success(f"✅ Saved: **{label}** for {', '.join(_saved)}")
             if _failed:
                 st.error(f"Failed for: {', '.join(_failed)}")
