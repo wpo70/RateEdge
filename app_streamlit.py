@@ -5432,6 +5432,8 @@ def sdr_live_tab():
     col_refresh, col_status = st.columns([1, 5])
     with col_refresh:
         manual_refresh = st.button("🔄 Refresh", key="sdr_refresh_btn", use_container_width=True)
+    if manual_refresh:
+        load_sdr_data.clear()
 
     @st.cache_data(ttl=30, show_spinner=False)
     def load_sdr_data(q: str, p: tuple):
@@ -5811,9 +5813,10 @@ def sdr_live_tab():
     if _interval > 0:
         import time as _time_rf
         _last_rf = st.session_state.get("_sdr_last_refresh", 0)
-        _now_rf  = _time_rf.time()
+        _now_rf  = _time_rf.monotonic()
         if _now_rf - _last_rf >= _interval:
             st.session_state["_sdr_last_refresh"] = _now_rf
+            load_sdr_data.clear()
             st.rerun()
         else:
             _remaining = max(0, int(_interval - (_now_rf - _last_rf)))
