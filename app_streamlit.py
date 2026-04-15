@@ -21051,25 +21051,164 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             + "</div></div>",
             unsafe_allow_html=True)
 
-        # ── Top 3 convictions ─────────────────────────────────────
-        st.markdown("#### 🏆 Top 3 Convictions")
+        # ── Conviction Trade Book MTM ──────────────────────────────
+        _VEGA_PER_BP = 25_000  # AUD per bp vega notional
+        _book_key = "rv_conviction_book"
+        _closed_key = "rv_conviction_closed"
+        _today_trade = str(pd.Timestamp.now(tz="Australia/Sydney").date())
+
+        # Load book from DB on fresh session
+        if _book_key not in st.session_state and HAS_POSTGRES:
+            _uid_bk = st.session_state.get("username", "wpo@rateedge.au")
+            _db_book = load_user_config(_uid_bk, _book_key, "AUD")
+            if _db_book: st.session_state[_book_key] = _db_book
+        if _closed_key not in st.session_state and HAS_POSTGRES:
+            _uid_bk = st.session_state.get("username", "wpo@rateedge.au")
+            _db_closed = load_user_config(_uid_bk, _closed_key, "AUD")
+            if _db_closed: st.session_state[_closed_key] = _db_closed
+
+        _book   = st.session_state.get(_book_key, {})     # {idea_id: {entry_date, entry_vol, structure, ...}}
+        _closed = st.session_state.get(_closed_key, [])   # list of closed trades
+
+        # Helper: get ATM vol for a tenor key from current surface
+        def _get_atm_vol(tenor_key):
+            return (_curr.get("atm") or {}).get(tenor_key)
+
+        # Build idea IDs for current top3 (use Structure as stable ID)
+        _top3_ids = [_idea.get("Structure","") for _idea in _top3]
+
+        # Close positions that have dropped out of top3
+        _new_closed = []
+        _book_updated = False
+        for _bid, _bpos in list(_book.items()):
+            if _bid not in _top3_ids:
+                # Position closed — compute final P&L
+                _close_vol = _get_atm_vol(_bpos.get("vol_key",""))
+                if _close_vol and _bpos.get("entry_vol"):
+                    _bp_pnl = (_close_vol - _bpos["entry_vol"]) * (1 if _bpos.get("direction","long")=="long" else -1)
+                    _usd_pnl = _bp_pnl * _VEGA_PER_BP
+                else:
+                    _bp_pnl, _usd_pnl = 0.0, 0.0
+                _new_closed.append({**_bpos, "close_date": _today_trade,
+                                    "close_vol": _close_vol, "bp_pnl": round(_bp_pnl,1),
+                                    "usd_pnl": round(_usd_pnl,0), "status": "CLOSED"})
+                del _book[_bid]
+                _book_updated = True
+
+        if _new_closed:
+            _closed = _closed + _new_closed
+            st.session_state[_closed_key] = _closed
+
+        # Open new positions for ideas just entering top3
+        for _idea in _top3:
+            _bid = _idea.get("Structure","")
+            if _bid and _bid not in _book:
+                # Guess vol key from structure (e.g. "3m×10Y" → "3M_10Y")
+                _raw = _bid.replace("×","_").replace("x","_").replace(" ","")
+                _vkey = _raw.upper() if _raw else ""
+                # Try to find matching key in curr atm
+                _ev = None
+                for _ak in (_curr.get("atm") or {}):
+                    if _ak.replace("_","").upper() == _vkey.replace("_","").upper():
+                        _ev = (_curr.get("atm") or {}).get(_ak)
+                        _vkey = _ak
+                        break
+                _book[_bid] = {
+                    "structure": _bid,
+                    "type": _idea.get("Type",""),
+                    "trade": _idea.get("Trade",""),
+                    "signal": _idea.get("Signal",""),
+                    "entry_date": _today_trade,
+                    "entry_vol": _ev,
+                    "vol_key": _vkey,
+                    "direction": "long",  # default; straddles are long vol
+                    "score": _idea.get("Score", 0),
+                }
+                _book_updated = True
+
+        if _book_updated:
+            st.session_state[_book_key] = _book
+            if HAS_POSTGRES:
+                _uid_bk = st.session_state.get("username", "wpo@rateedge.au")
+                save_user_config(_uid_bk, _book_key, "AUD", _book)
+                save_user_config(_uid_bk, _closed_key, "AUD", _closed)
+
+        # ── Display ──────────────────────────────────────────────────
+        st.markdown("#### 🏆 Top 3 Convictions — Live Book")
         if _top3:
             for _i, _idea in enumerate(_top3):
-                _score = _idea.get("Score",0)
-                _sc = "#f59e0b" if _score>50 else "#22c55e" if _score>20 else "#94a3b8"
-                _ca, _cb = st.columns([5,1])
+                _score = _idea.get("Score", 0)
+                _sc = "#f59e0b" if _score>60 else "#22c55e" if _score>30 else "#94a3b8"
+                _bid = _idea.get("Structure","")
+                _pos = _book.get(_bid, {})
+                _ev  = _pos.get("entry_vol")
+                _cv  = _get_atm_vol(_pos.get("vol_key",""))
+                _is_new = (_pos.get("entry_date") == _today_trade and _bid in _book and
+                           len([x for x in _closed if x.get("structure")==_bid])==0)
+
+                # P&L
+                if _ev and _cv:
+                    _bp_live = (_cv - _ev) * (1 if _pos.get("direction","long")=="long" else -1)
+                    _usd_live = _bp_live * _VEGA_PER_BP
+                    _pnl_col = "#22c55e" if _usd_live >= 0 else "#ef4444"
+                else:
+                    _bp_live, _usd_live, _pnl_col = None, None, "#94a3b8"
+
+                # Row layout
+                _ca, _cb, _cc = st.columns([5, 1.5, 1.2])
                 with _ca:
-                    st.markdown(f"**{_i+1}. {_idea.get('Type','')} — {_idea.get('Structure','')}**")
-                    st.markdown(f"<span style='color:#94a3b8;font-size:0.85rem'>{_idea.get('Signal','')} &nbsp;|&nbsp; {_idea.get('Trade','')}</span>", unsafe_allow_html=True)
-                    if _idea.get("Rationale"): st.caption(_idea["Rationale"])
-                with _cb:
-                    st.markdown(f"<div style='text-align:center;padding:8px 4px;background:#1e293b;border-radius:6px;margin-top:4px'>"
-                                f"<div style='color:{_sc};font-size:1.2rem;font-weight:700'>{_score:.0f}</div>"
-                                f"<div style='color:#64748b;font-size:0.65rem'>Score</div></div>",
+                    _new_badge = " <span style='background:#7c3aed;color:white;font-size:0.65rem;padding:1px 6px;border-radius:3px;margin-left:6px'>NEW</span>" if _is_new else ""
+                    st.markdown(f"**{_i+1}. {_idea.get('Type','')} — {_bid}**{_new_badge}",
                                 unsafe_allow_html=True)
+                    st.markdown(f"<span style='color:#94a3b8;font-size:0.82rem'>{_idea.get('Signal','')} &nbsp;|&nbsp; {_idea.get('Trade','')}</span>",
+                                unsafe_allow_html=True)
+                    if _idea.get("Rationale"): st.caption(_idea["Rationale"])
+                    if _pos.get("entry_date"):
+                        _entry_lbl = f"Entry: {_pos['entry_date']}"
+                        if _ev: _entry_lbl += f"  |  Entry vol: {_ev:.1f}bp"
+                        if _cv: _entry_lbl += f"  |  Now: {_cv:.1f}bp"
+                        st.caption(_entry_lbl)
+                with _cb:
+                    if _bp_live is not None:
+                        st.markdown(
+                            f"<div style='text-align:center;padding:6px 4px;background:#1e293b;border-radius:6px;margin-top:4px'>"
+                            f"<div style='color:{_pnl_col};font-size:1rem;font-weight:700'>{_bp_live:+.1f}bp</div>"
+                            f"<div style='color:{_pnl_col};font-size:0.8rem;font-weight:600'>"
+                            f"{'A$'+f'{abs(_usd_live/1000):.0f}k' if abs(_usd_live)>=1000 else 'A$'+f'{_usd_live:.0f}'}"
+                            f"{'▲' if _usd_live>=0 else '▼'}</div>"
+                            f"<div style='color:#64748b;font-size:0.6rem'>MTM P&L</div></div>",
+                            unsafe_allow_html=True)
+                    else:
+                        st.markdown(
+                            f"<div style='text-align:center;padding:6px 4px;background:#1e293b;border-radius:6px;margin-top:4px'>"
+                            f"<div style='color:#64748b;font-size:0.75rem'>No vol match</div></div>",
+                            unsafe_allow_html=True)
+                with _cc:
+                    st.markdown(
+                        f"<div style='text-align:center;padding:6px 4px;background:#1e293b;border-radius:6px;margin-top:4px'>"
+                        f"<div style='color:{_sc};font-size:1.1rem;font-weight:700'>{_score:.0f}</div>"
+                        f"<div style='color:#64748b;font-size:0.6rem'>Score</div></div>",
+                        unsafe_allow_html=True)
                 if _i < 2: st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
         else:
             st.info("Run Generate Trade Ideas on the RV tab first, then re-publish.")
+
+        # ── Closed Trade Log ─────────────────────────────────────────
+        if _closed:
+            st.markdown("##### 📋 Closed Positions")
+            for _ct in reversed(_closed[-6:]):  # show last 6 closed
+                _cpnl_col = "#22c55e" if _ct.get("bp_pnl",0)>=0 else "#ef4444"
+                _highlight = "border-left:3px solid #7c3aed;" if _ct.get("status")=="CLOSED" else ""
+                st.markdown(
+                    f"<div style='background:#0f172a;border-radius:6px;padding:8px 12px;margin:4px 0;{_highlight}'>"
+                    f"<span style='color:#e2e8f0;font-weight:600'>{_ct.get('structure','')}</span> "
+                    f"<span style='color:#64748b;font-size:0.8rem'>{_ct.get('entry_date','')} → {_ct.get('close_date','')}</span> "
+                    f"<span style='float:right;color:{_cpnl_col};font-weight:700'>"
+                    f"{_ct.get('bp_pnl',0):+.1f}bp  "
+                    f"A${'+'if _ct.get('usd_pnl',0)>=0 else ''}{_ct.get('usd_pnl',0)/1000:.0f}k</span>"
+                    f"<span style='display:block;color:#94a3b8;font-size:0.75rem;margin-top:2px'>"
+                    f"⬆ New conviction replaced this position</span>"
+                    f"</div>", unsafe_allow_html=True)
 
         # ── Charts — only if real data ──────────────────────────────
         if _chg_rows:
@@ -21092,47 +21231,115 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                                   height=230, margin=dict(t=35,b=35,l=40,r=20), showlegend=False)
             st.plotly_chart(_fig_r, use_container_width=True)
 
-        # ── Realised Vol Matrices (if manually copied) ────────────────
-        _rv_mats = st.session_state.get("rv_realised_matrices")
-        if _rv_mats:
-            st.markdown("---")
-            st.markdown("#### 📈 Realised & Delivered Vol Matrices")
-            _exp_l = _rv_mats.get("exp_labels", [])
-            _ten_l = _rv_mats.get("ten_labels", [])
-            import plotly.graph_objects as _go_rv
-            import math as _mth_rv
+        # ── Realised Vol Matrices — DB-driven ────────────────────────
+        st.markdown("---")
+        st.markdown("#### 📈 Realised & Delivered Vol Matrices")
 
-            def _rv_heatmap(data_dict, title, fmt, low_green):
-                _df = pd.DataFrame(data_dict).T.reindex(index=_exp_l, columns=_ten_l)
-                _vals = _df.values.astype(float)
-                _vmin, _vmax = float(np.nanmin(_vals)), float(np.nanmax(_vals))
-                _fig = _go_rv.Figure(data=_go_rv.Heatmap(
-                    z=_vals, x=_ten_l, y=_exp_l,
-                    colorscale="RdYlGn_r" if low_green else "RdYlGn",
-                    zmin=_vmin, zmax=_vmax,
-                    text=[[fmt.format(v) if not _mth_rv.isnan(v) else "—" for v in row] for row in _vals],
-                    texttemplate="%{text}", textfont={"size": 10},
-                    showscale=True, colorbar=dict(thickness=12, len=0.8)
-                ))
-                _fig.update_layout(
-                    title=dict(text=title, font=dict(size=12, color="#e2e8f0")),
-                    height=380, template="plotly_dark",
-                    margin=dict(l=60, r=40, t=40, b=40),
-                    xaxis=dict(title="Swap Tenor"),
-                    yaxis=dict(title="Option Expiry", autorange="reversed", tickfont=dict(size=10))
-                )
-                st.plotly_chart(_fig, use_container_width=True)
+        _EXPIRIES_RV = ["1M","3M","6M","1Y","2Y","3Y","5Y"]
+        _TENORS_RV   = ["2Y","3Y","5Y","7Y","10Y","15Y","20Y"]
+        _WIN_OPTS    = {"7d":7, "21d":21, "3m":63}
 
-            if "rv" in _rv_mats:
-                _rv_heatmap(_rv_mats["rv"]["df"], f"Realised ATM Vol ({_rv_mats['rv']['window']}) — bp/annum", "{:.1f}", False)
-            if "diff" in _rv_mats:
-                _rv_heatmap(_rv_mats["diff"]["df"], f"ATM − Realised ({_rv_mats['diff']['window']}) — bp  |  Green=cheap  Red=rich", "{:+.1f}", True)
-            if "dv" in _rv_mats:
-                _rv_heatmap(_rv_mats["dv"]["df"], f"ATM Vol Change ({_rv_mats['dv']['window']}) — bp  |  Green=lower  Red=higher", "{:+.1f}", True)
+        _mca, _mcb, _mcc = st.columns(3)
+        with _mca:
+            _show_rv  = st.checkbox("Realised ATM Vol", value=True,  key="rv_mat_show_rv")
+            _win_rv   = st.selectbox("Lookback", list(_WIN_OPTS.keys()), index=1, key="rv_mat_win_rv",
+                                      label_visibility="collapsed") if _show_rv else None
+        with _mcb:
+            _show_vrp = st.checkbox("ATM − Realised (VRP)", value=True, key="rv_mat_show_vrp")
+            _win_vrp  = st.selectbox("Lookback", list(_WIN_OPTS.keys()), index=1, key="rv_mat_win_vrp",
+                                      label_visibility="collapsed") if _show_vrp else None
+        with _mcc:
+            _show_dv  = st.checkbox("1d Vol Change", value=False, key="rv_mat_show_dv")
+            _win_dv   = st.selectbox("Lookback", list(_WIN_OPTS.keys()), index=0, key="rv_mat_win_dv",
+                                      label_visibility="collapsed") if _show_dv else None
 
-            if st.button("🗑 Clear Matrices from Report", key="rv_clear_matrices"):
-                st.session_state.pop("rv_realised_matrices", None)
-                st.rerun()
+        import plotly.graph_objects as _go_rv
+        import math as _mth_rv
+
+        def _rv_heatmap_db(z_vals, x_labs, y_labs, title, fmt, low_green, height=360):
+            _vmin = float(np.nanmin(z_vals)) if not np.all(np.isnan(z_vals)) else 0
+            _vmax = float(np.nanmax(z_vals)) if not np.all(np.isnan(z_vals)) else 1
+            _fig = _go_rv.Figure(data=_go_rv.Heatmap(
+                z=z_vals, x=x_labs, y=y_labs,
+                colorscale="RdYlGn_r" if low_green else "RdYlGn",
+                zmin=_vmin, zmax=_vmax,
+                text=[[fmt.format(v) if not _mth_rv.isnan(v) else "—" for v in row] for row in z_vals],
+                texttemplate="%{text}", textfont={"size":10},
+                showscale=True, colorbar=dict(thickness=12, len=0.8)
+            ))
+            _fig.update_layout(
+                title=dict(text=title, font=dict(size=12, color="#e2e8f0")),
+                height=height, template="plotly_dark",
+                margin=dict(l=60, r=40, t=40, b=30),
+                xaxis=dict(title="Swap Tenor"),
+                yaxis=dict(title="Option Expiry", autorange="reversed", tickfont=dict(size=10))
+            )
+            st.plotly_chart(_fig, use_container_width=True)
+
+        def _build_rv_matrix(window_days):
+            """Build realised vol matrix from DB for all expiry × tenor combos."""
+            import math as _m
+            _exp_map = {"1M":1/12,"3M":0.25,"6M":0.5,"1Y":1.0,"2Y":2.0,"3Y":3.0,"5Y":5.0}
+            _z = []
+            for _exp in _EXPIRIES_RV:
+                _row = []
+                for _ten in _TENORS_RV:
+                    _ten_y = float(_ten.replace("Y",""))
+                    _rv = _compute_realised_vol_db("AUD", _ten_y, window_days)
+                    _row.append(round(_rv, 1) if _rv else float("nan"))
+                _z.append(_row)
+            return _z
+
+        def _build_atm_matrix():
+            """Current ATM surface as matrix matching _EXPIRIES_RV × _TENORS_RV."""
+            _atm_d = _curr.get("atm", {})
+            _exp_map = {"1M":"1M","3M":"3M","6M":"6M","1Y":"1Y","2Y":"2Y","3Y":"3Y","5Y":"5Y"}
+            _z = []
+            for _exp in _EXPIRIES_RV:
+                _row = []
+                for _ten in _TENORS_RV:
+                    _k = f"{_exp}_{_ten}"
+                    _v = _atm_d.get(_k)
+                    _row.append(float(_v) if _v else float("nan"))
+                _z.append(_row)
+            return _z
+
+        if _show_rv and _win_rv:
+            with st.spinner(f"Computing {_win_rv} realised vol..."):
+                _rv_z = _build_rv_matrix(_WIN_OPTS[_win_rv])
+            _rv_heatmap_db(_rv_z, _TENORS_RV, _EXPIRIES_RV,
+                           f"Realised ATM Vol ({_win_rv}) — bp/annum", "{:.1f}", False)
+
+        if _show_vrp and _win_vrp:
+            with st.spinner(f"Computing {_win_vrp} VRP..."):
+                _rv_z2  = _build_rv_matrix(_WIN_OPTS[_win_vrp])
+                _atm_z  = _build_atm_matrix()
+                _vrp_z  = [[(_atm_z[r][c] - _rv_z2[r][c])
+                             if not (_mth_rv.isnan(_atm_z[r][c]) or _mth_rv.isnan(_rv_z2[r][c]))
+                             else float("nan")
+                             for c in range(len(_TENORS_RV))]
+                            for r in range(len(_EXPIRIES_RV))]
+            _rv_heatmap_db(_vrp_z, _TENORS_RV, _EXPIRIES_RV,
+                           f"ATM − Realised ({_win_vrp}) — bp  |  Green=cheap  Red=rich",
+                           "{:+.1f}", True)
+
+        if _show_dv and _win_dv:
+            # 1d vol change: compare curr atm to prev atm
+            _prev_atm = _prev.get("atm", {}) if _prev else {}
+            _curr_atm = _curr.get("atm", {})
+            _dv_z = []
+            for _exp in _EXPIRIES_RV:
+                _row = []
+                for _ten in _TENORS_RV:
+                    _k = f"{_exp}_{_ten}"
+                    _c_v = _curr_atm.get(_k)
+                    _p_v = _prev_atm.get(_k)
+                    _row.append(round(float(_c_v)-float(_p_v),1)
+                                if (_c_v and _p_v) else float("nan"))
+                _dv_z.append(_row)
+            _rv_heatmap_db(_dv_z, _TENORS_RV, _EXPIRIES_RV,
+                           "ATM Vol Change (1d) — bp  |  Green=lower  Red=higher",
+                           "{:+.1f}", True)
         # Build HTML for PDF
         _pdf_ideas_html = ""
         for _i, _idea in enumerate(_top3):
