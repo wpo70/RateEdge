@@ -20794,7 +20794,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                         if _htbl_rows:
                             st.markdown(f"<div style='font-size:11px;color:#64748b;margin-bottom:6px'>Comparing <b style='color:#38bdf8'>{_sel_date}</b> → Today | {len(_htbl_rows)} fields</div>", unsafe_allow_html=True)
                             _hcols = st.columns([1, 2, 1.2, 1.2, 1.2])
-                            for _hgc, _hgh in zip(_hcols, ["Group", "Rate", _sel_date, "Today", "Move"]):
+                            for _hgc, _hgh in zip(_hcols, ["Group", "Rate", "Today", _sel_date, "Move"]):
                                 _hgc.markdown(f"<div style='font-size:11px;font-weight:700;color:#64748b'>{_hgh}</div>", unsafe_allow_html=True)
                             st.markdown("<hr style='margin:4px 0;border-color:#1e3050'>", unsafe_allow_html=True)
                             _prev_hgrp = None
@@ -20806,8 +20806,8 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                                 _hrc = st.columns([1, 2, 1.2, 1.2, 1.2])
                                 _hrc[0].markdown(f"<div style='font-size:10px;color:#475569'>{_hrow['Group']}</div>", unsafe_allow_html=True)
                                 _hrc[1].markdown(f"<div style='font-size:12px;color:#e2e8f0'>{_hrow['Rate']}</div>", unsafe_allow_html=True)
-                                _hrc[2].markdown(f"<div style='font-size:12px;color:#94a3b8'>{_hrow[_sel_date]}</div>", unsafe_allow_html=True)
-                                _hrc[3].markdown(f"<div style='font-size:12px;font-weight:600;color:#f8fafc'>{_hrow['Today']}</div>", unsafe_allow_html=True)
+                                _hrc[2].markdown(f"<div style='font-size:12px;font-weight:600;color:#f8fafc'>{_hrow['Today']}</div>", unsafe_allow_html=True)
+                                _hrc[3].markdown(f"<div style='font-size:12px;color:#94a3b8'>{_hrow[_sel_date]}</div>", unsafe_allow_html=True)
                                 _mv_col_h = "#22c55e" if _hrow["_chg"] > 0 else "#ef4444" if _hrow["_chg"] < 0 else "#64748b"
                                 _hrc[4].markdown(f"<div style='font-size:12px;font-weight:600;color:{_mv_col_h}'>{_hrow['Move']}</div>", unsafe_allow_html=True)
                     else:
