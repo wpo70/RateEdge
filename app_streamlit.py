@@ -21578,35 +21578,49 @@ RateEdge Options Platform""",
                 </div>
                 """, unsafe_allow_html=True)
         
-        # Save EOD Snapshot
-        st.markdown("### 💾 Save EOD Snapshot")
+        # Save Snapshot
+        st.markdown("### 💾 Save Vol Snapshot")
         st.caption("Save current vol surface to database for SOD Report / implied open calculations")
 
-        _eod_label = st.text_input(
-            "Snapshot Label",
-            value=f"EOD {pd.Timestamp.now().strftime('%Y-%m-%d')}",
-            key="eod_snap_label"
-        )
         _eod_notes = st.text_input("Notes (optional)", value="", key="eod_snap_notes")
 
-        if st.button("💾 Save EOD Snapshot", key="save_eod_snap_btn", type="primary", use_container_width=True):
+        def _do_save_snap(label):
             if not HAS_POSTGRES:
-                st.error("Database not connected   —   cannot save snapshot.")
-            elif not export_currencies:
+                st.error("Database not connected.")
+                return
+            if not export_currencies:
                 st.error("Select at least one currency above first.")
-            else:
-                _saved, _failed = [], []
-                for _ccy in export_currencies:
-                    _sid = save_vol_snapshot(user_id, _ccy, _eod_label.strip(), _eod_notes.strip())
-                    if _sid:
-                        _saved.append(_ccy)
-                    else:
-                        _failed.append(_ccy)
-                if _saved:
-                    st.success(f"✅ Saved EOD snapshot for: {', '.join(_saved)}")
-                    list_vol_snapshots.clear()  # clear cache so Vol History shows new snapshot immediately
-                if _failed:
-                    st.error(f"├ö├ÿ├« Failed for: {', '.join(_failed)}   —   check vol data is loaded.")
+                return
+            _saved, _failed = [], []
+            for _ccy in export_currencies:
+                _sid = save_vol_snapshot(user_id, _ccy, label.strip(), _eod_notes.strip())
+                if _sid: _saved.append(_ccy)
+                else: _failed.append(_ccy)
+            if _saved:
+                st.success(f"✅ Saved: **{label}** for {', '.join(_saved)}")
+            if _failed:
+                st.error(f"Failed for: {', '.join(_failed)}")
+
+        import datetime as _dt_snap
+        _syd_now = _dt_snap.datetime.now(ZoneInfo("Australia/Sydney"))
+        _syd_lbl = "AEST" if _syd_now.utcoffset().total_seconds() == 36000 else "AEDT"
+        _ts_str  = _syd_now.strftime(f"%d-%b-%Y %H:%M {_syd_lbl}")
+        _date_str = _syd_now.strftime("%d-%b-%Y")
+        _ccys_str = "/".join(export_currencies) if export_currencies else "AUD"
+
+        _sc1, _sc2, _sc3 = st.columns(3)
+        with _sc1:
+            if st.button(f"🌙 EOD  {_date_str}", key="snap_eod", type="primary", use_container_width=True,
+                         help=f"Label: {_ccys_str} EOD {_ts_str}"):
+                _do_save_snap(f"{_ccys_str} EOD {_ts_str}")
+        with _sc2:
+            if st.button(f"🌅 SOD  {_date_str}", key="snap_sod", use_container_width=True,
+                         help=f"Label: {_ccys_str} SOD {_ts_str}"):
+                _do_save_snap(f"{_ccys_str} SOD {_ts_str}")
+        with _sc3:
+            if st.button(f"⏱ Intraday  {_syd_now.strftime('%H:%M')}", key="snap_intraday", use_container_width=True,
+                         help=f"Label: {_ccys_str} {_ts_str}"):
+                _do_save_snap(f"{_ccys_str} {_ts_str}")
 
         # Quick tips
         st.markdown(f"""
