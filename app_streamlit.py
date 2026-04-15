@@ -6882,10 +6882,8 @@ def curves_tab():
         _mb = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
         _conv_now = {"Market":"market","Q/Q":"qq","S/S":"ss"}.get(leg_conv,"market")
         _prev_conv = st.session_state.get("fwd_convention", "market")
-        _prev_ccy  = st.session_state.get("fwd_ccy", ccy)
-
-        # Auto-regen: convention changed, or currency changed, or explicit button press
-        _need_regen = gen_fwd or _conv_now != _prev_conv or _prev_ccy != ccy
+        # Auto-regen on convention change; CCY change requires explicit button press
+        _need_regen = gen_fwd or _conv_now != _prev_conv
 
         if _need_regen and _mc is not None:
             with st.spinner("Calculating..."):
