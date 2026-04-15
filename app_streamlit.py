@@ -6161,7 +6161,6 @@ def vol_config_tab():
                         if _saved > 0:
                             st.success(f"✅ Auto-saved {_saved} configs to database.")
                         # Clear load_user_config cache so next load gets fresh data
-                        load_user_config.clear()
                     except Exception as _e:
                         st.warning(f"Auto-save failed: {_e}")
 
@@ -6263,7 +6262,6 @@ def vol_config_tab():
                                     _uid_mr = st.session_state.get("username","")
                                     if _uid_mr and HAS_POSTGRES:
                                         save_user_config(_uid_mr, "morning_rates_today", "AUD", _mr_now)
-                                        load_user_config.clear()
                                 except Exception: pass
                     except Exception as _se:
                         st.warning(f"Curve save to swap_rates failed: {_se}")
@@ -8451,7 +8449,6 @@ def swaptions_tab(vol_mode: str):
                                         if _col != "Expiry": _rec[_col] = _row[_col]
                                     _a_records.append(_rec)
                                 save_user_config(_uid, "sabr_alpha", ccy, {"values": _a_records})
-                                load_user_config.clear()
                             except Exception:
                                 pass
                         st.session_state.pop("_alpha_check_result", None)
@@ -9967,7 +9964,6 @@ def caps_floors_tab(vol_mode: str):
                     _uid_cf = st.session_state.get("username", "default")
                     if HAS_POSTGRES:
                         save_user_config(_uid_cf, "cf_spreads", "AUD", _cf_data)
-                        load_user_config.clear()
                 except Exception:
                     pass
                 # Bust caplet and CFS cache so curve re-builds with new spreads
@@ -18866,7 +18862,6 @@ def main():
                 try:
                     _tab_prefs_save = {k: st.session_state.get(k, True) for _, k in _ALL_TABS}
                     save_user_config(st.session_state.get("username",""), "tab_prefs", "AUD", _tab_prefs_save)
-                    load_user_config.clear()
                 except Exception: pass
 
         
@@ -19532,17 +19527,11 @@ def sod_report_tab():
 
     user_id = st.session_state.get("username", "default")
 
-    # ── Load available snapshots — cached, refresh on button ─────
+    # ── Load available snapshots ──────────────────────────────────
     if st.button("🔄 Reload Snapshots", key="sod_reload_snaps"):
-        st.session_state.pop("sod_snaps_usd", None)
-        st.session_state.pop("sod_snaps_aud", None)
-    # Cache in session state — only query on reload or first load
-    if "sod_snaps_usd" not in st.session_state:
-        st.session_state["sod_snaps_usd"] = list_vol_snapshots(user_id, "USD") if HAS_POSTGRES else []
-    if "sod_snaps_aud" not in st.session_state:
-        st.session_state["sod_snaps_aud"] = list_vol_snapshots(user_id, "AUD") if HAS_POSTGRES else []
-    _snaps_usd = st.session_state["sod_snaps_usd"]
-    _snaps_aud = st.session_state["sod_snaps_aud"]
+        st.rerun()
+    _snaps_usd = list_vol_snapshots(user_id, "USD") if HAS_POSTGRES else []
+    _snaps_aud = list_vol_snapshots(user_id, "AUD") if HAS_POSTGRES else []
 
     if not HAS_POSTGRES:
         st.warning("Database not connected   —   SOD Report requires saved vol snapshots.")
@@ -20571,7 +20560,6 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 if HAS_POSTGRES:
                     save_user_config(_uid_rv, "rv_snap_curr", "AUD", _snap)
                     if _old_curr: save_user_config(_uid_rv, "rv_snap_prev", "AUD", _old_curr)
-                    load_user_config.clear()
                 st.success(f"✅ Snapshot saved — {_snap['date']}")
                 st.rerun()
             else:
@@ -20677,7 +20665,6 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 _sydney_now = _dt_mr.datetime.now(SYDNEY_TZ)
                 _mr_dated_key = f"morning_rates_{_sydney_now.strftime('%Y-%m-%d')}"
                 save_user_config(_uid_rv, _mr_dated_key, "AUD", _new_rates)
-                load_user_config.clear()
             st.success("✅ Morning rates saved")
             st.rerun()
 
@@ -20803,7 +20790,6 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                                 st.session_state["morning_rates_prev"] = _hist_data
                                 if HAS_POSTGRES:
                                     save_user_config(_uid_rv, "morning_rates_prev", "AUD", _hist_data)
-                                    load_user_config.clear()
                                 st.success(f"✅ Prev baseline set to {_sel_date} — moves will now calculate correctly.")
                                 st.rerun()
 
