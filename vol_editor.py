@@ -163,6 +163,9 @@ def _init_state(ccy: str, surface: pd.DataFrame) -> None:
 
 def _push_history(ccy: str) -> None:
     ed = st.session_state["vol_editor"]
+    if ccy not in ed.get("working", {}): return  # surface not yet initialised
+    if ccy not in ed.get("history", {}): ed.setdefault("history", {})[ccy] = []
+    if ccy not in ed.get("redo_stack", {}): ed.setdefault("redo_stack", {})[ccy] = []
     ed["history"][ccy].append(ed["working"][ccy].copy())
     ed["redo_stack"][ccy] = []
     if len(ed["history"][ccy]) > 50:
@@ -773,6 +776,9 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
             _work_ccy = ed.get("working", {}).get(payload_ccy)
             if _work_ccy is None:
                 _work_ccy = working
+            if _work_ccy is None:
+                st.warning("Load a vol surface first before confirming edits.")
+                st.stop()
             tcols = [c for c in _work_ccy.columns[1:] if c.lower() != "expiry" and str(c).upper() not in ("AUD","USD","NZD","EUR","GBP","JPY")]
             expiries = _work_ccy[_work_ccy.columns[0]].tolist()
             
