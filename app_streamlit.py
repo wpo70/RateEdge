@@ -13590,7 +13590,7 @@ def backtesting_tab():
     else:
         c1, c2, c3 = st.columns([2, 2, 2])
         with c1:
-            _vs_start = st.date_input("From", value=pd.Timestamp.now() - pd.Timedelta(days=90),
+            _vs_start = st.date_input("From", value=pd.Timestamp.now() - pd.Timedelta(days=365),
                                        key="hviz_vol_start")
         with c2:
             _vs_end = st.date_input("To", value=pd.Timestamp.now(), key="hviz_vol_end")
@@ -14264,28 +14264,40 @@ def _render_realised_delivered_vol():
             return pd.DataFrame()
 
     with st.spinner("Loading historical data..."):
-        _snap_rows  = _load_atm_history(ccy, 90)
-        _swap_df_raw = _load_swap_history(ccy, 90)
+        _snap_rows  = _load_atm_history(ccy, 180)
+        _swap_df_raw = _load_swap_history(ccy, 180)
 
     if not _snap_rows:
         st.info("No EOD vol snapshots found. Save snapshots from the Vol Export tab to populate this view.")
         return
 
     # ── Build vol history DataFrame ────────────────────────────────────────────
-    # Rows = dates, cols = "expiry×tenor" e.g. "3m×5Y"
     _vol_records = []
     for _snap_date, _atm_vols in _snap_rows:
         if not isinstance(_atm_vols, dict): continue
         _rec = {"date": pd.Timestamp(_snap_date)}
-        # atm_vols is dict keyed by expiry label, values = dict of tenor→vol
-        for _ei, _exp in enumerate(_EXP_LABELS):
-            _exp_data = _atm_vols.get(_exp) or _atm_vols.get(_exp.upper())
-            if not _exp_data: continue
-            for _ti, _ten in enumerate(_TEN_LABELS):
-                _v = _exp_data.get(_ten) or _exp_data.get(_ten.lower())
-                if _v is not None:
-                    try: _rec[f"{_exp}×{_ten}"] = float(_v)
-                    except: pass
+
+        # Handle {"values": [{"Expiry": "1m", "1Y": 88.4, ...}]} format
+        if "values" in _atm_vols:
+            _rows_list = _atm_vols["values"]
+            for _vrow in _rows_list:
+                _exp = str(_vrow.get("Expiry", "")).lower().strip()
+                if _exp not in _EXP_LABELS: continue
+                for _ten in _TEN_LABELS:
+                    _v = _vrow.get(_ten) or _vrow.get(_ten.lower())
+                    if _v is not None:
+                        try: _rec[f"{_exp}×{_ten}"] = float(_v)
+                        except: pass
+        else:
+            # Handle flat dict keyed by expiry label
+            for _exp in _EXP_LABELS:
+                _exp_data = _atm_vols.get(_exp) or _atm_vols.get(_exp.upper())
+                if not _exp_data: continue
+                for _ten in _TEN_LABELS:
+                    _v = _exp_data.get(_ten) or _exp_data.get(_ten.lower())
+                    if _v is not None:
+                        try: _rec[f"{_exp}×{_ten}"] = float(_v)
+                        except: pass
         _vol_records.append(_rec)
 
     if not _vol_records:
