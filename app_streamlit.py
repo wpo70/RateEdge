@@ -18835,7 +18835,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1604d  |  UAT</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1604e  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -21195,12 +21195,24 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         for _bid, _bpos in list(_book.items()):
             if _norm_struct(_bid) not in _top3_ids:
                 # Position closed — compute final P&L
-                _close_vol = _get_atm_vol(_bpos.get("vol_key",""))
-                if _close_vol and _bpos.get("entry_vol"):
-                    _bp_pnl = (_close_vol - _bpos["entry_vol"]) * (1 if _bpos.get("direction","long")=="long" else -1)
+                if _bpos.get("trade_type") == "calendar":
+                    _sv_c = _get_atm_vol(_bpos.get("short_key",""))
+                    _lv_c = _get_atm_vol(_bpos.get("long_key",""))
+                    _er_c = _bpos.get("entry_ratio")
+                    if _sv_c and _lv_c and _lv_c > 0 and _er_c:
+                        _cr_c = _sv_c / _lv_c
+                        _bp_pnl = round((_er_c - _cr_c) * (_sv_c + _lv_c) / 2, 2)
+                    else:
+                        _bp_pnl = 0.0
                     _usd_pnl = _bp_pnl * _VEGA_PER_BP
+                    _close_vol = _sv_c
                 else:
-                    _bp_pnl, _usd_pnl = 0.0, 0.0
+                    _close_vol = _get_atm_vol(_bpos.get("vol_key",""))
+                    if _close_vol and _bpos.get("entry_vol"):
+                        _bp_pnl = (_close_vol - _bpos["entry_vol"]) * (1 if _bpos.get("direction","long")=="long" else -1)
+                        _usd_pnl = _bp_pnl * _VEGA_PER_BP
+                    else:
+                        _bp_pnl, _usd_pnl, _close_vol = 0.0, 0.0, None
                 _new_closed.append({**_bpos, "close_date": _today_trade,
                                     "close_vol": _close_vol, "bp_pnl": round(_bp_pnl,1),
                                     "usd_pnl": round(_usd_pnl,0), "status": "CLOSED"})
@@ -21218,36 +21230,50 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             _bid = _idea.get("Structure","")
             _bid_norm = _norm_struct(_bid)
             if _bid and _bid_norm not in _book_norm_keys:
-                # Extract expiry×tenor from structure using regex
-                # Matches "1m×10Y", "1m~10Y", "1m =2Y", "3m×5Y", "Sell 1m / Buy 3m ~2Y" etc
-                _vm = _re_vk.search(r"(\d+[mM])\s*[×~=/x]\s*(\d+[Yy])", _bid)
-                if not _vm:
-                    # Try patterns like "1m~10Y" with space: "1m 10Y"
-                    _vm = _re_vk.search(r"(\d+[mM])\s+(\d+[Yy])", _bid)
-                if _vm:
-                    _vkey = f"{_vm.group(1).upper()}_{_vm.group(2).upper()}"
-                else:
-                    _vkey = ""
-                # Find matching key in curr atm
-                _ev = None
                 _atm_now = _curr.get("atm") or {}
-                if _vkey in _atm_now:
-                    _ev = _atm_now[_vkey]
-                else:
+                # Detect calendar spread: "Sell Xm / Buy Ym ~TY"
+                _cal = _re_vk.search(r"sell\s+(\d+[mM]).+buy\s+(\d+[mM]).+[~×x]\s*(\d+[Yy])", _bid, _re_vk.IGNORECASE)
+                if not _cal:
+                    _cal = _re_vk.search(r"(\d+[mM])\s*/\s*buy\s+(\d+[mM])\s*[~×x]\s*(\d+[Yy])", _bid, _re_vk.IGNORECASE)
+
+                def _find_vol(exp, ten):
+                    _k = f"{exp.upper()}_{ten.upper()}"
+                    if _k in _atm_now: return _atm_now[_k], _k
                     for _ak in _atm_now:
-                        if _ak.upper() == _vkey.upper():
-                            _ev = _atm_now[_ak]; _vkey = _ak; break
-                _book[_bid_norm] = {
-                    "structure": _bid,
-                    "type": _idea.get("Type",""),
-                    "trade": _idea.get("Trade",""),
-                    "signal": _idea.get("Signal",""),
-                    "entry_date": _today_trade,
-                    "entry_vol": _ev,
-                    "vol_key": _vkey,
-                    "direction": "long",  # default; straddles are long vol
-                    "score": _idea.get("Score", 0),
-                }
+                        if _ak.upper() == _k: return _atm_now[_ak], _ak
+                    return None, _k
+
+                if _cal:
+                    # Calendar: short near expiry, long far expiry, same tenor
+                    _short_exp, _long_exp, _ten = _cal.group(1), _cal.group(2), _cal.group(3)
+                    _sv, _sk = _find_vol(_short_exp, _ten)
+                    _lv, _lk = _find_vol(_long_exp, _ten)
+                    _entry_ratio = round(_sv / _lv, 4) if (_sv and _lv and _lv > 0) else None
+                    _book[_bid_norm] = {
+                        "structure": _bid, "type": _idea.get("Type",""),
+                        "trade": _idea.get("Trade",""), "signal": _idea.get("Signal",""),
+                        "entry_date": _today_trade, "score": _idea.get("Score", 0),
+                        "trade_type": "calendar",
+                        "short_key": _sk, "long_key": _lk,
+                        "short_vol_entry": _sv, "long_vol_entry": _lv,
+                        "entry_ratio": _entry_ratio,
+                        # keep entry_vol/vol_key for compatibility
+                        "entry_vol": _sv, "vol_key": _sk, "direction": "short",
+                    }
+                else:
+                    # Simple straddle: match expiry×tenor
+                    _vm = _re_vk.search(r"(\d+[mM])\s*[×~=/x]\s*(\d+[Yy])", _bid)
+                    if not _vm:
+                        _vm = _re_vk.search(r"(\d+[mM])\s+(\d+[Yy])", _bid)
+                    _vkey = f"{_vm.group(1).upper()}_{_vm.group(2).upper()}" if _vm else ""
+                    _ev, _vkey = _find_vol(_vm.group(1) if _vm else "", _vm.group(2) if _vm else "")
+                    _book[_bid_norm] = {
+                        "structure": _bid, "type": _idea.get("Type",""),
+                        "trade": _idea.get("Trade",""), "signal": _idea.get("Signal",""),
+                        "entry_date": _today_trade, "score": _idea.get("Score", 0),
+                        "trade_type": "straddle",
+                        "entry_vol": _ev, "vol_key": _vkey, "direction": "long",
+                    }
                 _book_updated = True
 
         if _book_updated:
@@ -21271,8 +21297,20 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 _is_new = (_pos.get("entry_date") == _today_trade and _bid in _book and
                            len([x for x in _closed if x.get("structure")==_bid])==0)
 
-                # P&L
-                if _ev and _cv:
+                # P&L — calendar spread uses ratio; straddle uses vol diff
+                if _pos.get("trade_type") == "calendar":
+                    _sv_now = _get_atm_vol(_pos.get("short_key",""))
+                    _lv_now = _get_atm_vol(_pos.get("long_key",""))
+                    _er = _pos.get("entry_ratio")
+                    if _sv_now and _lv_now and _lv_now > 0 and _er:
+                        _cr = _sv_now / _lv_now
+                        _avg_vol = (_sv_now + _lv_now) / 2
+                        _bp_live = round((_er - _cr) * _avg_vol, 2)
+                        _usd_live = _bp_live * _VEGA_PER_BP
+                        _pnl_col = "#22c55e" if _usd_live >= 0 else "#ef4444"
+                    else:
+                        _bp_live, _usd_live, _pnl_col = None, None, "#94a3b8"
+                elif _ev and _cv:
                     _bp_live = (_cv - _ev) * (1 if _pos.get("direction","long")=="long" else -1)
                     _usd_live = _bp_live * _VEGA_PER_BP
                     _pnl_col = "#22c55e" if _usd_live >= 0 else "#ef4444"
@@ -21289,9 +21327,17 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                                 unsafe_allow_html=True)
                     if _idea.get("Rationale"): st.caption(_idea["Rationale"])
                     if _pos.get("entry_date"):
-                        _entry_lbl = f"Entry: {_pos['entry_date']}"
-                        if _ev: _entry_lbl += f"  |  Entry vol: {_ev:.1f}bp"
-                        if _cv: _entry_lbl += f"  |  Now: {_cv:.1f}bp"
+                        if _pos.get("trade_type") == "calendar":
+                            _sv_d = _get_atm_vol(_pos.get("short_key",""))
+                            _lv_d = _get_atm_vol(_pos.get("long_key",""))
+                            _er_d = _pos.get("entry_ratio")
+                            _cr_d = round(_sv_d/_lv_d, 3) if (_sv_d and _lv_d and _lv_d>0) else None
+                            _entry_lbl = f"Entry: {_pos['entry_date']}  |  Entry ratio: {_er_d:.3f}" if _er_d else f"Entry: {_pos['entry_date']}"
+                            if _cr_d: _entry_lbl += f"  |  Now: {_cr_d:.3f}  |  Short: {_sv_d:.1f}bp  Long: {_lv_d:.1f}bp"
+                        else:
+                            _entry_lbl = f"Entry: {_pos['entry_date']}"
+                            if _ev: _entry_lbl += f"  |  Entry vol: {_ev:.1f}bp"
+                            if _cv: _entry_lbl += f"  |  Now: {_cv:.1f}bp"
                         st.caption(_entry_lbl)
                 with _cb:
                     if _bp_live is not None:
