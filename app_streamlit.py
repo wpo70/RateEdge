@@ -5303,7 +5303,7 @@ def sdr_live_tab():
         al1, al2, al3, al4, al5 = st.columns(5)
         with al1:
             st.markdown("**Timezone**")
-            _tz_options = ["Sydney (AEST/AEDT)", "Auckland (NZST/NZDT)", "New York (ET)", "London (GMT/BST)", "Tokyo (JST)", "UTC"]
+            _tz_options = ["Sydney (AEST/AEDT)", "Auckland (NZST/NZDT)", "New York (ET)", "London (GMT/BST)", "Tokyo (JST)"]
             st.selectbox("Timezone", _tz_options, key="sdr_timezone",
                         label_visibility="collapsed", on_change=_save_sdr_filters)
         with al2:
@@ -5353,9 +5353,9 @@ def sdr_live_tab():
 
         cols = st.columns([1,2,2,1,1])
         cols[0].markdown("**CCY**")
-        cols[1].markdown("**UTC window**")
-        cols[2].markdown("**AEST**")
-        cols[3].markdown("**Pre-open UTC**")
+        cols[1].markdown("**Window**")
+        cols[2].markdown("**AEST/AEDT**")
+        cols[3].markdown("**Pre-open**")
         cols[4].markdown("**Status**")
 
         _status_map = {
@@ -5379,7 +5379,7 @@ def sdr_live_tab():
             c[4].markdown(_pre_map[pre_now] if pre_now else _status_map[active])
 
         st.markdown("")
-        st.caption(f"Current UTC time: {_now_utc.strftime('%H:%M')} · Refresh loop: every 5 min · Pre-open lookback: 90 min · Active poll lookback: 10 min")
+        st.caption(f"Current Sydney time: {_now_utc.astimezone(__import__('zoneinfo').ZoneInfo('Australia/Sydney')).strftime('%H:%M %Z')} · Refresh: every 5 min · Pre-open lookback: 90 min · Active poll: 10 min")
 
     # ── Build query ───────────────────────────────────────────────────────────
     filters = []
@@ -5564,7 +5564,7 @@ def sdr_live_tab():
         "New York (ET)":         "America/New_York",
         "London (GMT/BST)":      "Europe/London",
         "Tokyo (JST)":           "Asia/Tokyo",
-        "UTC":                   "UTC",
+        
     }
     # Default based on CCY preference
     _default_tz = "Sydney (AEST/AEDT)"
@@ -5650,7 +5650,7 @@ def sdr_live_tab():
             hide_index=True,
         )
 
-        st.caption(f"Showing {len(disp_df):,} trades · Last loaded: {datetime.utcnow().strftime('%H:%M UTC')} · Alert count this session: {st.session_state['sdr_alert_count']}")
+        st.caption(f"Showing {len(disp_df):,} trades · Last loaded: {(lambda _syd_now: _syd_now.strftime('%H:%M ') + ('AEDT' if _syd_now.utcoffset().total_seconds()==39600 else 'AEST'))(__import__('datetime').datetime.now(__import__('zoneinfo').ZoneInfo('Australia/Sydney')))} · Alert count this session: {st.session_state['sdr_alert_count']}")
 
     # ── Analytics ─────────────────────────────────────────────────────────────
     if not df.empty:
@@ -6479,7 +6479,16 @@ def vol_config_tab():
                         _cat_s = snap['created_at'].replace(tzinfo=__import__('datetime').timezone.utc).astimezone(_syd_s)
                         _snap_time_lbl = _cat_s.strftime('%Y-%m-%d %H:%M AEST')
                     except:
-                        _snap_time_lbl = snap['snapshot_date'].strftime('%Y-%m-%d %H:%M UTC')
+                        _snap_dt = snap['snapshot_date']
+                        try:
+                            from zoneinfo import ZoneInfo as _ZI
+                            import datetime as _dtm
+                            _snap_dt_aware = _snap_dt.replace(tzinfo=_dtm.timezone.utc) if _snap_dt.tzinfo is None else _snap_dt
+                            _snap_syd = _snap_dt_aware.astimezone(_ZI('Australia/Sydney'))
+                            _snap_tz_lbl = 'AEDT' if _snap_syd.utcoffset().total_seconds()==39600 else 'AEST'
+                            _snap_time_lbl = _snap_syd.strftime('%Y-%m-%d %H:%M ') + _snap_tz_lbl
+                        except:
+                            _snap_time_lbl = _snap_dt.strftime('%Y-%m-%d %H:%M AEST')
                     with st.expander(f"📸 {snap['currency']} - {snap['label']} ({_snap_time_lbl})", expanded=False):
                         col1, col2, col3 = st.columns([3, 1, 1])
                         
@@ -6493,7 +6502,16 @@ def vol_config_tab():
                                 _cat = snap['created_at'].replace(tzinfo=__import__('datetime').timezone.utc).astimezone(_syd)
                                 st.caption(f"Created: {_cat.strftime('%Y-%m-%d %H:%M:%S AEST')}")
                             except:
-                                st.caption(f"Created: {snap['created_at'].strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                                try:
+                                from zoneinfo import ZoneInfo as _ZI2
+                                import datetime as _dtm2
+                                _cat2 = snap['created_at']
+                                _cat2_aware = _cat2.replace(tzinfo=_dtm2.timezone.utc) if _cat2.tzinfo is None else _cat2
+                                _cat2_syd = _cat2_aware.astimezone(_ZI2('Australia/Sydney'))
+                                _cat2_lbl = 'AEDT' if _cat2_syd.utcoffset().total_seconds()==39600 else 'AEST'
+                                st.caption(f"Created: {_cat2_syd.strftime('%Y-%m-%d %H:%M:%S')} {_cat2_lbl}")
+                            except:
+                                st.caption(f"Created: {snap['created_at'].strftime('%Y-%m-%d %H:%M:%S')} AEST")
                         
                         with col2:
                             if st.button("📂 Load", key=f"load_snap_{snap['id']}", use_container_width=True):
@@ -14209,8 +14227,8 @@ def _render_realised_delivered_vol():
     ccy = "AUD"
 
     # ── Expiry / Tenor grid (matches ATM vol surface) ─────────────────────────
-    _EXP_LABELS  = ["1m","3m","6m","1y","2y","3y","5y","7y","10y","15y","20y"]
-    _TEN_LABELS  = ["1Y","2Y","3Y","5Y","7Y","10Y","15Y","20Y","25Y","30Y"]
+    _EXP_LABELS  = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
+    _TEN_LABELS  = ["1Y","2Y","3Y","4Y","5Y","6Y","7Y","10Y","12Y","15Y","20Y","25Y","30Y"]
     _EXP_YRS     = [label_to_years(e) for e in _EXP_LABELS]
     _TEN_YRS     = [label_to_years(t) for t in _TEN_LABELS]
     _WINDOWS     = {"5d": 5, "21d": 21, "3m": 63}
@@ -14356,7 +14374,7 @@ def _render_realised_delivered_vol():
         _s = series.dropna().sort_index()
         if len(_s) < window_days + 1: return float('nan')
         _recent = _s.iloc[-window_days-1:]
-        _moves = _recent.diff().dropna() * 100  # convert % to bp moves
+        _moves = _recent.diff().dropna()  # vol surface already in bp
         if len(_moves) < 3: return float('nan')
         return float(_moves.std() * _math.sqrt(252))
 
