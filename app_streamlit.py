@@ -1409,10 +1409,10 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
 
 @st.cache_data(ttl=600, show_spinner=False)
 def list_vol_snapshots(user_id: str, currency: str = None):
+    """List all historical vol snapshots for a user"""
     # Normalise: both admin emails share the same snapshots
     _ADMIN_ALIASES = {"wpo70@icloud.com": "wpo@rateedge.au", "wpo@rateedge.au": "wpo@rateedge.au"}
     user_id = _ADMIN_ALIASES.get(user_id, user_id)
-    """List all historical vol snapshots for a user"""
     conn = get_db_connection()
     if not conn:
         return []
@@ -18822,7 +18822,7 @@ def main():
                 <div style="font-size:1.4rem;font-weight:700;">
                     <span style="color:#1e3a5f;">Rate</span><span style="color:#ef4444;">Edge</span>
                 </div>
-                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v0804u</div>
+                <div style="font-size:0.75rem;color:#94a3b8;">Options Platform v1504w  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
