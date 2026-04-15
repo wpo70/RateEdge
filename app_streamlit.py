@@ -20498,6 +20498,9 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
     st.caption("Update snapshot at end of day. Publish at start of next day to see overnight moves + top convictions.")
 
     _uid_rv = st.session_state.get("username","default")
+    # Normalise to canonical admin id so configs load correctly
+    if _uid_rv in ("wpo70@icloud.com", "wpo@rateedge.au"):
+        _uid_rv = "wpo@rateedge.au"
 
     # ── Auto-load snapshots from DB on first render ───────────────────
     if "rv_daily_snap_curr" not in st.session_state and HAS_POSTGRES:
