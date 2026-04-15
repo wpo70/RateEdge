@@ -6885,24 +6885,22 @@ def curves_tab():
         # Auto-regen on convention change; CCY change requires explicit button press
         _need_regen = gen_fwd or _conv_now != _prev_conv
 
+        _mb3v1 = st.session_state.get("config_basis", {}).get(ccy, {}).get("3v1")
         if _need_regen and _mc is not None:
             with st.spinner("Calculating..."):
                 fm = generate_forward_matrix_convention(ccy, _mc, _mb, _conv_now)
                 st.session_state["fwd_matrix"][ccy] = fm
                 st.session_state["fwd_convention"]  = _conv_now
-                st.session_state["fwd_ccy"]         = ccy
                 if _mb is not None:
                     st.session_state["basis_matrix"][ccy] = generate_basis_matrix(ccy, _mb)
+                # 3v1 basis inside spinner so UI does not freeze after main matrix
+                if _mb3v1 is not None:
+                    if "basis_matrix_3v1" not in st.session_state:
+                        st.session_state["basis_matrix_3v1"] = {}
+                    st.session_state["basis_matrix_3v1"][ccy] = generate_basis_matrix(ccy, _mb3v1)
             has_fwd = True
         elif _need_regen and _mc is None:
             st.error("No curve — upload config first")
-
-        # Also generate 3v1 basis matrix if basis available
-        _mb3v1 = st.session_state.get("config_basis", {}).get(ccy, {}).get("3v1")
-        if _need_regen and _mc is not None and _mb3v1 is not None:
-            if "basis_matrix_3v1" not in st.session_state:
-                st.session_state["basis_matrix_3v1"] = {}
-            st.session_state["basis_matrix_3v1"][ccy] = generate_basis_matrix(ccy, _mb3v1)
 
         if has_fwd:
             has_basis   = ccy in st.session_state.get("basis_matrix", {})
@@ -7005,8 +7003,7 @@ def curves_tab():
                                     _pv2 = _snap_prem_df.copy()
                                     if _pv2.index.name == "Expiry": _pv2 = _pv2.reset_index()
                                     _prem_json = _Json({"values": _pv2.to_dict(orient="records")})
-                                from datetime import datetime as _dtnow2
-                                from datetime import datetime as _dtnow2, timezone as _tz_pub, timedelta as _td_pub
+                                from datetime import datetime as _dtnow2, timezone as _tz_pub
                                 _utc_now2 = _dtnow2.now(_tz_pub.utc)
                                 import calendar as _cal2
                                 def _syd_aedt2(_d):
