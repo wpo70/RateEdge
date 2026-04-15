@@ -20637,6 +20637,13 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
     _mr_today = st.session_state.get("morning_rates_today", {})
     _mr_prev  = st.session_state.get("morning_rates_prev", {})
 
+    # Auto-load from DB BEFORE rendering inputs
+    if not _mr_today and HAS_POSTGRES:
+        _db_mr = load_user_config(_uid_rv, "morning_rates_today", "AUD")
+        _db_mr_p = load_user_config(_uid_rv, "morning_rates_prev", "AUD")
+        if _db_mr:  st.session_state["morning_rates_today"] = _db_mr;  _mr_today = _db_mr
+        if _db_mr_p: st.session_state["morning_rates_prev"] = _db_mr_p; _mr_prev  = _db_mr_p
+
     with st.expander("📝 Enter Morning Rates", expanded=not bool(_mr_today)):
         _new_rates = {}
         _groups = {}
@@ -20671,13 +20678,6 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 save_user_config(_uid_rv, _mr_dated_key, "AUD", _new_rates)
             st.success("✅ Morning rates saved")
             st.rerun()
-
-    # Auto-load from DB
-    if not _mr_today and HAS_POSTGRES:
-        _db_mr = load_user_config(_uid_rv, "morning_rates_today", "AUD")
-        _db_mr_p = load_user_config(_uid_rv, "morning_rates_prev", "AUD")
-        if _db_mr:  st.session_state["morning_rates_today"] = _db_mr;  _mr_today = _db_mr
-        if _db_mr_p: st.session_state["morning_rates_prev"] = _db_mr_p; _mr_prev  = _db_mr_p
 
     # ── Morning rates display table ───────────────────────────────────
     if _mr_today:
