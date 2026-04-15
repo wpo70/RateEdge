@@ -18823,7 +18823,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505h  |  UAT</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505i  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -21736,7 +21736,7 @@ h2{{color:#1e3a5f;margin-top:20px}}
                 st.download_button(
                     "⬇️ Download (PDF)",
                     data=_pdf_bytes,
-                    file_name=f"RateEdge_Daily_{_today_str}.pdf",
+                    file_name=f"RateEdge_Daily_{pd.Timestamp.now(tz='Australia/Sydney').strftime('%Y-%m-%d_%H%M')}_AEST.pdf",
                     mime="application/pdf",
                     key="sod_rv_dl_pdf"
                 )
