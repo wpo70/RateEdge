@@ -15521,6 +15521,7 @@ def rv_tab():
                         _spi_atm = st.session_state.get("spi_vol_override", _spi_surf.get("Jun-26", {}).get("50D", 0.0))
                         if _spi_atm and _spi_atm > 0:
                             st.caption(f"SPI front ATM (50D Jun-26): **{_spi_atm:.2f}%** — used as equity vol context")
+                        st.caption("📊 BBG: `XPA Index` → OVDV for SPI vol surface")
 
                     # SPX vol surface for USD
                     if ccy == "USD":
