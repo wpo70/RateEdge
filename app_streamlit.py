@@ -14024,6 +14024,7 @@ def _meetings_in_window(ccy: str, expiry_label: str) -> list:
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def _compute_realised_vol_db(ccy: str, tenor_y: float, window_days: int = 21) -> Optional[float]:
     """Annualised realised normal vol (bp) from swap_rates history.
     Uses daily rate differences × √252 × 10000."""
@@ -14032,17 +14033,13 @@ def _compute_realised_vol_db(ccy: str, tenor_y: float, window_days: int = 21) ->
         if conn is None:
             return None
         cur = conn.cursor()
-        # Determine floating_rate label for this ccy/tenor
         if ccy == "AUD":
             fr = "6M BBSW" if tenor_y >= 4.0 else "3M BBSW"
         elif ccy == "USD":
             fr = "SOFR"
         else:
             fr = "3M BKBM"
-
-        # Closest available tenor string (e.g. "5Y", "10Y")
         tenor_str = f"{int(round(tenor_y))}Y"
-
         cur.execute("""
             SELECT date, rate FROM swap_rates
             WHERE currency=%s AND floating_rate=%s AND tenor=%s
@@ -14054,11 +14051,11 @@ def _compute_realised_vol_db(ccy: str, tenor_y: float, window_days: int = 21) ->
             return None
         df = pd.DataFrame(rows, columns=["date", "rate"]).sort_values("date")
         df["rate"] = df["rate"].astype(float)
-        df["diff"] = df["rate"].diff() * 100  # rate is %, diff in bp
+        df["diff"] = df["rate"].diff() * 100
         diffs = df["diff"].dropna().values
         if len(diffs) < 4:
             return None
-        rv = float(np.std(diffs) * math.sqrt(252))  # annualised bp
+        rv = float(np.std(diffs) * math.sqrt(252))
         return round(rv, 2)
     except Exception:
         return None
@@ -14284,84 +14281,78 @@ def _render_realised_delivered_vol():
         st.info("No EOD vol snapshots found. Save snapshots from the Vol Export tab to populate this view.")
         return
 
-    # ── Build vol history DataFrame ────────────────────────────────────────────
-    _vol_records = []
-    for _snap_date, _atm_vols in _snap_rows:
-        if not isinstance(_atm_vols, dict): continue
-        _rec = {"date": pd.Timestamp(_snap_date)}
+    # ── Build vol history DataFrame (cached) ──────────────────────────────────
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _build_vol_df(snap_rows_key: int, exp_labels: tuple, ten_labels: tuple):
+        _vol_records = []
+        for _snap_date, _atm_vols in _snap_rows:
+            if not isinstance(_atm_vols, dict): continue
+            _rec = {"date": pd.Timestamp(_snap_date)}
+            if "values" in _atm_vols:
+                _rows_list = _atm_vols["values"]
+                if not isinstance(_rows_list, list): continue
+                for _vrow in _rows_list:
+                    _exp = str(_vrow.get("Expiry", "")).lower().strip()
+                    if _exp not in exp_labels: continue
+                    for _ten in ten_labels:
+                        _v = _vrow.get(_ten) or _vrow.get(_ten.lower())
+                        if _v is not None:
+                            try: _rec[f"{_exp}×{_ten}"] = float(_v)
+                            except: pass
+            else:
+                for _exp in exp_labels:
+                    _exp_data = _atm_vols.get(_exp) or _atm_vols.get(_exp.upper())
+                    if not _exp_data: continue
+                    for _ten in ten_labels:
+                        _v = _exp_data.get(_ten) or _exp_data.get(_ten.lower())
+                        if _v is not None:
+                            try: _rec[f"{_exp}×{_ten}"] = float(_v)
+                            except: pass
+            _vol_records.append(_rec)
+        if not _vol_records: return pd.DataFrame()
+        _df = pd.DataFrame(_vol_records).sort_values("date").set_index("date")
+        return _df.dropna(axis=1, how="all")
 
-        # Handle {"values": [{"Expiry": "1m", "1Y": 88.4, ...}]} format
-        if "values" in _atm_vols:
-            _rows_list = _atm_vols["values"]
-            if not isinstance(_rows_list, list): continue
-            for _vrow in _rows_list:
-                _exp = str(_vrow.get("Expiry", "")).lower().strip()
-                if _exp not in _EXP_LABELS: continue
-                for _ten in _TEN_LABELS:
-                    _v = _vrow.get(_ten) or _vrow.get(_ten.lower())
-                    if _v is not None:
-                        try: _rec[f"{_exp}×{_ten}"] = float(_v)
-                        except: pass
-        else:
-            # Handle flat dict keyed by expiry label
-            for _exp in _EXP_LABELS:
-                _exp_data = _atm_vols.get(_exp) or _atm_vols.get(_exp.upper())
-                if not _exp_data: continue
-                for _ten in _TEN_LABELS:
-                    _v = _exp_data.get(_ten) or _exp_data.get(_ten.lower())
-                    if _v is not None:
-                        try: _rec[f"{_exp}×{_ten}"] = float(_v)
-                        except: pass
-        _vol_records.append(_rec)
-
-    if not _vol_records:
-        st.info("Vol snapshots found but no data could be parsed.")
-        return
-
-    _vol_df = pd.DataFrame(_vol_records).sort_values("date").set_index("date")
-    _vol_df = _vol_df.dropna(axis=1, how="all")
-
-    # ── Build fwd swap history ─────────────────────────────────────────────────
-    _fwd_records = {}
-    if not _swap_df_raw.empty:
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _build_fwd_df(swap_raw_hash: int, exp_labels: tuple, exp_yrs: tuple, ten_labels: tuple, ten_yrs: tuple):
+        if _swap_df_raw.empty: return pd.DataFrame()
         import re as _re2
         def _tenor_to_y(t):
             m = _re2.match(r"([\d.]+)(Y|M)", str(t).strip().upper())
             if not m: return None
             v, u = float(m.group(1)), m.group(2)
             return v if u == "Y" else v/12
-
-        _swap_df_raw["mat_y"] = _swap_df_raw["tenor"].apply(_tenor_to_y)
-        _swap_df_raw = _swap_df_raw.dropna(subset=["mat_y"])
-
-        # Build wide pivot: date × maturity
-        _par_wide = _swap_df_raw.pivot_table(index="date", columns="mat_y", values="rate", aggfunc="last")
-        _par_wide = _par_wide.sort_index()
-
-        # Compute forward swap rates for each expiry×tenor combination
-        # Using simple approximation: fwd(exp, ten) ≈ (par(exp+ten)*(exp+ten) - par(exp)*exp) / ten
-        for _ei, (_exp_lbl, _exp_y) in enumerate(zip(_EXP_LABELS, _EXP_YRS)):
-            for _ti, (_ten_lbl, _ten_y) in enumerate(zip(_TEN_LABELS, _TEN_YRS)):
+        _sdr = _swap_df_raw.copy()
+        _sdr["mat_y"] = _sdr["tenor"].apply(_tenor_to_y)
+        _sdr = _sdr.dropna(subset=["mat_y"])
+        _par_wide = _sdr.pivot_table(index="date", columns="mat_y", values="rate", aggfunc="last").sort_index()
+        _xs_base = _par_wide.columns.to_numpy(dtype=float)
+        _fwd_records = {}
+        for _exp_lbl, _exp_y in zip(exp_labels, exp_yrs):
+            for _ten_lbl, _ten_y in zip(ten_labels, ten_yrs):
                 _end_y = _exp_y + _ten_y
                 _col = f"{_exp_lbl}×{_ten_lbl}"
                 _fwd_series = []
                 for _dt, _row in _par_wide.iterrows():
                     try:
-                        _xs = _par_wide.columns.to_numpy(dtype=float)
                         _ys = _row.values.astype(float)
                         _mask = ~pd.isna(_ys)
                         if _mask.sum() < 3: continue
-                        _p_exp = float(np.interp(_exp_y, _xs[_mask], _ys[_mask]))
-                        _p_end = float(np.interp(_end_y, _xs[_mask], _ys[_mask]))
-                        _fwd = (_p_end * _end_y - _p_exp * _exp_y) / _ten_y if _ten_y > 0 else _p_end
-                        _fwd_series.append({"date": _dt, "fwd": _fwd})
+                        _xs = _xs_base[_mask]; _ys = _ys[_mask]
+                        _p_exp = float(np.interp(_exp_y, _xs, _ys))
+                        _p_end = float(np.interp(_end_y, _xs, _ys))
+                        _fwd_series.append({"date": _dt, "fwd": (_p_end*_end_y - _p_exp*_exp_y)/_ten_y if _ten_y>0 else _p_end})
                     except: pass
                 if _fwd_series:
                     _fwd_records[_col] = pd.DataFrame(_fwd_series).set_index("date")["fwd"]
+        return pd.DataFrame(_fwd_records).sort_index() if _fwd_records else pd.DataFrame()
 
-        _fwd_df = pd.DataFrame(_fwd_records).sort_index() if _fwd_records else pd.DataFrame()
-    else:
-        _fwd_df = pd.DataFrame()
+    _vol_df = _build_vol_df(len(_snap_rows), tuple(_EXP_LABELS), tuple(_TEN_LABELS))
+    if _vol_df.empty:
+        st.info("Vol snapshots found but no data could be parsed.")
+        return
+
+    _fwd_df = _build_fwd_df(len(_swap_df_raw), tuple(_EXP_LABELS), tuple(_EXP_YRS), tuple(_TEN_LABELS), tuple(_TEN_YRS))
 
     # ── Helper: compute realised vol ──────────────────────────────────────────
     def _realised_vol_bp(series: pd.Series, window_days: int) -> float:
@@ -14486,6 +14477,40 @@ def _render_realised_delivered_vol():
             st.info("Not enough data for delivered vol comparison.")
     else:
         st.info("Insufficient snapshots for this window.")
+
+    # ── Copy to RV Daily button ───────────────────────────────────────────────
+    st.markdown("---")
+    _copy_col, _ = st.columns([1, 3])
+    with _copy_col:
+        if st.button("📋 Copy Matrices to RV Daily", key="rdv_copy_to_rv", type="secondary",
+                     help="Manually push current realised vol matrices into the RV Daily Report"):
+            _matrices_payload = {}
+            if _rv_matrix:
+                _matrices_payload["rv"] = {
+                    "window": _rv_window,
+                    "df": pd.DataFrame(_rv_matrix).T.reindex(index=_EXP_LABELS, columns=_TEN_LABELS).round(1).to_dict()
+                }
+            if _diff_matrix if 'diff_matrix' in dir() else False:
+                pass
+            # Store diff and dv if available
+            try:
+                if _diff_matrix:
+                    _matrices_payload["diff"] = {
+                        "window": _rv_window,
+                        "df": pd.DataFrame(_diff_matrix).T.reindex(index=_EXP_LABELS, columns=_TEN_LABELS).round(1).to_dict()
+                    }
+            except: pass
+            try:
+                if _dv_matrix:
+                    _matrices_payload["dv"] = {
+                        "window": _dv_window,
+                        "df": pd.DataFrame(_dv_matrix).T.reindex(index=_EXP_LABELS, columns=_TEN_LABELS).round(1).to_dict()
+                    }
+            except: pass
+            _matrices_payload["exp_labels"] = _EXP_LABELS
+            _matrices_payload["ten_labels"] = _TEN_LABELS
+            st.session_state["rv_realised_matrices"] = _matrices_payload
+            st.success("✅ Matrices copied to RV Daily Report")
 
     # ── Section 3: Fwd Swap Moves ─────────────────────────────────────────────
     st.markdown("---")
@@ -20956,7 +20981,47 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                                   height=230, margin=dict(t=35,b=35,l=40,r=20), showlegend=False)
             st.plotly_chart(_fig_r, use_container_width=True)
 
-        # ── Download ──────────────────────────────────────────────────
+        # ── Realised Vol Matrices (if manually copied) ────────────────
+        _rv_mats = st.session_state.get("rv_realised_matrices")
+        if _rv_mats:
+            st.markdown("---")
+            st.markdown("#### 📈 Realised & Delivered Vol Matrices")
+            _exp_l = _rv_mats.get("exp_labels", [])
+            _ten_l = _rv_mats.get("ten_labels", [])
+            import plotly.graph_objects as _go_rv
+            import math as _mth_rv
+
+            def _rv_heatmap(data_dict, title, fmt, low_green):
+                _df = pd.DataFrame(data_dict).T.reindex(index=_exp_l, columns=_ten_l)
+                _vals = _df.values.astype(float)
+                _vmin, _vmax = float(np.nanmin(_vals)), float(np.nanmax(_vals))
+                _fig = _go_rv.Figure(data=_go_rv.Heatmap(
+                    z=_vals, x=_ten_l, y=_exp_l,
+                    colorscale="RdYlGn_r" if low_green else "RdYlGn",
+                    zmin=_vmin, zmax=_vmax,
+                    text=[[fmt.format(v) if not _mth_rv.isnan(v) else "—" for v in row] for row in _vals],
+                    texttemplate="%{text}", textfont={"size": 10},
+                    showscale=True, colorbar=dict(thickness=12, len=0.8)
+                ))
+                _fig.update_layout(
+                    title=dict(text=title, font=dict(size=12, color="#e2e8f0")),
+                    height=380, template="plotly_dark",
+                    margin=dict(l=60, r=40, t=40, b=40),
+                    xaxis=dict(title="Swap Tenor"),
+                    yaxis=dict(title="Option Expiry", autorange="reversed", tickfont=dict(size=10))
+                )
+                st.plotly_chart(_fig, use_container_width=True)
+
+            if "rv" in _rv_mats:
+                _rv_heatmap(_rv_mats["rv"]["df"], f"Realised ATM Vol ({_rv_mats['rv']['window']}) — bp/annum", "{:.1f}", False)
+            if "diff" in _rv_mats:
+                _rv_heatmap(_rv_mats["diff"]["df"], f"ATM − Realised ({_rv_mats['diff']['window']}) — bp  |  Green=cheap  Red=rich", "{:+.1f}", True)
+            if "dv" in _rv_mats:
+                _rv_heatmap(_rv_mats["dv"]["df"], f"ATM Vol Change ({_rv_mats['dv']['window']}) — bp  |  Green=lower  Red=higher", "{:+.1f}", True)
+
+            if st.button("🗑 Clear Matrices from Report", key="rv_clear_matrices"):
+                st.session_state.pop("rv_realised_matrices", None)
+                st.rerun()
         # Build HTML for PDF
         _pdf_ideas_html = ""
         for _i, _idea in enumerate(_top3):
