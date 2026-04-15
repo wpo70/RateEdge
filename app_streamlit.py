@@ -6498,11 +6498,6 @@ def vol_config_tab():
                             if snap['notes']:
                                 st.markdown(f"**Notes:** {snap['notes']}")
                             try:
-                                import pytz as _pytz; _syd = _pytz.timezone('Australia/Sydney')
-                                _cat = snap['created_at'].replace(tzinfo=__import__('datetime').timezone.utc).astimezone(_syd)
-                                st.caption(f"Created: {_cat.strftime('%Y-%m-%d %H:%M:%S AEST')}")
-                            except:
-                                try:
                                 from zoneinfo import ZoneInfo as _ZI2
                                 import datetime as _dtm2
                                 _cat2 = snap['created_at']
