@@ -15465,8 +15465,18 @@ def rv_tab():
                     st.markdown("**Meeting Bias Override**")
                     _bias_opts = ["Hold", "Cut 25bp", "Cut 50bp", "Hike 25bp", "Hike 50bp"]
                     _bias_key  = f"cb_bias_{ccy}"
+                    # Load saved bias from DB on fresh session
+                    if _bias_key not in st.session_state and HAS_POSTGRES:
+                        _uid_cb = st.session_state.get("username", "wpo@rateedge.au")
+                        _db_bias = load_user_config(_uid_cb, _bias_key, ccy)
+                        if _db_bias and _db_bias.get("value") in _bias_opts:
+                            st.session_state[_bias_key] = _db_bias["value"]
                     _bias = st.selectbox("Next meeting bias", _bias_opts, key=_bias_key,
                                          help="Changes vol premium estimate for next meeting")
+                    # Persist bias to DB whenever it changes
+                    if HAS_POSTGRES:
+                        _uid_cb = st.session_state.get("username", "wpo@rateedge.au")
+                        save_user_config(_uid_cb, _bias_key, ccy, {"value": _bias})
                     _prem_override = {"Hold": 3.0, "Cut 25bp": 4.0, "Cut 50bp": 6.0,
                                       "Hike 25bp": 4.0, "Hike 50bp": 6.0}
                     _adj_prem = _prem_override.get(_bias, 3.0)
@@ -15517,10 +15527,24 @@ def rv_tab():
                                 # Use front contract 50D as the single SPI vol context
                                 _front_atm = _new_spi_surf.get(_SPI_CONTRACTS[0], {}).get("50D", 0.0)
                                 st.session_state["spi_vol_override"] = _front_atm
+                                if HAS_POSTGRES:
+                                    _uid_spi = st.session_state.get("username", "wpo@rateedge.au")
+                                    save_user_config(_uid_spi, "spi_vol_surface", "AUD", _new_spi_surf)
+                                    save_user_config(_uid_spi, "spi_vol_override", "AUD", {"value": _front_atm})
                                 st.success(f"✅ SPI surface saved. Front ATM: {_front_atm:.2f}%")
                                 st.rerun()
 
                         # Show current front ATM
+                        # Auto-load SPI surface from DB if not in session state
+                        if not st.session_state.get("spi_vol_surface") and HAS_POSTGRES:
+                            _uid_spi = st.session_state.get("username", "wpo@rateedge.au")
+                            _db_spi = load_user_config(_uid_spi, "spi_vol_surface", "AUD")
+                            if _db_spi:
+                                st.session_state["spi_vol_surface"] = _db_spi
+                                _spi_surf = _db_spi
+                            _db_spi_atm = load_user_config(_uid_spi, "spi_vol_override", "AUD")
+                            if _db_spi_atm:
+                                st.session_state["spi_vol_override"] = _db_spi_atm.get("value", 0.0)
                         _spi_atm = st.session_state.get("spi_vol_override", _spi_surf.get("Jun-26", {}).get("50D", 0.0))
                         if _spi_atm and _spi_atm > 0:
                             st.caption(f"SPI front ATM (50D Jun-26): **{_spi_atm:.2f}%** — used as equity vol context")
