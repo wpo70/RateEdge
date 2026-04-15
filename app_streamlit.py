@@ -18823,7 +18823,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505p  |  UAT</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505q  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -20733,6 +20733,12 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     _mr_prev = _db_mr_p
                 break
 
+    # Pre-seed ALL widget keys from _mr_today BEFORE rendering
+    # This prevents Streamlit from resetting fields on rerun when a new key appears
+    for _rk, _, _ in _RATE_FIELDS:
+        if f"mr_{_rk}" not in st.session_state and _rk in _mr_today:
+            st.session_state[f"mr_{_rk}"] = float(_mr_today[_rk])
+
     with st.expander("📝 Enter Morning Rates", expanded=not bool(_mr_today)):
         _new_rates = {}
         _groups = {}
@@ -20743,7 +20749,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             st.markdown(f"**{_grp}**")
             _gcols = st.columns(len(_fields))
             for _gi, (_k, _lbl) in enumerate(_fields):
-                _def = _mr_today.get(_k, 0.0)
+                _def = st.session_state.get(f"mr_{_k}", _mr_today.get(_k, 0.0))
                 _is_fut = _k in _FOURDP_KEYS
                 _is_bp_field = _k in _BP_KEYS
                 _is_big = _k in ("spi","sp500","gold_aud","usdjpy")
