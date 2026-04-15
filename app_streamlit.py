@@ -18823,7 +18823,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505m  |  UAT</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1505n  |  UAT</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -21398,15 +21398,18 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             st.plotly_chart(_fig, use_container_width=True)
 
         def _build_rv_matrix(window_days):
-            """Build realised vol matrix from DB for all expiry × tenor combos."""
-            import math as _m
-            _exp_map = {"1M":1/12,"3M":0.25,"6M":0.5,"1Y":1.0,"2Y":2.0,"3Y":3.0,"5Y":5.0}
+            """Realised vol matrix — expiry row uses expiry-matched lookback for term structure.
+            1M row = 21d realized, 3M = 63d, 6M = 126d, 1Y = 252d, 2Y = 504d, 3Y = 756d, 5Y = 1260d.
+            The window_days param is used as a floor/default for short expiries."""
+            _exp_days = {"1M":21,"3M":63,"6M":126,"1Y":252,"2Y":504,"3Y":756,"5Y":1260}
             _z = []
             for _exp in _EXPIRIES_RV:
                 _row = []
+                # Use expiry-matched lookback so rows differ (term structure of realized vol)
+                _lookback = max(_exp_days.get(_exp, window_days), window_days)
                 for _ten in _TENORS_RV:
                     _ten_y = float(_ten.replace("Y",""))
-                    _rv = _compute_realised_vol_db("AUD", _ten_y, window_days)
+                    _rv = _compute_realised_vol_db("AUD", _ten_y, _lookback)
                     _row.append(round(_rv, 1) if _rv else float("nan"))
                 _z.append(_row)
             return _z
@@ -21458,24 +21461,35 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                            "{:+.1f}", True)
 
         if _show_dv and _win_dv:
-            # 1d vol change: current working surface vs prev snap
-            _prev_atm = _prev.get("atm", {}) if _prev else {}
+            # 1d vol change: current working surface vs prev vol_history snapshot (full ATM)
             _atm_df_dv = get_working_atm_surface("AUD")
-            _exp_y_dv = {"1M":1/12,"3M":0.25,"6M":0.5,"1Y":1.0,"2Y":2.0,"3Y":3.0,"5Y":5.0}
+            # Load full prev ATM from vol_history
+            _prev_atm_df = None
+            _prev_snap_id = (_prev or {}).get("id")
+            if not _prev_snap_id:
+                # Find most recent different-day snapshot
+                _all_snaps = list_vol_snapshots(user_id, "AUD")
+                _today_date = str(pd.Timestamp.now(tz="Australia/Sydney").date())
+                for _sp in _all_snaps[1:]:  # skip most recent (today)
+                    _sp_date = str(_sp.get("snapshot_date",""))[:10]
+                    if _sp_date != _today_date:
+                        _prev_snap_id = _sp["id"]
+                        break
+            if _prev_snap_id:
+                _prev_loaded = load_vol_snapshot(_prev_snap_id)
+                if _prev_loaded and _prev_loaded.get("atm") is not None:
+                    _prev_atm_df = _prev_loaded["atm"]
+                    if "Expiry" in _prev_atm_df.columns:
+                        _prev_atm_df = _prev_atm_df.set_index("Expiry")
             _dv_z = []
             for _exp in _EXPIRIES_RV:
                 _row = []
                 for _ten in _TENORS_RV:
                     _ten_y = float(_ten.replace("Y",""))
-                    # Current from working surface
-                    _c_v = None
-                    if _atm_df_dv is not None:
-                        _c_v = get_matrix_value(_atm_df_dv, _exp.lower(), _ten_y)
-                    # Prev from snap (case-insensitive key search)
+                    _c_v = get_matrix_value(_atm_df_dv, _exp.lower(), _ten_y) if _atm_df_dv is not None else None
                     _p_v = None
-                    _pk_candidates = [f"{_exp.lower()}_{_ten}", f"{_exp}_{_ten}", f"{_exp.lower()}_{_ten}".upper()]
-                    for _pk in _pk_candidates:
-                        if _pk in _prev_atm: _p_v = _prev_atm[_pk]; break
+                    if _prev_atm_df is not None:
+                        _p_v = get_matrix_value(_prev_atm_df, _exp.lower(), _ten_y)
                     _row.append(round(float(_c_v)-float(_p_v),1)
                                 if (_c_v and _p_v) else float("nan"))
                 _dv_z.append(_row)
