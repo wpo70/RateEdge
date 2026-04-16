@@ -14289,9 +14289,9 @@ def _render_realised_delivered_vol():
     # _load_atm_history moved to module level
     # _load_swap_history moved to module level
     @st.cache_data(ttl=300, show_spinner=False)
-    def _build_vol_df(snap_rows_key: int, exp_labels: tuple, ten_labels: tuple):
+    def _build_vol_df(snap_rows_key: int, exp_labels: tuple, ten_labels: tuple, snap_rows_data: tuple = ()):
         _vol_records = []
-        for _snap_date, _atm_vols in _snap_rows:
+        for _snap_date, _atm_vols in snap_rows_data:
             if not isinstance(_atm_vols, dict): continue
             _rec = {"date": pd.Timestamp(_snap_date)}
             if "values" in _atm_vols:
@@ -14320,7 +14320,8 @@ def _render_realised_delivered_vol():
         return _df.dropna(axis=1, how="all")
 
     @st.cache_data(ttl=300, show_spinner=False)
-    def _build_fwd_df(swap_raw_hash: int, exp_labels: tuple, exp_yrs: tuple, ten_labels: tuple, ten_yrs: tuple):
+    def _build_fwd_df(swap_raw_hash: int, exp_labels: tuple, exp_yrs: tuple, ten_labels: tuple, ten_yrs: tuple, swap_df_json: str = ""):
+        _swap_df_raw = pd.read_json(swap_df_json) if swap_df_json else pd.DataFrame()
         if _swap_df_raw.empty: return pd.DataFrame()
         import re as _re2
         def _tenor_to_y(t):
@@ -14353,12 +14354,12 @@ def _render_realised_delivered_vol():
                     _fwd_records[_col] = pd.DataFrame(_fwd_series).set_index("date")["fwd"]
         return pd.DataFrame(_fwd_records).sort_index() if _fwd_records else pd.DataFrame()
 
-    _vol_df = _build_vol_df(len(_snap_rows), tuple(_EXP_LABELS), tuple(_TEN_LABELS))
+    _vol_df = _build_vol_df(len(_snap_rows), tuple(_EXP_LABELS), tuple(_TEN_LABELS), tuple(_snap_rows))
     if _vol_df.empty:
         st.info("Vol snapshots found but no data could be parsed.")
         return
 
-    _fwd_df = _build_fwd_df(len(_swap_df_raw), tuple(_EXP_LABELS), tuple(_EXP_YRS), tuple(_TEN_LABELS), tuple(_TEN_YRS))
+    _fwd_df = _build_fwd_df(len(_swap_df_raw), tuple(_EXP_LABELS), tuple(_EXP_YRS), tuple(_TEN_LABELS), tuple(_TEN_YRS), _swap_df_raw.to_json() if not _swap_df_raw.empty else "")
 
     # ── Helper: compute realised vol ──────────────────────────────────────────
     def _realised_vol_bp(series: pd.Series, window_days: int) -> float:
