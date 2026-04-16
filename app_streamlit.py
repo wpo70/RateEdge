@@ -6242,7 +6242,6 @@ def vol_config_tab():
                             _conn.commit()
                             _cur.close()
                             _conn.close()
-                            _load_curve_from_db_latest.clear()
                             if _swap_rows_saved > 0:
                                 st.success(f"✅ Saved {_swap_rows_saved} curve points to swap_rates ({_today})")
 
@@ -12577,6 +12576,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
 
 
 
+@st.fragment
 def vol_surface_editor_tab():
     """Vol Surface Editor with mode selection - Hybrid or 3D Drag"""
     
