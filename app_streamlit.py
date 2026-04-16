@@ -20699,8 +20699,8 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
     _RATE_FIELDS = [
         # (key, label, group)
         ("rba_cash",   "RBA Cash Rate",    "AUD Money"),
-        ("bbsw_3m",    "BBSW 3M",          "AUD Money"),
-        ("bbsw_6m",    "BBSW 6M",          "AUD Money"),
+        ("bbsw_3m",    "BBSW 3M (1Day delay)",   "AUD Money"),
+        ("bbsw_6m",    "BBSW 6M (1Day delay)",   "AUD Money"),
         ("ois_1m",     "OIS 1M",           "AUD OIS"),
         ("ois_3m",     "OIS 3M",           "AUD OIS"),
         ("ois_6m",     "OIS 6M",           "AUD OIS"),
