@@ -14327,7 +14327,7 @@ def _render_realised_delivered_vol():
 
     @st.cache_data(ttl=300, show_spinner=False)
     def _build_fwd_df(swap_raw_hash: int, exp_labels: tuple, exp_yrs: tuple, ten_labels: tuple, ten_yrs: tuple, swap_df_json: str = ""):
-        _swap_df_raw = pd.read_json(swap_df_json) if swap_df_json else pd.DataFrame()
+        import io as _sio; _swap_df_raw = pd.read_json(_sio.StringIO(swap_df_json)) if swap_df_json else pd.DataFrame()
         if _swap_df_raw.empty: return pd.DataFrame()
         import re as _re2
         def _tenor_to_y(t):
