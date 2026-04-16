@@ -20897,6 +20897,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                         save_user_config(_uid_rv, "morning_rates_today", "AUD", _loaded)
                     st.success(f"✅ Loaded {len(_loaded)} rates from config sheet")
                     if _errors: st.caption(f"Skipped: {', '.join(_errors)}")
+                    st.rerun()
                 except Exception as _e:
                     st.error(f"Failed to read config: {_e}")
 
@@ -20917,6 +20918,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 _mr_dated_key = f"morning_rates_{_sydney_now.strftime('%Y-%m-%d')}"
                 save_user_config(_uid_rv, _mr_dated_key, "AUD", _new_rates)
             st.success("✅ Morning rates saved")
+            st.rerun()
 
     # ── Morning rates display table ───────────────────────────────────
     if _mr_today:
