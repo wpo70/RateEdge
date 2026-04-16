@@ -5884,7 +5884,6 @@ def _fmt_premium(v) -> str:
     return f"{v:,.0f}"
 
 
-@st.fragment
 def vol_config_tab():
     st.subheader(" Vol / SABR Config & Upload")
     
@@ -6035,12 +6034,18 @@ def vol_config_tab():
     _upload_raw = st.file_uploader(
         "Upload RateEdge_Config.xlsx",
         type=["xlsx"],
-        key="cfg_upload_v4",
+        key="cfg_upload_v5",
         help="Excel file with sheets: ATM_Vols_[CCY], SABR_*_[CCY], Curves_[CCY]"
     )
+    # Store bytes (not file object) — file objects go stale after reruns
     if _upload_raw is not None:
-        st.session_state["_vol_cfg_upload"] = _upload_raw
-    upload = st.session_state.get("_vol_cfg_upload")
+        st.session_state["_vol_cfg_bytes"] = _upload_raw.read()
+        st.session_state["_vol_cfg_name"] = _upload_raw.name
+        _upload_raw.seek(0)
+    import io as _upload_io
+    upload = _upload_io.BytesIO(st.session_state["_vol_cfg_bytes"]) if st.session_state.get("_vol_cfg_bytes") else None
+    if upload and st.session_state.get("_vol_cfg_name") and _upload_raw is None:
+        st.caption(f"📎 {st.session_state['_vol_cfg_name']}")
 
     # Always show commit controls — button disabled until file loaded
     st.markdown("#### Select what to commit:")
