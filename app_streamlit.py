@@ -14286,8 +14286,14 @@ def _render_realised_delivered_vol():
         return
 
     # ── Load vol snapshots ────────────────────────────────────────────────────
-    # _load_atm_history moved to module level
-    # _load_swap_history moved to module level
+    with st.spinner("Loading historical data..."):
+        _snap_rows   = _load_atm_history(ccy, 180)
+        _swap_df_raw = _load_swap_history(ccy, 180)
+
+    if not _snap_rows:
+        st.info("No EOD vol snapshots found. Save snapshots from the Vol Export tab to populate this view.")
+        return
+
     @st.cache_data(ttl=300, show_spinner=False)
     def _build_vol_df(snap_rows_key: int, exp_labels: tuple, ten_labels: tuple, snap_rows_data: tuple = ()):
         _vol_records = []
