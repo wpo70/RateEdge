@@ -6060,223 +6060,223 @@ def vol_config_tab():
     }
     if st.button(" Commit Selected Data", key="commit_btn", type="primary",
                  disabled=(upload is None or not can_upload_vol())):
-            selected_type = type_map[load_type]
-            loaded = load_config_excel(upload, selected_type)
-            
-            # Show what was loaded
-            msgs = []
-            if loaded["atm"] > 0:
-                msgs.append(f"ATM Vols: {loaded['atm']} currencies")
-            if loaded["sabr"] > 0:
-                msgs.append(f"SABR Grids: {loaded['sabr']} currencies")
-            if loaded["curves"] > 0:
-                msgs.append(f"Curves: {loaded['curves']} currencies")
-            if loaded.get("basis", 0) > 0:
-                msgs.append(f"Basis/OIS: {loaded['basis']} curves")
+        selected_type = type_map[load_type]
+        loaded = load_config_excel(upload, selected_type)
+        
+        # Show what was loaded
+        msgs = []
+        if loaded["atm"] > 0:
+            msgs.append(f"ATM Vols: {loaded['atm']} currencies")
+        if loaded["sabr"] > 0:
+            msgs.append(f"SABR Grids: {loaded['sabr']} currencies")
+        if loaded["curves"] > 0:
+            msgs.append(f"Curves: {loaded['curves']} currencies")
+        if loaded.get("basis", 0) > 0:
+            msgs.append(f"Basis/OIS: {loaded['basis']} curves")
 
-            # Check OIS status
-            _ois_loaded = st.session_state.get("config_basis", {}).get("AUD", {}).get("ois") is not None
-            if not _ois_loaded and selected_type in ["curves", "all"]:
-                # Show what sheets ARE in the Excel to diagnose
-                try:
-                    import io as _io
-                    _xl2 = pd.ExcelFile(upload)
-                    _ois_sheets = [s for s in _xl2.sheet_names if "ois" in s.lower() or "aonia" in s.lower() or "OIS" in s]
-                    if _ois_sheets:
-                        st.warning(f"⚠️ OIS sheet found ({_ois_sheets}) but failed to parse — check column format (MaturityY, ZeroRatePct)")
-                    else:
-                        st.warning(f"⚠️ No OIS/AONIA sheet in Excel. Sheets found: {_xl2.sheet_names}. Add sheet named 'OIS_AUD'.")
-                except Exception:
-                    st.warning("⚠️ OIS/AONIA curve not loaded — check Excel has OIS_AUD sheet")
-            elif _ois_loaded:
-                _ois_df = st.session_state["config_basis"]["AUD"]["ois"]
-                msgs.append(f"AONIA ✅ ({len(_ois_df)} pts)")
-            
-            if msgs:
-                _cdebug = []
-                def _mat_to_label(y):
-                    """Convert MaturityY float to human-readable tenor label."""
-                    days = y * 365.25
-                    if days < 10: return "1w"
-                    if days < 20: return "2w"
-                    m = round(y * 12)
-                    if m == 0: return "1w"
-                    if m == 1: return "1m"
-                    if m == 2: return "2m"
-                    if m == 3: return "3m"
-                    if m == 4: return "4m"
-                    if m == 5: return "5m"
-                    if m == 6: return "6m"
-                    if m == 9: return "9m"
-                    if m == 12: return "1y"
-                    if m == 18: return "18m"
-                    yr = round(y)
-                    return f"{yr}y"
-                for _c in SUPPORTED_CURRENCIES:
-                    _cv = st.session_state.get("config_curves", {}).get(_c)
+        # Check OIS status
+        _ois_loaded = st.session_state.get("config_basis", {}).get("AUD", {}).get("ois") is not None
+        if not _ois_loaded and selected_type in ["curves", "all"]:
+            # Show what sheets ARE in the Excel to diagnose
+            try:
+                import io as _io
+                _xl2 = pd.ExcelFile(upload)
+                _ois_sheets = [s for s in _xl2.sheet_names if "ois" in s.lower() or "aonia" in s.lower() or "OIS" in s]
+                if _ois_sheets:
+                    st.warning(f"⚠️ OIS sheet found ({_ois_sheets}) but failed to parse — check column format (MaturityY, ZeroRatePct)")
+                else:
+                    st.warning(f"⚠️ No OIS/AONIA sheet in Excel. Sheets found: {_xl2.sheet_names}. Add sheet named 'OIS_AUD'.")
+            except Exception:
+                st.warning("⚠️ OIS/AONIA curve not loaded — check Excel has OIS_AUD sheet")
+        elif _ois_loaded:
+            _ois_df = st.session_state["config_basis"]["AUD"]["ois"]
+            msgs.append(f"AONIA ✅ ({len(_ois_df)} pts)")
+        
+        if msgs:
+            _cdebug = []
+            def _mat_to_label(y):
+                """Convert MaturityY float to human-readable tenor label."""
+                days = y * 365.25
+                if days < 10: return "1w"
+                if days < 20: return "2w"
+                m = round(y * 12)
+                if m == 0: return "1w"
+                if m == 1: return "1m"
+                if m == 2: return "2m"
+                if m == 3: return "3m"
+                if m == 4: return "4m"
+                if m == 5: return "5m"
+                if m == 6: return "6m"
+                if m == 9: return "9m"
+                if m == 12: return "1y"
+                if m == 18: return "18m"
+                yr = round(y)
+                return f"{yr}y"
+            for _c in SUPPORTED_CURRENCIES:
+                _cv = st.session_state.get("config_curves", {}).get(_c)
+                if _cv is not None and len(_cv) > 0:
+                    _z025 = _cv[_cv["MaturityY"].sub(0.25).abs() < 0.01]["ZeroRatePct"]
+                    _z1 = _cv[_cv["MaturityY"].sub(1.0).abs() < 0.01]["ZeroRatePct"]
+                    z025 = float(_z025.iloc[0]) if len(_z025) else 0
+                    z1 = float(_z1.iloc[0]) if len(_z1) else 0
+                    _cdebug.append(f"{_c}: {len(_cv)} pts | 3m={z025:.4f}% | 1Y={z1:.4f}%")
+            st.success(f" Loaded: {', '.join(msgs)}")
+            if _cdebug:
+                for _cd in _cdebug:
+                    st.caption(f"📊 {_cd}")
+            # Show bootstrap warnings immediately after commit
+            _bwarn = st.session_state.get("_bootstrap_warnings", [])
+            for _bw in _bwarn:
+                st.error(f"🔴 BOOTSTRAP ERROR — {_bw}")
+            # Show par rates parsed from BBG_Feed for visual confirmation
+            for _pc in SUPPORTED_CURRENCIES:
+                _p_par = st.session_state.get("_irs_par_rates", {}).get(_pc)
+                if _p_par is not None and not _p_par.empty:
+                    st.caption(f"{_pc} par rates read from BBG_Feed (verify before using the forward matrix):")
+                    _par_disp = _p_par.copy()
+                    # Standardise tenor labels: 0.5Y→6m, 0.75Y→9m, 1.0Y→1y etc
+                    def _std_tenor(t):
+                        try:
+                            y = float(str(t).replace("Y","").replace("y",""))
+                            return _mat_to_label(y)
+                        except: return str(t)
+                    _par_disp["Tenor"] = _par_disp["Tenor"].apply(_std_tenor)
+                    _par_disp["Par Rate (%)"] = _par_disp["Par Rate (%)"].apply(lambda x: round(float(x), 4))
+                    _conv_row = None
+                    if "Conv" in _par_disp.columns:
+                        _conv_row = _par_disp.set_index("Tenor")["Conv"].to_dict()
+                    _rate_row = _par_disp.set_index("Tenor")["Par Rate (%)"].to_dict()
+                    _rows_disp = {"Par Rate (%)": _rate_row}
+                    if _conv_row: _rows_disp["Conv"] = _conv_row
+                    st.dataframe(pd.DataFrame(_rows_disp).T, use_container_width=True)
+                elif _pc in ["USD", "NZD"]:
+                    # Show zero curve directly for non-AUD currencies
+                    _cv = st.session_state.get("config_curves", {}).get(_pc)
                     if _cv is not None and len(_cv) > 0:
-                        _z025 = _cv[_cv["MaturityY"].sub(0.25).abs() < 0.01]["ZeroRatePct"]
-                        _z1 = _cv[_cv["MaturityY"].sub(1.0).abs() < 0.01]["ZeroRatePct"]
-                        z025 = float(_z025.iloc[0]) if len(_z025) else 0
-                        z1 = float(_z1.iloc[0]) if len(_z1) else 0
-                        _cdebug.append(f"{_c}: {len(_cv)} pts | 3m={z025:.4f}% | 1Y={z1:.4f}%")
-                st.success(f" Loaded: {', '.join(msgs)}")
-                if _cdebug:
-                    for _cd in _cdebug:
-                        st.caption(f"📊 {_cd}")
-                # Show bootstrap warnings immediately after commit
-                _bwarn = st.session_state.get("_bootstrap_warnings", [])
-                for _bw in _bwarn:
-                    st.error(f"🔴 BOOTSTRAP ERROR — {_bw}")
-                # Show par rates parsed from BBG_Feed for visual confirmation
-                for _pc in SUPPORTED_CURRENCIES:
-                    _p_par = st.session_state.get("_irs_par_rates", {}).get(_pc)
-                    if _p_par is not None and not _p_par.empty:
-                        st.caption(f"{_pc} par rates read from BBG_Feed (verify before using the forward matrix):")
-                        _par_disp = _p_par.copy()
-                        # Standardise tenor labels: 0.5Y→6m, 0.75Y→9m, 1.0Y→1y etc
-                        def _std_tenor(t):
-                            try:
-                                y = float(str(t).replace("Y","").replace("y",""))
-                                return _mat_to_label(y)
-                            except: return str(t)
-                        _par_disp["Tenor"] = _par_disp["Tenor"].apply(_std_tenor)
-                        _par_disp["Par Rate (%)"] = _par_disp["Par Rate (%)"].apply(lambda x: round(float(x), 4))
-                        _conv_row = None
-                        if "Conv" in _par_disp.columns:
-                            _conv_row = _par_disp.set_index("Tenor")["Conv"].to_dict()
-                        _rate_row = _par_disp.set_index("Tenor")["Par Rate (%)"].to_dict()
-                        _rows_disp = {"Par Rate (%)": _rate_row}
-                        if _conv_row: _rows_disp["Conv"] = _conv_row
-                        st.dataframe(pd.DataFrame(_rows_disp).T, use_container_width=True)
-                    elif _pc in ["USD", "NZD"]:
-                        # Show zero curve directly for non-AUD currencies
-                        _cv = st.session_state.get("config_curves", {}).get(_pc)
-                        if _cv is not None and len(_cv) > 0:
-                            st.caption(f"{_pc} SOFR curve loaded from BBG_Feed ({len(_cv)} pts):")
-                            _cv_disp = _cv.copy()
-                            _cv_disp["Tenor"] = _cv_disp["MaturityY"].apply(_mat_to_label)
-                            _cv_disp["Rate (%)"] = _cv_disp["ZeroRatePct"].apply(lambda x: f"{x:.4f}%")
-                            _rows = {"Rate (%)": _cv_disp.set_index("Tenor")["Rate (%)"].to_dict()}
-                            # Add source date row for USD/NZD
-                            if "_source_date" in _cv.columns:
-                                _rows["Source Date"] = _cv_disp.set_index("Tenor")["_source_date"].to_dict()
+                        st.caption(f"{_pc} SOFR curve loaded from BBG_Feed ({len(_cv)} pts):")
+                        _cv_disp = _cv.copy()
+                        _cv_disp["Tenor"] = _cv_disp["MaturityY"].apply(_mat_to_label)
+                        _cv_disp["Rate (%)"] = _cv_disp["ZeroRatePct"].apply(lambda x: f"{x:.4f}%")
+                        _rows = {"Rate (%)": _cv_disp.set_index("Tenor")["Rate (%)"].to_dict()}
+                        # Add source date row for USD/NZD
+                        if "_source_date" in _cv.columns:
+                            _rows["Source Date"] = _cv_disp.set_index("Tenor")["_source_date"].to_dict()
+                        else:
+                            _rows["Source Date"] = {k: "2026-04-13" for k in _rows["Rate (%)"]}
+                        st.dataframe(pd.DataFrame(_rows).T, use_container_width=True)
+            # Auto-save to DB so it persists across sessions
+            if HAS_POSTGRES and is_admin():
+                try:
+                    _uid = st.session_state.get("username", "default")
+                    _saved = save_all_session_data(_uid)
+                    if _saved > 0:
+                        st.success(f"✅ Auto-saved {_saved} configs to database.")
+                    # Clear load_user_config cache so next load gets fresh data
+                except Exception as _e:
+                    st.warning(f"Auto-save failed: {_e}")
+
+            # Save uploaded curves to swap_rates (AUD 6M BBSW/3M BBSW/AONIA, NZD 3M BKBM/NZONIA, USD SOFR)
+            if HAS_POSTGRES and is_admin():
+                try:
+                    import datetime as _dt
+                    _today = str(_dt.date.today())
+                    _conn = get_db_connection()
+                    if _conn:
+                        _cur = _conn.cursor()
+                        _swap_rows_saved = 0
+                        _curve_saves = [
+                            ("AUD", "6M BBSW",      None),
+                            ("AUD", "3M BBSW",      None),
+                            ("AUD", "AONIA",        "ois"),
+                            ("NZD", "3M BKBM",      None),
+                            ("NZD", "NZONIA",       "ois"),
+                            ("USD", "SOFR",         None),
+                            ("USD", "FEDFUNDS",     "ois"),
+                        ]
+                        _commit_sanity_warns = []
+                        for _ccy, _fr, _basis_type in _curve_saves:
+                            if _basis_type:
+                                _cdf = st.session_state.get("config_basis", {}).get(_ccy, {}).get(_basis_type)
+                                # USD FEDFUNDS stored under ois key
+                                if _cdf is None and _fr == "FEDFUNDS":
+                                    _cdf = st.session_state.get("config_basis", {}).get(_ccy, {}).get("fedfunds_ois")
                             else:
-                                _rows["Source Date"] = {k: "2026-04-13" for k in _rows["Rate (%)"]}
-                            st.dataframe(pd.DataFrame(_rows).T, use_container_width=True)
-                # Auto-save to DB so it persists across sessions
-                if HAS_POSTGRES and is_admin():
-                    try:
-                        _uid = st.session_state.get("username", "default")
-                        _saved = save_all_session_data(_uid)
-                        if _saved > 0:
-                            st.success(f"✅ Auto-saved {_saved} configs to database.")
-                        # Clear load_user_config cache so next load gets fresh data
-                    except Exception as _e:
-                        st.warning(f"Auto-save failed: {_e}")
-
-                # Save uploaded curves to swap_rates (AUD 6M BBSW/3M BBSW/AONIA, NZD 3M BKBM/NZONIA, USD SOFR)
-                if HAS_POSTGRES and is_admin():
-                    try:
-                        import datetime as _dt
-                        _today = str(_dt.date.today())
-                        _conn = get_db_connection()
-                        if _conn:
-                            _cur = _conn.cursor()
-                            _swap_rows_saved = 0
-                            _curve_saves = [
-                                ("AUD", "6M BBSW",      None),
-                                ("AUD", "3M BBSW",      None),
-                                ("AUD", "AONIA",        "ois"),
-                                ("NZD", "3M BKBM",      None),
-                                ("NZD", "NZONIA",       "ois"),
-                                ("USD", "SOFR",         None),
-                                ("USD", "FEDFUNDS",     "ois"),
-                            ]
-                            _commit_sanity_warns = []
-                            for _ccy, _fr, _basis_type in _curve_saves:
-                                if _basis_type:
-                                    _cdf = st.session_state.get("config_basis", {}).get(_ccy, {}).get(_basis_type)
-                                    # USD FEDFUNDS stored under ois key
-                                    if _cdf is None and _fr == "FEDFUNDS":
-                                        _cdf = st.session_state.get("config_basis", {}).get(_ccy, {}).get("fedfunds_ois")
+                                _cdf = st.session_state.get("config_curves", {}).get(_ccy)
+                            if _cdf is None or len(_cdf) == 0:
+                                continue
+                            # Build rate dict for sanity check before INSERT
+                            _pre_check = {}
+                            for _, _row in _cdf.iterrows():
+                                _mat = float(_row.get("MaturityY", 0))
+                                _rate = float(_row.get("ZeroRatePct", 0))
+                                # Convert maturity to tenor label
+                                _days = _mat * 365.25
+                                if _days < 10:
+                                    _tenor = "1W"
+                                elif _days < 25:
+                                    _tenor = "2W"
+                                elif _mat < 1.0:
+                                    _months = max(1, round(_mat * 12))
+                                    _tenor = f"{_months}M"
                                 else:
-                                    _cdf = st.session_state.get("config_curves", {}).get(_ccy)
-                                if _cdf is None or len(_cdf) == 0:
-                                    continue
-                                # Build rate dict for sanity check before INSERT
-                                _pre_check = {}
-                                for _, _row in _cdf.iterrows():
-                                    _mat = float(_row.get("MaturityY", 0))
-                                    _rate = float(_row.get("ZeroRatePct", 0))
-                                    # Convert maturity to tenor label
-                                    _days = _mat * 365.25
-                                    if _days < 10:
-                                        _tenor = "1W"
-                                    elif _days < 25:
-                                        _tenor = "2W"
-                                    elif _mat < 1.0:
-                                        _months = max(1, round(_mat * 12))
-                                        _tenor = f"{_months}M"
-                                    else:
-                                        _tenor = f"{int(round(_mat))}Y"
-                                    _pre_check[_tenor] = _rate
-                                _sw = check_swap_rates_sanity(_pre_check, _fr, _ccy)
-                                _commit_sanity_warns.extend(_sw)
-                                # INSERT to DB
-                                for _tenor, _rate in _pre_check.items():
-                                    _cur.execute("""
-                                        INSERT INTO swap_rates (date, currency, tenor, floating_rate, rate)
-                                        VALUES (%s, %s, %s, %s, %s)
-                                        ON CONFLICT (date, currency, tenor, floating_rate) DO UPDATE SET rate = EXCLUDED.rate
-                                    """, (_today, _ccy, _tenor, _fr, _rate))
-                                    _swap_rows_saved += 1
-                            # Show commit sanity warnings BEFORE success message
-                            for _csw in _commit_sanity_warns:
-                                st.error(f"🔴 COMMIT SANITY — {_csw}")
-                            _conn.commit()
-                            _cur.close()
-                            _conn.close()
-                            if _swap_rows_saved > 0:
-                                st.success(f"✅ Saved {_swap_rows_saved} curve points to swap_rates ({_today})")
+                                    _tenor = f"{int(round(_mat))}Y"
+                                _pre_check[_tenor] = _rate
+                            _sw = check_swap_rates_sanity(_pre_check, _fr, _ccy)
+                            _commit_sanity_warns.extend(_sw)
+                            # INSERT to DB
+                            for _tenor, _rate in _pre_check.items():
+                                _cur.execute("""
+                                    INSERT INTO swap_rates (date, currency, tenor, floating_rate, rate)
+                                    VALUES (%s, %s, %s, %s, %s)
+                                    ON CONFLICT (date, currency, tenor, floating_rate) DO UPDATE SET rate = EXCLUDED.rate
+                                """, (_today, _ccy, _tenor, _fr, _rate))
+                                _swap_rows_saved += 1
+                        # Show commit sanity warnings BEFORE success message
+                        for _csw in _commit_sanity_warns:
+                            st.error(f"🔴 COMMIT SANITY — {_csw}")
+                        _conn.commit()
+                        _cur.close()
+                        _conn.close()
+                        if _swap_rows_saved > 0:
+                            st.success(f"✅ Saved {_swap_rows_saved} curve points to swap_rates ({_today})")
 
-                            # Save USD SOFR/FF basis to benchmark_rates
-                            _sofr_ff = st.session_state.get("config_basis",{}).get("USD",{}).get("sofr_ff_basis")
-                            if _sofr_ff is not None and not _sofr_ff.empty:
-                                try:
-                                    _conn2 = get_db_connection()
-                                    if _conn2:
-                                        _cur2 = _conn2.cursor()
-                                        _basis_saved = 0
-                                        for _, _br in _sofr_ff.iterrows():
-                                            _mat = float(_br["MaturityY"])
-                                            _bp  = float(_br["BasisBp"])
-                                            _months = round(_mat * 12)
-                                            _bl = f"{_months}M" if _mat < 1 else f"{int(round(_mat))}Y"
-                                            _cur2.execute("""
-                                                INSERT INTO benchmark_rates (date, currency, rate_type, rate)
-                                                VALUES (%s, 'USD', %s, %s)
-                                                ON CONFLICT (date, currency, rate_type) DO UPDATE SET rate = EXCLUDED.rate
-                                            """, (_today, f"SOFR_FF_BASIS_{_bl}", _bp))
-                                            _basis_saved += 1
-                                        _conn2.commit(); _cur2.close(); _conn2.close()
-                                        if _basis_saved > 0:
-                                            st.success(f"✅ Saved {_basis_saved} SOFR/FF basis points to benchmark_rates")
-                                except Exception as _be:
-                                    st.warning(f"SOFR/FF basis save failed: {_be}")
+                        # Save USD SOFR/FF basis to benchmark_rates
+                        _sofr_ff = st.session_state.get("config_basis",{}).get("USD",{}).get("sofr_ff_basis")
+                        if _sofr_ff is not None and not _sofr_ff.empty:
+                            try:
+                                _conn2 = get_db_connection()
+                                if _conn2:
+                                    _cur2 = _conn2.cursor()
+                                    _basis_saved = 0
+                                    for _, _br in _sofr_ff.iterrows():
+                                        _mat = float(_br["MaturityY"])
+                                        _bp  = float(_br["BasisBp"])
+                                        _months = round(_mat * 12)
+                                        _bl = f"{_months}M" if _mat < 1 else f"{int(round(_mat))}Y"
+                                        _cur2.execute("""
+                                            INSERT INTO benchmark_rates (date, currency, rate_type, rate)
+                                            VALUES (%s, 'USD', %s, %s)
+                                            ON CONFLICT (date, currency, rate_type) DO UPDATE SET rate = EXCLUDED.rate
+                                        """, (_today, f"SOFR_FF_BASIS_{_bl}", _bp))
+                                        _basis_saved += 1
+                                    _conn2.commit(); _cur2.close(); _conn2.close()
+                                    if _basis_saved > 0:
+                                        st.success(f"✅ Saved {_basis_saved} SOFR/FF basis points to benchmark_rates")
+                            except Exception as _be:
+                                st.warning(f"SOFR/FF basis save failed: {_be}")
 
-                            # Save morning rates to DB
-                            _mr_now = st.session_state.get("morning_rates_today", {})
-                            if _mr_now:
-                                try:
-                                    _uid_mr = st.session_state.get("username","")
-                                    if _uid_mr and HAS_POSTGRES:
-                                        save_user_config(_uid_mr, "morning_rates_today", "AUD", _mr_now)
-                                except Exception: pass
-                    except Exception as _se:
-                        st.warning(f"Curve save to swap_rates failed: {_se}")
-            else:
-                st.warning("No matching data found in file for selected option.")
+                        # Save morning rates to DB
+                        _mr_now = st.session_state.get("morning_rates_today", {})
+                        if _mr_now:
+                            try:
+                                _uid_mr = st.session_state.get("username","")
+                                if _uid_mr and HAS_POSTGRES:
+                                    save_user_config(_uid_mr, "morning_rates_today", "AUD", _mr_now)
+                            except Exception: pass
+                except Exception as _se:
+                    st.warning(f"Curve save to swap_rates failed: {_se}")
+        else:
+            st.warning("No matching data found in file for selected option.")
     
     st.markdown("---")
     st.markdown("#### Currently Loaded Status")
