@@ -6086,7 +6086,6 @@ def vol_config_tab():
             # Show what sheets ARE in the Excel to diagnose
             try:
                 import io as _io
-                upload.seek(0)
                 _xl2 = pd.ExcelFile(upload)
                 _ois_sheets = [s for s in _xl2.sheet_names if "ois" in s.lower() or "aonia" in s.lower() or "OIS" in s]
                 if _ois_sheets:
@@ -13199,7 +13198,6 @@ def _expiry_to_years(lbl: str) -> float:
     except Exception:
         return 0
 
-@st.cache_data(ttl=300, show_spinner=False)
 def _load_vol_snapshots_for_viz(ccy: str, start_date: str, end_date: str) -> list:
     """Load vol snapshots from vol_history within date range. Returns list of dicts."""
     if not HAS_POSTGRES:
@@ -17827,7 +17825,6 @@ def bond_option_tab():
 
 
 
-@st.fragment
 def portfolio_tab():
     st.subheader("Trade Blotter  —  Swaptions + Caps & Floors")
 
@@ -20859,12 +20856,11 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         st.markdown("---")
         _cfg_col1, _cfg_col2 = st.columns([2, 3])
         with _cfg_col1:
-            _cfg_file_raw = st.file_uploader("📂 Load rates from Config Sheet", type=["xlsx"],
+            _cfg_file = st.file_uploader("📂 Load rates from Config Sheet", type=["xlsx"],
                                           key="mr_config_upload", label_visibility="visible")
-            if _cfg_file_raw is not None:
-                st.session_state["_mr_cfg_bytes"] = _cfg_file_raw.read()
-            import io as _mr_io
-            _cfg_file = _mr_io.BytesIO(st.session_state["_mr_cfg_bytes"]) if st.session_state.get("_mr_cfg_bytes") else None
+            if _cfg_file is not None:
+                st.session_state["_mr_cfg_cache"] = _cfg_file
+            _cfg_file = st.session_state.get("_mr_cfg_cache") if _cfg_file is None else _cfg_file
         with _cfg_col2:
             st.markdown("")
             st.markdown("")
