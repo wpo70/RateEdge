@@ -1336,22 +1336,24 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
         return False
     
     try:
-        # Get current vol data from session
-        vol_data = st.session_state.get("vol_data", {}).get(currency, {})
-        atm = vol_data.get("atm")
-        
+        # Get current vol data from session — use get_working_atm_surface for reliability
+        atm, sabr_alpha, sabr_beta, sabr_rho, sabr_nu = get_ccy_vol_data(currency)
+
         if atm is None:
-            st.error(f"No ATM vol data loaded for {currency}")
+            # Fallback: try vol_data directly
+            _vd = st.session_state.get("vol_data", {}).get(currency, {})
+            atm = _vd.get("atm")
+            sabr_alpha = _vd.get("alpha")
+            sabr_beta = _vd.get("beta")
+            sabr_rho = _vd.get("rho")
+            sabr_nu = _vd.get("nu")
+
+        if atm is None:
+            st.error(f"❌ No ATM vol surface loaded for {currency}. Go to IRS/Vol Upload → Reload Vols from DB first.")
             return False
-        
+
         # Convert DataFrame to JSON
         atm_json = atm.to_dict(orient="records")
-        
-        # Get SABR params if available
-        sabr_alpha = vol_data.get("alpha")
-        sabr_beta = vol_data.get("beta")
-        sabr_rho = vol_data.get("rho")
-        sabr_nu = vol_data.get("nu")
         
         sabr_alpha_json = sabr_alpha.to_dict(orient="records") if sabr_alpha is not None else None
         sabr_beta_json = sabr_beta.to_dict(orient="records") if sabr_beta is not None else None
@@ -22501,18 +22503,21 @@ RateEdge Options Platform""",
         _ccys_str = "/".join(export_currencies) if export_currencies else "AUD"
 
         _sc1, _sc2, _sc3 = st.columns(3)
+        _snap_label = None
         with _sc1:
             if st.button(f"🌙 EOD  {_date_str}", key="snap_eod", type="primary", use_container_width=True,
                          help=f"Label: {_ccys_str} EOD {_ts_str}"):
-                _do_save_snap(f"{_ccys_str} EOD {_ts_str}")
+                _snap_label = f"{_ccys_str} EOD {_ts_str}"
         with _sc2:
-            if st.button(f"🌅 SOD  {_date_str}", key="snap_sod", use_container_width=True,
+            if st.button(f"🌅 SOD  {_date_str}", key="snap_sod", type="secondary", use_container_width=True,
                          help=f"Label: {_ccys_str} SOD {_ts_str}"):
-                _do_save_snap(f"{_ccys_str} SOD {_ts_str}")
+                _snap_label = f"{_ccys_str} SOD {_ts_str}"
         with _sc3:
-            if st.button(f"⏱ Intraday  {_syd_now.strftime('%H:%M')}", key="snap_intraday", use_container_width=True,
+            if st.button(f"⏱ Intraday  {_syd_now.strftime('%H:%M')}", key="snap_intraday", type="secondary", use_container_width=True,
                          help=f"Label: {_ccys_str} {_ts_str}"):
-                _do_save_snap(f"{_ccys_str} {_ts_str}")
+                _snap_label = f"{_ccys_str} {_ts_str}"
+        if _snap_label:
+            _do_save_snap(_snap_label)
 
         # Quick tips
         st.markdown(f"""
