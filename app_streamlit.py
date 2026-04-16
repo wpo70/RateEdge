@@ -6698,6 +6698,7 @@ def generate_forward_matrix_convention(ccy: str, curve: pd.DataFrame, basis_6v3:
     return _generate_forward_matrix_cached(ccy, curve_tuple, basis_tuple, convention=convention, ois_tuple=None)
 
 
+@st.fragment
 def curves_tab():
     import plotly.graph_objects as go
     st.subheader("📐 IRS Curves & Forward Matrix")
@@ -7261,6 +7262,7 @@ def _load_swap_rates_history(floating_rate: str, years_back: int = 20) -> pd.Dat
         return pd.DataFrame()
 
 
+@st.fragment
 def fwd_analysis_tab():
     """FWD Swap & Basis Historical Analysis tab"""
     st.subheader("📈 FWD IRS Analysis")
