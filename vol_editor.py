@@ -78,8 +78,10 @@ def surface_vol_to_premium(df: pd.DataFrame, ccy: str = None) -> pd.DataFrame:
     otherwise falls back to the simplified formula."""
     import streamlit as st
     if ccy is not None:
-        prem_store = st.session_state.get("prem_matrix", {})
-        if ccy in prem_store:
+        # atm_prem_matrix[ccy]["prem"] is the correct key in the main app
+        _atm_pm = st.session_state.get("atm_prem_matrix", {})
+        prem_store = {c: v.get("prem") for c, v in _atm_pm.items() if isinstance(v, dict) and v.get("prem") is not None}
+        if ccy in prem_store and prem_store[ccy] is not None:
             p = prem_store[ccy].copy()
             exp_col = df.columns[0]
             if "Expiry" in p.columns:
