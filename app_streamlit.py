@@ -22277,7 +22277,6 @@ h2{{color:#1e3a5f;margin-top:20px}}
                 st.rerun()
 
 
-@st.fragment
 def vol_export_tab():
     """Vol Export tab - Export and email vol surfaces"""
     st.subheader("📂 Vol Surface Export & Distribution")
@@ -22480,21 +22479,21 @@ RateEdge Options Platform""",
                 st.error("Select at least one currency above first.")
                 return
             _saved, _failed = [], []
-            for _ccy in export_currencies:
-                # Debug: check vol_data before saving
-                _vd = st.session_state.get("vol_data", {}).get(_ccy, {})
-                _atm_check = _vd.get("atm")
-                if _atm_check is None:
-                    st.error(f"❌ No ATM vol surface in session for {_ccy}. Load vols from DB first (IRS/Vol Upload tab → Reload Vols from DB).")
-                    continue
-                _sid = save_vol_snapshot(user_id, _ccy, label.strip(), _eod_notes.strip())
-                if _sid: _saved.append(_ccy)
-                else: _failed.append(_ccy)
+            with st.spinner(f"Saving {label}..."):
+                for _ccy in export_currencies:
+                    _vd = st.session_state.get("vol_data", {}).get(_ccy, {})
+                    _atm_check = _vd.get("atm")
+                    if _atm_check is None:
+                        st.error(f"❌ No ATM vol for {_ccy} — reload vols from DB first.")
+                        continue
+                    _sid = save_vol_snapshot(user_id, _ccy, label.strip(), _eod_notes.strip())
+                    if _sid: _saved.append(_ccy)
+                    else: _failed.append(_ccy)
             if _saved:
                 list_vol_snapshots.clear()
                 st.success(f"✅ Saved: **{label}** for {', '.join(_saved)}")
             if _failed:
-                st.error(f"❌ Save failed for: {', '.join(_failed)} — check DB connection")
+                st.error(f"❌ Save failed for: {', '.join(_failed)}")
 
         import datetime as _dt_snap
         _syd_now = _dt_snap.datetime.now(ZoneInfo("Australia/Sydney"))
