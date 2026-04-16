@@ -6086,6 +6086,7 @@ def vol_config_tab():
             # Show what sheets ARE in the Excel to diagnose
             try:
                 import io as _io
+                upload.seek(0)
                 _xl2 = pd.ExcelFile(upload)
                 _ois_sheets = [s for s in _xl2.sheet_names if "ois" in s.lower() or "aonia" in s.lower() or "OIS" in s]
                 if _ois_sheets:
@@ -12603,24 +12604,24 @@ def vol_surface_editor_tab():
     # Check if we have v3d_data in query params (coming back from Apply button)
     has_v3d_data = 'v3d_data' in st.query_params and st.query_params.get('v3d_ccy') == ccy
     
-    # Get current ATM surface
+    # Get current ATM surface — uses session state cache, fast if already loaded
     atm = get_working_atm_surface(ccy)
-    
+
     # Only block if no ATM surface AND no v3d_data to restore from
     if (atm is None or atm.empty) and not has_v3d_data:
         st.info("No ATM vol surface loaded for this currency. Go to 'Vol / SABR' tab to load data first.")
         return
-    
-    # If we have v3d_data but no atm, create placeholder - vol_editor will restore from query params
+
+    # If we have v3d_data but no atm, create placeholder
     if (atm is None or atm.empty) and has_v3d_data:
         atm = pd.DataFrame({"Expiry": ["1Y"], "1Y": [50.0]})
-    
-    # Get curve for annuity calculations
+
+    # Get curve from session state (fast - no DB call if already loaded)
     _cc = st.session_state.get("config_curves", {}).get(ccy)
     curve = _cc if _cc is not None else get_ccy_curve(ccy)
     _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
     ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
-    
+
     st.markdown("---")
 
     # Gate editor render — prevents hang on every tab visit
@@ -13198,6 +13199,7 @@ def _expiry_to_years(lbl: str) -> float:
     except Exception:
         return 0
 
+@st.cache_data(ttl=300, show_spinner=False)
 def _load_vol_snapshots_for_viz(ccy: str, start_date: str, end_date: str) -> list:
     """Load vol snapshots from vol_history within date range. Returns list of dicts."""
     if not HAS_POSTGRES:
@@ -20856,11 +20858,12 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         st.markdown("---")
         _cfg_col1, _cfg_col2 = st.columns([2, 3])
         with _cfg_col1:
-            _cfg_file = st.file_uploader("📂 Load rates from Config Sheet", type=["xlsx"],
+            _cfg_file_raw = st.file_uploader("📂 Load rates from Config Sheet", type=["xlsx"],
                                           key="mr_config_upload", label_visibility="visible")
-            if _cfg_file is not None:
-                st.session_state["_mr_cfg_cache"] = _cfg_file
-            _cfg_file = st.session_state.get("_mr_cfg_cache") if _cfg_file is None else _cfg_file
+            if _cfg_file_raw is not None:
+                st.session_state["_mr_cfg_bytes"] = _cfg_file_raw.read()
+            import io as _mr_io
+            _cfg_file = _mr_io.BytesIO(st.session_state["_mr_cfg_bytes"]) if st.session_state.get("_mr_cfg_bytes") else None
         with _cfg_col2:
             st.markdown("")
             st.markdown("")
@@ -22475,6 +22478,12 @@ RateEdge Options Platform""",
                 return
             _saved, _failed = [], []
             for _ccy in export_currencies:
+                # Debug: check vol_data before saving
+                _vd = st.session_state.get("vol_data", {}).get(_ccy, {})
+                _atm_check = _vd.get("atm")
+                if _atm_check is None:
+                    st.error(f"❌ No ATM vol surface in session for {_ccy}. Load vols from DB first (IRS/Vol Upload tab → Reload Vols from DB).")
+                    continue
                 _sid = save_vol_snapshot(user_id, _ccy, label.strip(), _eod_notes.strip())
                 if _sid: _saved.append(_ccy)
                 else: _failed.append(_ccy)
@@ -22482,7 +22491,7 @@ RateEdge Options Platform""",
                 list_vol_snapshots.clear()
                 st.success(f"✅ Saved: **{label}** for {', '.join(_saved)}")
             if _failed:
-                st.error(f"Failed for: {', '.join(_failed)}")
+                st.error(f"❌ Save failed for: {', '.join(_failed)} — check DB connection")
 
         import datetime as _dt_snap
         _syd_now = _dt_snap.datetime.now(ZoneInfo("Australia/Sydney"))
