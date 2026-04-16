@@ -13314,7 +13314,7 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)") 
     if not snapshots:
         return None
 
-    # Build frames
+    # Build frames — surface + scatter3d overlay for reliable per-point hover
     frames = []
     dates = []
     for snap in snapshots:
@@ -13323,25 +13323,45 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)") 
             continue
         lbl = snap["label"] if snap["label"] else snap["date"].strftime("%Y-%m-%d")
         dates.append(lbl)
-        # Build hover text
-        _text_arr = []
+        # Flatten grid for scatter3d overlay — one point per cell, reliable hover
+        import numpy as _np
+        _px, _py, _pz, _ptxt = [], [], [], []
         for ei, el in enumerate(exp_labels):
-            _trow = []
             for ti, tl in enumerate(tenor_labels):
-                _trow.append(f"{el} × {tl}  {z[ei,ti]:.1f}bp")
-            _text_arr.append(_trow)
+                _v = z[ei, ti]
+                try:
+                    _fv = float(_v)
+                    if _np.isfinite(_fv):
+                        _px.append(tenor_x[ti])
+                        _py.append(expiry_y[ei])
+                        _pz.append(_fv)
+                        _ptxt.append(f"{el} × {tl}  {_fv:.1f}bp")
+                except (TypeError, ValueError):
+                    pass
         frames.append(go.Frame(
-            data=[go.Surface(
-                x=tenor_x, y=expiry_y, z=z.tolist(),
-                colorscale="RdYlGn_r",
-                cmin=50, cmax=130,
-                showscale=True,
-                colorbar=dict(title="bp", thickness=12, len=0.6),
-                text=_text_arr,
-                hoverinfo="text",
-                hoverlabel=dict(bgcolor="#1e293b", bordercolor="#FFD700",
-                               font=dict(color="#FFD700", size=14, family="Arial Black")),
-            )],
+            data=[
+                go.Surface(
+                    x=tenor_x, y=expiry_y, z=z.tolist(),
+                    colorscale="RdYlGn_r",
+                    cmin=50, cmax=130,
+                    showscale=True,
+                    colorbar=dict(title="bp", thickness=12, len=0.6),
+                    hoverinfo="skip",
+                ),
+                go.Scatter3d(
+                    x=_px, y=_py, z=_pz,
+                    mode="markers",
+                    marker=dict(size=4, opacity=0.5,
+                                color=_pz, colorscale="RdYlGn_r",
+                                cmin=50, cmax=130,
+                                showscale=False),
+                    text=_ptxt,
+                    hoverinfo="text",
+                    hoverlabel=dict(bgcolor="#1e293b", bordercolor="#FFD700",
+                                   font=dict(color="#FFD700", size=13, family="Arial Black")),
+                    showlegend=False,
+                ),
+            ],
             name=lbl,
         ))
 
