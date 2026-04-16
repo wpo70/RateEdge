@@ -6031,12 +6031,15 @@ def vol_config_tab():
     
     # File upload
     st.markdown("#### Upload Config File")
-    upload = st.file_uploader(
+    _upload_raw = st.file_uploader(
         "Upload RateEdge_Config.xlsx",
         type=["xlsx"],
         key="cfg_upload",
         help="Excel file with sheets: ATM_Vols_[CCY], SABR_*_[CCY], Curves_[CCY]"
     )
+    if _upload_raw is not None:
+        st.session_state["_vol_cfg_upload"] = _upload_raw
+    upload = st.session_state.get("_vol_cfg_upload")
     
     if upload is not None:
         st.markdown("#### Select what to commit:")
