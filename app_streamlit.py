@@ -21472,6 +21472,14 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
     for _rk, _, _ in _RATE_FIELDS:
         if f"mr_{_rk}" not in st.session_state and _rk in _mr_today:
             st.session_state[f"mr_{_rk}"] = float(_mr_today[_rk])
+    # RBA cash: always force from sticky — never let it go blank
+    _rba_sticky_val = st.session_state.get("rba_cash_sticky")
+    if _rba_sticky_val is None and _mr_today.get("rba_cash"):
+        _rba_sticky_val = float(_mr_today["rba_cash"])
+    if _rba_sticky_val is not None:
+        st.session_state["mr_rba_cash"] = _rba_sticky_val
+        if _mr_today.get("rba_cash") != _rba_sticky_val:
+            _mr_today["rba_cash"] = _rba_sticky_val
 
     with st.expander("📝 Enter Morning Rates", expanded=not bool(_mr_today)):
         _new_rates = {}
@@ -21500,6 +21508,9 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         with _cfg_col1:
             _cfg_file = st.file_uploader("📂 Load rates from Config Sheet", type=["xlsx"],
                                           key="mr_config_upload", label_visibility="visible")
+            if _cfg_file is not None:
+                st.session_state["_mr_cfg_cache"] = _cfg_file
+            _cfg_file = st.session_state.get("_mr_cfg_cache") if _cfg_file is None else _cfg_file
         with _cfg_col2:
             st.markdown("")
             st.markdown("")
