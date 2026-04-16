@@ -6040,31 +6040,26 @@ def vol_config_tab():
     if _upload_raw is not None:
         st.session_state["_vol_cfg_upload"] = _upload_raw
     upload = st.session_state.get("_vol_cfg_upload")
-    
-    if upload is not None:
-        st.markdown("#### Select what to commit:")
-        
-        load_type = st.radio(
-            "Commit options",
-            ["SOD IRS", "AUD Vol (Manual Load)", "USD & NZD Vol (Manual Load)", "All"],
-            index=0,  # Default to SOD IRS — not All
-            horizontal=True,
-            key="load_type_radio"
-        )
-        
-        # Warn if user is about to overwrite DB-loaded vol surface
-        if load_type in ["All", "AUD Vol (Manual Load)", "USD & NZD Vol (Manual Load)"]:
-            st.warning("⚠️ This will overwrite the vol surface loaded from DB with data from your Excel file. Use **SOD IRS** if you only want to commit curves.")
 
-        # Map selection to load_type
-        type_map = {
-            "All": "all", 
-            "SOD IRS": "curves",
-            "AUD Vol (Manual Load)": "atm_aud",
-            "USD & NZD Vol (Manual Load)": "atm_usd_nzd"
-        }
-        
-        if st.button(" Commit Selected Data", key="commit_btn", type="primary", disabled=not can_upload_vol()):
+    # Always show commit controls — button disabled until file loaded
+    st.markdown("#### Select what to commit:")
+    load_type = st.radio(
+        "Commit options",
+        ["SOD IRS", "AUD Vol (Manual Load)", "USD & NZD Vol (Manual Load)", "All"],
+        index=0,
+        horizontal=True,
+        key="load_type_radio"
+    )
+    if load_type in ["All", "AUD Vol (Manual Load)", "USD & NZD Vol (Manual Load)"]:
+        st.warning("⚠️ This will overwrite the vol surface loaded from DB with data from your Excel file. Use **SOD IRS** if you only want to commit curves.")
+    type_map = {
+        "All": "all",
+        "SOD IRS": "curves",
+        "AUD Vol (Manual Load)": "atm_aud",
+        "USD & NZD Vol (Manual Load)": "atm_usd_nzd"
+    }
+    if st.button(" Commit Selected Data", key="commit_btn", type="primary",
+                 disabled=(upload is None or not can_upload_vol())):
             selected_type = type_map[load_type]
             loaded = load_config_excel(upload, selected_type)
             
