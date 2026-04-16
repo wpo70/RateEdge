@@ -20754,20 +20754,52 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
     _mr_today = st.session_state.get("morning_rates_today", {})
     _mr_prev  = st.session_state.get("morning_rates_prev", {})
 
+    # Compute last business day (AEST) for auto-prev logic
+    def _last_bday_aest():
+        import datetime as _dt_mr
+        _syd = _dt_mr.datetime.now(SYDNEY_TZ).date()
+        _d = _syd - _dt_mr.timedelta(days=1)
+        while not is_business_day(_d):
+            _d -= _dt_mr.timedelta(days=1)
+        return str(_d)
+    _yesterday_str = _last_bday_aest()
+
     # Auto-load from DB BEFORE rendering inputs
     if not _mr_today and HAS_POSTGRES:
         for _try_uid in ["wpo@rateedge.au", "wpo70@icloud.com", _uid_rv]:
             _db_mr = load_user_config(_try_uid, "morning_rates_today", "AUD")
             if _db_mr:
-                # Clear ALL stale widget keys first so value= parameter takes effect
+                # Clear widget keys except rba_cash — preserve sticky RBA rate
                 for _rk, _, _ in _RATE_FIELDS:
-                    st.session_state.pop(f"mr_{_rk}", None)
+                    if _rk != "rba_cash":
+                        st.session_state.pop(f"mr_{_rk}", None)
                 st.session_state["morning_rates_today"] = _db_mr
                 _mr_today = _db_mr
                 _db_mr_p = load_user_config(_try_uid, "morning_rates_prev", "AUD")
                 if _db_mr_p:
                     st.session_state["morning_rates_prev"] = _db_mr_p
                     _mr_prev = _db_mr_p
+                break
+
+    # RBA cash: load sticky value — never overwritten by config upload
+    if HAS_POSTGRES and "rba_cash_sticky" not in st.session_state:
+        for _try_uid in ["wpo@rateedge.au", "wpo70@icloud.com", _uid_rv]:
+            _rba_s = load_user_config(_try_uid, "rba_cash_sticky", "AUD")
+            if _rba_s and isinstance(_rba_s, dict) and "value" in _rba_s:
+                st.session_state["rba_cash_sticky"] = float(_rba_s["value"])
+                # Apply to today rates
+                if _mr_today:
+                    _mr_today["rba_cash"] = st.session_state["rba_cash_sticky"]
+                    st.session_state["morning_rates_today"] = _mr_today
+                break
+
+    # Auto-load prev from last business day if prev not set
+    if not _mr_prev and HAS_POSTGRES:
+        for _try_uid in ["wpo@rateedge.au", "wpo70@icloud.com", _uid_rv]:
+            _db_prev_auto = load_user_config(_try_uid, f"morning_rates_{_yesterday_str}", "AUD")
+            if _db_prev_auto:
+                st.session_state["morning_rates_prev"] = _db_prev_auto
+                _mr_prev = _db_prev_auto
                 break
 
     # Pre-seed ALL widget keys from _mr_today BEFORE rendering
@@ -20822,6 +20854,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                         "N20": "gold_aud",  "N84": "usdjpy",
                         "N95": "sp500",
                         "N108": "efp_3y",   "N109": "efp_10y",
+                        "N111": "aud_fut_3y", "N112": "aud_fut_10y",
                         "V44": "fed_funds",
                         "V47": "usdswap_2y", "V50": "usdswap_10y", "V51": "usdswap_30y",
                         "V67": "sofr_fix",
@@ -20836,13 +20869,19 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                                 _loaded[_fkey] = float(_v)
                         except Exception as _ce:
                             _errors.append(f"{_cell}:{_ce}")
-                    # Preserve RBA cash rate and AUD futures (manual fields)
-                    for _keep in ["rba_cash", "aud_fut_3y", "aud_fut_10y", "usd_2y", "usd_10y", "usd_30y"]:
+                    # Preserve RBA cash (sticky) and AUD futures (manual fields)
+                    _rba_sticky = st.session_state.get("rba_cash_sticky")
+                    if _rba_sticky is not None:
+                        _loaded["rba_cash"] = _rba_sticky
+                    elif "rba_cash" in _mr_today:
+                        _loaded["rba_cash"] = _mr_today["rba_cash"]
+                    for _keep in ["usd_2y", "usd_10y", "usd_30y"]:
                         if _keep in _mr_today:
                             _loaded[_keep] = _mr_today[_keep]
-                    # Clear widget keys so inputs re-render with new values
+                    # Clear widget keys — but NEVER clear rba_cash widget key
                     for _rk, _, _ in _RATE_FIELDS:
-                        st.session_state.pop(f"mr_{_rk}", None)
+                        if _rk != "rba_cash":
+                            st.session_state.pop(f"mr_{_rk}", None)
                     st.session_state["morning_rates_today"] = _loaded
                     # Save to DB
                     if HAS_POSTGRES:
@@ -20856,9 +20895,14 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         if st.button("💾 Save Morning Rates", key="mr_save", type="primary"):
             st.session_state["morning_rates_prev"]  = _mr_today
             st.session_state["morning_rates_today"] = _new_rates
+            # Persist RBA cash sticky separately so it survives config uploads
+            if _new_rates.get("rba_cash"):
+                st.session_state["rba_cash_sticky"] = float(_new_rates["rba_cash"])
             if HAS_POSTGRES:
                 save_user_config(_uid_rv, "morning_rates_today", "AUD", _new_rates)
                 save_user_config(_uid_rv, "morning_rates_prev",  "AUD", _mr_today)
+                if _new_rates.get("rba_cash"):
+                    save_user_config(_uid_rv, "rba_cash_sticky", "AUD", {"value": float(_new_rates["rba_cash"])})
                 # Also write dated snapshot for historical lookup
                 import datetime as _dt_mr
                 _sydney_now = _dt_mr.datetime.now(SYDNEY_TZ)
@@ -20966,8 +21010,15 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 st.caption(f"(Searching as user: `{_uid_rv}`)")
             else:
                 st.caption(f"Found {len(_hist_dates)} snapshot(s) | user: `{_hist_uid_found}`")
+                # Default to last business day — not today
+                _hist_default_idx = 0
+                if _yesterday_str in _hist_dates:
+                    _hist_default_idx = _hist_dates.index(_yesterday_str)
+                elif len(_hist_dates) > 1:
+                    _hist_default_idx = 1  # second most recent if yesterday not saved
                 _sel_date = st.selectbox(
                     "Select date", _hist_dates,
+                    index=_hist_default_idx,
                     format_func=lambda d: d,
                     key="mr_hist_date_sel"
                 )
