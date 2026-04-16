@@ -13351,7 +13351,7 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)") 
                 go.Scatter3d(
                     x=_px, y=_py, z=_pz,
                     mode="markers",
-                    marker=dict(size=4, opacity=0.5,
+                    marker=dict(size=10, opacity=0.7,
                                 color=_pz, colorscale="RdYlGn_r",
                                 cmin=50, cmax=130,
                                 showscale=False),
