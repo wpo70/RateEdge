@@ -14263,16 +14263,6 @@ def _load_swap_history(ccy: str, days: int = 90):
     except Exception:
         return pd.DataFrame()
 
-with st.spinner("Loading historical data..."):
-    _snap_rows  = _load_atm_history(ccy, 180)
-    _swap_df_raw = _load_swap_history(ccy, 180)
-
-if not _snap_rows:
-    st.info("No EOD vol snapshots found. Save snapshots from the Vol Export tab to populate this view.")
-    return
-
-# ── Build vol history DataFrame (cached) ──────────────────────────────────
-
 def _render_realised_delivered_vol():
     """Realised & Delivered Vol sub-tab — 5d/21d/3m windows."""
     import plotly.graph_objects as go
