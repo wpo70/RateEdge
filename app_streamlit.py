@@ -8243,6 +8243,7 @@ def interpolate_basis(basis_df: pd.DataFrame, t: float) -> float:
     return float(np.interp(t, xs, ys))
 
 
+@st.fragment
 def swaptions_tab(vol_mode: str):
     st.subheader(" Swaptions")
 
@@ -9460,6 +9461,7 @@ def swaptions_tab(vol_mode: str):
 
 
 
+@st.fragment
 def caps_floors_tab(vol_mode: str):
     st.subheader("Caps & Floors")
     
@@ -14033,7 +14035,6 @@ def _meetings_in_window(ccy: str, expiry_label: str) -> list:
     return [d for d in _get_cb_meetings(ccy) if today <= d <= end]
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
 @st.cache_data(ttl=3600, show_spinner=False)
 def _compute_realised_vol_db(ccy: str, tenor_y: float, window_days: int = 21) -> Optional[float]:
     """Annualised realised normal vol (bp) from swap_rates history.
@@ -14567,6 +14568,7 @@ def _render_realised_delivered_vol():
             _colour_matrix(_fa_df, fmt="{:.1f}", title=f"Avg Daily Move ({_fw_window}) — bp", low_is_green=False)
 
 
+@st.fragment
 def rv_tab():
     import plotly.graph_objects as go
     st.subheader("📊 Relative Value   —   Swaption & Cap/Floor Trade Ideas")
@@ -19532,6 +19534,7 @@ Use the ρ slider above to stress-test spread vol across the matrix.
         pass
 
 
+@st.fragment
 def sod_report_tab():
     """Start-of-Day Report   —   USD overnight moves → implied AUD vol open."""
     import plotly.graph_objects as go
