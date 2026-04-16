@@ -14218,6 +14218,61 @@ def _compute_fwd_vol_surface_stats(ccy: str) -> dict:
         return {}
 
 
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_atm_history(ccy: str, days: int = 90):
+    """Load last N days of ATM vol snapshots from vol_history."""
+    conn = get_db_connection()
+    if not conn: return []
+    try:
+        cur = conn.cursor()
+        cutoff = (pd.Timestamp.today() - pd.Timedelta(days=days)).date()
+        cur.execute("""
+            SELECT snapshot_date, atm_vols
+            FROM vol_history
+            WHERE (user_id = 'shared' OR user_id = 'wpo@rateedge.au' OR user_id = 'wpo70@icloud.com')
+              AND currency = %s AND snapshot_date >= %s
+            ORDER BY snapshot_date DESC
+        """, (ccy, cutoff))
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+        return [(r[0], r[1]) for r in rows if r[1]]
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_swap_history(ccy: str, days: int = 90):
+    """Load swap_rates for last N days."""
+    conn = get_db_connection()
+    if not conn: return pd.DataFrame()
+    try:
+        cur = conn.cursor()
+        cutoff = (pd.Timestamp.today() - pd.Timedelta(days=days)).date()
+        cur.execute("""
+            SELECT date, tenor, rate FROM swap_rates
+            WHERE currency = %s AND date >= %s
+            ORDER BY date DESC
+        """, (ccy, cutoff))
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+        if not rows: return pd.DataFrame()
+        df = pd.DataFrame(rows, columns=["date","tenor","rate"])
+        df["date"] = pd.to_datetime(df["date"])
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+with st.spinner("Loading historical data..."):
+    _snap_rows  = _load_atm_history(ccy, 180)
+    _swap_df_raw = _load_swap_history(ccy, 180)
+
+if not _snap_rows:
+    st.info("No EOD vol snapshots found. Save snapshots from the Vol Export tab to populate this view.")
+    return
+
+# ── Build vol history DataFrame (cached) ──────────────────────────────────
+
 def _render_realised_delivered_vol():
     """Realised & Delivered Vol sub-tab — 5d/21d/3m windows."""
     import plotly.graph_objects as go
@@ -14241,58 +14296,8 @@ def _render_realised_delivered_vol():
         return
 
     # ── Load vol snapshots ────────────────────────────────────────────────────
-    @st.cache_data(ttl=300, show_spinner=False)
-    def _load_atm_history(ccy: str, days: int = 90):
-        """Load last N days of ATM vol snapshots from vol_history."""
-        conn = get_db_connection()
-        if not conn: return []
-        try:
-            cur = conn.cursor()
-            cutoff = (pd.Timestamp.today() - pd.Timedelta(days=days)).date()
-            cur.execute("""
-                SELECT snapshot_date, atm_vols
-                FROM vol_history
-                WHERE (user_id = 'shared' OR user_id = 'wpo@rateedge.au' OR user_id = 'wpo70@icloud.com')
-                  AND currency = %s AND snapshot_date >= %s
-                ORDER BY snapshot_date DESC
-            """, (ccy, cutoff))
-            rows = cur.fetchall()
-            cur.close(); conn.close()
-            return [(r[0], r[1]) for r in rows if r[1]]
-        except Exception:
-            return []
-
-    @st.cache_data(ttl=300, show_spinner=False)
-    def _load_swap_history(ccy: str, days: int = 90):
-        """Load swap_rates for last N days."""
-        conn = get_db_connection()
-        if not conn: return pd.DataFrame()
-        try:
-            cur = conn.cursor()
-            cutoff = (pd.Timestamp.today() - pd.Timedelta(days=days)).date()
-            cur.execute("""
-                SELECT date, tenor, rate FROM swap_rates
-                WHERE currency = %s AND date >= %s
-                ORDER BY date DESC
-            """, (ccy, cutoff))
-            rows = cur.fetchall()
-            cur.close(); conn.close()
-            if not rows: return pd.DataFrame()
-            df = pd.DataFrame(rows, columns=["date","tenor","rate"])
-            df["date"] = pd.to_datetime(df["date"])
-            return df
-        except Exception:
-            return pd.DataFrame()
-
-    with st.spinner("Loading historical data..."):
-        _snap_rows  = _load_atm_history(ccy, 180)
-        _swap_df_raw = _load_swap_history(ccy, 180)
-
-    if not _snap_rows:
-        st.info("No EOD vol snapshots found. Save snapshots from the Vol Export tab to populate this view.")
-        return
-
-    # ── Build vol history DataFrame (cached) ──────────────────────────────────
+    # _load_atm_history moved to module level
+    # _load_swap_history moved to module level
     @st.cache_data(ttl=300, show_spinner=False)
     def _build_vol_df(snap_rows_key: int, exp_labels: tuple, ten_labels: tuple):
         _vol_records = []
