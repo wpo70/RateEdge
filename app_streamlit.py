@@ -13314,7 +13314,8 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)") 
     if not snapshots:
         return None
 
-    # Build frames — surface + scatter3d overlay for reliable per-point hover
+
+    # Build frames — clean surface, native hover on every grid vertex
     frames = []
     dates = []
     for snap in snapshots:
@@ -13323,45 +13324,27 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)") 
             continue
         lbl = snap["label"] if snap["label"] else snap["date"].strftime("%Y-%m-%d")
         dates.append(lbl)
-        # Flatten grid for scatter3d overlay — one point per cell, reliable hover
-        import numpy as _np
-        _px, _py, _pz, _ptxt = [], [], [], []
+        _text_arr = []
         for ei, el in enumerate(exp_labels):
+            _trow = []
             for ti, tl in enumerate(tenor_labels):
-                _v = z[ei, ti]
-                try:
-                    _fv = float(_v)
-                    if _np.isfinite(_fv):
-                        _px.append(tenor_x[ti])
-                        _py.append(expiry_y[ei])
-                        _pz.append(_fv)
-                        _ptxt.append(f"{el} × {tl}  {_fv:.1f}bp")
-                except (TypeError, ValueError):
-                    pass
+                _trow.append(f"{el} × {tl}  {z[ei,ti]:.1f}bp")
+            _text_arr.append(_trow)
         frames.append(go.Frame(
-            data=[
-                go.Surface(
-                    x=tenor_x, y=expiry_y, z=z.tolist(),
-                    colorscale="RdYlGn_r",
-                    cmin=50, cmax=130,
-                    showscale=True,
-                    colorbar=dict(title="bp", thickness=12, len=0.6),
-                    hoverinfo="skip",
-                ),
-                go.Scatter3d(
-                    x=_px, y=_py, z=_pz,
-                    mode="markers",
-                    marker=dict(size=10, opacity=0.7,
-                                color=_pz, colorscale="RdYlGn_r",
-                                cmin=50, cmax=130,
-                                showscale=False),
-                    text=_ptxt,
-                    hoverinfo="text",
-                    hoverlabel=dict(bgcolor="#1e293b", bordercolor="#FFD700",
-                                   font=dict(color="#FFD700", size=13, family="Arial Black")),
-                    showlegend=False,
-                ),
-            ],
+            data=[go.Surface(
+                x=tenor_x, y=expiry_y, z=z.tolist(),
+                colorscale="RdYlGn_r",
+                cmin=50, cmax=130,
+                showscale=True,
+                colorbar=dict(title="bp", thickness=12, len=0.6),
+                text=_text_arr,
+                hovertemplate="%{text}<extra></extra>",
+                hoverlabel=dict(bgcolor="#1e293b", bordercolor="#FFD700",
+                               font=dict(color="#FFD700", size=13, family="Arial Black")),
+                lighting=dict(ambient=0.7, diffuse=0.8, roughness=0.5,
+                              specular=0.3, fresnel=0.2),
+                lightposition=dict(x=100, y=200, z=0),
+            )],
             name=lbl,
         ))
 
@@ -13400,13 +13383,13 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)") 
         frames=frames,
         layout=go.Layout(
             title=dict(text=title, font=dict(color="#f1f5f9", size=14)),
-            height=720,
-            paper_bgcolor="rgba(15,23,42,0.95)",
-            plot_bgcolor="rgba(15,23,42,0.95)",
-            font=dict(color="#94a3b8", family="Arial", size=11),
+            title=dict(text=title, font=dict(color="#f1f5f9", size=15)),
+            height=900,
+            paper_bgcolor="rgba(10,18,38,1.0)",
+            plot_bgcolor="rgba(10,18,38,1.0)",
             scene=dict(
-                bgcolor="rgba(15,23,42,0.95)",
-                xaxis=dict(
+            scene=dict(
+                bgcolor="rgba(10,18,38,1.0)",
                     title=dict(text="Swap Tenor (Y)", font=dict(color="#c8d8e8", size=12)),
                     tickmode="array", tickvals=[1,2,3,5,7,10,15,20,30],
                     ticktext=["1","2","3","5","7","10","15","20","30"],
