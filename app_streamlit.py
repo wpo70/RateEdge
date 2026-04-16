@@ -6010,8 +6010,6 @@ def vol_config_tab():
                     except Exception as e:
                         st.error(f"Clear failed: {e}")
             st.caption(" Database connected")
-
-        with col_db3:
             if st.button("🔄 Reload Vols from DB", key="reload_vols_btn", type="secondary"):
                 for _ccy in ["AUD","NZD","USD"]:
                     st.session_state.get("vol_data", {}).pop(_ccy, None)
