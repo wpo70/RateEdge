@@ -20917,6 +20917,22 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 _sydney_now = _dt_mr.datetime.now(SYDNEY_TZ)
                 _mr_dated_key = f"morning_rates_{_sydney_now.strftime('%Y-%m-%d')}"
                 save_user_config(_uid_rv, _mr_dated_key, "AUD", _new_rates)
+                # Also write BBSW 3M and 6M to swap_rates for historical RV
+                try:
+                    _mr_date = _sydney_now.strftime("%Y-%m-%d")
+                    _bbsw_conn = get_db_connection()
+                    if _bbsw_conn:
+                        _bbsw_cur = _bbsw_conn.cursor()
+                        for _tenor, _fr, _key in [("3M","3M BBSW","bbsw_3m"),("6M","6M BBSW","bbsw_6m")]:
+                            _val = _new_rates.get(_key)
+                            if _val:
+                                _bbsw_cur.execute("""
+                                    INSERT INTO swap_rates (date, currency, tenor, floating_rate, rate)
+                                    VALUES (%s, 'AUD', %s, %s, %s)
+                                    ON CONFLICT (date, currency, tenor, floating_rate) DO UPDATE SET rate = EXCLUDED.rate
+                                """, (_mr_date, _tenor, _fr, float(_val)))
+                        _bbsw_conn.commit(); _bbsw_cur.close(); _bbsw_conn.close()
+                except Exception: pass
             st.success("✅ Morning rates saved")
             st.rerun()
 
