@@ -20675,6 +20675,15 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     for _t in [2.0,5.0,10.0]:
                         _snap["curve"][f"{int(_t)}Y"] = round(float(np.interp(_t,_cx,_cy)),4)
                 except Exception: pass
+                # Also capture par swap rates from morning rates for overnight Δ chart
+                _mr_now = st.session_state.get("morning_rates_today", {})
+                _swap_map = {
+                    "swap_2y": "2Y", "swap_3y": "3Y", "swap_5y": "5Y",
+                    "swap_7y": "7Y", "swap_10y": "10Y", "swap_20y": "20Y"
+                }
+                for _mk, _sk in _swap_map.items():
+                    _sv = _mr_now.get(_mk)
+                    if _sv: _snap["curve"][_sk] = round(float(_sv), 4)
                 # Rotate: curr → prev
                 _old_curr = st.session_state.get("rv_daily_snap_curr")
                 if _old_curr: st.session_state["rv_daily_snap_prev"] = _old_curr
