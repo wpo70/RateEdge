@@ -20759,7 +20759,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         import datetime as _dt_mr
         _syd = _dt_mr.datetime.now(SYDNEY_TZ).date()
         _d = _syd - _dt_mr.timedelta(days=1)
-        while not is_business_day(_d):
+        while not is_au_bd(_d):
             _d -= _dt_mr.timedelta(days=1)
         return str(_d)
     _yesterday_str = _last_bday_aest()
@@ -20855,6 +20855,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                         "N95": "sp500",
                         "N108": "efp_3y",   "N109": "efp_10y",
                         "N111": "aud_fut_3y", "N112": "aud_fut_10y",
+                        "V21": "usd_2y",  "V26": "usd_10y", "V27": "usd_30y",
                         "V44": "fed_funds",
                         "V47": "usdswap_2y", "V50": "usdswap_10y", "V51": "usdswap_30y",
                         "V67": "sofr_fix",
@@ -20875,9 +20876,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                         _loaded["rba_cash"] = _rba_sticky
                     elif "rba_cash" in _mr_today:
                         _loaded["rba_cash"] = _mr_today["rba_cash"]
-                    for _keep in ["usd_2y", "usd_10y", "usd_30y"]:
-                        if _keep in _mr_today:
-                            _loaded[_keep] = _mr_today[_keep]
+                    # UST yields now auto-loaded from V21/V26/V27
                     # Clear widget keys — but NEVER clear rba_cash widget key
                     for _rk, _, _ in _RATE_FIELDS:
                         if _rk != "rba_cash":
