@@ -13383,13 +13383,12 @@ def _make_vol_surface_fig(snapshots: list, title: str = "ATM Vol Surface (bp)") 
         frames=frames,
         layout=go.Layout(
             title=dict(text=title, font=dict(color="#f1f5f9", size=14)),
-            title=dict(text=title, font=dict(color="#f1f5f9", size=15)),
             height=900,
             paper_bgcolor="rgba(10,18,38,1.0)",
             plot_bgcolor="rgba(10,18,38,1.0)",
             scene=dict(
-            scene=dict(
                 bgcolor="rgba(10,18,38,1.0)",
+                xaxis=dict(
                     title=dict(text="Swap Tenor (Y)", font=dict(color="#c8d8e8", size=12)),
                     tickmode="array", tickvals=[1,2,3,5,7,10,15,20,30],
                     ticktext=["1","2","3","5","7","10","15","20","30"],
