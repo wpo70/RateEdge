@@ -22277,6 +22277,7 @@ h2{{color:#1e3a5f;margin-top:20px}}
                 st.rerun()
 
 
+@st.fragment
 def vol_export_tab():
     """Vol Export tab - Export and email vol surfaces"""
     st.subheader("📂 Vol Surface Export & Distribution")
