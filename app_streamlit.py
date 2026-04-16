@@ -6034,7 +6034,7 @@ def vol_config_tab():
     upload = st.file_uploader(
         "Upload RateEdge_Config.xlsx",
         type=["xlsx"],
-        key="cfg_upload",
+        key="cfg_upload_v2",
         help="Excel file with sheets: ATM_Vols_[CCY], SABR_*_[CCY], Curves_[CCY]"
     )
     
