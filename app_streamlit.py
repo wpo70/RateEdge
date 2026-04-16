@@ -6029,19 +6029,14 @@ def vol_config_tab():
     
     st.markdown("---")
     
-    # File upload — cache in session state so reruns don't lose the file
+    # File upload
     st.markdown("#### Upload Config File")
-    _uploaded = st.file_uploader(
+    upload = st.file_uploader(
         "Upload RateEdge_Config.xlsx",
         type=["xlsx"],
-        key="cfg_upload_v2",
+        key="cfg_upload_v3",
         help="Excel file with sheets: ATM_Vols_[CCY], SABR_*_[CCY], Curves_[CCY]"
     )
-    if _uploaded is not None:
-        st.session_state["_cfg_upload_cache"] = _uploaded
-    upload = st.session_state.get("_cfg_upload_cache")
-    if upload is not None and _uploaded is None:
-        st.caption(f"📎 Using cached: {getattr(upload, 'name', 'config file')}")
     
     if upload is not None:
         st.markdown("#### Select what to commit:")
