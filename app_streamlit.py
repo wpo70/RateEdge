@@ -20870,12 +20870,13 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                                 _loaded[_fkey] = float(_v)
                         except Exception as _ce:
                             _errors.append(f"{_cell}:{_ce}")
-                    # Preserve RBA cash (sticky) and AUD futures (manual fields)
-                    _rba_sticky = st.session_state.get("rba_cash_sticky")
-                    if _rba_sticky is not None:
-                        _loaded["rba_cash"] = _rba_sticky
-                    elif "rba_cash" in _mr_today:
-                        _loaded["rba_cash"] = _mr_today["rba_cash"]
+                    # rba_cash: never overwritten — take live widget value,
+                    # fall back to today dict, then to 4.10 default
+                    _loaded["rba_cash"] = (
+                        st.session_state.get("mr_rba_cash")
+                        or _mr_today.get("rba_cash")
+                        or 4.10
+                    )
                     # UST yields now auto-loaded from V21/V26/V27
                     # Clear widget keys — but NEVER clear rba_cash widget key
                     for _rk, _, _ in _RATE_FIELDS:
