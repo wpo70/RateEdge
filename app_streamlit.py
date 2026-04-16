@@ -22040,24 +22040,24 @@ h2{{color:#1e3a5f;margin-top:20px}}
                         import io as _cio
                         from reportlab.platypus import Image as _RLImage
                         _v_df2 = pd.DataFrame(_pdf_chg_rows)
-                        _fig_v2, _ax_v = _plt.subplots(figsize=(9, 2.8))
+                        _fig_v2, _ax_v = _plt.subplots(figsize=(14, 3.5))
                         _colors_v = ["#22c55e" if v>=0 else "#ef4444" for v in _v_df2["Chg"]]
                         _bars = _ax_v.bar(_v_df2["Tenor"], _v_df2["Chg"], color=_colors_v)
                         for _bar, _val in zip(_bars, _v_df2["Chg"]):
                             _ax_v.text(_bar.get_x()+_bar.get_width()/2,
-                                       _bar.get_height() + (0.05 if _val>=0 else -0.12),
-                                       f"{_val:+.1f}", ha="center", va="bottom", fontsize=7)
+                                       _bar.get_height() + (0.03 if _val>=0 else -0.10),
+                                       f"{_val:+.1f}", ha="center", va="bottom", fontsize=6)
                         _ax_v.axhline(0, color="#94a3b8", linewidth=0.5)
                         _ax_v.set_title("Overnight ATM Vol Δ (bp)", fontsize=9, pad=4)
-                        _ax_v.tick_params(axis="x", labelsize=7, rotation=30)
+                        _ax_v.tick_params(axis="x", labelsize=6, rotation=45)
                         _ax_v.tick_params(axis="y", labelsize=7)
                         _ax_v.set_facecolor("#f8fafc"); _fig_v2.patch.set_facecolor("#ffffff")
-                        _plt.tight_layout()
+                        _plt.tight_layout(pad=1.5)
                         _img_buf_v = _cio.BytesIO()
                         _fig_v2.savefig(_img_buf_v, format="png", dpi=150, bbox_inches="tight")
                         _plt.close(_fig_v2)
                         _img_buf_v.seek(0)
-                        _story.append(_RLImage(_img_buf_v, width=17*cm, height=6*cm))
+                        _story.append(_RLImage(_img_buf_v, width=17*cm, height=7*cm))
                     except Exception: pass
 
                 # Overnight rate changes + chart
@@ -22082,7 +22082,8 @@ h2{{color:#1e3a5f;margin-top:20px}}
                         _ax_r.tick_params(axis="x", labelsize=7, rotation=30)
                         _ax_r.tick_params(axis="y", labelsize=7)
                         _ax_r.set_facecolor("#f8fafc"); _fig_r2.patch.set_facecolor("#ffffff")
-                        _plt.tight_layout()
+                        _ax_r.margins(x=0.05)
+                        _plt.tight_layout(pad=1.5)
                         _img_buf_r = _cio.BytesIO()
                         _fig_r2.savefig(_img_buf_r, format="png", dpi=150, bbox_inches="tight")
                         _plt.close(_fig_r2)
