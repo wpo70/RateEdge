@@ -14263,6 +14263,75 @@ def _load_swap_history(ccy: str, days: int = 90):
     except Exception:
         return pd.DataFrame()
 
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _build_vol_df(snap_rows_key: int, exp_labels: tuple, ten_labels: tuple, snap_rows_data: tuple = ()):
+    _vol_records = []
+    for _snap_date, _atm_vols in snap_rows_data:
+        if not isinstance(_atm_vols, dict): continue
+        _rec = {"date": pd.Timestamp(_snap_date)}
+        if "values" in _atm_vols:
+            _rows_list = _atm_vols["values"]
+            if not isinstance(_rows_list, list): continue
+            for _vrow in _rows_list:
+                _exp = str(_vrow.get("Expiry", "")).lower().strip()
+                if _exp not in exp_labels: continue
+                for _ten in ten_labels:
+                    _v = _vrow.get(_ten) or _vrow.get(_ten.lower())
+                    if _v is not None:
+                        try: _rec[f"{_exp}×{_ten}"] = float(_v)
+                        except: pass
+        else:
+            for _exp in exp_labels:
+                _exp_data = _atm_vols.get(_exp) or _atm_vols.get(_exp.upper())
+                if not _exp_data: continue
+                for _ten in ten_labels:
+                    _v = _exp_data.get(_ten) or _exp_data.get(_ten.lower())
+                    if _v is not None:
+                        try: _rec[f"{_exp}×{_ten}"] = float(_v)
+                        except: pass
+        _vol_records.append(_rec)
+    if not _vol_records: return pd.DataFrame()
+    _df = pd.DataFrame(_vol_records).sort_values("date").set_index("date")
+    return _df.dropna(axis=1, how="all")
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _build_fwd_df(swap_raw_hash: int, exp_labels: tuple, exp_yrs: tuple, ten_labels: tuple, ten_yrs: tuple, swap_df_json: str = ""):
+    import io as _sio; _swap_df_raw = pd.read_json(_sio.StringIO(swap_df_json)) if swap_df_json else pd.DataFrame()
+    if _swap_df_raw.empty: return pd.DataFrame()
+    import re as _re2
+    def _tenor_to_y(t):
+        m = _re2.match(r"([\d.]+)(Y|M)", str(t).strip().upper())
+        if not m: return None
+        v, u = float(m.group(1)), m.group(2)
+        return v if u == "Y" else v/12
+    _sdr = _swap_df_raw.copy()
+    _sdr["mat_y"] = _sdr["tenor"].apply(_tenor_to_y)
+    _sdr = _sdr.dropna(subset=["mat_y"])
+    _par_wide = _sdr.pivot_table(index="date", columns="mat_y", values="rate", aggfunc="last").sort_index()
+    _xs_base = _par_wide.columns.to_numpy(dtype=float)
+    _fwd_records = {}
+    for _exp_lbl, _exp_y in zip(exp_labels, exp_yrs):
+        for _ten_lbl, _ten_y in zip(ten_labels, ten_yrs):
+            _end_y = _exp_y + _ten_y
+            _col = f"{_exp_lbl}×{_ten_lbl}"
+            _fwd_series = []
+            for _dt, _row in _par_wide.iterrows():
+                try:
+                    _ys = _row.values.astype(float)
+                    _mask = ~pd.isna(_ys)
+                    if _mask.sum() < 3: continue
+                    _xs = _xs_base[_mask]; _ys = _ys[_mask]
+                    _p_exp = float(np.interp(_exp_y, _xs, _ys))
+                    _p_end = float(np.interp(_end_y, _xs, _ys))
+                    _fwd_series.append({"date": _dt, "fwd": (_p_end*_end_y - _p_exp*_exp_y)/_ten_y if _ten_y>0 else _p_end})
+                except: pass
+            if _fwd_series:
+                _fwd_records[_col] = pd.DataFrame(_fwd_series).set_index("date")["fwd"]
+    return pd.DataFrame(_fwd_records).sort_index() if _fwd_records else pd.DataFrame()
+
+
 def _render_realised_delivered_vol():
     """Realised & Delivered Vol sub-tab — 5d/21d/3m windows."""
     import plotly.graph_objects as go
@@ -14293,72 +14362,6 @@ def _render_realised_delivered_vol():
     if not _snap_rows:
         st.info("No EOD vol snapshots found. Save snapshots from the Vol Export tab to populate this view.")
         return
-
-    @st.cache_data(ttl=300, show_spinner=False)
-    def _build_vol_df(snap_rows_key: int, exp_labels: tuple, ten_labels: tuple, snap_rows_data: tuple = ()):
-        _vol_records = []
-        for _snap_date, _atm_vols in snap_rows_data:
-            if not isinstance(_atm_vols, dict): continue
-            _rec = {"date": pd.Timestamp(_snap_date)}
-            if "values" in _atm_vols:
-                _rows_list = _atm_vols["values"]
-                if not isinstance(_rows_list, list): continue
-                for _vrow in _rows_list:
-                    _exp = str(_vrow.get("Expiry", "")).lower().strip()
-                    if _exp not in exp_labels: continue
-                    for _ten in ten_labels:
-                        _v = _vrow.get(_ten) or _vrow.get(_ten.lower())
-                        if _v is not None:
-                            try: _rec[f"{_exp}×{_ten}"] = float(_v)
-                            except: pass
-            else:
-                for _exp in exp_labels:
-                    _exp_data = _atm_vols.get(_exp) or _atm_vols.get(_exp.upper())
-                    if not _exp_data: continue
-                    for _ten in ten_labels:
-                        _v = _exp_data.get(_ten) or _exp_data.get(_ten.lower())
-                        if _v is not None:
-                            try: _rec[f"{_exp}×{_ten}"] = float(_v)
-                            except: pass
-            _vol_records.append(_rec)
-        if not _vol_records: return pd.DataFrame()
-        _df = pd.DataFrame(_vol_records).sort_values("date").set_index("date")
-        return _df.dropna(axis=1, how="all")
-
-    @st.cache_data(ttl=300, show_spinner=False)
-    def _build_fwd_df(swap_raw_hash: int, exp_labels: tuple, exp_yrs: tuple, ten_labels: tuple, ten_yrs: tuple, swap_df_json: str = ""):
-        import io as _sio; _swap_df_raw = pd.read_json(_sio.StringIO(swap_df_json)) if swap_df_json else pd.DataFrame()
-        if _swap_df_raw.empty: return pd.DataFrame()
-        import re as _re2
-        def _tenor_to_y(t):
-            m = _re2.match(r"([\d.]+)(Y|M)", str(t).strip().upper())
-            if not m: return None
-            v, u = float(m.group(1)), m.group(2)
-            return v if u == "Y" else v/12
-        _sdr = _swap_df_raw.copy()
-        _sdr["mat_y"] = _sdr["tenor"].apply(_tenor_to_y)
-        _sdr = _sdr.dropna(subset=["mat_y"])
-        _par_wide = _sdr.pivot_table(index="date", columns="mat_y", values="rate", aggfunc="last").sort_index()
-        _xs_base = _par_wide.columns.to_numpy(dtype=float)
-        _fwd_records = {}
-        for _exp_lbl, _exp_y in zip(exp_labels, exp_yrs):
-            for _ten_lbl, _ten_y in zip(ten_labels, ten_yrs):
-                _end_y = _exp_y + _ten_y
-                _col = f"{_exp_lbl}×{_ten_lbl}"
-                _fwd_series = []
-                for _dt, _row in _par_wide.iterrows():
-                    try:
-                        _ys = _row.values.astype(float)
-                        _mask = ~pd.isna(_ys)
-                        if _mask.sum() < 3: continue
-                        _xs = _xs_base[_mask]; _ys = _ys[_mask]
-                        _p_exp = float(np.interp(_exp_y, _xs, _ys))
-                        _p_end = float(np.interp(_end_y, _xs, _ys))
-                        _fwd_series.append({"date": _dt, "fwd": (_p_end*_end_y - _p_exp*_exp_y)/_ten_y if _ten_y>0 else _p_end})
-                    except: pass
-                if _fwd_series:
-                    _fwd_records[_col] = pd.DataFrame(_fwd_series).set_index("date")["fwd"]
-        return pd.DataFrame(_fwd_records).sort_index() if _fwd_records else pd.DataFrame()
 
     _vol_df = _build_vol_df(len(_snap_rows), tuple(_EXP_LABELS), tuple(_TEN_LABELS), tuple(_snap_rows))
     if _vol_df.empty:
