@@ -22503,21 +22503,18 @@ RateEdge Options Platform""",
         _ccys_str = "/".join(export_currencies) if export_currencies else "AUD"
 
         _sc1, _sc2, _sc3 = st.columns(3)
-        _snap_label = None
         with _sc1:
             if st.button(f"🌙 EOD  {_date_str}", key="snap_eod", type="primary", use_container_width=True,
                          help=f"Label: {_ccys_str} EOD {_ts_str}"):
-                _snap_label = f"{_ccys_str} EOD {_ts_str}"
+                _do_save_snap(f"{_ccys_str} EOD {_ts_str}")
         with _sc2:
-            if st.button(f"🌅 SOD  {_date_str}", key="snap_sod", type="secondary", use_container_width=True,
+            if st.button(f"🌅 SOD  {_date_str}", key="snap_sod", type="primary", use_container_width=True,
                          help=f"Label: {_ccys_str} SOD {_ts_str}"):
-                _snap_label = f"{_ccys_str} SOD {_ts_str}"
+                _do_save_snap(f"{_ccys_str} SOD {_ts_str}")
         with _sc3:
-            if st.button(f"⏱ Intraday  {_syd_now.strftime('%H:%M')}", key="snap_intraday", type="secondary", use_container_width=True,
+            if st.button(f"⏱ Intraday  {_syd_now.strftime('%H:%M')}", key="snap_intraday", type="primary", use_container_width=True,
                          help=f"Label: {_ccys_str} {_ts_str}"):
-                _snap_label = f"{_ccys_str} {_ts_str}"
-        if _snap_label:
-            _do_save_snap(_snap_label)
+                _do_save_snap(f"{_ccys_str} {_ts_str}")
 
         # Quick tips
         st.markdown(f"""
