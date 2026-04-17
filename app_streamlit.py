@@ -7030,6 +7030,179 @@ def curves_tab():
             st.rerun()
 
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # USD CURVES — SOFR OIS / FF OIS / FF-SOFR BASIS
+    # ══════════════════════════════════════════════════════════════════════════
+    if ccy == "USD":
+        import plotly.graph_objects as go
+        _sofr_curve  = st.session_state.get("config_curves", {}).get("USD")
+        _ff_ois      = st.session_state.get("config_basis", {}).get("USD", {}).get("fedfunds_ois")
+        _sofr_ff_bas = st.session_state.get("config_basis", {}).get("USD", {}).get("sofr_ff_basis")
+
+        if _sofr_curve is None:
+            st.info("No USD curves loaded. Go to IRS / Vol Upload tab and commit your config file.")
+        else:
+            # ── USD Curve Chart ──────────────────────────────────────────────
+            _usd_fig = go.Figure()
+
+            # SOFR swap curve
+            if _sofr_curve is not None and not _sofr_curve.empty:
+                _usd_fig.add_trace(go.Scatter(
+                    x=_sofr_curve["MaturityY"], y=_sofr_curve["ZeroRatePct"],
+                    mode="lines+markers", name="SOFR Swap",
+                    line=dict(color="#38bdf8", width=2),
+                    marker=dict(size=5)
+                ))
+
+            # FF OIS curve
+            if _ff_ois is not None and not _ff_ois.empty:
+                _usd_fig.add_trace(go.Scatter(
+                    x=_ff_ois["MaturityY"], y=_ff_ois["ZeroRatePct"],
+                    mode="lines+markers", name="FF OIS",
+                    line=dict(color="#f59e0b", width=2, dash="dash"),
+                    marker=dict(size=5)
+                ))
+
+            _usd_fig.update_layout(
+                title="USD Rate Curves (%)", height=320, margin=dict(l=40,r=20,t=40,b=40),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
+                font=dict(color="#94a3b8", size=11),
+                xaxis=dict(title="Maturity (Y)", gridcolor="#1e293b"),
+                yaxis=dict(title="Rate (%)", gridcolor="#1e293b"),
+                legend=dict(bgcolor="rgba(0,0,0,0)"),
+                hovermode="x unified"
+            )
+            st.plotly_chart(_usd_fig, use_container_width=True)
+
+            # SOFR-FF Basis chart (bp, separate axis)
+            if _sofr_ff_bas is not None and not _sofr_ff_bas.empty:
+                _bas_fig = go.Figure()
+                _bas_fig.add_trace(go.Bar(
+                    x=_sofr_ff_bas["MaturityY"], y=_sofr_ff_bas["BasisBp"],
+                    name="SOFR-FF Basis",
+                    marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _sofr_ff_bas["BasisBp"]]
+                ))
+                _bas_fig.update_layout(
+                    title="SOFR / FF Basis (bp)", height=220, margin=dict(l=40,r=20,t=40,b=40),
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
+                    font=dict(color="#94a3b8", size=11),
+                    xaxis=dict(title="Maturity (Y)", gridcolor="#1e293b"),
+                    yaxis=dict(title="Basis (bp)", gridcolor="#1e293b"),
+                )
+                st.plotly_chart(_bas_fig, use_container_width=True)
+
+            st.markdown("---")
+
+            # ── USD Forward Matrix ───────────────────────────────────────────
+            if "usd_fwd_matrix" not in st.session_state: st.session_state["usd_fwd_matrix"] = {}
+            if "usd_fwd_section_open" not in st.session_state: st.session_state["usd_fwd_section_open"] = True
+
+            _ufl = "▼ Hide USD Forward Matrix" if st.session_state["usd_fwd_section_open"] else "▶ Show USD Forward Matrix"
+            if st.button(_ufl, key="usd_fwd_toggle"):
+                st.session_state["usd_fwd_section_open"] = not st.session_state["usd_fwd_section_open"]
+
+            if st.session_state["usd_fwd_section_open"]:
+                _usd_fwd_cols = st.columns([2, 2, 2])
+                with _usd_fwd_cols[0]:
+                    _usd_fwd_mode = st.radio(
+                        "Curve", ["SOFR OIS", "FF OIS", "SOFR-FF Basis"],
+                        horizontal=True, key="usd_fwd_mode"
+                    )
+                with _usd_fwd_cols[1]:
+                    _gen_usd_fwd = st.button("▶ Generate USD Forward Matrix", key="gen_usd_fwd", type="primary")
+                with _usd_fwd_cols[2]:
+                    _has_usd_fwd = "SOFR OIS" in st.session_state.get("usd_fwd_matrix", {})
+                    st.download_button("⬇ Download",
+                        data=st.session_state["usd_fwd_matrix"].get(_usd_fwd_mode, pd.DataFrame()).to_csv() if _has_usd_fwd else "",
+                        file_name=f"USD_fwd_{_usd_fwd_mode.replace(' ','_')}.csv",
+                        key="dl_usd_fwd", use_container_width=True, disabled=not _has_usd_fwd)
+
+                if _gen_usd_fwd:
+                    st.session_state["_gen_usd_fwd_requested"] = True
+
+                if st.session_state.get("_gen_usd_fwd_requested"):
+                    st.session_state.pop("_gen_usd_fwd_requested", None)
+
+                    # Standard USD expiries and tenors
+                    _USD_EXPIRIES = [1/12, 2/12, 3/12, 6/12, 9/12, 1, 1.5, 2, 3, 4, 5, 7, 10, 15, 20, 30]
+                    _USD_TENORS   = [1, 2, 3, 4, 5, 7, 10, 12, 15, 20, 25, 30]
+                    _EXP_LABELS   = ["1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","7y","10y","15y","20y","30y"]
+                    _TEN_LABELS   = ["1Y","2Y","3Y","4Y","5Y","7Y","10Y","12Y","15Y","20Y","25Y","30Y"]
+
+                    def _interp_rate(df_curve, maturity, col="ZeroRatePct"):
+                        """Linear interpolation from a zero curve DataFrame."""
+                        xs = df_curve["MaturityY"].values
+                        ys = df_curve[col].values
+                        return float(np.interp(maturity, xs, ys))
+
+                    def _usd_fwd_rate(df_curve, exp, ten, col="ZeroRatePct"):
+                        """Forward rate from zero curve: (z2*t2 - z1*t1) / tenor."""
+                        if df_curve is None or df_curve.empty: return None
+                        t1, t2 = exp, exp + ten
+                        z1 = _interp_rate(df_curve, t1, col) / 100
+                        z2 = _interp_rate(df_curve, t2, col) / 100
+                        return round(((z2 * t2 - z1 * t1) / ten) * 100, 4)
+
+                    with st.spinner("Generating USD forward matrices..."):
+                        # SOFR forward matrix
+                        _sofr_rows = {}
+                        for ei, exp in enumerate(_USD_EXPIRIES):
+                            _row = {}
+                            for ti, ten in enumerate(_USD_TENORS):
+                                _row[_TEN_LABELS[ti]] = _usd_fwd_rate(_sofr_curve, exp, ten)
+                            _sofr_rows[_EXP_LABELS[ei]] = _row
+                        _sofr_df = pd.DataFrame(_sofr_rows).T
+                        _sofr_df.index.name = "Expiry"
+                        _sofr_df = _sofr_df.reset_index()
+
+                        # FF OIS forward matrix
+                        _ff_rows = {}
+                        for ei, exp in enumerate(_USD_EXPIRIES):
+                            _row = {}
+                            for ti, ten in enumerate(_USD_TENORS):
+                                _row[_TEN_LABELS[ti]] = _usd_fwd_rate(_ff_ois, exp, ten) if _ff_ois is not None else None
+                            _ff_rows[_EXP_LABELS[ei]] = _row
+                        _ff_df = pd.DataFrame(_ff_rows).T
+                        _ff_df.index.name = "Expiry"
+                        _ff_df = _ff_df.reset_index()
+
+                        # SOFR-FF Basis forward matrix (bp, interpolated directly)
+                        _bas_rows = {}
+                        for ei, exp in enumerate(_USD_EXPIRIES):
+                            _row = {}
+                            for ti, ten in enumerate(_USD_TENORS):
+                                if _sofr_ff_bas is not None and not _sofr_ff_bas.empty:
+                                    _mid = float(np.interp(exp + ten/2,
+                                                           _sofr_ff_bas["MaturityY"].values,
+                                                           _sofr_ff_bas["BasisBp"].values))
+                                    _row[_TEN_LABELS[ti]] = round(_mid, 2)
+                                else:
+                                    _row[_TEN_LABELS[ti]] = None
+                            _bas_rows[_EXP_LABELS[ei]] = _row
+                        _bas_df = pd.DataFrame(_bas_rows).T
+                        _bas_df.index.name = "Expiry"
+                        _bas_df = _bas_df.reset_index()
+
+                        st.session_state["usd_fwd_matrix"]["SOFR OIS"]       = _sofr_df
+                        st.session_state["usd_fwd_matrix"]["FF OIS"]          = _ff_df
+                        st.session_state["usd_fwd_matrix"]["SOFR-FF Basis"]   = _bas_df
+
+                # Display selected matrix
+                _disp_key = _usd_fwd_mode
+                _disp_df  = st.session_state.get("usd_fwd_matrix", {}).get(_disp_key)
+                if _disp_df is not None and not _disp_df.empty:
+                    _num_cols = [c for c in _disp_df.columns if c != "Expiry"]
+                    _fmt_dict = {c: "{:.4f}" for c in _num_cols}
+                    st.dataframe(
+                        _disp_df.style.format(_fmt_dict).background_gradient(
+                            cmap="RdYlGn_r" if _disp_key == "SOFR-FF Basis" else "RdYlGn",
+                            subset=_num_cols),
+                        use_container_width=True, hide_index=True
+                    )
+                else:
+                    st.info("Click **▶ Generate USD Forward Matrix** to compute.")
+
+
     st.markdown("---")
 
     # ── ATM Vol / Forward Premium / Vega ──────────────────────────────────────
