@@ -5866,7 +5866,6 @@ def _fmt_premium(v) -> str:
     return f"{v:,.0f}"
 
 
-@st.fragment
 def vol_config_tab():
     st.subheader(" Vol / SABR Config & Upload")
     
