@@ -21025,22 +21025,30 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 if _hconn:
                     _hcur = _hconn.cursor()
                     # Try current user_id and common fallbacks
-                    _candidate_uids = list({_uid_rv, st.session_state.get("username",""), "default", "wpo@rateedge.au", "wpo70@icloud.com"} - {""})
-                    for _cuid in _candidate_uids:
+                    # Super admin sees ALL morning rates across all users
+                    if is_super_admin():
                         _hcur.execute("""
-                            SELECT config_type, updated_at
+                            SELECT DISTINCT config_type
+                            FROM user_configs
+                            WHERE config_type ~ '^morning_rates_[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+                              AND currency = 'AUD'
+                            ORDER BY config_type DESC
+                            LIMIT 90
+                        """)
+                    else:
+                        _hcur.execute("""
+                            SELECT DISTINCT config_type
                             FROM user_configs
                             WHERE user_id = %s
                               AND config_type ~ '^morning_rates_[0-9]{4}-[0-9]{2}-[0-9]{2}$'
                               AND currency = 'AUD'
                             ORDER BY config_type DESC
                             LIMIT 90
-                        """, (_cuid,))
-                        _hist_rows = _hcur.fetchall()
-                        if _hist_rows:
-                            _hist_dates = [r[0].replace("morning_rates_", "") for r in _hist_rows]
-                            _hist_uid_found = _cuid
-                            break
+                        """, (_uid_rv,))
+                    _hist_rows = _hcur.fetchall()
+                    if _hist_rows:
+                        _hist_dates = [r[0].replace("morning_rates_", "") for r in _hist_rows]
+                        _hist_uid_found = "all"
                     _hcur.close(); _hconn.close()
             except Exception as _he:
                 st.caption(f"Could not load history: {_he}")
@@ -21064,7 +21072,10 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 )
                 if _sel_date:
                     _hist_key = f"morning_rates_{_sel_date}"
-                    _hist_data = load_user_config(_hist_uid_found or _uid_rv, _hist_key, "AUD")
+                    _hist_data = None
+                    for _try_uid in ["wpo@rateedge.au", "wpo70@icloud.com", _uid_rv]:
+                        _hist_data = load_user_config(_try_uid, _hist_key, "AUD")
+                        if _hist_data: break
                     if _hist_data:
                         # ── Set as Prev button — restores lost baseline ──────────
                         _col_btn1, _col_btn2 = st.columns([2,5])
