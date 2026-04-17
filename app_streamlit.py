@@ -5866,6 +5866,7 @@ def _fmt_premium(v) -> str:
     return f"{v:,.0f}"
 
 
+@st.fragment
 def vol_config_tab():
     st.subheader(" Vol / SABR Config & Upload")
     
@@ -13594,6 +13595,7 @@ def _make_overlay_fig(snap_a: dict, snap_b: dict):
     return fig
 
 
+@st.fragment
 def backtesting_tab():
     st.subheader("📊 Historical VOL Analysis")
 
@@ -17814,6 +17816,7 @@ def bond_option_tab():
 
 
 
+@st.fragment
 def portfolio_tab():
     st.subheader("Trade Blotter  —  Swaptions + Caps & Floors")
 
@@ -18810,7 +18813,7 @@ def main():
                                 if _trow and _trow[0]:
                                     _tprefs = _trow[0] if isinstance(_trow[0], dict) else json.loads(_trow[0])
                                     _known_tabs = {"tab_show_home","tab_show_sdr","tab_show_upload",
-                                        "tab_show_curves","tab_show_fwd","tab_show_hva",
+                                        "tab_show_curves","tab_show_fwd",
                                         "tab_show_swaptions","tab_show_caps","tab_show_blotter",
                                         "tab_show_rv","tab_show_exotics","tab_show_sod",
                                         "tab_show_voleditor","tab_show_volexport",
@@ -18871,7 +18874,6 @@ def main():
                 ("📋 IRS / Vol Upload", "tab_show_upload"),
                 ("📏 Curves", "tab_show_curves"),
                 ("📈 FWD IRS Analysis", "tab_show_fwd"),
-                ("📊 Historical VOL Analysis", "tab_show_hva"),
                 ("📊 Swaptions", "tab_show_swaptions"),
                 ("🔔 Caps & Floors", "tab_show_caps"),
                 ("💼 Trade Blotter", "tab_show_blotter"),
@@ -18920,7 +18922,7 @@ def main():
                 # Persist tab visibility prefs
                 try:
                     _tab_keys = ["tab_show_home","tab_show_upload","tab_show_curves","tab_show_fwd",
-                                 "tab_show_hva","tab_show_swaptions","tab_show_caps","tab_show_blotter",
+                                 "tab_show_swaptions","tab_show_caps","tab_show_blotter",
                                  "tab_show_rv","tab_show_exotics","tab_show_sod","tab_show_voleditor",
                                  "tab_show_volexport","tab_show_midcurve","tab_show_multiccy","tab_show_ticket"]
                     _tab_prefs = {k: st.session_state.get(k, True) for k in _tab_keys}
@@ -19158,7 +19160,6 @@ def main():
         ("📋 IRS / Vol Upload",          "tab_show_upload",    vol_config_tab),
         ("📏 Curves",                    "tab_show_curves",    curves_tab),
         ("📈 FWD IRS Analysis",          "tab_show_fwd",       fwd_analysis_tab),
-        ("📊 Historical VOL Analysis",   "tab_show_hva",       backtesting_tab),
         ("📊 Swaptions",                 "tab_show_swaptions", lambda: swaptions_tab(vol_mode)),
         ("🔔 Caps & Floors",             "tab_show_caps",      lambda: caps_floors_tab(vol_mode)),
         ("💼 Trade Blotter",             "tab_show_blotter",   portfolio_tab),
