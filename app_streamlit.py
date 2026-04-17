@@ -6014,22 +6014,31 @@ def vol_config_tab():
     # File upload
     st.markdown("#### Upload Config File")
     import io as _upload_io
+
     _upload_raw = st.file_uploader(
         "Upload RateEdge_Config.xlsx",
         type=["xlsx"],
         key="cfg_upload_v7",
         help="Excel file with sheets: ATM_Vols_[CCY], SABR_*_[CCY], Curves_[CCY]"
     )
+
+    # Always try to read from widget first — Streamlit file_uploader persists
+    # the uploaded file across reruns until the user removes it
     if _upload_raw is not None:
-        _upload_raw.seek(0)
-        _raw_bytes = _upload_raw.read()
-        if _raw_bytes:
-            st.session_state["_vol_cfg_bytes"] = _raw_bytes
-            st.session_state["_vol_cfg_name"] = _upload_raw.name
-        upload = _upload_io.BytesIO(st.session_state["_vol_cfg_bytes"]) if st.session_state.get("_vol_cfg_bytes") else None
-    elif st.session_state.get("_vol_cfg_bytes"):
+        try:
+            _upload_raw.seek(0)
+            _raw_bytes = _upload_raw.read()
+            if len(_raw_bytes) > 0:
+                st.session_state["_vol_cfg_bytes"] = _raw_bytes
+                st.session_state["_vol_cfg_name"] = _upload_raw.name
+        except Exception:
+            pass
+
+    # Build upload BytesIO from cache — always available after first upload
+    if st.session_state.get("_vol_cfg_bytes"):
         upload = _upload_io.BytesIO(st.session_state["_vol_cfg_bytes"])
-        st.caption(f"📎 {st.session_state.get('_vol_cfg_name', 'cached file')}")
+        if _upload_raw is None:
+            st.caption(f"📎 {st.session_state.get('_vol_cfg_name', 'cached file')}")
     else:
         upload = None
 
@@ -19021,7 +19030,7 @@ def main():
             f"""
             <div style="text-align:center;padding:0.75rem 0;border-bottom:1px solid #334155;margin-bottom:1rem;">
                 <img src="data:image/png;base64,{_RATEEDGE_LOGO_B64}" style="width:160px;max-width:90%;margin-bottom:6px;"/>
-                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1704j  |  PROD_AUD</div>
+                <div style="font-size:0.7rem;color:#94a3b8;letter-spacing:0.5px;">Options Platform v1704j-e  |  PROD_AUD</div>
             </div>
             """,
             unsafe_allow_html=True,
