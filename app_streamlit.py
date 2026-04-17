@@ -6693,7 +6693,8 @@ def curves_tab():
     import plotly.graph_objects as go
     st.subheader("📐 IRS Curves & Forward Matrix")
 
-    ccy = st.selectbox("Currency", SUPPORTED_CURRENCIES, index=SUPPORTED_CURRENCIES.index(st.session_state.get("sidebar_ccy","AUD")) if st.session_state.get("sidebar_ccy","AUD") in SUPPORTED_CURRENCIES else 0, key="curve_ccy")
+    ccy = st.session_state.get("sidebar_ccy", "AUD")
+    if ccy not in SUPPORTED_CURRENCIES: ccy = SUPPORTED_CURRENCIES[0]
 
     curve     = st.session_state.get("config_curves", {}).get(ccy)
     basis_6v3 = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
@@ -8263,7 +8264,8 @@ def swaptions_tab(vol_mode: str):
     # Currency selector
     col_ccy, col_spacer = st.columns([1, 3])
     with col_ccy:
-        ccy_select = st.selectbox("📎 Currency", ALL_CURRENCIES, key="sw_ccy")
+        ccy_select = st.session_state.get("sidebar_ccy", "AUD")
+        if ccy_select not in ALL_CURRENCIES: ccy_select = "AUD"
     
     # Extract actual currency code (remove PENDING)
     ccy = ccy_select.split(" ")[0]
@@ -9463,7 +9465,8 @@ def caps_floors_tab(vol_mode: str):
     # Currency selector
     col_ccy, col_spacer = st.columns([1, 3])
     with col_ccy:
-        ccy_select = st.selectbox("📎 Currency", ALL_CURRENCIES, key="cf_ccy")
+        ccy_select = st.session_state.get("sidebar_ccy", "AUD")
+        if ccy_select not in ALL_CURRENCIES: ccy_select = "AUD"
     
     # Extract actual currency code (remove PENDING)
     ccy = ccy_select.split(" ")[0]
@@ -12590,7 +12593,8 @@ def vol_surface_editor_tab():
     if default_ccy not in SUPPORTED_CURRENCIES:
         default_ccy = SUPPORTED_CURRENCIES[0]
     default_idx = SUPPORTED_CURRENCIES.index(default_ccy)
-    ccy = st.selectbox("Currency", SUPPORTED_CURRENCIES, index=default_idx, key="vol_editor_ccy")
+    ccy = st.session_state.get("sidebar_ccy", "AUD")
+    if ccy not in SUPPORTED_CURRENCIES: ccy = SUPPORTED_CURRENCIES[0]
     
     # Check if we have v3d_data in query params (coming back from Apply button)
     has_v3d_data = 'v3d_data' in st.query_params and st.query_params.get('v3d_ccy') == ccy
