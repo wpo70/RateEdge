@@ -4651,17 +4651,17 @@ def load_usd_sofr_ff_basis_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFr
     try:
         raw = pd.read_excel(xl, sheet_name="BBG_Feed", header=None)
         USSFVF_MAP = {
-            "USSFVFC":0.25, "USSFVFF":0.5,  "USSFVF1 ":1.0,  "USSFVF2 ":2.0,
-            "USSFVF3 ":3.0, "USSFVF4 ":4.0,  "USSFVF5 ":5.0,  "USSFVF6 ":6.0,
-            "USSFVF7 ":7.0, "USSFVF8 ":8.0,  "USSFVF9 ":9.0,  "USSFVF10":10.0,
-            "USSFVF12":12.0,"USSFVF15":15.0, "USSFVF20":20.0, "USSFVF25":25.0,
+            "USSFVFC":0.25, "USSFVFF":0.5, "USSFVF1":1.0, "USSFVF2":2.0,
+            "USSFVF3":3.0, "USSFVF4":4.0, "USSFVF5":5.0, "USSFVF6":6.0,
+            "USSFVF7":7.0, "USSFVF8":8.0, "USSFVF9":9.0, "USSFVF10":10.0,
+            "USSFVF12":12.0, "USSFVF15":15.0, "USSFVF20":20.0, "USSFVF25":25.0,
             "USSFVF30":30.0,
         }
         pts = {}
         for _, r in raw.iterrows():
             ticker = str(r.iloc[1]).strip() if len(r) > 1 else ""
             for prefix, mat in USSFVF_MAP.items():
-                if ticker.startswith(prefix.strip()):
+                if ticker.startswith(prefix):
                     try:
                         mid = float(r.iloc[4])
                         pts[mat] = mid  # can be negative
@@ -6831,10 +6831,12 @@ def curves_tab():
                 st.caption(_label)
                 st.dataframe(_df, use_container_width=True, hide_index=True)
 
-    st.markdown("---")
+    if ccy != "USD":
+     st.markdown("---")
 
-    # ── IRS Forward Matrix ─────────────────────────────────────────────────────
-    if "fwd_matrix"   not in st.session_state: st.session_state["fwd_matrix"]   = {}
+    # ── IRS Forward Matrix (AUD/NZD only) ────────────────────────────────────────
+    if ccy != "USD":
+        if "fwd_matrix"   not in st.session_state: st.session_state["fwd_matrix"]   = {}
     if "basis_matrix" not in st.session_state: st.session_state["basis_matrix"] = {}
     if "fwd_section_open" not in st.session_state: st.session_state["fwd_section_open"] = True
 
@@ -6913,6 +6915,7 @@ def curves_tab():
                     st.dataframe(_disp.style.format(_fmt), use_container_width=True, height=820)
         else:
             st.info("Click **▶ Generate Forward Matrix**")
+
 
     # ── 📡 Publish to Options Whiteboard ──────────────────────────────────────────────────
     st.markdown("---")
