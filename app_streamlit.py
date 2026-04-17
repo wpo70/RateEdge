@@ -6013,25 +6013,30 @@ def vol_config_tab():
     
     # File upload
     st.markdown("#### Upload Config File")
+    import io as _upload_io
+
+    def _on_upload_change():
+        """Capture bytes immediately on file change — before rerun."""
+        _f = st.session_state.get("cfg_upload_v8")
+        if _f is not None:
+            _f.seek(0)
+            _b = _f.read()
+            if _b:
+                st.session_state["_vol_cfg_bytes"] = _b
+                st.session_state["_vol_cfg_name"] = _f.name
+
     _upload_raw = st.file_uploader(
         "Upload RateEdge_Config.xlsx",
         type=["xlsx"],
-        key="cfg_upload_v7",
+        key="cfg_upload_v8",
+        on_change=_on_upload_change,
         help="Excel file with sheets: ATM_Vols_[CCY], SABR_*_[CCY], Curves_[CCY]"
     )
-    import io as _upload_io
-    if _upload_raw is not None:
-        # New file uploaded — always overwrite cache immediately
-        _upload_raw.seek(0)
-        _raw_bytes = _upload_raw.read()
-        if _raw_bytes:  # only update if bytes actually read
-            st.session_state["_vol_cfg_bytes"] = _raw_bytes
-            st.session_state["_vol_cfg_name"] = _upload_raw.name
-        upload = _upload_io.BytesIO(st.session_state["_vol_cfg_bytes"]) if st.session_state.get("_vol_cfg_bytes") else None
-    elif st.session_state.get("_vol_cfg_bytes"):
-        # No new file — use cached bytes from last upload
+
+    if st.session_state.get("_vol_cfg_bytes"):
         upload = _upload_io.BytesIO(st.session_state["_vol_cfg_bytes"])
-        st.caption(f"📎 {st.session_state.get('_vol_cfg_name', 'cached file')}")
+        if _upload_raw is None:
+            st.caption(f"📎 {st.session_state.get('_vol_cfg_name', 'cached file')}")
     else:
         upload = None
 
