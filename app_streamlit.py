@@ -15514,10 +15514,16 @@ def rv_tab():
                         _SPI_CONTRACTS = ["Jun-26", "Sep-26", "Dec-26", "Mar-27"]
                         _SPI_STRIKES   = ["10DP", "15DP", "25DP", "35DP", "50D", "35DC", "25DC", "15DC", "10DC"]
 
-                        # Load or init SPI surface
+                        # Load from DB first before falling back to defaults
+                        if not st.session_state.get("spi_vol_surface") and HAS_POSTGRES:
+                            for _try_uid in ["wpo@rateedge.au", st.session_state.get("username","")]:
+                                _db_spi = load_user_config(_try_uid, "spi_vol_surface", "AUD")
+                                if _db_spi:
+                                    st.session_state["spi_vol_surface"] = _db_spi
+                                    break
                         _spi_surf = st.session_state.get("spi_vol_surface", {})
                         if not _spi_surf:
-                            # Pre-fill with today's BBG values from screenshot
+                            # Pre-fill with hardcoded defaults only if nothing in DB
                             _spi_surf = {
                                 "Jun-26": {"10DP":22.39,"15DP":20.52,"25DP":18.19,"35DP":16.58,"50D":14.88,"35DC":13.73,"25DC":13.13,"15DC":12.63,"10DC":12.42},
                                 "Sep-26": {"10DP":22.72,"15DP":21.17,"25DP":18.80,"35DP":17.09,"50D":15.34,"35DC":14.05,"25DC":13.29,"15DC":12.62,"10DC":12.41},
@@ -15552,23 +15558,12 @@ def rv_tab():
                                 _front_atm = _new_spi_surf.get(_SPI_CONTRACTS[0], {}).get("50D", 0.0)
                                 st.session_state["spi_vol_override"] = _front_atm
                                 if HAS_POSTGRES:
-                                    _uid_spi = st.session_state.get("username", "wpo@rateedge.au")
-                                    save_user_config(_uid_spi, "spi_vol_surface", "AUD", _new_spi_surf)
-                                    save_user_config(_uid_spi, "spi_vol_override", "AUD", {"value": _front_atm})
+                                    save_user_config("wpo@rateedge.au", "spi_vol_surface", "AUD", _new_spi_surf)
+                                    save_user_config("wpo@rateedge.au", "spi_vol_override", "AUD", {"value": _front_atm})
                                 st.success(f"✅ SPI surface saved. Front ATM: {_front_atm:.2f}%")
                                 st.rerun()
 
-                        # Show current front ATM
-                        # Auto-load SPI surface from DB if not in session state
-                        if not st.session_state.get("spi_vol_surface") and HAS_POSTGRES:
-                            _uid_spi = st.session_state.get("username", "wpo@rateedge.au")
-                            _db_spi = load_user_config(_uid_spi, "spi_vol_surface", "AUD")
-                            if _db_spi:
-                                st.session_state["spi_vol_surface"] = _db_spi
-                                _spi_surf = _db_spi
-                            _db_spi_atm = load_user_config(_uid_spi, "spi_vol_override", "AUD")
-                            if _db_spi_atm:
-                                st.session_state["spi_vol_override"] = _db_spi_atm.get("value", 0.0)
+                        # DB load already done above
                         _spi_atm = st.session_state.get("spi_vol_override", _spi_surf.get("Jun-26", {}).get("50D", 0.0))
                         if _spi_atm and _spi_atm > 0:
                             st.caption(f"SPI front ATM (50D Jun-26): **{_spi_atm:.2f}%** — used as equity vol context")
