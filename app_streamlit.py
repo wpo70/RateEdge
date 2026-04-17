@@ -6053,6 +6053,7 @@ def vol_config_tab():
     if st.button(" Commit Selected Data", key="commit_btn", type="primary",
                  disabled=(upload is None or not can_upload_vol())):
         selected_type = type_map[load_type]
+        upload.seek(0)  # ensure BytesIO is at start
         loaded = load_config_excel(upload, selected_type)
         
         # Show what was loaded
