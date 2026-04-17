@@ -550,10 +550,16 @@ updCam();return;
 if(drag&&sel){{
 // Scale drag sensitivity based on data range
 const range = D.zMax - D.zMin;
-// Aim for ~2% of range per 10px drag - more responsive
-const dragScale = range / 500;
+const {{i,j}}=sel.userData;
+let dragScale = range / 500;
+// Premium mode: normalise sensitivity by sqrt(cellValue/minValue) so cheap cells
+// are not dragged 30bp on a tiny movement
+if(D.viewMode==='fwd_premium'){{
+  const minVal = Math.max(1, D.zMin);
+  const cellVal = Math.max(minVal, vals[i][j]);
+  dragScale = dragScale / Math.sqrt(cellVal / minVal);
+}}
 const dy=(ly-e.clientY)*dragScale;ly=e.clientY;
-const{{i,j}}=sel.userData;
 smooth(i,j,dy);
 sel.position.y=v2y(vals[i][j]);
 updSurf();
@@ -703,10 +709,7 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
             st.session_state[f"_clear_paste_{ccy}"] = True
             st.success("Published!")
             st.rerun()
-    with cols[1]:
-        if st.button("↩️ Undo", key=f"undo_{ccy}", disabled=not ed["history"].get(ccy), use_container_width=True):
-            _undo(ccy)
-            st.rerun()
+    # Undo removed — use Reset to revert all changes
     with cols[2]:
         if st.button("↪️ Redo", key=f"redo_{ccy}", disabled=not ed["redo_stack"].get(ccy), use_container_width=True):
             _redo(ccy)
