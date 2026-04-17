@@ -12680,6 +12680,15 @@ def vol_surface_editor_tab():
         for _c in atm.columns[1:]:
             atm[_c] = pd.to_numeric(atm[_c], errors="coerce")
 
+    # Ensure vol_editor session state is initialised for this ccy before render
+    if "vol_editor" not in st.session_state:
+        st.session_state["vol_editor"] = {"working":{},"base":{},"history":{},"redo_stack":{},"view_mode":{},"smoothing":{},"paste_data":{}}
+    _ve = st.session_state["vol_editor"]
+    for _k in ["working","base","history","redo_stack","view_mode","smoothing","paste_data"]:
+        if _k not in _ve: _ve[_k] = {}
+    if ccy not in _ve["working"] and atm is not None and not atm.empty:
+        _ve["working"][ccy] = atm.copy()
+        _ve["base"][ccy] = atm.copy()
     # Render the unified editor with mode toggle (Hybrid vs 3D Drag)
     updated_surface = render_vol_surface_editor_unified(ccy, atm, curve, ois_curve)
 
@@ -22277,7 +22286,6 @@ h2{{color:#1e3a5f;margin-top:20px}}
                 st.rerun()
 
 
-@st.fragment
 def vol_export_tab():
     """Vol Export tab - Export and email vol surfaces"""
     st.subheader("📂 Vol Surface Export & Distribution")
