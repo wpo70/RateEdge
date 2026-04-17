@@ -20675,41 +20675,14 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 for _mk, _sk in _swap_map.items():
                     _sv = _mr_now.get(_mk)
                     if _sv: _snap["curve"][_sk] = round(float(_sv), 4)
-                # Build prev from most recent vol_history snapshot before today
-                _prev_snap = None
-                if HAS_POSTGRES:
-                    try:
-                        _vh_snaps = list_vol_snapshots(_uid_rv, "AUD")
-                        _today_str = str(_dtnow.today())
-                        _prev_vh = next((s for s in _vh_snaps if str(s.get("snapshot_date",""))[:10] < _today_str), None)
-                        if _prev_vh:
-                            _prev_loaded = load_vol_snapshot(_prev_vh["id"])
-                            if _prev_loaded and _prev_loaded.get("atm") is not None:
-                                _atm_prev = _prev_loaded["atm"]
-                                if "Expiry" in _atm_prev.columns:
-                                    _atm_prev = _atm_prev.set_index("Expiry")
-                                _prev_snap = {"date": str(_prev_vh["snapshot_date"])[:10], "atm": {}, "curve": {}, "ideas": []}
-                                for _pe in ["1m","3m","6m","1y","2y","3y","5y"]:
-                                    for _pt in [2.0,3.0,5.0,7.0,10.0,15.0,20.0]:
-                                        try:
-                                            _ptc = next((_c for _c in _atm_prev.columns if str(_c).replace("Y","").strip()==str(int(_pt))), None)
-                                            if _ptc and _pe in _atm_prev.index:
-                                                _pv = float(_atm_prev.loc[_pe, _ptc])
-                                                if _pv > 0: _prev_snap["atm"][f"{_pe}_{int(_pt)}Y"] = round(_pv, 1)
-                                        except: pass
-                    except Exception: _prev_snap = None
-                # Rotate: use vol_history prev if available, else rotate curr → prev
+                # Rotate: curr → prev, new snap → curr
                 _old_curr = st.session_state.get("rv_daily_snap_curr")
-                if _prev_snap:
-                    st.session_state["rv_daily_snap_prev"] = _prev_snap
-                elif _old_curr:
-                    st.session_state["rv_daily_snap_prev"] = _old_curr
+                if _old_curr: st.session_state["rv_daily_snap_prev"] = _old_curr
                 st.session_state["rv_daily_snap_curr"] = _snap
                 # Persist to DB
                 if HAS_POSTGRES:
                     save_user_config(_uid_rv, "rv_snap_curr", "AUD", _snap)
-                    _prev_to_save = _prev_snap or _old_curr
-                    if _prev_to_save: save_user_config(_uid_rv, "rv_snap_prev", "AUD", _prev_to_save)
+                    if _old_curr: save_user_config(_uid_rv, "rv_snap_prev", "AUD", _old_curr)
                 st.success(f"✅ Snapshot saved — {_snap['date']}")
                 st.rerun()
             else:
@@ -22050,6 +22023,20 @@ h2{{color:#1e3a5f;margin-top:20px}}
                                                   "Now": round(float(_vc),1),
                                                   "Chg": round(float(_vc)-float(_vp),1)})
                 _pdf_rate_rows = _rate_chg_rows if _rate_chg_rows else []
+                # Also try morning rates directly for swap rate chart
+                if not _pdf_rate_rows and not _sample_mode:
+                    _mr_t = st.session_state.get("morning_rates_today", {})
+                    _mr_p = st.session_state.get("morning_rates_prev", {})
+                    _swap_mr_map = [("swap_2y","2Y"),("swap_3y","3Y"),("swap_5y","5Y"),
+                                    ("swap_7y","7Y"),("swap_10y","10Y"),("swap_20y","20Y")]
+                    for _mk, _tk in _swap_mr_map:
+                        _vc = _mr_t.get(_mk)
+                        _vp = _mr_p.get(_mk)
+                        if _vc and _vp:
+                            _chg = round((float(_vc)-float(_vp))*100, 1)
+                            if abs(_chg) > 0.0:
+                                _pdf_rate_rows.append({"Tenor": _tk, "Prev": float(_vp),
+                                                       "Now": float(_vc), "Chg (bp)": _chg})
                 if not _pdf_rate_rows and not _sample_mode and _curr.get("curve") and _prev and _prev.get("curve"):
                     for _k, _vc in _curr.get("curve", {}).items():
                         _vp = _prev.get("curve", {}).get(_k)
