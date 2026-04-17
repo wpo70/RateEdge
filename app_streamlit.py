@@ -1336,20 +1336,16 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
         return False
     
     try:
-        # Get current vol data from session — use get_working_atm_surface for reliability
-        atm, sabr_alpha, sabr_beta, sabr_rho, sabr_nu = get_ccy_vol_data(currency)
+        # Get current vol data from session
+        vol_data = st.session_state.get("vol_data", {}).get(currency, {})
+        atm = vol_data.get("atm")
+        sabr_alpha = vol_data.get("alpha")
+        sabr_beta = vol_data.get("beta")
+        sabr_rho = vol_data.get("rho")
+        sabr_nu = vol_data.get("nu")
 
         if atm is None:
-            # Fallback: try vol_data directly
-            _vd = st.session_state.get("vol_data", {}).get(currency, {})
-            atm = _vd.get("atm")
-            sabr_alpha = _vd.get("alpha")
-            sabr_beta = _vd.get("beta")
-            sabr_rho = _vd.get("rho")
-            sabr_nu = _vd.get("nu")
-
-        if atm is None:
-            st.error(f"❌ No ATM vol surface loaded for {currency}. Go to IRS/Vol Upload → Reload Vols from DB first.")
+            st.error(f"No ATM vol data loaded for {currency}")
             return False
 
         # Convert DataFrame to JSON
@@ -22283,39 +22279,28 @@ def vol_export_tab():
     st.caption("Export vol surfaces to Excel and email to multiple recipients")
 
     user_id = st.session_state.get("username", "default")
-
-    # Get theme colors
     is_dark = st.session_state.get("theme_name", "Dealer Dark") == "Dealer Dark"
     card_bg = "#1e293b" if is_dark else "#ffffff"
     border_color = "#334155" if is_dark else "#e2e8f0"
-    
-    # Two column layout
+
     col_left, col_right = st.columns([1.5, 1])
-    
+
     with col_left:
         st.markdown("### 📊 Export Settings")
-        
-        # Currency selection - multi-select
         export_currencies = st.multiselect(
-            "Select Currencies",
-            SUPPORTED_CURRENCIES,
-            default=[SUPPORTED_CURRENCIES[0]],
-            key="export_currencies"
+            "Select Currencies", SUPPORTED_CURRENCIES,
+            default=[SUPPORTED_CURRENCIES[0]], key="export_currencies"
         )
-        
         col1, col2 = st.columns(2)
         with col1:
             include_sabr = st.checkbox("Include SABR Parameters", value=True, key="export_include_sabr")
         with col2:
             include_metadata = st.checkbox("Include Metadata Sheet", value=True, key="export_metadata")
-        
-        # Export buttons
+
         st.markdown("#### 💾 Download Options")
-        
         if not export_currencies:
             st.warning("Select at least one currency to export")
         else:
-            # Generate all Excel files
             if st.button("📂 Generate Excel Files", key="generate_excel_btn", type="primary"):
                 for ccy in export_currencies:
                     export_data = export_vol_surface_to_excel(ccy, include_sabr)
@@ -22329,28 +22314,16 @@ def vol_export_tab():
                         )
                     else:
                         st.error(f"No data available for {ccy}")
-        
+
         st.markdown("---")
-        
-        # Email distribution section
         st.markdown("### 📧 Email Distribution")
-        
-        # Recipients input
         recipients_text = st.text_area(
             "Email Recipients (one per line or comma-separated)",
             placeholder="john.doe@example.com\njane.smith@example.com\nteam@rateedge.au",
-            height=100,
-            key="email_recipients"
+            height=100, key="email_recipients"
         )
-        
-        # Email subject and message
         default_subject = f"RateEdge Vol Surfaces - {pd.Timestamp.now().strftime('%Y-%m-%d')}"
-        email_subject = st.text_input(
-            "Email Subject",
-            value=default_subject,
-            key="email_subject"
-        )
-        
+        email_subject = st.text_input("Email Subject", value=default_subject, key="email_subject")
         email_message = st.text_area(
             "Email Message",
             value=f"""Hi Team,
@@ -22362,34 +22335,24 @@ SABR Parameters: {'Included' if include_sabr else 'Not included'}
 
 Regards,
 RateEdge Options Platform""",
-            height=200,
-            key="email_message"
+            height=200, key="email_message"
         )
-        
-        # SMTP settings expander
         with st.expander("⚙️ Email Settings (SMTP)", expanded=False):
-            st.caption("Configure your SMTP server settings")
-            
             col_smtp1, col_smtp2 = st.columns(2)
             with col_smtp1:
                 smtp_server = st.text_input("SMTP Server", value="smtp.office365.com", key="smtp_server")
                 smtp_port = st.number_input("SMTP Port", value=587, key="smtp_port")
             with col_smtp2:
                 smtp_user = st.text_input("SMTP Username", value="wpo@rateedge.au", key="smtp_user")
-                # Get password from environment variable, allow UI override
                 default_password = os.getenv("EMAIL_PASSWORD", "")
                 smtp_password = st.text_input("SMTP Password", value=default_password, type="password", key="smtp_password")
-            
             use_tls = st.checkbox("Use TLS", value=True, key="smtp_tls")
-            
             st.caption("💡 For Office 365/Outlook: smtp.office365.com:587 with TLS")
-            st.caption("💡 For Gmail: smtp.gmail.com:587 with TLS (requires app password)")
             if default_password:
                 st.caption("✅ Password loaded from environment variable EMAIL_PASSWORD")
             else:
                 st.caption("⚙️ Set EMAIL_PASSWORD environment variable in Streamlit secrets to auto-fill")
-        
-        # Send button
+
         if st.button("📧 Send Email with Attachments", key="send_email_btn", type="primary", use_container_width=True):
             if not recipients_text.strip():
                 st.error("Please enter at least one email recipient")
@@ -22398,42 +22361,24 @@ RateEdge Options Platform""",
             elif not smtp_user or not smtp_password:
                 st.error("Please configure SMTP credentials in Email Settings")
             else:
-                # Parse recipients
-                recipients = []
-                for line in recipients_text.replace(',', '\n').split('\n'):
-                    email = line.strip()
-                    if email and '@' in email:
-                        recipients.append(email)
-                
+                recipients = [e.strip() for l in recipients_text.replace(',', '\n').split('\n') for e in [l.strip()] if e and '@' in e]
                 if not recipients:
                     st.error("No valid email addresses found")
                 else:
-                    # Send email
                     with st.spinner(f"Sending email to {len(recipients)} recipient(s)..."):
                         success = send_vol_email(
-                            recipients=recipients,
-                            subject=email_subject,
-                            message=email_message,
-                            currencies=export_currencies,
-                            include_sabr=include_sabr,
-                            smtp_config={
-                                'server': smtp_server,
-                                'port': smtp_port,
-                                'user': smtp_user,
-                                'password': smtp_password,
-                                'use_tls': use_tls
-                            }
+                            recipients=recipients, subject=email_subject, message=email_message,
+                            currencies=export_currencies, include_sabr=include_sabr,
+                            smtp_config={'server': smtp_server, 'port': smtp_port,
+                                        'user': smtp_user, 'password': smtp_password, 'use_tls': use_tls}
                         )
-                    
                     if success:
                         st.success(f"✅ Email sent successfully to {len(recipients)} recipient(s)!")
                     else:
                         st.error("❌ Failed to send email. Check SMTP settings and try again.")
-    
+
     with col_right:
         st.markdown("### 📅 Preview")
-        
-        # Show export summary
         if export_currencies:
             st.markdown(f"""
             <div style="background:{card_bg};border:1px solid {border_color};border-radius:10px;padding:1rem;margin:0.5rem 0;">
@@ -22446,77 +22391,7 @@ RateEdge Options Platform""",
                 </div>
             </div>
             """, unsafe_allow_html=True)
-        
-        # Show recipient list
-        if recipients_text.strip():
-            recipients = []
-            for line in recipients_text.replace(',', '\n').split('\n'):
-                email = line.strip()
-                if email and '@' in email:
-                    recipients.append(email)
-            
-            if recipients:
-                st.markdown(f"""
-                <div style="background:{card_bg};border:1px solid {border_color};border-radius:10px;padding:1rem;margin:1rem 0;">
-                    <div style="font-weight:600;margin-bottom:0.5rem;">Recipients ({len(recipients)})</div>
-                    <div style="font-size:0.85rem;">
-                        {'<br>'.join(recipients)}
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-        
-        # Save Snapshot
-        st.markdown("### 💾 Save Vol Snapshot")
-        st.caption("Save current vol surface to database for SOD Report / implied open calculations")
 
-        _eod_notes = st.text_input("Notes (optional)", value="", key="eod_snap_notes")
-
-        def _do_save_snap(label):
-            if not HAS_POSTGRES:
-                st.error("Database not connected.")
-                return
-            if not export_currencies:
-                st.error("Select at least one currency above first.")
-                return
-            _saved, _failed = [], []
-            with st.spinner(f"Saving {label}..."):
-                for _ccy in export_currencies:
-                    _vd = st.session_state.get("vol_data", {}).get(_ccy, {})
-                    _atm_check = _vd.get("atm")
-                    if _atm_check is None:
-                        st.error(f"❌ No ATM vol for {_ccy} — reload vols from DB first.")
-                        continue
-                    _sid = save_vol_snapshot(user_id, _ccy, label.strip(), _eod_notes.strip())
-                    if _sid: _saved.append(_ccy)
-                    else: _failed.append(_ccy)
-            if _saved:
-                list_vol_snapshots.clear()
-                st.success(f"✅ Saved: **{label}** for {', '.join(_saved)}")
-            if _failed:
-                st.error(f"❌ Save failed for: {', '.join(_failed)}")
-
-        import datetime as _dt_snap
-        _syd_now = _dt_snap.datetime.now(ZoneInfo("Australia/Sydney"))
-        _syd_lbl = "AEST" if _syd_now.utcoffset().total_seconds() == 36000 else "AEDT"
-        _ts_str  = _syd_now.strftime(f"%d-%b-%Y %H:%M {_syd_lbl}")
-        _date_str = _syd_now.strftime("%d-%b-%Y")
-        _ccys_str = "/".join(export_currencies) if export_currencies else "AUD"
-
-        _sc1, _sc2, _sc3 = st.columns(3)
-        with _sc1:
-            if st.button(f"🌙 EOD  {_date_str}", key="snap_eod", type="primary", use_container_width=True,
-                         help=f"Label: {_ccys_str} EOD {_ts_str}"):
-                _do_save_snap(f"{_ccys_str} EOD {_ts_str}")
-        with _sc2:
-            if st.button(f"🌅 SOD  {_date_str}", key="snap_sod", type="primary", use_container_width=True,
-                         help=f"Label: {_ccys_str} SOD {_ts_str}"):
-                _do_save_snap(f"{_ccys_str} SOD {_ts_str}")
-        with _sc3:
-            if st.button(f"⏱ Intraday  {_syd_now.strftime('%H:%M')}", key="snap_intraday", type="primary", use_container_width=True,
-                         help=f"Label: {_ccys_str} {_ts_str}"):
-                _do_save_snap(f"{_ccys_str} {_ts_str}")
-
-        # Quick tips
         st.markdown(f"""
         <div style="background:{card_bg};border:1px solid {border_color};border-radius:10px;padding:1rem;margin:1rem 0;">
             <div style="font-weight:600;margin-bottom:0.5rem;">💡 Quick Tips</div>
@@ -22530,6 +22405,50 @@ RateEdge Options Platform""",
         </div>
         """, unsafe_allow_html=True)
 
+    # ── Save Vol Snapshot — full width below columns ──────────────────
+    st.markdown("---")
+    st.markdown("### 💾 Save Vol Snapshot")
+    st.caption("Save current vol surface to database for SOD Report / implied open calculations")
+
+    import datetime as _dt_snap
+    _syd_now = _dt_snap.datetime.now(ZoneInfo("Australia/Sydney"))
+    _syd_lbl = "AEST" if _syd_now.utcoffset().total_seconds() == 36000 else "AEDT"
+    _ts_str  = _syd_now.strftime(f"%d-%b-%Y %H:%M {_syd_lbl}")
+    _date_str = _syd_now.strftime("%d-%b-%Y")
+    _ccys_str = "/".join(export_currencies) if export_currencies else "AUD"
+    _eod_notes = st.text_input("Notes (optional)", value="", key="eod_snap_notes")
+
+    _sb1, _sb2, _sb3 = st.columns(3)
+    _snap_type = None
+    with _sb1:
+        if st.button(f"🌙 EOD {_date_str}", key="snap_eod", type="primary", use_container_width=True):
+            _snap_type = "EOD"
+    with _sb2:
+        if st.button(f"🌅 SOD {_date_str}", key="snap_sod", type="primary", use_container_width=True):
+            _snap_type = "SOD"
+    with _sb3:
+        if st.button(f"⏱ Intraday {_syd_now.strftime('%H:%M')}", key="snap_intraday", type="primary", use_container_width=True):
+            _snap_type = "Intraday"
+
+    if _snap_type:
+        _label = f"{_ccys_str} {_ts_str}" if _snap_type == "Intraday" else f"{_ccys_str} {_snap_type} {_ts_str}"
+        if not HAS_POSTGRES:
+            st.error("Database not connected.")
+        elif not export_currencies:
+            st.error("Select at least one currency above first.")
+        else:
+            _saved, _failed = [], []
+            for _ccy in export_currencies:
+                _sid = save_vol_snapshot(user_id, _ccy, _label, _eod_notes.strip())
+                if _sid:
+                    _saved.append(_ccy)
+                else:
+                    _failed.append(_ccy)
+            if _saved:
+                list_vol_snapshots.clear()
+                st.success(f"✅ Saved **{_label}** for {', '.join(_saved)}")
+            if _failed:
+                st.error(f"❌ Save failed for: {', '.join(_failed)}")
 
 def send_vol_email(recipients: list, subject: str, message: str, currencies: list, include_sabr: bool, smtp_config: dict) -> bool:
     """Send email with vol surface Excel attachments"""
