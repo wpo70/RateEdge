@@ -6706,6 +6706,9 @@ def curves_tab():
         st.info("No curves loaded. Go to IRS / Vol Upload tab and commit your config file.")
         return
 
+    if ccy == "USD":
+        curve = None  # USD uses its own section below
+
     def _clean(df):
         if df is None: return None
         return df.drop(columns=["_source_date"], errors="ignore")
