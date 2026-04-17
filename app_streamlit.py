@@ -18820,8 +18820,8 @@ def main():
                                 if _trow and _trow[0]:
                                     _tprefs = _trow[0] if isinstance(_trow[0], dict) else json.loads(_trow[0])
                                     _known_tabs = {"tab_show_home","tab_show_sdr","tab_show_upload",
-                                        "tab_show_curves","tab_show_fwd",
-                                        "tab_show_swaptions","tab_show_caps","tab_show_blotter",
+                                        "tab_show_curves","tab_show_fwd","tab_show_hva",
+                                        "tab_show_hva","tab_show_swaptions","tab_show_caps","tab_show_blotter",
                                         "tab_show_rv","tab_show_exotics","tab_show_sod",
                                         "tab_show_voleditor","tab_show_volexport",
                                         "tab_show_midcurve","tab_show_multiccy","tab_show_ticket"}
@@ -18880,6 +18880,7 @@ def main():
                 ("📡 SDR Live", "tab_show_sdr"),
                 ("📋 IRS / Vol Upload", "tab_show_upload"),
                 ("📏 Curves", "tab_show_curves"),
+                ("📊 Historical VOL Analysis", "tab_show_hva"),
                 ("📈 FWD IRS Analysis", "tab_show_fwd"),
                 ("📊 Swaptions", "tab_show_swaptions"),
                 ("🔔 Caps & Floors", "tab_show_caps"),
@@ -19167,6 +19168,7 @@ def main():
         ("📋 IRS / Vol Upload",          "tab_show_upload",    vol_config_tab),
         ("📏 Curves",                    "tab_show_curves",    curves_tab),
         ("📈 FWD IRS Analysis",          "tab_show_fwd",       fwd_analysis_tab),
+        ("📊 Historical VOL Analysis",   "tab_show_hva",       backtesting_tab),
         ("📊 Swaptions",                 "tab_show_swaptions", lambda: swaptions_tab(vol_mode)),
         ("🔔 Caps & Floors",             "tab_show_caps",      lambda: caps_floors_tab(vol_mode)),
         ("💼 Trade Blotter",             "tab_show_blotter",   portfolio_tab),
