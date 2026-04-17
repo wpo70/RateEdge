@@ -6016,16 +6016,18 @@ def vol_config_tab():
     _upload_raw = st.file_uploader(
         "Upload RateEdge_Config.xlsx",
         type=["xlsx"],
-        key="cfg_upload_v6",
+        key="cfg_upload_v7",
         help="Excel file with sheets: ATM_Vols_[CCY], SABR_*_[CCY], Curves_[CCY]"
     )
     import io as _upload_io
     if _upload_raw is not None:
         # New file uploaded — always overwrite cache immediately
+        _upload_raw.seek(0)
         _raw_bytes = _upload_raw.read()
-        st.session_state["_vol_cfg_bytes"] = _raw_bytes
-        st.session_state["_vol_cfg_name"] = _upload_raw.name
-        upload = _upload_io.BytesIO(_raw_bytes)
+        if _raw_bytes:  # only update if bytes actually read
+            st.session_state["_vol_cfg_bytes"] = _raw_bytes
+            st.session_state["_vol_cfg_name"] = _upload_raw.name
+        upload = _upload_io.BytesIO(st.session_state["_vol_cfg_bytes"]) if st.session_state.get("_vol_cfg_bytes") else None
     elif st.session_state.get("_vol_cfg_bytes"):
         # No new file — use cached bytes from last upload
         upload = _upload_io.BytesIO(st.session_state["_vol_cfg_bytes"])
@@ -7070,6 +7072,9 @@ def curves_tab():
                                    disabled=not has_atm)
 
             if gen_atm:
+                st.session_state["_gen_atm_ccy"] = ccy
+            if st.session_state.get("_gen_atm_ccy") == ccy:
+                st.session_state.pop("_gen_atm_ccy", None)
                 _mc = st.session_state.get("config_curves", {}).get(ccy)
                 _mb = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
                 if _mc is None:
@@ -7078,7 +7083,6 @@ def curves_tab():
                     with st.spinner("Calculating..."):
                         pm, vm = calculate_atm_premium_matrix(ccy, _mc, atm_vols, _mb)
                         st.session_state["atm_prem_matrix"][ccy] = {"vol": atm_vols, "prem": pm, "vega": vm}
-                    st.rerun()
 
             if has_atm:
                 _ad = st.session_state["atm_prem_matrix"][ccy]
@@ -22285,6 +22289,7 @@ h2{{color:#1e3a5f;margin-top:20px}}
                 st.rerun()
 
 
+@st.fragment
 def vol_export_tab():
     """Vol Export tab - Export and email vol surfaces"""
     st.subheader("📂 Vol Surface Export & Distribution")
