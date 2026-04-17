@@ -1356,24 +1356,8 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
         sabr_rho_json = sabr_rho.to_dict(orient="records") if sabr_rho is not None else None
         sabr_nu_json = sabr_nu.to_dict(orient="records") if sabr_nu is not None else None
         
-        # Use the pricer's own Forward Premium (bp) matrix from Curves tab → Generate ATM Matrix
-        # This is st.session_state["atm_prem_matrix"][currency]["prem"]
-        # If not generated yet, atm_prems is saved as NULL
+        # atm_prems saved as NULL — serialization too slow for large matrices
         atm_prems_json = None
-        try:
-            _prem_df = st.session_state.get("atm_prem_matrix", {}).get(currency, {}).get("prem")
-            if _prem_df is not None:
-                _prem_save = _prem_df.copy()
-                if _prem_save.index.name == "Expiry":
-                    _prem_save = _prem_save.reset_index()
-                elif "Expiry" not in _prem_save.columns:
-                    _first = _prem_save.index[0] if len(_prem_save) > 0 else None
-                    if isinstance(_first, str):
-                        _prem_save = _prem_save.reset_index()
-                        _prem_save.columns = ["Expiry"] + list(_prem_save.columns[1:])
-                atm_prems_json = _prem_save.to_dict(orient="records")
-        except Exception:
-            atm_prems_json = None
 
         # Insert into vol_history table — always save as 'shared' so all users can load
         cur = conn.cursor()
@@ -22273,6 +22257,7 @@ h2{{color:#1e3a5f;margin-top:20px}}
                 st.rerun()
 
 
+@st.fragment
 def vol_export_tab():
     """Vol Export tab - Export and email vol surfaces"""
     st.subheader("📂 Vol Surface Export & Distribution")
