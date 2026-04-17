@@ -22438,13 +22438,13 @@ RateEdge Options Platform""",
     _sb1, _sb2, _sb3 = st.columns(3)
     _snap_type = None
     with _sb1:
-        if st.button(f"🌙 EOD {_date_str}", key="snap_eod", type="primary", use_container_width=True):
+        if st.button(f"🌙 EOD {_date_str}", key="snap_eod", use_container_width=True):
             _snap_type = "EOD"
     with _sb2:
-        if st.button(f"🌅 SOD {_date_str}", key="snap_sod", type="primary", use_container_width=True):
+        if st.button(f"🌅 SOD {_date_str}", key="snap_sod", use_container_width=True):
             _snap_type = "SOD"
     with _sb3:
-        if st.button(f"⏱ Intraday {_syd_now.strftime('%H:%M')}", key="snap_intraday", type="primary", use_container_width=True):
+        if st.button(f"⏱ Intraday {_syd_now.strftime('%H:%M')}", key="snap_intraday", use_container_width=True):
             _snap_type = "Intraday"
 
     if _snap_type:
