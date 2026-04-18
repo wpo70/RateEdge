@@ -6767,7 +6767,7 @@ def curves_tab():
             st.plotly_chart(_usd_fig, use_container_width=True)
 
             # USD Curve Data Table
-            with st.expander("USD Curve Data", expanded=False):
+            with st.expander("USD Curve Data", expanded=True):
                 _usd_tcols = st.columns(3)
                 with _usd_tcols[0]:
                     st.caption("SOFR Swap (%)")
@@ -6832,9 +6832,9 @@ def curves_tab():
                     st.session_state.pop("_gen_usd_fwd_requested", None)
 
                     # Standard USD expiries and tenors
-                    _USD_EXPIRIES = [1/12, 2/12, 3/12, 6/12, 9/12, 1, 1.5, 2, 3, 4, 5, 7, 10, 15, 20, 30]
+                    _USD_EXPIRIES = [1/52, 1/12, 2/12, 3/12, 6/12, 9/12, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30]
                     _USD_TENORS   = [1, 2, 3, 4, 5, 7, 10, 12, 15, 20, 25, 30]
-                    _EXP_LABELS   = ["1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","7y","10y","15y","20y","30y"]
+                    _EXP_LABELS   = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
                     _TEN_LABELS   = ["1Y","2Y","3Y","4Y","5Y","7Y","10Y","12Y","15Y","20Y","25Y","30Y"]
 
                     def _interp_rate(df_curve, maturity, col="ZeroRatePct"):
@@ -6911,15 +6911,16 @@ def curves_tab():
                     st.info("Click **▶ Generate USD Forward Matrix** to compute.")
 
 
-        return  # USD fully handled above
-
-    # ── Chart toggles ─────────────────────────────────────────────────────────
-    _ck = st.columns(5)
-    with _ck[0]: _show_par = st.checkbox("IRS Par", value=True, key="chart_par")
-    with _ck[1]: _show_irs = st.checkbox("IRS Zero", value=True, key="chart_irs")
-    with _ck[2]: _show_ois = st.checkbox("OIS", value=True, key="chart_ois")
-    with _ck[3]: _show_b6  = st.checkbox("6v3 Basis", value=True, key="chart_b6")
-    with _ck[4]: _show_b3  = st.checkbox("3v1 Basis", value=True, key="chart_b3")
+    # ── Chart toggles (AUD/NZD only) ─────────────────────────────────────────
+    # AUD/NZD chart — defaults so USD path through try block is harmless
+    _show_par = _show_irs = _show_ois = _show_b6 = _show_b3 = False
+    if ccy != "USD":
+        _ck = st.columns(5)
+        with _ck[0]: _show_par = st.checkbox("IRS Par", value=True, key="chart_par")
+        with _ck[1]: _show_irs = st.checkbox("IRS Zero", value=True, key="chart_irs")
+        with _ck[2]: _show_ois = st.checkbox("OIS", value=True, key="chart_ois")
+        with _ck[3]: _show_b6  = st.checkbox("6v3 Basis", value=True, key="chart_b6")
+        with _ck[4]: _show_b3  = st.checkbox("3v1 Basis", value=True, key="chart_b3")
 
     try:
         fig = go.Figure()
@@ -6985,7 +6986,8 @@ def curves_tab():
 
     with st.expander("IRS Par Rates & Curve Data", expanded=False):
         _cols_to_show = []
-        if _show_par:
+        if ccy == "USD": pass  # no AUD data tables for USD
+        elif _show_par:
             if par_rates is not None and not par_rates.empty:
                 import pandas as _pd2
                 # Normalise tenor labels: "40.0Y" → "40Y", "50.0Y" → "50Y"
