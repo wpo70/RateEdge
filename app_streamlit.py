@@ -20170,6 +20170,7 @@ def main():
                 ("📋 IRS / Vol Upload", "tab_show_upload"),
                 ("📏 Curves", "tab_show_curves"),
                 ("📊 Historical VOL Analysis", "tab_show_hva"),
+                ("📉 SR3 Listed Vols", "tab_show_sr3vols"),
                 ("📈 FWD IRS Analysis", "tab_show_fwd"),
                 ("📊 Swaptions", "tab_show_swaptions"),
                 ("🔔 Caps & Floors", "tab_show_caps"),
@@ -20458,6 +20459,7 @@ def main():
         ("📏 Curves",                    "tab_show_curves",    curves_tab),
         ("📈 FWD IRS Analysis",          "tab_show_fwd",       fwd_analysis_tab),
         ("📊 Historical VOL Analysis",   "tab_show_hva",       backtesting_tab),
+        ("📉 SR3 Listed Vols",           "tab_show_sr3vols",   sr3_vol_tab),
         ("📊 Swaptions",                 "tab_show_swaptions", lambda: swaptions_tab(vol_mode)),
         ("🔔 Caps & Floors",             "tab_show_caps",      lambda: caps_floors_tab(vol_mode)),
         ("💼 Trade Blotter",             "tab_show_blotter",   portfolio_tab),
@@ -20482,6 +20484,460 @@ def main():
         with tabs[_ti]:
             _tf()
 
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# SR3 Listed Vol Tab — USD CFS Build (v1704t, 19-Apr-2026)
+# ═══════════════════════════════════════════════════════════════════════
+# Reads/writes sr3_vol_history (separate table from vol_history).
+# BBG-format grid, SOD/EOD/Intraday saves with NYC timestamps.
+# Auto-loads latest snapshot on tab open, history dropdown for older.
+
+SR3_SMILE_COLS = ["vol_10dp", "vol_15dp", "vol_25dp", "vol_35dp", "atm_vol",
+                  "vol_35dc", "vol_25dc", "vol_15dc", "vol_10dc"]
+SR3_SMILE_LABELS = ["10DP", "15DP", "25DP", "35DP", "50D", "35DC", "25DC", "15DC", "10DC"]
+
+# CME pack colors by contract year (for contract_code cell tint)
+SR3_PACK_COLORS = {
+    2026: "#94a3b8",  # White pack  -> slate gray (visible on dark bg)
+    2027: "#ef4444",  # Red pack
+    2028: "#22c55e",  # Green pack
+    2029: "#3b82f6",  # Blue pack
+    2030: "#eab308",  # Gold pack
+    2031: "#a855f7",  # Purple pack
+    2032: "#a855f7",
+}
+
+# Canonical 39-row scaffold — shown as rows even if DB has no data for them yet.
+# Split point: rows 0-22 are standards/serials (23), rows 23-38 are mid-curves (16).
+SR3_CONTRACTS_CANONICAL = [
+    # (code, type, exp_date, underlying, maturity_date)
+    ("SFRK6",  "Serial",     "2026-05-15", "SFRM6 Comdty", "2026-09-15"),
+    ("SFRM6s", "Serial-1M",  "2026-06-12", "SFRM6 Comdty", "2026-09-15"),
+    ("SFRN6",  "Serial",     "2026-07-10", "SFRU6 Comdty", "2026-12-15"),
+    ("SFRQ6",  "Serial",     "2026-08-14", "SFRU6 Comdty", "2026-12-15"),
+    ("SFRU6",  "Quarterly",  "2026-09-11", "SFRU6 Comdty", "2026-12-15"),
+    ("SFRV6",  "Serial",     "2026-10-16", "SFRZ6 Comdty", "2027-03-16"),
+    ("SFRZ6",  "Quarterly",  "2026-12-11", "SFRZ6 Comdty", "2027-03-16"),
+    ("SFRH7",  "Quarterly",  "2027-03-12", "SFRH7 Comdty", "2027-06-15"),
+    ("SFRM7",  "Quarterly",  "2027-06-11", "SFRM7 Comdty", "2027-09-14"),
+    ("SFRU7",  "Quarterly",  "2027-09-10", "SFRU7 Comdty", "2027-12-14"),
+    ("SFRZ7",  "Quarterly",  "2027-12-10", "SFRZ7 Comdty", "2028-03-14"),
+    ("SFRH8",  "Quarterly",  "2028-03-10", "SFRH8 Comdty", "2028-06-20"),
+    ("SFRM8",  "Quarterly",  "2028-06-16", "SFRM8 Comdty", "2028-09-19"),
+    ("SFRU8",  "Quarterly",  "2028-09-15", "SFRU8 Comdty", "2028-12-19"),
+    ("SFRZ8",  "Quarterly",  "2028-12-15", "SFRZ8 Comdty", "2029-03-20"),
+    ("SFRH9",  "Quarterly",  "2029-03-16", "SFRH9 Comdty", "2029-06-18"),
+    ("SFRM9",  "Quarterly",  "2029-06-15", "SFRM9 Comdty", "2029-09-18"),
+    ("SFRU9",  "Quarterly",  "2029-09-14", "SFRU9 Comdty", "2029-12-18"),
+    ("SFRZ9",  "Quarterly",  "2029-12-14", "SFRZ9 Comdty", "2030-03-19"),  # Gold-1
+    ("SFRH0",  "Quarterly",  "2030-03-15", "SFRH0 Comdty", "2030-06-18"),  # Gold
+    ("SFRM0",  "Quarterly",  "2030-06-14", "SFRM0 Comdty", "2030-09-17"),  # Gold
+    ("SFRU0",  "Quarterly",  "2030-09-13", "SFRU0 Comdty", "2030-12-17"),  # Gold
+    ("SFRZ0",  "Quarterly",  "2030-12-13", "SFRZ0 Comdty", "2031-03-18"),  # Gold — last liquid
+    # ── Mid-Curves (split) ─────────────────────────────────────────
+    ("0QM6",   "1Y MC",      "2026-06-12", "SFRM7 Comdty", "2027-09-14"),
+    ("0QU6",   "1Y MC",      "2026-09-11", "SFRU7 Comdty", "2027-12-14"),
+    ("0QZ6",   "1Y MC",      "2026-12-11", "SFRZ7 Comdty", "2028-03-14"),
+    ("0QH7",   "1Y MC",      "2027-03-12", "SFRH8 Comdty", "2028-06-20"),
+    ("2QM6",   "2Y MC",      "2026-06-12", "SFRM8 Comdty", "2028-09-19"),
+    ("2QU6",   "2Y MC",      "2026-09-11", "SFRU8 Comdty", "2028-12-19"),
+    ("2QZ6",   "2Y MC",      "2026-12-11", "SFRZ8 Comdty", "2029-03-20"),
+    ("2QH7",   "2Y MC",      "2027-03-12", "SFRH9 Comdty", "2029-06-18"),
+    ("3QM6",   "3Y MC",      "2026-06-12", "SFRM9 Comdty", "2029-09-18"),
+    ("3QU6",   "3Y MC",      "2026-09-11", "SFRU9 Comdty", "2029-12-18"),
+    ("3QZ6",   "3Y MC",      "2026-12-11", "SFRZ9 Comdty", "2030-03-19"),
+    ("3QH7",   "3Y MC",      "2027-03-12", "SFRH0 Comdty", "2030-06-18"),
+    ("4QZ6",   "4Y MC",      "2026-12-11", "SFRZ0 Comdty", "2031-03-18"),
+    ("4QH7",   "4Y MC",      "2027-03-12", "SFRH1 Comdty", "2031-06-17"),
+    ("5QZ6",   "5Y MC",      "2026-12-11", "SFRZ1 Comdty", "2032-03-17"),
+    ("5QH7",   "5Y MC",      "2027-03-12", "SFRH2 Comdty", "2032-06-16"),
+]
+SR3_SPLIT_INDEX = 23  # rows 0..22 = standards/serials, 23..38 = mid-curves
+
+
+def _sr3_year_from_underlying(underlying: str, ref_year: int = 2026) -> int:
+    """Parse contract year from BBG ticker like 'SFRH0 Comdty' → 2030."""
+    if not underlying:
+        return ref_year
+    try:
+        code_part = underlying.split()[0]   # 'SFRH0'
+        year_digit = int(code_part[-1])
+        ref_decade = (ref_year // 10) * 10  # 2020
+        cand = ref_decade + year_digit
+        if cand < ref_year:
+            cand += 10
+        return cand
+    except Exception:
+        return ref_year
+
+
+def _sr3_pack_color(underlying: str) -> str:
+    """Hex color for the contract_code cell background based on CME pack."""
+    yr = _sr3_year_from_underlying(underlying)
+    return SR3_PACK_COLORS.get(yr, "#64748b")
+
+
+def save_sr3_snapshot(user_id: str, label: str, snapshot_date, rows: list, notes: str = "") -> int:
+    """
+    Write one or more rows to sr3_vol_history.
+    `rows` is a list of dicts matching the canonical scaffold, each with smile fields.
+    Rows where all smile fields are None are skipped.
+    Returns count of rows actually written.
+    """
+    if not HAS_POSTGRES:
+        return 0
+    _ADMIN_ALIASES = {"wpo70@icloud.com": "wpo@rateedge.au"}
+    user_id = _ADMIN_ALIASES.get(user_id, user_id)
+
+    conn = get_db_connection()
+    if not conn:
+        return 0
+    try:
+        cur = conn.cursor()
+        n_written = 0
+        for r in rows:
+            if all(r.get(c) is None for c in SR3_SMILE_COLS):
+                continue
+            cur.execute("""
+                INSERT INTO sr3_vol_history (
+                    user_id, currency, snapshot_date, contract_code, contract_type,
+                    expiry_date, underlying, maturity_date, futures_price, vol_type,
+                    vol_10dp, vol_15dp, vol_25dp, vol_35dp, atm_vol,
+                    vol_35dc, vol_25dc, vol_15dc, vol_10dc,
+                    label, notes, manual_override
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                          %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (currency, snapshot_date, contract_code, label)
+                DO UPDATE SET
+                    contract_type = EXCLUDED.contract_type,
+                    expiry_date   = EXCLUDED.expiry_date,
+                    underlying    = EXCLUDED.underlying,
+                    maturity_date = EXCLUDED.maturity_date,
+                    futures_price = EXCLUDED.futures_price,
+                    vol_type      = EXCLUDED.vol_type,
+                    vol_10dp = EXCLUDED.vol_10dp, vol_15dp = EXCLUDED.vol_15dp,
+                    vol_25dp = EXCLUDED.vol_25dp, vol_35dp = EXCLUDED.vol_35dp,
+                    atm_vol  = EXCLUDED.atm_vol,
+                    vol_35dc = EXCLUDED.vol_35dc, vol_25dc = EXCLUDED.vol_25dc,
+                    vol_15dc = EXCLUDED.vol_15dc, vol_10dc = EXCLUDED.vol_10dc,
+                    notes            = EXCLUDED.notes,
+                    manual_override  = EXCLUDED.manual_override
+            """, (
+                'shared', 'USD', snapshot_date, r["contract_code"], r.get("contract_type"),
+                r.get("expiry_date"), r.get("underlying"), r.get("maturity_date"),
+                r.get("futures_price"), r.get("vol_type", "normal"),
+                r.get("vol_10dp"), r.get("vol_15dp"), r.get("vol_25dp"), r.get("vol_35dp"),
+                r.get("atm_vol"),
+                r.get("vol_35dc"), r.get("vol_25dc"), r.get("vol_15dc"), r.get("vol_10dc"),
+                label, notes or None, bool(r.get("manual_override", False)),
+            ))
+            n_written += 1
+        conn.commit()
+        cur.close()
+        return n_written
+    except Exception as e:
+        st.error(f"SR3 save failed: {e}")
+        try: conn.rollback()
+        except Exception: pass
+        return 0
+    finally:
+        try: conn.close()
+        except Exception: pass
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def list_sr3_snapshots(currency: str = "USD", limit: int = 50):
+    """Return list of (snapshot_date, label, created_at, row_count) for history dropdown."""
+    if not HAS_POSTGRES:
+        return []
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT snapshot_date, label, MAX(created_at) AS created_at, COUNT(*) AS n
+            FROM sr3_vol_history
+            WHERE currency = %s
+            GROUP BY snapshot_date, label
+            ORDER BY MAX(created_at) DESC
+            LIMIT %s
+        """, (currency, limit))
+        rows = cur.fetchall()
+        cur.close()
+        return [
+            {"snapshot_date": r[0], "label": r[1], "created_at": r[2], "n": r[3]}
+            for r in rows
+        ]
+    except Exception:
+        return []
+    finally:
+        try: conn.close()
+        except Exception: pass
+
+
+def load_sr3_snapshot(snapshot_date=None, label=None, currency: str = "USD") -> dict:
+    """
+    Load snapshot rows. If both snapshot_date and label are None, loads the LATEST snapshot.
+    Returns {contract_code: row_dict}.
+    """
+    if not HAS_POSTGRES:
+        return {}
+    conn = get_db_connection()
+    if not conn:
+        return {}
+    try:
+        cur = conn.cursor()
+        if snapshot_date is None and label is None:
+            # Latest snapshot for currency
+            cur.execute("""
+                SELECT contract_code, contract_type, expiry_date, underlying, maturity_date,
+                       futures_price, vol_type,
+                       vol_10dp, vol_15dp, vol_25dp, vol_35dp, atm_vol,
+                       vol_35dc, vol_25dc, vol_15dc, vol_10dc,
+                       manual_override, notes, snapshot_date, label
+                FROM sr3_vol_history
+                WHERE currency = %s
+                  AND (snapshot_date, label) = (
+                      SELECT snapshot_date, label FROM sr3_vol_history
+                      WHERE currency = %s
+                      ORDER BY created_at DESC LIMIT 1
+                  )
+            """, (currency, currency))
+        else:
+            cur.execute("""
+                SELECT contract_code, contract_type, expiry_date, underlying, maturity_date,
+                       futures_price, vol_type,
+                       vol_10dp, vol_15dp, vol_25dp, vol_35dp, atm_vol,
+                       vol_35dc, vol_25dc, vol_15dc, vol_10dc,
+                       manual_override, notes, snapshot_date, label
+                FROM sr3_vol_history
+                WHERE currency = %s AND snapshot_date = %s AND label = %s
+            """, (currency, snapshot_date, label))
+        rows = cur.fetchall()
+        cur.close()
+        out = {}
+        for r in rows:
+            out[r[0]] = {
+                "contract_code":   r[0], "contract_type":  r[1],
+                "expiry_date":     r[2], "underlying":     r[3], "maturity_date": r[4],
+                "futures_price":   float(r[5]) if r[5] is not None else None,
+                "vol_type":        r[6],
+                "vol_10dp":        float(r[7])  if r[7]  is not None else None,
+                "vol_15dp":        float(r[8])  if r[8]  is not None else None,
+                "vol_25dp":        float(r[9])  if r[9]  is not None else None,
+                "vol_35dp":        float(r[10]) if r[10] is not None else None,
+                "atm_vol":         float(r[11]) if r[11] is not None else None,
+                "vol_35dc":        float(r[12]) if r[12] is not None else None,
+                "vol_25dc":        float(r[13]) if r[13] is not None else None,
+                "vol_15dc":        float(r[14]) if r[14] is not None else None,
+                "vol_10dc":        float(r[15]) if r[15] is not None else None,
+                "manual_override": bool(r[16]),
+                "notes":           r[17],
+                "_snapshot_date":  r[18],
+                "_label":          r[19],
+            }
+        return out
+    except Exception as e:
+        st.error(f"SR3 load failed: {e}")
+        return {}
+    finally:
+        try: conn.close()
+        except Exception: pass
+
+
+@st.fragment
+def sr3_vol_tab():
+    """USD SR3 Listed Vol Builder — BBG-format grid, SOD/EOD/Intraday saves."""
+    st.subheader("📉 USD SR3 Listed Vol Builder")
+    st.caption("Listed SR3 (3M SOFR) option vol surface — source of truth for 0→3Y CFS. "
+               "Normal vol, Bachelier bp/yr. Column order matches BBG: 10DP → 50D → 10DC.")
+
+    if not HAS_POSTGRES:
+        st.error("Database not connected.")
+        return
+
+    user_id = st.session_state.get("username", "wpo@rateedge.au")
+
+    # ── Top bar: snapshot loader ─────────────────────────────────────
+    snaps = list_sr3_snapshots("USD", limit=50)
+    cur_key = st.session_state.get("sr3_current_label")
+
+    # Auto-load latest on first open
+    if "sr3_grid_data" not in st.session_state:
+        latest = load_sr3_snapshot(currency="USD")
+        st.session_state["sr3_grid_data"] = latest
+        if snaps:
+            st.session_state["sr3_current_label"] = f"{snaps[0]['snapshot_date']} | {snaps[0]['label']}"
+            cur_key = st.session_state["sr3_current_label"]
+
+    _tl, _tm, _tr = st.columns([3, 2, 2])
+    with _tl:
+        snap_opts = ["— latest —"] + [f"{s['snapshot_date']} | {s['label']}" for s in snaps]
+        idx = 0
+        if cur_key and cur_key in snap_opts:
+            idx = snap_opts.index(cur_key)
+        picked = st.selectbox("Snapshot", snap_opts, index=idx, key="sr3_snap_pick")
+    with _tm:
+        if st.button("🔄 Load", key="sr3_load_btn", use_container_width=True):
+            if picked == "— latest —":
+                grid = load_sr3_snapshot(currency="USD")
+                st.session_state["sr3_grid_data"] = grid
+                st.session_state["sr3_current_label"] = (
+                    f"{snaps[0]['snapshot_date']} | {snaps[0]['label']}" if snaps else None
+                )
+            else:
+                sd, lbl = picked.split(" | ", 1)
+                # Parse 'YYYY-MM-DD HH:MM:SS' or 'YYYY-MM-DD' back to date
+                try:
+                    sd_parsed = pd.Timestamp(sd).to_pydatetime()
+                except Exception:
+                    sd_parsed = sd
+                grid = load_sr3_snapshot(snapshot_date=sd_parsed, label=lbl, currency="USD")
+                st.session_state["sr3_grid_data"] = grid
+                st.session_state["sr3_current_label"] = picked
+            list_sr3_snapshots.clear()
+            st.rerun()
+    with _tr:
+        if st.button("🧹 Clear Grid", key="sr3_clear_btn", use_container_width=True,
+                     help="Clear all cells (doesn't delete from DB)"):
+            st.session_state["sr3_grid_data"] = {}
+            st.rerun()
+
+    # Status line
+    if cur_key:
+        st.caption(f"**Loaded:** {cur_key}  ·  **Rows in memory:** "
+                   f"{sum(1 for v in st.session_state['sr3_grid_data'].values() if v.get('atm_vol') is not None)}")
+    else:
+        st.caption("No snapshot loaded yet.")
+
+    grid_state = st.session_state.get("sr3_grid_data", {})
+
+    # ── Grid ──────────────────────────────────────────────────────────
+    def _render_grid_section(title: str, contracts_slice: list, key_prefix: str):
+        st.markdown(f"### {title}")
+        # Header row: Code | Type | Exp | 9 smile cols
+        _hcols = st.columns([1.1, 1.0, 1.05] + [0.85]*9)
+        _hcols[0].markdown("<div style='font-size:11px;font-weight:600;color:#64748b'>Code</div>",
+                           unsafe_allow_html=True)
+        _hcols[1].markdown("<div style='font-size:11px;font-weight:600;color:#64748b'>Type</div>",
+                           unsafe_allow_html=True)
+        _hcols[2].markdown("<div style='font-size:11px;font-weight:600;color:#64748b'>Exp</div>",
+                           unsafe_allow_html=True)
+        for _si, _sk in enumerate(SR3_SMILE_LABELS):
+            _col_style = "color:#38bdf8;font-weight:700" if _sk == "50D" else "color:#64748b"
+            _hcols[3 + _si].markdown(
+                f"<div style='font-size:11px;{_col_style};text-align:center'>{_sk}</div>",
+                unsafe_allow_html=True,
+            )
+
+        for (code, ctype, exp_str, underlying, maturity_str) in contracts_slice:
+            rstate = grid_state.get(code, {})
+            pack = _sr3_pack_color(underlying)
+            override = rstate.get("manual_override", False)
+            badge = " 🅜" if override else ""
+
+            _rcols = st.columns([1.1, 1.0, 1.05] + [0.85]*9)
+            _rcols[0].markdown(
+                f"<div style='font-size:12px;padding-top:8px;font-weight:700;"
+                f"color:{pack};'>{code}{badge}</div>",
+                unsafe_allow_html=True,
+            )
+            _rcols[1].markdown(
+                f"<div style='font-size:11px;padding-top:9px;color:#94a3b8;'>{ctype}</div>",
+                unsafe_allow_html=True,
+            )
+            _rcols[2].markdown(
+                f"<div style='font-size:11px;padding-top:9px;color:#94a3b8;'>{exp_str[5:]}</div>",
+                unsafe_allow_html=True,
+            )
+            # Smile cells — number_input per delta
+            for _si, (col_key, _sk) in enumerate(zip(SR3_SMILE_COLS, SR3_SMILE_LABELS)):
+                _cur = rstate.get(col_key)
+                _v = _rcols[3 + _si].number_input(
+                    "", value=float(_cur) if _cur is not None else 0.0,
+                    min_value=0.0, max_value=999.99,
+                    step=0.01, format="%.2f",
+                    key=f"{key_prefix}_{code}_{col_key}",
+                    label_visibility="collapsed",
+                )
+                # Back into state — 0.0 treated as "not set" to keep scaffold rows clean
+                if _v > 0:
+                    if code not in grid_state:
+                        grid_state[code] = {
+                            "contract_code": code, "contract_type": ctype,
+                            "expiry_date": exp_str, "underlying": underlying,
+                            "maturity_date": maturity_str,
+                        }
+                    # Only mark manual_override=True if value CHANGED from loaded
+                    _old = rstate.get(col_key)
+                    if _old is not None and abs(_old - _v) > 1e-6:
+                        grid_state[code]["manual_override"] = True
+                    grid_state[code][col_key] = _v
+                else:
+                    if code in grid_state and col_key in grid_state[code]:
+                        grid_state[code][col_key] = None
+
+    with st.expander("📊 SR3 Vol Grid — Standards & Serials (23 rows)", expanded=True):
+        _render_grid_section("", SR3_CONTRACTS_CANONICAL[:SR3_SPLIT_INDEX], "sr3s")
+
+    with st.expander("📊 SR3 Vol Grid — Mid-Curves (16 rows)", expanded=False):
+        _render_grid_section("", SR3_CONTRACTS_CANONICAL[SR3_SPLIT_INDEX:], "sr3m")
+
+    st.session_state["sr3_grid_data"] = grid_state
+
+    # ── Save buttons (NYC timestamped) ────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 💾 Save SR3 Vol Snapshot")
+
+    from zoneinfo import ZoneInfo as _ZI
+    from datetime import datetime as _dt
+    _nyc_now = _dt.now(_ZI("America/New_York"))
+    _date_str = _nyc_now.strftime("%d-%b-%Y")
+    _ts_str = _nyc_now.strftime("%d-%b-%Y %H:%M NYC")
+
+    _sr3_notes = st.text_input("Notes (optional)", value="", key="sr3_save_notes")
+
+    _sb1, _sb2, _sb3 = st.columns(3)
+    _snap_type = None
+    with _sb1:
+        if st.button(f"🌙 EOD {_date_str}", key="sr3_snap_eod", use_container_width=True):
+            _snap_type = "EOD"
+    with _sb2:
+        if st.button(f"🌅 SOD {_date_str}", key="sr3_snap_sod", use_container_width=True):
+            _snap_type = "SOD"
+    with _sb3:
+        if st.button(f"⏱ Intraday {_nyc_now.strftime('%H:%M')}", key="sr3_snap_intra",
+                     use_container_width=True):
+            _snap_type = "Intraday"
+
+    if _snap_type:
+        _label = f"USD {_ts_str}" if _snap_type == "Intraday" else f"USD {_snap_type} {_ts_str}"
+        _snap_dt = _nyc_now.replace(tzinfo=None)  # naive datetime for DB
+        _rows_to_save = []
+        for (code, ctype, exp_str, underlying, maturity_str) in SR3_CONTRACTS_CANONICAL:
+            if code not in grid_state:
+                continue
+            r = dict(grid_state[code])
+            r.setdefault("contract_code", code)
+            r.setdefault("contract_type", ctype)
+            r.setdefault("expiry_date", exp_str)
+            r.setdefault("underlying", underlying)
+            r.setdefault("maturity_date", maturity_str)
+            r.setdefault("vol_type", "normal")
+            _rows_to_save.append(r)
+
+        if not _rows_to_save:
+            st.warning("No rows have values to save.")
+        else:
+            n = save_sr3_snapshot(user_id, _label, _snap_dt, _rows_to_save, _sr3_notes.strip())
+            if n:
+                list_sr3_snapshots.clear()
+                st.session_state["sr3_current_label"] = f"{_snap_dt.date()} | {_label}"
+                st.success(f"✅ Saved **{_label}** — {n} rows to sr3_vol_history")
+            else:
+                st.error("Save failed — see error above.")
 
 
 def midcurve_tab():
