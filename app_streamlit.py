@@ -6832,10 +6832,10 @@ def curves_tab():
                     st.session_state.pop("_gen_usd_fwd_requested", None)
 
                     # Standard USD expiries and tenors
-                    # Match AUD expiry grid exactly
-                    _USD_EXPIRIES = [1/52, 1/12, 2/12, 3/12, 6/12, 9/12, 1, 1.5, 2, 3, 5, 7, 10, 15, 20, 30]
+                    # Match AUD expiry grid exactly (22 rows)
+                    _USD_EXPIRIES = [1/52, 1/12, 2/12, 3/12, 6/12, 9/12, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30]
                     _USD_TENORS   = [1, 2, 3, 4, 5, 7, 10, 12, 15, 20, 25, 30]
-                    _EXP_LABELS   = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","15y","20y","30y"]
+                    _EXP_LABELS   = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
                     _TEN_LABELS   = ["1Y","2Y","3Y","4Y","5Y","7Y","10Y","12Y","15Y","20Y","25Y","30Y"]
 
                     def _interp_rate(df_curve, maturity, col="ZeroRatePct"):
