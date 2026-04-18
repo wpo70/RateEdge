@@ -18963,7 +18963,19 @@ def main():
                                 if "vol_data" not in st.session_state: st.session_state["vol_data"] = {}
                                 if _cc2 not in st.session_state["vol_data"]: st.session_state["vol_data"][_cc2] = {}
                                 if _av:
-                                    _df = pd.DataFrame(_av["values"])
+                                    # Handle both formats: {"values":[...rows...]} and flat {"exp_ten": val}
+                                    if "values" in _av:
+                                        _df = pd.DataFrame(_av["values"])
+                                    else:
+                                        # Flat key format: "1m_2Y" -> reconstruct DataFrame
+                                        _flat_rows = {}
+                                        for _k, _v in _av.items():
+                                            if "_" in str(_k):
+                                                _parts = str(_k).split("_", 1)
+                                                _exp, _ten = _parts[0], _parts[1]
+                                                if _exp not in _flat_rows: _flat_rows[_exp] = {"Expiry": _exp}
+                                                _flat_rows[_exp][_ten] = _v
+                                        _df = pd.DataFrame(list(_flat_rows.values()))
                                     if "Expiry" in _df.columns: _df = _df[["Expiry"]+[c for c in _df.columns if c!="Expiry"]]
                                     st.session_state["vol_data"][_cc2]["atm"] = _df
                                     if "vol_editor" not in st.session_state: st.session_state["vol_editor"]={"working":{},"base":{},"history":{},"future":{},"redo_stack":{}}
