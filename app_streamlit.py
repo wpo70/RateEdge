@@ -7029,25 +7029,23 @@ def curves_tab():
                 st.caption(_label)
                 st.dataframe(_df, use_container_width=True, hide_index=True)
 
-    if ccy != "USD":
-     st.markdown("---")
-
     # ── IRS Forward Matrix (AUD/NZD only) ────────────────────────────────────────
     if ccy != "USD":
         if "fwd_matrix"   not in st.session_state: st.session_state["fwd_matrix"]   = {}
-    if "basis_matrix" not in st.session_state: st.session_state["basis_matrix"] = {}
-    if "fwd_section_open" not in st.session_state: st.session_state["fwd_section_open"] = True
+        if "basis_matrix" not in st.session_state: st.session_state["basis_matrix"] = {}
+        if "fwd_section_open" not in st.session_state: st.session_state["fwd_section_open"] = True
+        st.markdown("---")
 
-    has_fwd = ccy in st.session_state.get("fwd_matrix", {}) and \
-              not st.session_state["fwd_matrix"][ccy].empty
+        has_fwd = ccy in st.session_state.get("fwd_matrix", {}) and \
+                  not st.session_state["fwd_matrix"][ccy].empty
 
-    _fl = "▼ Hide Forward Swap Rates" if st.session_state["fwd_section_open"] else "▶ Show Forward Swap Rates"
-    if st.button(_fl, key="fwd_toggle"):
-        st.session_state["fwd_section_open"] = not st.session_state["fwd_section_open"]
-        st.rerun()
+        _fl = "▼ Hide Forward Swap Rates" if st.session_state["fwd_section_open"] else "▶ Show Forward Swap Rates"
+        if st.button(_fl, key="fwd_toggle"):
+            st.session_state["fwd_section_open"] = not st.session_state["fwd_section_open"]
+            st.rerun()
 
-    if st.session_state["fwd_section_open"]:
-        _r1, _r2, _r3, _r4 = st.columns([3, 1, 3, 3])
+        if st.session_state["fwd_section_open"]:
+            _r1, _r2, _r3, _r4 = st.columns([3, 1, 3, 3])
         with _r1:
             leg_conv = st.radio("Leg Convention", ["Market","Q/Q","S/S"],
                                 horizontal=True, key="fwd_leg_convention")
