@@ -6017,26 +6017,23 @@ def vol_config_tab():
     st.markdown("#### Upload Config File")
     import io as _upload_io
 
+    def _cfg_upload_changed():
+        f = st.session_state.get("cfg_upload_v9")
+        if f is not None:
+            f.seek(0)
+            b = f.read()
+            if b:
+                st.session_state["_vol_cfg_bytes"] = b
+                st.session_state["_vol_cfg_name"] = f.name
+
     _upload_raw = st.file_uploader(
         "Upload RateEdge_Config.xlsx",
         type=["xlsx"],
-        key="cfg_upload_v7",
+        key="cfg_upload_v9",
+        on_change=_cfg_upload_changed,
         help="Excel file with sheets: ATM_Vols_[CCY], SABR_*_[CCY], Curves_[CCY]"
     )
 
-    # Always try to read from widget first — Streamlit file_uploader persists
-    # the uploaded file across reruns until the user removes it
-    if _upload_raw is not None:
-        try:
-            _upload_raw.seek(0)
-            _raw_bytes = _upload_raw.read()
-            if len(_raw_bytes) > 0:
-                st.session_state["_vol_cfg_bytes"] = _raw_bytes
-                st.session_state["_vol_cfg_name"] = _upload_raw.name
-        except Exception:
-            pass
-
-    # Build upload BytesIO from cache — always available after first upload
     if st.session_state.get("_vol_cfg_bytes"):
         upload = _upload_io.BytesIO(st.session_state["_vol_cfg_bytes"])
         if _upload_raw is None:
@@ -18963,19 +18960,7 @@ def main():
                                 if "vol_data" not in st.session_state: st.session_state["vol_data"] = {}
                                 if _cc2 not in st.session_state["vol_data"]: st.session_state["vol_data"][_cc2] = {}
                                 if _av:
-                                    # Handle both formats: {"values":[...rows...]} and flat {"exp_ten": val}
-                                    if "values" in _av:
-                                        _df = pd.DataFrame(_av["values"])
-                                    else:
-                                        # Flat key format: "1m_2Y" -> reconstruct DataFrame
-                                        _flat_rows = {}
-                                        for _k, _v in _av.items():
-                                            if "_" in str(_k):
-                                                _parts = str(_k).split("_", 1)
-                                                _exp, _ten = _parts[0], _parts[1]
-                                                if _exp not in _flat_rows: _flat_rows[_exp] = {"Expiry": _exp}
-                                                _flat_rows[_exp][_ten] = _v
-                                        _df = pd.DataFrame(list(_flat_rows.values()))
+                                    _df = pd.DataFrame(_av["values"])
                                     if "Expiry" in _df.columns: _df = _df[["Expiry"]+[c for c in _df.columns if c!="Expiry"]]
                                     st.session_state["vol_data"][_cc2]["atm"] = _df
                                     if "vol_editor" not in st.session_state: st.session_state["vol_editor"]={"working":{},"base":{},"history":{},"future":{},"redo_stack":{}}
