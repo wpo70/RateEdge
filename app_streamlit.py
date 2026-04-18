@@ -14675,6 +14675,12 @@ def _make_overlay_fig(snap_a: dict, snap_b: dict):
 
 @st.fragment
 def backtesting_tab():
+    # Route USD to dedicated USD function — AUD/NZD fall through to existing logic below
+    _ccy_current = st.session_state.get("sidebar_ccy", "AUD")
+    if _ccy_current == "USD":
+        _backtesting_tab_usd()
+        return
+
     st.subheader("📊 Historical VOL Analysis")
 
     ccy = st.session_state.get("selected_ccy", "AUD")
@@ -14951,6 +14957,223 @@ def backtesting_tab():
     with col2:
         st.slider("Wing vol shift (bp)", -50, 50, 0, key="bt_wing_shift")
         st.slider("Vega flatten (%)", -20, 20, 0, key="bt_vega_flat")
+
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# USD HISTORICAL VOL ANALYSIS — added 18-Apr-2026
+# Mirrors AUD backtesting_tab structure with USD adaptations:
+#  - Uses sidebar_ccy (AUD version still reads legacy selected_ccy)
+#  - Floating rate options: SOFR / FEDFUNDS (instead of 3M/6M BBSW)
+#  - Seed block reads USD vol surface from vol_data["USD"]["atm"]
+# AUD code path is untouched — USD is routed here via guard in backtesting_tab()
+# ══════════════════════════════════════════════════════════════════════════
+
+def _backtesting_tab_usd():
+    st.subheader("📊 Historical VOL Analysis — USD")
+    ccy = "USD"
+
+    # ── Section 1: Vol Surface History ───────────────────────────────────────
+    st.markdown("### 🌊 Vol Surface History")
+    if not HAS_POSTGRES:
+        st.warning("Database not connected — vol history unavailable.")
+    else:
+        c1, c2, c3 = st.columns([2, 2, 2])
+        with c1:
+            _vs_start = st.date_input("From", value=pd.Timestamp.now() - pd.Timedelta(days=365),
+                                       key="hviz_usd_vol_start")
+        with c2:
+            _vs_end = st.date_input("To", value=pd.Timestamp.now(), key="hviz_usd_vol_end")
+        with c3:
+            _vs_mode = st.selectbox("View", ["Animated Timeline", "Single Date", "Overlay A vs B"],
+                                     key="hviz_usd_vol_mode")
+
+        if st.button("🔄 Load Vol Snapshots", key="hviz_usd_load_vol"):
+            getattr(_load_vol_snapshots_for_viz, "clear", lambda: None)()
+            st.session_state["hviz_usd_snaps_loaded"] = True
+
+        snaps = _load_vol_snapshots_for_viz(ccy, str(_vs_start), str(_vs_end))
+
+        if not snaps:
+            st.info("No USD vol snapshots in this date range. Save EOD snapshots from the Vol Export tab.")
+            st.caption(f"DEBUG: 0 snapshots loaded from DB for USD between {_vs_start} and {_vs_end}")
+        else:
+            st.caption(f"Found **{len(snaps)}** snapshots  ·  "
+                       f"{snaps[0]['date'].strftime('%Y-%m-%d')} → {snaps[-1]['date'].strftime('%Y-%m-%d')}")
+
+            if _vs_mode == "Animated Timeline":
+                _fig = _make_vol_surface_fig(snaps, f"{ccy} ATM Vol Surface — bp (animated)")
+                if _fig:
+                    st.plotly_chart(_fig, use_container_width=True, key="hviz_usd_vol_chart")
+                else:
+                    _s0 = snaps[0] if snaps else None
+                    if _s0 is not None:
+                        _df0 = _s0["df"]
+                        st.warning(f"Could not build surface. Snap 0: index={list(_df0.index[:3])}, cols={list(_df0.columns[:3])}, shape={_df0.shape}")
+                    else:
+                        st.warning("Could not build surface — check snapshot data format.")
+
+            elif _vs_mode == "Single Date":
+                _snap_labels = [f"{s['date'].strftime('%Y-%m-%d')}  {s['label']}" for s in snaps]
+                _sel_idx = st.selectbox("Select snapshot", range(len(_snap_labels)),
+                                         format_func=lambda i: _snap_labels[i],
+                                         key="hviz_usd_single_sel")
+                _fig = _make_vol_surface_fig([snaps[_sel_idx]], f"{ccy} ATM Vol — {snaps[_sel_idx]['date'].strftime('%Y-%m-%d')}")
+                if _fig:
+                    st.plotly_chart(_fig, use_container_width=True)
+
+            elif _vs_mode == "Overlay A vs B":
+                _snap_labels = [f"{s['date'].strftime('%Y-%m-%d')}  {s['label']}" for s in snaps]
+                _oa, _ob = st.columns(2)
+                with _oa:
+                    _idx_a = st.selectbox("Date A", range(len(_snap_labels)),
+                                           format_func=lambda i: _snap_labels[i],
+                                           index=0, key="hviz_usd_ov_a")
+                with _ob:
+                    _idx_b = st.selectbox("Date B", range(len(_snap_labels)),
+                                           format_func=lambda i: _snap_labels[i],
+                                           index=min(len(snaps)-1, len(snaps)-1),
+                                           key="hviz_usd_ov_b")
+                if _idx_a != _idx_b:
+                    _fig = _make_overlay_fig(snaps[_idx_a], snaps[_idx_b])
+                    if _fig:
+                        st.plotly_chart(_fig, use_container_width=True)
+                    else:
+                        st.warning("Snapshot grids don't match — select two snapshots with identical expiry/tenor structure.")
+                else:
+                    st.info("Select two different dates to compare.")
+
+    # ── Section 2: Forward Swap Rate Matrix History ───────────────────────────
+    st.markdown("---")
+    st.markdown("### 📈 Par Swap Rate History")
+
+    if not HAS_POSTGRES:
+        st.warning("Database not connected.")
+    else:
+        _fr1, _fr2, _fr3 = st.columns([2, 2, 2])
+        with _fr1:
+            _fr_start = st.date_input("From", value=pd.Timestamp.now() - pd.Timedelta(days=90),
+                                       key="hviz_usd_fwd_start")
+        with _fr2:
+            _fr_end = st.date_input("To", value=pd.Timestamp.now(), key="hviz_usd_fwd_end")
+        with _fr3:
+            _fr_type = st.selectbox("Floating Rate", ["SOFR", "FEDFUNDS"],
+                                     key="hviz_usd_fwd_type")
+
+        if st.button("🔄 Load Rate History", key="hviz_usd_load_fwd"):
+            _load_fwd_rates_for_viz.clear()
+
+        _pivot = _load_fwd_rates_for_viz(ccy, str(_fr_start), str(_fr_end), _fr_type)
+
+        if _pivot.empty:
+            st.info(f"No {_fr_type} data in this date range. Load data into swap_rates table first.")
+        else:
+            st.caption(f"Loaded **{len(_pivot)}** daily curves  ·  "
+                       f"Tenors: {', '.join(list(_pivot.columns)[:6])}{'...' if len(_pivot.columns) > 6 else ''}")
+
+            _fwd_mode = st.radio("View", ["3D Surface (time × tenor)", "Single Date Curve",
+                                           "Overlay A vs B"],
+                                  horizontal=True, key="hviz_usd_fwd_mode")
+
+            if _fwd_mode == "3D Surface (time × tenor)":
+                _fig2 = _make_fwd_matrix_surface_fig(
+                    _pivot, list(_pivot.index),
+                    f"{ccy} {_fr_type} Par Rates — {str(_fr_start)} to {str(_fr_end)}")
+                if _fig2:
+                    st.plotly_chart(_fig2, use_container_width=True)
+
+            elif _fwd_mode == "Single Date Curve":
+                import plotly.graph_objects as go
+                _avail_dates = [d.strftime("%Y-%m-%d") for d in _pivot.index]
+                _sel_date = st.selectbox("Date", _avail_dates,
+                                          index=len(_avail_dates)-1, key="hviz_usd_fwd_single")
+                _row = _pivot.loc[_pivot.index.strftime("%Y-%m-%d") == _sel_date]
+                if not _row.empty:
+                    _tx = []
+                    for c in _row.columns:
+                        _cs = str(c).upper()
+                        try:
+                            if _cs.endswith("Y"): _tx.append(float(_cs[:-1]))
+                            elif _cs.endswith("M"): _tx.append(float(_cs[:-1])/12.0)
+                            else: _tx.append(float(_cs))
+                        except Exception:
+                            _tx.append(0.0)
+                    _ry = _row.values[0].tolist()
+                    _fig3 = go.Figure(go.Scatter(x=_tx, y=_ry, mode="lines+markers",
+                                                  line=dict(color="#00B4C8", width=2),
+                                                  marker=dict(size=6)))
+                    _fig3.update_layout(
+                        title=dict(text=f"{ccy} {_fr_type}  {_sel_date}", font=dict(color="#f1f5f9")),
+                        xaxis_title="Tenor (Y)", yaxis_title="Rate (%)",
+                        height=350, template="plotly_dark",
+                        paper_bgcolor="rgba(15,23,42,0.95)",
+                        plot_bgcolor="rgba(15,23,42,0.8)",
+                        font=dict(color="#94a3b8"),
+                        xaxis=dict(gridcolor="#334155"),
+                        yaxis=dict(gridcolor="#334155"),
+                        margin=dict(l=40, r=20, t=50, b=40))
+                    st.plotly_chart(_fig3, use_container_width=True)
+
+            elif _fwd_mode == "Overlay A vs B":
+                import plotly.graph_objects as go
+                _avail_dates = [d.strftime("%Y-%m-%d") for d in _pivot.index]
+                _fo1, _fo2 = st.columns(2)
+                with _fo1:
+                    _fd_a = st.selectbox("Date A", _avail_dates, index=0, key="hviz_usd_fo_a")
+                with _fo2:
+                    _fd_b = st.selectbox("Date B", _avail_dates,
+                                          index=len(_avail_dates)-1, key="hviz_usd_fo_b")
+                _row_a = _pivot.loc[_pivot.index.strftime("%Y-%m-%d") == _fd_a]
+                _row_b = _pivot.loc[_pivot.index.strftime("%Y-%m-%d") == _fd_b]
+                if not _row_a.empty and not _row_b.empty:
+                    import numpy as np
+                    _tx = []
+                    for c in _pivot.columns:
+                        _cs = str(c).upper()
+                        try:
+                            if _cs.endswith("Y"): _tx.append(float(_cs[:-1]))
+                            elif _cs.endswith("M"): _tx.append(float(_cs[:-1])/12.0)
+                            else: _tx.append(float(_cs))
+                        except Exception:
+                            _tx.append(0.0)
+                    _ra = _row_a.values[0]
+                    _rb = _row_b.values[0]
+                    _delta = _rb - _ra
+                    _fig4 = go.Figure()
+                    _fig4.add_trace(go.Scatter(x=_tx, y=_ra.tolist(), name=f"A: {_fd_a}",
+                                               mode="lines+markers", line=dict(color="#00B4C8", width=2)))
+                    _fig4.add_trace(go.Scatter(x=_tx, y=_rb.tolist(), name=f"B: {_fd_b}",
+                                               mode="lines+markers", line=dict(color="#F0A500", width=2)))
+                    _fig4.add_trace(go.Bar(x=_tx, y=(_delta * 100).tolist(),
+                                           name="Δ B−A (bp)", yaxis="y2",
+                                           marker_color=["#18A96A" if v >= 0 else "#DC3545"
+                                                         for v in _delta],
+                                           opacity=0.5))
+                    _fig4.update_layout(
+                        title=dict(text=f"{ccy} {_fr_type}  Overlay: {_fd_a} vs {_fd_b}", font=dict(color="#f1f5f9")),
+                        xaxis_title="Tenor (Y)", yaxis_title="Rate (%)",
+                        template="plotly_dark",
+                        paper_bgcolor="rgba(15,23,42,0.95)",
+                        plot_bgcolor="rgba(15,23,42,0.8)",
+                        font=dict(color="#94a3b8"),
+                        xaxis=dict(gridcolor="#334155"),
+                        yaxis=dict(gridcolor="#334155"),
+                        yaxis2=dict(title="Δ bp", overlaying="y", side="right", gridcolor="#334155"),
+                        legend=dict(orientation="h", y=-0.2, font=dict(color="#e2e8f0")),
+                        height=380, margin=dict(l=40, r=60, t=50, b=60))
+                    st.plotly_chart(_fig4, use_container_width=True)
+
+    # ── Section 3: What-if Scenarios (retained) ───────────────────────────────
+    st.markdown("---")
+    st.markdown("### 🎛️ What-if Scenarios")
+    st.caption("Placeholder — will clone surfaces, apply shocks, and reprice portfolio with RV breakdowns.")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.slider("Parallel curve shift (bp)", -200, 200, 0, key="bt_usd_curve_shift")
+        st.slider("ATM vol shift (bp)", -50, 50, 0, key="bt_usd_vol_shift")
+    with col2:
+        st.slider("Wing vol shift (bp)", -50, 50, 0, key="bt_usd_wing_shift")
+        st.slider("Vega flatten (%)", -20, 20, 0, key="bt_usd_vega_flat")
 
 
 # ─── RV Historical Data ──────────────────────────────────────────────────────
