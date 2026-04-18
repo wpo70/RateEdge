@@ -6767,20 +6767,52 @@ def curves_tab():
             st.plotly_chart(_usd_fig, use_container_width=True)
 
             # USD Curve Data Table
+            # Helper: convert maturity (years) → tenor label for DISPLAY only
+            def _mat_to_tenor(_y):
+                try:
+                    _y = float(_y)
+                except Exception:
+                    return str(_y)
+                _map = [
+                    (1/52, "1w"), (2/52, "2w"), (3/52, "3w"),
+                    (1/12, "1m"), (2/12, "2m"), (3/12, "3m"), (4/12, "4m"),
+                    (5/12, "5m"), (6/12, "6m"), (7/12, "7m"), (8/12, "8m"),
+                    (9/12, "9m"), (10/12, "10m"), (11/12, "11m"),
+                    (1.0, "1y"), (1.5, "18m"),
+                    (2.0, "2y"), (3.0, "3y"), (4.0, "4y"), (5.0, "5y"),
+                    (6.0, "6y"), (7.0, "7y"), (8.0, "8y"), (9.0, "9y"),
+                    (10.0, "10y"), (12.0, "12y"), (15.0, "15y"),
+                    (20.0, "20y"), (25.0, "25y"), (30.0, "30y"),
+                    (40.0, "40y"), (50.0, "50y"),
+                ]
+                for _v, _lbl in _map:
+                    if abs(_y - _v) < 0.005:
+                        return _lbl
+                return f"{_y:.4g}Y"
+
+            def _relabel_maturity(_df):
+                """Return display copy with MaturityY mapped to tenor labels. Original untouched."""
+                if _df is None or _df.empty:
+                    return _df
+                _dc = _df.copy()
+                if "MaturityY" in _dc.columns:
+                    _dc["MaturityY"] = _dc["MaturityY"].apply(_mat_to_tenor)
+                return _dc
+
             with st.expander("USD Curve Data", expanded=True):
                 _usd_tcols = st.columns(3)
                 with _usd_tcols[0]:
                     st.caption("SOFR Swap (%)")
                     if _sofr_curve is not None and not _sofr_curve.empty:
-                        st.dataframe(_sofr_curve.rename(columns={"MaturityY":"Maturity(Y)","ZeroRatePct":"Rate(%)"}), use_container_width=True, hide_index=True)
+                        st.dataframe(_relabel_maturity(_sofr_curve).rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Rate(%)"}), use_container_width=True, hide_index=True)
                 with _usd_tcols[1]:
                     st.caption("FF OIS (%)")
                     if _ff_ois is not None and not _ff_ois.empty:
-                        st.dataframe(_ff_ois.rename(columns={"MaturityY":"Maturity(Y)","ZeroRatePct":"Rate(%)"}), use_container_width=True, hide_index=True)
+                        st.dataframe(_relabel_maturity(_ff_ois).rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Rate(%)"}), use_container_width=True, hide_index=True)
                 with _usd_tcols[2]:
                     st.caption("SOFR-FF Basis (bp)")
                     if _sofr_ff_bas is not None and not _sofr_ff_bas.empty:
-                        st.dataframe(_sofr_ff_bas.rename(columns={"MaturityY":"Maturity(Y)","BasisBp":"Basis(bp)"}), use_container_width=True, hide_index=True)
+                        st.dataframe(_relabel_maturity(_sofr_ff_bas).rename(columns={"MaturityY":"Tenor","BasisBp":"Basis(bp)"}), use_container_width=True, hide_index=True)
 
             # SOFR-FF Basis chart (bp, separate axis)
             if _sofr_ff_bas is not None and not _sofr_ff_bas.empty:
