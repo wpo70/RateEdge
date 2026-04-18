@@ -6906,7 +6906,7 @@ def curves_tab():
                         _disp_df.style.format(_fmt_dict).background_gradient(
                             cmap="RdYlGn_r" if _disp_key == "SOFR-FF Basis" else "RdYlGn",
                             subset=_num_cols),
-                        use_container_width=True, hide_index=True, height=480
+                        use_container_width=True, hide_index=True, height=820
                     )
                 else:
                     st.info("Click **▶ Generate USD Forward Matrix** to compute.")
@@ -6923,7 +6923,8 @@ def curves_tab():
         with _ck[3]: _show_b6  = st.checkbox("6v3 Basis", value=True, key="chart_b6")
         with _ck[4]: _show_b3  = st.checkbox("3v1 Basis", value=True, key="chart_b3")
 
-    try:
+    if ccy != "USD":
+     try:
         fig = go.Figure()
         if _show_par:
             if par_rates is not None and not par_rates.empty:
@@ -6982,10 +6983,11 @@ def curves_tab():
             legend=dict(orientation="h", y=1.1),
             margin=dict(l=40, r=40, t=20, b=40))
         st.plotly_chart(fig, use_container_width=True)
-    except Exception as _e:
+     except Exception as _e:
         st.warning(f"Chart: {_e}")
 
-    with st.expander("IRS Par Rates & Curve Data", expanded=False):
+    if ccy != "USD":
+     with st.expander("IRS Par Rates & Curve Data", expanded=False):
         _cols_to_show = []
         if ccy == "USD": pass  # no AUD data tables for USD
         elif _show_par:
