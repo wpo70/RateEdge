@@ -11515,12 +11515,28 @@ def caps_floors_tab(vol_mode: str):
                 # Mark this render so the Listed bootstrap pre-calc block
                 # doesn't immediately overwrite the refreshed swaption values.
                 # Cleared automatically on the NEXT render.
-                st.session_state["_refresh_swpt_just_clicked"] = True
                 _prem_df = st.session_state.get("atm_prem_matrix", {}).get(ccy, {}).get("prem")
-                if _prem_df is not None and not _prem_df.empty:
+                if _prem_df is None or _prem_df.empty:
+                    # Sticky error — persists across the rerun via session flag
+                    st.session_state["_refresh_swpt_error"] = (
+                        f"⚠️ **ATM premium matrix is empty for {ccy}.**\n\n"
+                        f"Refresh Swaptions reads ATM swaption premiums from "
+                        f"`atm_prem_matrix[{ccy}]['prem']` — which gets populated when "
+                        f"you click **📐 Generate Forward & ATM Matrix** on the "
+                        f"**Curves** tab.\n\n"
+                        f"**Fix:** Switch to the Curves tab → scroll down to the "
+                        f"'Forward & ATM Matrix' section → click Generate → come "
+                        f"back to Caps/Floors → click Refresh Swaptions again."
+                    )
+                    # Don't rerun — let the error render inline immediately below
+                else:
+                    # Clear any previous error and proceed
+                    st.session_state.pop("_refresh_swpt_error", None)
+                    st.session_state["_refresh_swpt_just_clicked"] = True
                     # Get OIS curve for forward→spot conversion
                     _ois_rs = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
                     if _ois_rs is None: _ois_rs = get_basis_curve(ccy, "ois")
+                    _rows_ok = 0
                     for lbl, exp, tenor, cfs_lbl in [
                         ("3m1y","3m",1.0,"1Y CFS"),("1y1y","1y",1.0,"2Y CFS"),
                         ("2y1y","2y",1.0,"3Y CFS"),("3y1y","3y",1.0,"4Y CFS"),
@@ -11550,10 +11566,24 @@ def caps_floors_tab(vol_mode: str):
                                 "cfs_label": cfs_lbl,
                                 "cfs_straddle": v_spot
                             }
+                            _rows_ok += 1
                         except: pass
-                else:
-                    st.warning("Generate ATM Matrix on Curves tab first.")
-                st.rerun()
+                    # Flash success briefly (sticky in session — will show once then clear)
+                    st.session_state["_refresh_swpt_success"] = (
+                        f"✅ Refreshed {_rows_ok}/9 swaption rows from ATM premium matrix."
+                    )
+                    st.rerun()
+
+            # Display any sticky Refresh Swaptions error OR success message.
+            _refresh_err = st.session_state.get("_refresh_swpt_error")
+            _refresh_ok  = st.session_state.pop("_refresh_swpt_success", None)
+            if _refresh_err:
+                st.error(_refresh_err)
+                if st.button("✓ Dismiss", key="_refresh_err_dismiss"):
+                    st.session_state.pop("_refresh_swpt_error", None)
+                    st.rerun()
+            elif _refresh_ok:
+                st.success(_refresh_ok)
 
             # ── Publish Wedge Mids to Blotter ─────────────────────────
             st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
