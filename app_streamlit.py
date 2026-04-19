@@ -2721,10 +2721,21 @@ def _load_sr3_latest_usd() -> dict:
 
 def _sr3_anchor_points(sr3_rows: dict, today=None) -> list:
     """
-    Extract (T_yrs, atm_vol_bp) anchor points from SR3 snapshot for CFS caplet.
-    Returns list sorted by T. Uses expiry_date → T_yrs conversion.
-    Quarterlies and serials both contribute; mid-curves are skipped here (their
-    vol is on fwd-start rates, not spot-starting caplets).
+    Extract (T_yrs, atm_vol_bp) anchor points for CFS caplet curve.
+    
+    CRITICAL: The vol of an SR3 option is on the 3M SOFR fixing that occurs
+    in the underlying future's reference period. The caplet being priced at
+    T_caplet_fix has its fixing at T_caplet_fix. The correct anchor for SFRM6
+    (option expires 12-Jun-26, underlying is SFRM6 future referencing Jun→Sep
+    3M SOFR) is the MIDPOINT of that Jun→Sep reference period (~T=0.5y for
+    today=19-Apr-26), NOT the option's expiry (~T=0.15y).
+    
+    This matters because our caplet vol curve is indexed by FIXING TIME.
+    Using expiry date here was anchoring vols to the wrong point and
+    producing a too-jumpy front end.
+    
+    Returns list sorted by T. Mid-curves skipped (forward-start rate vols,
+    handled via a separate path).
     """
     from datetime import date as _d
     if today is None:
@@ -2733,19 +2744,27 @@ def _sr3_anchor_points(sr3_rows: dict, today=None) -> list:
     for code, row in (sr3_rows or {}).items():
         ctype = row.get("contract_type", "")
         if "MC" in ctype:
-            # Mid-curve vols are on fwd-start 3m fixings — handle separately
             continue
         atm = row.get("atm_vol")
         if atm is None:
             continue
         ed = row.get("expiry_date")
+        md = row.get("maturity_date")
         if ed is None:
             continue
         try:
-            if hasattr(ed, "toordinal"):
-                t = (ed - today).days / 365.25
+            ed_d = ed if hasattr(ed, "toordinal") else _d.fromisoformat(str(ed)[:10])
+            # Fixing reference period runs expiry → maturity (3M window).
+            # If maturity_date is missing, fall back to expiry + 45 days.
+            if md is not None:
+                md_d = md if hasattr(md, "toordinal") else _d.fromisoformat(str(md)[:10])
             else:
-                t = (_d.fromisoformat(str(ed)[:10]) - today).days / 365.25
+                from datetime import timedelta as _td
+                md_d = ed_d + _td(days=90)
+            # Anchor at midpoint of the reference period (T_fix midpoint)
+            from datetime import timedelta as _td2
+            mid = ed_d + _td2(days=(md_d - ed_d).days // 2)
+            t = (mid - today).days / 365.25
         except Exception:
             continue
         if t <= 0:
