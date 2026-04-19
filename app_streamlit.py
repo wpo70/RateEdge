@@ -20508,16 +20508,38 @@ SR3_SMILE_COLS = ["vol_10dp", "vol_15dp", "vol_25dp", "vol_35dp", "atm_vol",
                   "vol_35dc", "vol_25dc", "vol_15dc", "vol_10dc"]
 SR3_SMILE_LABELS = ["10DP", "15DP", "25DP", "35DP", "50D", "35DC", "25DC", "15DC", "10DC"]
 
-# CME pack colors by contract year (for contract_code cell tint)
-SR3_PACK_COLORS = {
-    2026: "#94a3b8",  # White pack  -> slate gray (visible on dark bg)
-    2027: "#ef4444",  # Red pack
-    2028: "#22c55e",  # Green pack
-    2029: "#3b82f6",  # Blue pack
-    2030: "#eab308",  # Gold pack
-    2031: "#a855f7",  # Purple pack
-    2032: "#a855f7",
-}
+# CME pack colors — packs are the "nearest 4 quarterlies" at any point in time.
+# We compute the pack at display time based on the underlying's delivery month
+# relative to the current front quarterly contract.
+#
+# Pack colors (CME convention):
+#   Whites  = nearest 4 quarterlies           (pack_idx 0..3)
+#   Reds    = next 4                          (pack_idx 4..7)
+#   Greens  = next 4                          (pack_idx 8..11)
+#   Blues   = next 4                          (pack_idx 12..15)
+#   Golds   = next 4                          (pack_idx 16..19)
+#   Purples = next 4                          (pack_idx 20..23)
+SR3_PACK_COLORS_BY_IDX = [
+    # Whites 0..3 — conventional CME display is WHITE on quote boards; adjusted
+    # for dark-mode terminal legibility. The key signal is "front pack".
+    "#e2e8f0",  # W0 — slightly tinted white
+    "#e2e8f0",
+    "#e2e8f0",
+    "#e2e8f0",
+    "#ef4444", "#ef4444", "#ef4444", "#ef4444",   # Reds
+    "#22c55e", "#22c55e", "#22c55e", "#22c55e",   # Greens
+    "#3b82f6", "#3b82f6", "#3b82f6", "#3b82f6",   # Blues
+    "#eab308", "#eab308", "#eab308", "#eab308",   # Golds
+    "#a855f7", "#a855f7", "#a855f7", "#a855f7",   # Purples
+]
+SR3_PACK_NAMES_BY_IDX = (
+    ["W"]*4 + ["R"]*4 + ["G"]*4 + ["B"]*4 + ["Gd"]*4 + ["P"]*4
+)
+
+# Month-letter → month-number (CME / BBG futures convention)
+SR3_MONTH_LETTERS = {"F":1,"G":2,"H":3,"J":4,"K":5,"M":6,"N":7,"Q":8,"U":9,"V":10,"X":11,"Z":12}
+# Quarterly delivery months in order
+SR3_QUARTERLY_MONTHS = [3, 6, 9, 12]  # Mar, Jun, Sep, Dec
 
 # Canonical 39-row scaffold — shown as rows even if DB has no data for them yet.
 # Split point: rows 0-22 are standards/serials (23), rows 23-38 are mid-curves (16).
@@ -20546,19 +20568,19 @@ SR3_CONTRACTS_CANONICAL = [
     ("SFRM0",  "Quarterly",  "2030-06-14", "SFRM0 Comdty", "2030-09-17"),  # Gold
     ("SFRU0",  "Quarterly",  "2030-09-13", "SFRU0 Comdty", "2030-12-17"),  # Gold
     ("SFRZ0",  "Quarterly",  "2030-12-13", "SFRZ0 Comdty", "2031-03-18"),  # Gold — last liquid
-    # ── Mid-Curves (split) ─────────────────────────────────────────
-    ("0QM6",   "1Y MC",      "2026-06-12", "SFRM7 Comdty", "2027-09-14"),
-    ("0QU6",   "1Y MC",      "2026-09-11", "SFRU7 Comdty", "2027-12-14"),
-    ("0QZ6",   "1Y MC",      "2026-12-11", "SFRZ7 Comdty", "2028-03-14"),
-    ("0QH7",   "1Y MC",      "2027-03-12", "SFRH8 Comdty", "2028-06-20"),
-    ("2QM6",   "2Y MC",      "2026-06-12", "SFRM8 Comdty", "2028-09-19"),
-    ("2QU6",   "2Y MC",      "2026-09-11", "SFRU8 Comdty", "2028-12-19"),
-    ("2QZ6",   "2Y MC",      "2026-12-11", "SFRZ8 Comdty", "2029-03-20"),
-    ("2QH7",   "2Y MC",      "2027-03-12", "SFRH9 Comdty", "2029-06-18"),
-    ("3QM6",   "3Y MC",      "2026-06-12", "SFRM9 Comdty", "2029-09-18"),
-    ("3QU6",   "3Y MC",      "2026-09-11", "SFRU9 Comdty", "2029-12-18"),
-    ("3QZ6",   "3Y MC",      "2026-12-11", "SFRZ9 Comdty", "2030-03-19"),
-    ("3QH7",   "3Y MC",      "2027-03-12", "SFRH0 Comdty", "2030-06-18"),
+    # ── Mid-Curves — ticker uses UNDERLYING year (0QM27 = 1Y MC on SFRM27 = Jun-27 future) ──
+    ("0QM27",  "1Y MC",      "2026-06-12", "SFRM7 Comdty", "2027-09-14"),
+    ("0QU27",  "1Y MC",      "2026-09-11", "SFRU7 Comdty", "2027-12-14"),
+    ("0QZ27",  "1Y MC",      "2026-12-11", "SFRZ7 Comdty", "2028-03-14"),
+    ("0QH28",  "1Y MC",      "2027-03-12", "SFRH8 Comdty", "2028-06-20"),
+    ("2QM28",  "2Y MC",      "2026-06-12", "SFRM8 Comdty", "2028-09-19"),
+    ("2QU28",  "2Y MC",      "2026-09-11", "SFRU8 Comdty", "2028-12-19"),
+    ("2QZ28",  "2Y MC",      "2026-12-11", "SFRZ8 Comdty", "2029-03-20"),
+    ("2QH29",  "2Y MC",      "2027-03-12", "SFRH9 Comdty", "2029-06-18"),
+    ("3QM29",  "3Y MC",      "2026-06-12", "SFRM9 Comdty", "2029-09-18"),
+    ("3QU29",  "3Y MC",      "2026-09-11", "SFRU9 Comdty", "2029-12-18"),
+    ("3QZ29",  "3Y MC",      "2026-12-11", "SFRZ9 Comdty", "2030-03-19"),
+    ("3QH30",  "3Y MC",      "2027-03-12", "SFRH0 Comdty", "2030-06-18"),
     ("4QZ6",   "4Y MC",      "2026-12-11", "SFRZ0 Comdty", "2031-03-18"),
     ("4QH7",   "4Y MC",      "2027-03-12", "SFRH1 Comdty", "2031-06-17"),
     ("5QZ6",   "5Y MC",      "2026-12-11", "SFRZ1 Comdty", "2032-03-17"),
@@ -20567,26 +20589,73 @@ SR3_CONTRACTS_CANONICAL = [
 SR3_SPLIT_INDEX = 23  # rows 0..22 = standards/serials, 23..38 = mid-curves
 
 
-def _sr3_year_from_underlying(underlying: str, ref_year: int = 2026) -> int:
-    """Parse contract year from BBG ticker like 'SFRH0 Comdty' → 2030."""
+def _sr3_parse_underlying(underlying: str, ref_year: int = 2026):
+    """
+    Parse a BBG underlying ticker like 'SFRM7 Comdty' into (year, month).
+    Returns (year:int, month:int) or (None, None) if unparseable.
+    """
     if not underlying:
-        return ref_year
+        return None, None
     try:
-        code_part = underlying.split()[0]   # 'SFRH0'
-        year_digit = int(code_part[-1])
-        ref_decade = (ref_year // 10) * 10  # 2020
-        cand = ref_decade + year_digit
-        if cand < ref_year:
-            cand += 10
-        return cand
+        code = underlying.split()[0]                     # 'SFRM7'
+        yr_digit = int(code[-1])
+        mth_letter = code[-2].upper()
+        month = SR3_MONTH_LETTERS.get(mth_letter)
+        if month is None:
+            return None, None
+        ref_decade = (ref_year // 10) * 10               # 2020
+        yr = ref_decade + yr_digit
+        if yr < ref_year - 1:                            # wrap to next decade
+            yr += 10
+        return yr, month
     except Exception:
-        return ref_year
+        return None, None
+
+
+def _sr3_front_quarterly(today_year: int, today_month: int):
+    """
+    Given today's (year, month), return (year, month) of the nearest
+    upcoming (or current) quarterly SR3 contract. Quarterlies = Mar/Jun/Sep/Dec.
+    Simple rule: first quarterly with delivery month ≥ today_month in the same
+    year; else first quarterly next year (March).
+    """
+    for m in SR3_QUARTERLY_MONTHS:
+        if m >= today_month:
+            return today_year, m
+    return today_year + 1, 3
+
+
+def _sr3_pack_index(underlying: str, today=None) -> int:
+    """
+    How many quarterlies separate this underlying from the current front
+    quarterly contract. 0..3 = White, 4..7 = Red, etc. Returns -1 if unparseable.
+    """
+    from datetime import date as _d
+    if today is None:
+        today = _d.today()
+    u_yr, u_mo = _sr3_parse_underlying(underlying, today.year)
+    if u_yr is None or u_mo not in SR3_QUARTERLY_MONTHS:
+        return -1
+    f_yr, f_mo = _sr3_front_quarterly(today.year, today.month)
+    f_idx_abs = f_yr * 4 + SR3_QUARTERLY_MONTHS.index(f_mo)
+    u_idx_abs = u_yr * 4 + SR3_QUARTERLY_MONTHS.index(u_mo)
+    return u_idx_abs - f_idx_abs
 
 
 def _sr3_pack_color(underlying: str) -> str:
-    """Hex color for the contract_code cell background based on CME pack."""
-    yr = _sr3_year_from_underlying(underlying)
-    return SR3_PACK_COLORS.get(yr, "#64748b")
+    """Hex color for the contract code cell based on CME pack (dynamic)."""
+    idx = _sr3_pack_index(underlying)
+    if idx < 0 or idx >= len(SR3_PACK_COLORS_BY_IDX):
+        return "#64748b"   # slate for unmapped / beyond Purples
+    return SR3_PACK_COLORS_BY_IDX[idx]
+
+
+def _sr3_pack_name(underlying: str) -> str:
+    """Short pack name: 'W','R','G','B','Gd','P' or '' if out of range."""
+    idx = _sr3_pack_index(underlying)
+    if idx < 0 or idx >= len(SR3_PACK_NAMES_BY_IDX):
+        return ""
+    return SR3_PACK_NAMES_BY_IDX[idx]
 
 
 def save_sr3_snapshot(user_id: str, label: str, snapshot_date, rows: list, notes: str = "") -> int:
