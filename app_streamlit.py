@@ -2719,9 +2719,29 @@ def _load_sr3_latest_usd() -> dict:
         return {}
 
 
+def _apply_listed_adjustment(atm_vol, row: dict) -> float:
+    """
+    Apply the per-contract listed-to-delivered adjustment.
+    row is an sr3_vol_history row_dict with listed_adj_mode/ratio/bp fields.
+    Returns delivered vol in bp.
+    
+    Mode 'ratio': delivered = atm × ratio  (default ratio = 1.0 → no change)
+    Mode 'bp':    delivered = atm + bp     (default bp    = 0.0 → no change)
+    """
+    if atm_vol is None:
+        return None
+    mode = (row.get("listed_adj_mode") or "ratio").lower()
+    if mode == "bp":
+        bp = float(row.get("listed_adj_bp") or 0.0)
+        return float(atm_vol) + bp
+    # default / ratio
+    ratio = float(row.get("listed_adj_ratio") or 1.0)
+    return float(atm_vol) * ratio
+
+
 def _sr3_anchor_points(sr3_rows: dict, today=None) -> list:
     """
-    Extract (T_yrs, atm_vol_bp) anchor points for CFS caplet curve.
+    Extract (T_yrs, delivered_vol_bp) anchor points for CFS caplet curve.
     
     CRITICAL: The vol of an SR3 option is on the 3M SOFR fixing that occurs
     in the underlying future's reference period. The caplet being priced at
@@ -2730,9 +2750,10 @@ def _sr3_anchor_points(sr3_rows: dict, today=None) -> list:
     3M SOFR) is the MIDPOINT of that Jun→Sep reference period (~T=0.5y for
     today=19-Apr-26), NOT the option's expiry (~T=0.15y).
     
-    This matters because our caplet vol curve is indexed by FIXING TIME.
-    Using expiry date here was anchoring vols to the wrong point and
-    producing a too-jumpy front end.
+    DELIVERED VOL: Each anchor applies the per-row listed-to-delivered
+    adjustment (ratio or bp) to raw listed ATM. Default = no adjustment
+    (delivered == listed), but users can tune each contract's adjustment
+    in the SR3 tab grid to match broker prints.
     
     Returns list sorted by T. Mid-curves skipped (forward-start rate vols,
     handled via a separate path).
@@ -2754,14 +2775,11 @@ def _sr3_anchor_points(sr3_rows: dict, today=None) -> list:
             continue
         try:
             ed_d = ed if hasattr(ed, "toordinal") else _d.fromisoformat(str(ed)[:10])
-            # Fixing reference period runs expiry → maturity (3M window).
-            # If maturity_date is missing, fall back to expiry + 45 days.
             if md is not None:
                 md_d = md if hasattr(md, "toordinal") else _d.fromisoformat(str(md)[:10])
             else:
                 from datetime import timedelta as _td
                 md_d = ed_d + _td(days=90)
-            # Anchor at midpoint of the reference period (T_fix midpoint)
             from datetime import timedelta as _td2
             mid = ed_d + _td2(days=(md_d - ed_d).days // 2)
             t = (mid - today).days / 365.25
@@ -2769,7 +2787,11 @@ def _sr3_anchor_points(sr3_rows: dict, today=None) -> list:
             continue
         if t <= 0:
             continue
-        anchors.append((t, float(atm)))
+        # Apply listed-to-delivered adjustment per row
+        delivered = _apply_listed_adjustment(atm, row)
+        if delivered is None or delivered <= 0:
+            continue
+        anchors.append((t, delivered))
     anchors.sort(key=lambda x: x[0])
     return anchors
 
