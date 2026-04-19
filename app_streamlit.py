@@ -24422,7 +24422,7 @@ AUD vols are implied to open broadly {_aud_direction}, with an average absolute 
 Key AUD moves to watch: {_aud_move_str}.{_aud_prem_ctx}
 
 **Tactical note:** {"🔴 Significant overnight move — short-dated AUD gamma likely repriced at open. Priority: review 3m-6m expiry positions before first trades." if abs(float(_implied_chg.values.astype(float).max() if _implied_chg.values.astype(float).max() > abs(_implied_chg.values.astype(float).min()) else _implied_chg.values.astype(float).min())) > 4.0 else ("⚠️ Moderate moves — short-dated AUD gamma affected. Monitor 3m-6m expiry trades at open." if abs(float(_implied_chg.values.astype(float).max() if _implied_chg.values.astype(float).max() > abs(_implied_chg.values.astype(float).min()) else _implied_chg.values.astype(float).min())) > 2.0 else "✅ Moves are modest — no urgent repricing expected at the AUD open. Monitor live market confirmation.")} \
-These are indicative adjustments based on observed USD/AUD correlations and should be verified against live interdealer markets at open.
+These are indicative adjustments based on observed USD/AUD correlations and should be verified against live interdealer markets at open.{chr(10) + chr(10) + "**NOTE — SOD AUD IGNORING USD moves overnight**" if _ignore_usd else ""}
 """
             st.markdown(_narrative)
 
