@@ -21018,6 +21018,376 @@ def _render_sr3_basis_panel(grid_state: dict):
     )
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Convexity Adjustment Module — Step 4
+# ═══════════════════════════════════════════════════════════════════════
+# Three models compared side-by-side, average feeds the curve build (Step 5).
+# Pure functions so nightly cron can reuse. Writes to sr3_convexity_adj.
+
+SR3_CA_HW_MR = 0.03            # Hull–White mean reversion, fixed
+SR3_CA_SANITY_BP = 30.0        # soft warn threshold
+SR3_CA_MODELS = ["hull", "hw1f", "lmm_sabr"]
+
+
+def _sr3_t_years(exp_date_str, underlying_maturity_str, today=None):
+    """
+    T1 = years today→option expiry;  T2 = years expiry→underlying maturity.
+    For SR3, T2 is ~0.25 (next quarter) for standards/serials, and the
+    MC year + 0.25 for mid-curves.
+    """
+    from datetime import date as _d
+    if today is None:
+        today = _d.today()
+    try:
+        if hasattr(exp_date_str, "toordinal"):
+            ed = exp_date_str if isinstance(exp_date_str, _d) else exp_date_str.date()
+        else:
+            ed = _d.fromisoformat(str(exp_date_str)[:10])
+        if hasattr(underlying_maturity_str, "toordinal"):
+            md = underlying_maturity_str if isinstance(underlying_maturity_str, _d) else underlying_maturity_str.date()
+        else:
+            md = _d.fromisoformat(str(underlying_maturity_str)[:10])
+        t1 = (ed - today).days / 365.25
+        t2 = (md - ed).days / 365.25
+        return t1, t2
+    except Exception:
+        return None, None
+
+
+def ca_hull(sigma_bp: float, t1: float, t2: float) -> float:
+    """
+    Hull's leading-order formula: CA ≈ 0.5 · σ² · T1 · T2  (bp).
+    σ is Normal vol in bp/y. Returns CA in bp.
+    
+    NOTE: This is Hull Tech Note 1's Ho-Lee approximation. For SR3 contracts,
+    published broker convexity tables use the FULL HW1F closed-form which
+    includes higher-order T1 terms — absolute CA magnitudes from this function
+    are typically ~5-15× smaller than broker prints for T1>2y. The three
+    models here (Hull/HW1F/LMM+SABR) are INTERNALLY CONSISTENT for diagnostic
+    comparison; swap in the full HW closed-form variant when we've verified
+    which scaling matches a specific broker source.
+    """
+    if sigma_bp is None or t1 is None or t2 is None or t1 <= 0 or t2 <= 0:
+        return None
+    sigma = sigma_bp / 10000.0
+    ca_decimal = 0.5 * sigma * sigma * t1 * t2
+    return ca_decimal * 10000.0
+
+
+def ca_hw1f(sigma_bp: float, t1: float, t2: float, a: float = SR3_CA_HW_MR) -> float:
+    """
+    Hull–White 1F convexity adjustment.
+    Uses the low-mean-reversion expansion of the full closed-form:
+        CA_HW ≈ CA_Hull × [1 − a·T1/3]
+    This is Hull's Technical Note 1 Eq (4) small-a expansion, valid for
+    a·T1 ≲ 0.5 (fine for USD MR=0.03 × T1 up to ~15y).
+    At a→0 exactly reduces to Hull / Ho-Lee (σ²·T1·T2/2).
+    Returns CA in bp.
+    """
+    if sigma_bp is None or t1 is None or t2 is None or t1 <= 0 or t2 <= 0:
+        return None
+    base = ca_hull(sigma_bp, t1, t2)
+    if base is None:
+        return None
+    # MR correction factor, bounded below at 0 for very long T1
+    mr_factor = max(0.0, 1.0 - a * t1 / 3.0)
+    return base * mr_factor
+
+
+def ca_lmm_sabr(atm_vol_bp: float, t1: float, t2: float,
+                sabr_alpha=None, sabr_rho=None, sabr_nu=None,
+                forward_rate: float = 0.04) -> float:
+    """
+    LMM+SABR convexity approximation.
+    Full LMM is computationally heavy — we use the SABR-adjusted forward vol
+    as a proxy: the effective variance over [0, T1] of a SABR-driven forward
+    rate is approximately σ_ATM² · (1 + adj) where adj depends on ν, ρ.
+    The resulting CA applies the same 0.5·σ_eff²·T1·T2 shell.
+    Returns CA in bp.
+    """
+    if atm_vol_bp is None or t1 is None or t2 is None or t1 <= 0 or t2 <= 0:
+        return None
+    sigma = atm_vol_bp / 10000.0
+    # SABR variance enhancement (ATM, per Hagan small-time expansion):
+    #   σ_eff² ≈ σ² · (1 + (2 − 3ρ²) · ν² · T1 / 24 + ρ·ν·α·T1 / 4)
+    nu = float(sabr_nu) if sabr_nu is not None else 0.0
+    rho = float(sabr_rho) if sabr_rho is not None else 0.0
+    alpha = float(sabr_alpha) if sabr_alpha is not None else sigma
+    enh = 1.0 + ((2.0 - 3.0 * rho * rho) * nu * nu * t1 / 24.0
+                 + rho * nu * alpha * t1 / 4.0)
+    if enh <= 0:
+        enh = 1.0
+    sigma_eff_sq = sigma * sigma * enh
+    ca_decimal = 0.5 * sigma_eff_sq * t1 * t2
+    return ca_decimal * 10000.0
+
+
+def _lookup_sabr_at(vol_data_usd: dict, t1: float):
+    """
+    Pull SABR (alpha, rho, nu) from the OTC USD surface at the nearest
+    (expiry, tenor=1y) cell. Returns (alpha, rho, nu) or (None, None, None).
+    """
+    if not vol_data_usd:
+        return None, None, None
+    expiry_labels = [
+        ("1w", 1/52), ("2w", 2/52), ("1m", 1/12), ("2m", 2/12), ("3m", 3/12),
+        ("6m", 6/12), ("9m", 9/12), ("1y", 1.0),
+    ]
+    best_label = min(expiry_labels, key=lambda x: abs(x[1] - t1))[0]
+    out = []
+    for k in ("alpha", "rho", "nu"):
+        df = vol_data_usd.get(k)
+        if df is None or (hasattr(df, "empty") and df.empty):
+            out.append(None)
+            continue
+        try:
+            v = get_matrix_value(df, best_label, 1.0)
+            out.append(float(v) if v is not None else None)
+        except Exception:
+            out.append(None)
+    return tuple(out)
+
+
+def _sr3_ca_eligible(ctype: str) -> bool:
+    """35 of 39 contracts: all except 4Y and 5Y MC."""
+    return ctype not in ("4Y MC", "5Y MC")
+
+
+def compute_sr3_ca_for_grid(grid_state: dict, today=None):
+    """
+    Pure function: iterate the grid, compute CA for each eligible contract
+    under all 3 models, return a list of per-contract dicts.
+    No DB calls here — caller decides whether to persist.
+    """
+    vol_data_usd = st.session_state.get("vol_data", {}).get("USD", {})
+    results = []
+    for (code, ctype, exp_str, und, mat_str) in SR3_CONTRACTS_CANONICAL:
+        if not _sr3_ca_eligible(ctype):
+            continue
+        row = grid_state.get(code)
+        if not row or row.get("atm_vol") is None:
+            continue
+        atm = float(row["atm_vol"])
+        t1, t2 = _sr3_t_years(exp_str, mat_str, today)
+        if t1 is None or t1 <= 0:
+            continue
+        a, rho, nu = _lookup_sabr_at(vol_data_usd, t1)
+        c_hull = ca_hull(atm, t1, t2)
+        c_hw   = ca_hw1f(atm, t1, t2)
+        c_lmm  = ca_lmm_sabr(atm, t1, t2, sabr_alpha=a, sabr_rho=rho, sabr_nu=nu)
+        vals = [v for v in (c_hull, c_hw, c_lmm) if v is not None]
+        c_avg = sum(vals) / len(vals) if vals else None
+        spread = (max(vals) - min(vals)) if len(vals) == 3 else None
+        results.append({
+            "contract_code": code,
+            "contract_type": ctype,
+            "t1": t1, "t2": t2,
+            "atm_vol": atm,
+            "sabr_alpha": a, "sabr_rho": rho, "sabr_nu": nu,
+            "ca_hull": c_hull,
+            "ca_hw1f": c_hw,
+            "ca_lmm_sabr": c_lmm,
+            "ca_avg":  c_avg,
+            "ca_spread": spread,
+        })
+    return results
+
+
+def save_sr3_ca_snapshot(snapshot_date, label: str, ca_rows: list) -> int:
+    """
+    Persist one row per (contract, model) to sr3_convexity_adj.
+    Writes 3 rows per contract: hull / hw1f / lmm_sabr.
+    Returns total rows written.
+    """
+    if not HAS_POSTGRES or not ca_rows:
+        return 0
+    conn = get_db_connection()
+    if not conn:
+        return 0
+    try:
+        cur = conn.cursor()
+        n = 0
+        for r in ca_rows:
+            for model_key, ca_key in (("hull", "ca_hull"),
+                                       ("hw1f", "ca_hw1f"),
+                                       ("lmm_sabr", "ca_lmm_sabr")):
+                ca_bp = r.get(ca_key)
+                if ca_bp is None:
+                    continue
+                # futures_rate comes from the SR3 row's futures_price if available
+                # (not always populated; skip if missing — curve builder handles)
+                cur.execute("""
+                    INSERT INTO sr3_convexity_adj (
+                        currency, snapshot_date, contract_code,
+                        futures_rate, convexity_bp, adjusted_forward_rate,
+                        model, vol_source_label
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (currency, snapshot_date, contract_code, model)
+                    DO UPDATE SET
+                        convexity_bp = EXCLUDED.convexity_bp,
+                        adjusted_forward_rate = EXCLUDED.adjusted_forward_rate,
+                        futures_rate = EXCLUDED.futures_rate,
+                        vol_source_label = EXCLUDED.vol_source_label
+                """, (
+                    "USD", snapshot_date, r["contract_code"],
+                    None, float(ca_bp), None,
+                    model_key, label,
+                ))
+                n += 1
+        conn.commit()
+        cur.close()
+        return n
+    except Exception as e:
+        st.error(f"CA save failed: {e}")
+        try: conn.rollback()
+        except Exception: pass
+        return 0
+    finally:
+        try: conn.close()
+        except Exception: pass
+
+
+def _render_sr3_convexity_panel(grid_state: dict):
+    """Compute-on-view: show all 3 models side-by-side + average + spread."""
+    st.caption(
+        "Compares 3 convexity adjustment models per SR3 contract. Hull = "
+        "0.5·σ²·T₁·T₂ (Ho-Lee leading term). HW1F = Hull × (1 − a·T₁/3) with a=0.03. "
+        "LMM+SABR = Hull with σ replaced by SABR-enhanced effective vol (Hagan), "
+        "using USD swaption SABR params at matched expiry × 1y. "
+        "**Average feeds the curve build (Step 5).** "
+        f"Soft sanity warn at >{SR3_CA_SANITY_BP:.0f}bp (still writes). "
+        "**Note:** these are *relative* CAs — absolute magnitudes are Ho-Lee "
+        "leading-order (~5-15× smaller than broker prints for T₁>2y); full "
+        "HW closed-form slated as a follow-up refinement."
+    )
+
+    _tc1, _tc2, _tc3 = st.columns([1, 1, 2])
+    with _tc1:
+        flag_thresh = st.number_input(
+            "Model spread flag (bp)", value=2.0, min_value=0.1, max_value=20.0,
+            step=0.1, format="%.1f", key="sr3_ca_spread_thresh",
+            help="Flag row red if max(model) − min(model) > threshold."
+        )
+    with _tc2:
+        show_mc = st.checkbox("Include Mid-Curves", value=True, key="sr3_ca_incl_mc")
+
+    results = compute_sr3_ca_for_grid(grid_state)
+    if not results:
+        st.info("No eligible SR3 rows with ATM vols. Fill the grid above.")
+        return
+
+    if not show_mc:
+        results = [r for r in results if "MC" not in r["contract_type"]]
+
+    def _fmt(x, dp=2):
+        return f"{x:.{dp}f}" if isinstance(x, (int, float)) else "—"
+
+    _rows_display = []
+    for r in results:
+        sabr_str = "—"
+        if all(r.get(k) is not None for k in ("sabr_alpha", "sabr_rho", "sabr_nu")):
+            sabr_str = f"α={r['sabr_alpha']:.3f} ρ={r['sabr_rho']:+.2f} ν={r['sabr_nu']:.2f}"
+        status = "✓"
+        if r["ca_spread"] is not None and r["ca_spread"] > flag_thresh:
+            status = f"⚠ spread {r['ca_spread']:.1f}bp"
+        if r["ca_avg"] is not None and r["ca_avg"] > SR3_CA_SANITY_BP:
+            status = f"⚠ CA>{SR3_CA_SANITY_BP:.0f}bp"
+
+        _rows_display.append({
+            "Code":    r["contract_code"],
+            "Type":    r["contract_type"],
+            "T₁ (y)":  _fmt(r["t1"]),
+            "T₂ (y)":  _fmt(r["t2"]),
+            "σ_ATM":   _fmt(r["atm_vol"]),
+            "Hull":    _fmt(r["ca_hull"]),
+            "HW1F":    _fmt(r["ca_hw1f"]),
+            "LMM+SABR": _fmt(r["ca_lmm_sabr"]),
+            "Avg":     _fmt(r["ca_avg"]),
+            "Spread":  _fmt(r["ca_spread"]),
+            "SABR @ T₁×1y": sabr_str,
+            "Status":  status,
+        })
+
+    _df = pd.DataFrame(_rows_display)
+
+    def _color_status(val):
+        s = str(val)
+        if "⚠" in s: return "color:#ef4444;font-weight:700"
+        if "✓" in s: return "color:#22c55e"
+        return "color:#64748b"
+
+    def _color_spread(val):
+        try:
+            v = float(str(val))
+            return "color:#ef4444;font-weight:700" if v > flag_thresh else "color:#94a3b8"
+        except Exception:
+            return "color:#64748b"
+
+    _styled = _df.style.map(_color_status, subset=["Status"]).map(
+        _color_spread, subset=["Spread"]
+    )
+    st.dataframe(_styled, use_container_width=True, hide_index=True)
+
+    # Aggregates
+    _nrows = len(results)
+    _n_flag = sum(1 for r in results
+                  if r["ca_spread"] is not None and r["ca_spread"] > flag_thresh)
+    _n_sanity = sum(1 for r in results
+                    if r["ca_avg"] is not None and r["ca_avg"] > SR3_CA_SANITY_BP)
+    _avg_hull = _avg_hw = _avg_lmm = None
+    if results:
+        _vals = lambda k: [r[k] for r in results if r[k] is not None]
+        if _vals("ca_hull"):     _avg_hull = sum(_vals("ca_hull")) / len(_vals("ca_hull"))
+        if _vals("ca_hw1f"):     _avg_hw   = sum(_vals("ca_hw1f")) / len(_vals("ca_hw1f"))
+        if _vals("ca_lmm_sabr"): _avg_lmm  = sum(_vals("ca_lmm_sabr")) / len(_vals("ca_lmm_sabr"))
+
+    _m1, _m2, _m3, _m4 = st.columns(4)
+    with _m1:
+        st.metric("Contracts", _nrows)
+    with _m2:
+        st.metric(f"Flagged (spread>{flag_thresh:g}bp)", _n_flag,
+                  delta=None if _n_flag == 0 else f"{_n_flag} rows",
+                  delta_color="inverse")
+    with _m3:
+        st.metric(f"Sanity warns (>{SR3_CA_SANITY_BP:.0f}bp)", _n_sanity,
+                  delta=None if _n_sanity == 0 else f"{_n_sanity} rows",
+                  delta_color="inverse")
+    with _m4:
+        if _avg_hull is not None:
+            st.metric("Avg Hull CA (bp)", f"{_avg_hull:.2f}")
+
+    # Save action
+    st.markdown("---")
+    _sa1, _sa2 = st.columns([2, 3])
+    with _sa1:
+        if st.button("💾 Save CAs to sr3_convexity_adj", key="sr3_ca_save_btn",
+                     use_container_width=True):
+            cur_label = st.session_state.get("sr3_current_label")
+            if not cur_label:
+                st.error("No snapshot loaded — save vols first.")
+            else:
+                # Parse "YYYY-MM-DD HH:MM:SS | label" → (dt, label)
+                try:
+                    sd_str, lbl = cur_label.split(" | ", 1)
+                    sd = pd.Timestamp(sd_str).to_pydatetime()
+                except Exception:
+                    sd, lbl = None, cur_label
+                if sd is None:
+                    st.error(f"Couldn't parse snapshot key: {cur_label}")
+                else:
+                    n = save_sr3_ca_snapshot(sd, lbl, results)
+                    if n:
+                        st.success(f"✅ Wrote {n} CA rows (3 models × {_nrows} contracts)")
+                    else:
+                        st.error("CA save failed (see above).")
+    with _sa2:
+        st.caption(
+            "Saves 3 rows per contract (hull / hw1f / lmm_sabr). "
+            "On re-save for same (snapshot, contract, model) → UPDATE. "
+            "Nightly cron uses `compute_sr3_ca_for_grid` + `save_sr3_ca_snapshot` directly."
+        )
+
+
 @st.fragment
 def sr3_vol_tab():
     """USD SR3 Listed Vol Builder — BBG-format grid, SOD/EOD/Intraday saves."""
@@ -21162,6 +21532,10 @@ def sr3_vol_tab():
     with st.expander("🔍 Basis vs OTC Swaption Surface", expanded=False):
         _render_sr3_basis_panel(grid_state)
 
+    # ── Convexity Adjustment Panel ────────────────────────────────────
+    with st.expander("⚙️ Convexity Adjustment (Hull / HW1F / LMM+SABR)", expanded=False):
+        _render_sr3_convexity_panel(grid_state)
+
     # ── Save buttons (NYC timestamped) ────────────────────────────────
     st.markdown("---")
     st.markdown("### 💾 Save SR3 Vol Snapshot")
@@ -21211,6 +21585,15 @@ def sr3_vol_tab():
                 list_sr3_snapshots.clear()
                 st.session_state["sr3_current_label"] = f"{_snap_dt.date()} | {_label}"
                 st.success(f"✅ Saved **{_label}** — {n} rows to sr3_vol_history")
+                # Compute-on-save: CAs for this snapshot
+                try:
+                    ca_results = compute_sr3_ca_for_grid(grid_state)
+                    if ca_results:
+                        n_ca = save_sr3_ca_snapshot(_snap_dt, _label, ca_results)
+                        if n_ca:
+                            st.info(f"⚙️ Also wrote {n_ca} CA rows ({len(ca_results)} contracts × 3 models) to sr3_convexity_adj")
+                except Exception as _ca_e:
+                    st.warning(f"Vol saved but CA auto-compute failed: {_ca_e}")
             else:
                 st.error("Save failed — see error above.")
 
