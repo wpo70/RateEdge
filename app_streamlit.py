@@ -11545,9 +11545,63 @@ def caps_floors_tab(vol_mode: str):
         # Build caplet curve — before ATM CFS table so flat vols are fresh
         atm = get_working_atm_surface(ccy)
         _atm_hash = st.session_state.get(f"_atm_hash_{ccy}", 0)
+
+        # ═════════════════════════════════════════════════════════════════
+        # USD Listed Bootstrap (Chunk 6): when "📋 Use Listed Front editor"
+        # toggle is ON AND active source = "Listed bootstrap", compute the
+        # front straddle premium(s) from the listed caplet curve and stuff
+        # into cfs_table_data so build_caplet_vol_curve picks them up as the
+        # 1Y (and optionally 2Y) anchor — same plumbing as AUD.
+        # ═════════════════════════════════════════════════════════════════
+        _listed_bootstrap_active = False
+        _listed_1y_stradd = None
+        _listed_2y_stradd = None
+        if (ccy == "USD"
+                and st.session_state.get("_cfs_use_listed", False)
+                and st.session_state.get("cfs_active_vol_src", "OTC only") == "Listed bootstrap"):
+            try:
+                _lf_pack_now = st.session_state.get("_cfs_listed_pack", "whites")
+                # Build the listed-only caplet curve (session edits baked in).
+                # We use SR3 hybrid with a 1Y cutoff for whites-only (front year from
+                # listed), 2Y cutoff for whites+reds (front 2Y from listed).
+                _lf_cutoff = 1.0 if _lf_pack_now == "whites" else 2.0
+                _listed_curve_for_bs = build_caplet_vol_curve_sr3(
+                    "USD",
+                    cutoff_years=_lf_cutoff,
+                    otc_fallback_curve=st.session_state.get("caplet_vol_curve_aud") or {},
+                    final_maturity_y=max(tenor_y + 0.5, 10.0),
+                )
+                if _listed_curve_for_bs:
+                    _prem_1y_leg = price_caplets_with_vol_curve(
+                        "USD", 1.0, _listed_curve_for_bs, notional_mm=1.0
+                    )
+                    if _prem_1y_leg and _prem_1y_leg > 0:
+                        _listed_1y_stradd = float(_prem_1y_leg) * 2.0
+                        st.session_state.setdefault("cfs_table_data", {}).setdefault(
+                            "3m1y", {})["cfs_straddle"] = _listed_1y_stradd
+                        _listed_bootstrap_active = True
+                    if _lf_pack_now == "both":
+                        _prem_2y_leg = price_caplets_with_vol_curve(
+                            "USD", 2.0, _listed_curve_for_bs, notional_mm=1.0
+                        )
+                        if (_prem_2y_leg and _prem_2y_leg > 0
+                                and _listed_1y_stradd):
+                            _listed_2y_stradd = float(_prem_2y_leg) * 2.0
+                            # 1y1y gap straddle = 2Y cum − 1Y cum
+                            _1y1y_gap = _listed_2y_stradd - _listed_1y_stradd
+                            if _1y1y_gap > 0:
+                                st.session_state["cfs_table_data"].setdefault(
+                                    "1y1y", {})["cfs_straddle"] = _1y1y_gap
+            except Exception as _lb_err:
+                st.caption(f"⚠ Listed bootstrap pre-calc failed: {_lb_err}")
+
+        # Cache key includes listed bootstrap state so edits trigger rebuild
         _caplet_key = (spread_3m1y, spread_1y1y, spread_2y1y, spread_3y1y,
                        spread_4y1y, spread_5y2y, spread_7y3y, spread_10y2y, spread_12y3y,
-                       _atm_hash)
+                       _atm_hash,
+                       _listed_bootstrap_active,
+                       round(_listed_1y_stradd, 4) if _listed_1y_stradd else None,
+                       round(_listed_2y_stradd, 4) if _listed_2y_stradd else None)
         _cached_key = st.session_state.get("_caplet_curve_key")
         if _cached_key != _caplet_key or st.session_state.get("caplet_vol_curve_aud") is None:
             with st.spinner("⚙️ Bootstrapping caplet vol curve..."):
@@ -11598,20 +11652,29 @@ def caps_floors_tab(vol_mode: str):
                 )
                 _sr3_cutoff_y = float(_sr3_cutoff_lbl[:-1])
             with _mc2:
+                # 4-way radio now includes "Listed bootstrap" — auto-default
+                # to that option when the Listed Front editor toggle is ON.
+                _pricer_opts = ["OTC only", "Listed bootstrap", "SR3 hybrid", "SR3 full"]
+                _lf_on_now = st.session_state.get("_cfs_use_listed", False)
+                _default_src = "Listed bootstrap" if _lf_on_now else st.session_state.get("cfs_active_vol_src", "OTC only")
+                if _default_src not in _pricer_opts:
+                    _default_src = "OTC only"
                 _active_src = st.radio(
                     "Active pricer feed",
-                    ["OTC only", "SR3 hybrid", "SR3 full"],
-                    index=0,
+                    _pricer_opts,
+                    index=_pricer_opts.index(_default_src),
                     horizontal=True,
                     key="cfs_active_vol_src",
-                    help="OTC only = existing behavior. SR3 hybrid = listed wins 0→cutoff. "
+                    help="OTC only = existing behavior. "
+                         "Listed bootstrap = AUD-style bootstrap with listed 1Y/2Y straddle as anchor. "
+                         "SR3 hybrid = listed wins 0→cutoff caplet vols directly. "
                          "SR3 full = listed everywhere available.",
                 )
             with _mc3:
                 _overlay_choices = st.multiselect(
                     "Overlay on chart",
-                    ["OTC only", "SR3 hybrid", "SR3 full"],
-                    default=["OTC only", "SR3 hybrid"],
+                    ["OTC only", "Listed bootstrap", "SR3 hybrid", "SR3 full"],
+                    default=["OTC only", "Listed bootstrap"] if _lf_on_now else ["OTC only", "SR3 hybrid"],
                     key="cfs_overlay_choices",
                     help="Multiple curves overlaid on Caplet Vol Curve chart below.",
                 )
@@ -11639,7 +11702,14 @@ def caps_floors_tab(vol_mode: str):
                 st.caption(f"⚠ SR3 full build failed: {_e_f}")
 
             # Swap the active curve
-            if _active_src == "SR3 hybrid" and sr3_hybrid_curve:
+            if _active_src == "Listed bootstrap":
+                # caplet_vol_curve already bootstrapped at line ~11554 using
+                # the listed-derived 1Y (& possibly 2Y) straddle in cfs_table_data.
+                # Nothing to swap — it IS the active curve.
+                st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
+                _anchor_lbl = "1Y" if st.session_state.get("_cfs_listed_pack","whites")=="whites" else "2Y"
+                st.caption(f"🟢 **Active:** Listed bootstrap (listed {_anchor_lbl} straddle anchors AUD-style wedge chain)")
+            elif _active_src == "SR3 hybrid" and sr3_hybrid_curve:
                 caplet_vol_curve = sr3_hybrid_curve
                 st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
                 st.caption(f"🟢 **Active:** SR3 hybrid (listed ≤{_sr3_cutoff_lbl}, OTC >{_sr3_cutoff_lbl})")
@@ -11651,10 +11721,11 @@ def caps_floors_tab(vol_mode: str):
                 st.caption("🟢 **Active:** OTC only (existing wedge path)")
 
             # Stash for chart use
-            st.session_state["_cfs_otc_curve"]   = otc_caplet_curve
-            st.session_state["_cfs_sr3_hybrid"]  = sr3_hybrid_curve
-            st.session_state["_cfs_sr3_full"]    = sr3_full_curve
-            st.session_state["_cfs_overlay_sel"] = _overlay_choices
+            st.session_state["_cfs_otc_curve"]        = otc_caplet_curve
+            st.session_state["_cfs_listed_bootstrap"] = dict(caplet_vol_curve) if _active_src == "Listed bootstrap" and caplet_vol_curve else None
+            st.session_state["_cfs_sr3_hybrid"]       = sr3_hybrid_curve
+            st.session_state["_cfs_sr3_full"]         = sr3_full_curve
+            st.session_state["_cfs_overlay_sel"]      = _overlay_choices
 
             # ═════════════════════════════════════════════════════════════
             # Listed Front Editor — edit adjustments here, see impact live
@@ -12042,12 +12113,26 @@ def caps_floors_tab(vol_mode: str):
             _ois_tmp = _ois_tmp_cb if _ois_tmp_cb is not None else get_basis_curve(ccy, "ois")
             _ois_local = _ois_tmp if (_ois_tmp is not None and not isinstance(_ois_tmp, bool)) else _curve_local
 
-            # Stable cache key: use committed spread values + caplet curve length
+            # Stable cache key: use committed spread values + caplet curve length.
+            # Include Listed Front state (USD only) so listed edits trigger recalc.
+            _lf_sig = None
+            if ccy == "USD":
+                _lf_edits = st.session_state.get("_cfs_listed_session_edits", {}) or {}
+                _lf_sig = (
+                    st.session_state.get("_cfs_use_listed", False),
+                    st.session_state.get("_cfs_listed_pack", "whites"),
+                    tuple(sorted(st.session_state.get("_cfs_white_selected", []) or [])),
+                    tuple(sorted(
+                        (c, e.get("listed_adj_mode"), e.get("listed_adj_ratio"), e.get("listed_adj_bp"))
+                        for c, e in _lf_edits.items()
+                    )),
+                )
             _cfs_id = (
                 ccy,
                 st.session_state.get("_caplet_curve_key", 0),
                 len(_cfs_tdata),
                 len(_caplet_vc) if _caplet_vc else 0,
+                _lf_sig,
             )
             _cfs_cached = st.session_state.get("_atm_cfs_cache_key") == _cfs_id
             if _cfs_cached and st.session_state.get("_atm_cfs_rows_cache"):
