@@ -23967,6 +23967,26 @@ def sod_report_tab():
         if ey <= 2.0:   return _beta_mid
         return _beta_long
 
+    # ── Ignore USD Overnight toggle ──────────────────────────────────
+    # Use when AUD vol bias has decoupled from USD over the weekend
+    # (e.g. local catalysts, risk-off drift, RBA-specific moves) and
+    # you want to publish the AUD open at the prev close, ignoring the
+    # overnight USD → AUD beta pass-through entirely.
+    _ignore_usd = st.checkbox(
+        "🔒 Ignore USD overnight — publish AUD open unchanged vs prev close",
+        value=st.session_state.get("_sod_ignore_usd", False),
+        key="_sod_ignore_usd",
+        help="When ticked, implied AUD open = AUD previous close. "
+             "The beta × USD-move calculation is bypassed. "
+             "Useful when AUD vol bias has decoupled from USD "
+             "(weekend gaps, local catalysts, RBA-specific events).",
+    )
+    if _ignore_usd:
+        st.info(
+            "🔒 **USD overnight override ACTIVE** — AUD implied open = previous close. "
+            "USD moves will still display for reference but won't feed the implied surface."
+        )
+
     if _aud_atm is not None:
         _aud_exp = [e for e in _aud_atm.index if e in _usd_chg.index]
         _aud_ten = [c for c in _aud_atm.columns if c in _usd_chg.columns]
@@ -23985,8 +24005,10 @@ def sod_report_tab():
                     try:
                         _usd_mv  = float(_usd_chg.loc[_e, _t]) if _e in _usd_chg.index and _t in _usd_chg.columns else 0.0
                         _aud_now = float(_aud_atm.loc[_e, _t])
-                        _implied_chg.loc[_e, _t]  = round(_usd_mv * _b, 2)
-                        _implied_open.loc[_e, _t] = round(_aud_now + _usd_mv * _b, 2)
+                        # If override is ON, zero the USD move contribution.
+                        _effective_mv = 0.0 if _ignore_usd else _usd_mv
+                        _implied_chg.loc[_e, _t]  = round(_effective_mv * _b, 2)
+                        _implied_open.loc[_e, _t] = round(_aud_now + _effective_mv * _b, 2)
                     except Exception:
                         pass
 
