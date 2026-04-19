@@ -24568,12 +24568,53 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                                     textColor=colors.HexColor("#1e293b"), leading=12,
                                     spaceAfter=4, alignment=4,  # justified
                                 )
+                                _sCommMainHdr = ParagraphStyle(
+                                    "sCommMainHdr", parent=_ss["Normal"], fontSize=10.5,
+                                    fontName="Helvetica-Bold",
+                                    textColor=colors.HexColor("#1e3a5f"),
+                                    spaceBefore=4, spaceAfter=4,
+                                )
+                                _sCommSubHdr = ParagraphStyle(
+                                    "sCommSubHdr", parent=_ss["Normal"], fontSize=9,
+                                    fontName="Helvetica-Bold",
+                                    textColor=colors.HexColor("#334155"),
+                                    spaceBefore=4, spaceAfter=2,
+                                )
+                                import re as _re_hdr_sod
+                                _DAY_PAT_SOD = _re_hdr_sod.compile(
+                                    r'^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+(AM|PM)\b',
+                                    _re_hdr_sod.IGNORECASE)
+                                def _is_main_heading_sod(s):
+                                    s = s.strip()
+                                    return bool(_DAY_PAT_SOD.match(s)) and len(s) < 80
+                                def _is_sub_heading_sod(s):
+                                    s = s.strip()
+                                    if not s or len(s) > 80: return False
+                                    if s.lower().startswith("stance into"): return True
+                                    if s.endswith(":") and len(s.split()) <= 6: return True
+                                    letters = [c for c in s if c.isalpha()]
+                                    if letters and all(c.isupper() for c in letters) and len(letters) > 3:
+                                        return True
+                                    return False
                                 _sod_story.append(Paragraph("Market Commentary", _sCommHd))
                                 for _cpara in _comm_text_sod.split("\n\n"):
                                     _cpara = _cpara.strip()
-                                    if _cpara:
+                                    if not _cpara:
+                                        continue
+                                    _clines = _cpara.split("\n")
+                                    _cfirst = _clines[0].strip()
+                                    _crest  = "\n".join(_clines[1:]).strip()
+                                    if _is_main_heading_sod(_cfirst):
+                                        _sod_story.append(Paragraph(_cfirst, _sCommMainHdr))
+                                        if _crest:
+                                            _sod_story.append(Paragraph(_crest.replace("\n","<br/>"), _sCommBd))
+                                    elif _is_sub_heading_sod(_cfirst):
+                                        _sod_story.append(Paragraph(_cfirst, _sCommSubHdr))
+                                        if _crest:
+                                            _sod_story.append(Paragraph(_crest.replace("\n","<br/>"), _sCommBd))
+                                    else:
                                         _sod_story.append(Paragraph(_cpara.replace("\n", "<br/>"), _sCommBd))
-                                        _sod_story.append(Spacer(1, 3))
+                                    _sod_story.append(Spacer(1, 3))
                                 _sod_story.append(HRFlowable(width="100%", thickness=0.3,
                                     color=colors.HexColor("#cbd5e1"), spaceBefore=2, spaceAfter=8))
                     except Exception:
@@ -26113,11 +26154,55 @@ h2{{color:#1e3a5f;margin-top:20px}}
                                 textColor=colors.HexColor("#1e293b"), leading=12,
                                 spaceAfter=4, alignment=4,  # justified
                             )
+                            _comm_hdr_main = ParagraphStyle(
+                                "CommHdrMain", parent=_styles["Normal"], fontSize=10.5,
+                                fontName="Helvetica-Bold",
+                                textColor=colors.HexColor("#1e3a5f"),
+                                spaceBefore=4, spaceAfter=4,
+                            )
+                            _comm_hdr_sub = ParagraphStyle(
+                                "CommHdrSub", parent=_styles["Normal"], fontSize=9,
+                                fontName="Helvetica-Bold",
+                                textColor=colors.HexColor("#334155"),
+                                spaceBefore=4, spaceAfter=2,
+                            )
+                            import re as _re_hdr
+                            _DAY_PAT = _re_hdr.compile(
+                                r'^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+(AM|PM)\b',
+                                _re_hdr.IGNORECASE)
+                            def _is_main_heading(s):
+                                s = s.strip()
+                                return bool(_DAY_PAT.match(s)) and len(s) < 80
+                            def _is_sub_heading(s):
+                                s = s.strip()
+                                if not s or len(s) > 80: return False
+                                if s.lower().startswith("stance into"): return True
+                                # Short line ending with colon, looks like a label
+                                if s.endswith(":") and len(s.split()) <= 6: return True
+                                # All caps, not excessively long
+                                letters = [c for c in s if c.isalpha()]
+                                if letters and all(c.isupper() for c in letters) and len(letters) > 3:
+                                    return True
+                                return False
                             for _para in _comm_text.split("\n\n"):
                                 _para = _para.strip()
-                                if _para:
-                                    _story.append(Paragraph(_para.replace("\n", "<br/>"), _comm_style))
-                                    _story.append(Spacer(1, 3))
+                                if not _para:
+                                    continue
+                                # First line of paragraph may be a heading; check split
+                                _lines = _para.split("\n")
+                                _first = _lines[0].strip()
+                                _rest  = "\n".join(_lines[1:]).strip()
+                                if _is_main_heading(_first):
+                                    _story.append(Paragraph(_first, _comm_hdr_main))
+                                    if _rest:
+                                        _story.append(Paragraph(_rest.replace("\n","<br/>"), _comm_style))
+                                elif _is_sub_heading(_first):
+                                    _story.append(Paragraph(_first, _comm_hdr_sub))
+                                    if _rest:
+                                        _story.append(Paragraph(_rest.replace("\n","<br/>"), _comm_style))
+                                else:
+                                    _story.append(Paragraph(_para.replace("\n","<br/>"), _comm_style))
+                                _story.append(Spacer(1, 3))
                             _story.append(HRFlowable(width="100%", thickness=0.3,
                                 color=colors.HexColor("#cbd5e1"), spaceBefore=2, spaceAfter=8))
                 except Exception:
