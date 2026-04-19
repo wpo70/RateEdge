@@ -2719,6 +2719,29 @@ def _load_sr3_latest_usd() -> dict:
         return {}
 
 
+def _load_sr3_latest_usd_with_session_edits() -> dict:
+    """
+    Load latest USD SR3 snapshot and overlay CFS-tab session edits on top.
+    Session edits are stored in st.session_state['_cfs_listed_session_edits']
+    as {contract_code: {mode, ratio, bp}}. Non-destructive — DB values unchanged
+    until the user clicks "Save to snapshot" on the CFS tab.
+    """
+    rows = _load_sr3_latest_usd()
+    if not rows:
+        return rows
+    session_edits = st.session_state.get("_cfs_listed_session_edits", {}) or {}
+    for code, edits in session_edits.items():
+        if code not in rows:
+            continue
+        if "listed_adj_mode" in edits:
+            rows[code]["listed_adj_mode"] = edits["listed_adj_mode"]
+        if "listed_adj_ratio" in edits:
+            rows[code]["listed_adj_ratio"] = edits["listed_adj_ratio"]
+        if "listed_adj_bp" in edits:
+            rows[code]["listed_adj_bp"] = edits["listed_adj_bp"]
+    return rows
+
+
 def _apply_listed_adjustment(atm_vol, row: dict) -> float:
     """
     Apply the per-contract listed-to-delivered adjustment.
@@ -2813,7 +2836,7 @@ def build_caplet_vol_curve_sr3(
     if ccy != "USD":
         return otc_fallback_curve
     
-    sr3_rows = _load_sr3_latest_usd()
+    sr3_rows = _load_sr3_latest_usd_with_session_edits()
     if not sr3_rows:
         return otc_fallback_curve
     
@@ -2894,7 +2917,7 @@ def build_caplet_vol_curve_sr3_full(
     """
     if ccy != "USD":
         return otc_fallback_curve
-    sr3_rows = _load_sr3_latest_usd()
+    sr3_rows = _load_sr3_latest_usd_with_session_edits()
     if not sr3_rows:
         return otc_fallback_curve
     anchors = _sr3_anchor_points(sr3_rows)
@@ -11609,6 +11632,312 @@ def caps_floors_tab(vol_mode: str):
             st.session_state["_cfs_sr3_hybrid"]  = sr3_hybrid_curve
             st.session_state["_cfs_sr3_full"]    = sr3_full_curve
             st.session_state["_cfs_overlay_sel"] = _overlay_choices
+
+            # ═════════════════════════════════════════════════════════════
+            # Listed Front Editor — edit adjustments here, see impact live
+            # ═════════════════════════════════════════════════════════════
+            # Session-only edits stored in _cfs_listed_session_edits until user
+            # clicks "Save to snapshot". The SR3 caplet builders pick up
+            # session edits automatically via _load_sr3_latest_usd_with_session_edits().
+            st.markdown("<hr style='margin:10px 0;border-color:#1e3050'>", unsafe_allow_html=True)
+            _le_col1, _le_col2, _le_col3 = st.columns([1.5, 2.0, 2.0])
+            with _le_col1:
+                _use_listed = st.checkbox(
+                    "📋 Use Listed Front editor",
+                    value=st.session_state.get("_cfs_use_listed", False),
+                    key="_cfs_use_listed",
+                    help="Edit listed-to-delivered adjustments inline here. "
+                         "Session-only until you click Save.",
+                )
+            with _le_col2:
+                if _use_listed:
+                    _pack_sel = st.radio(
+                        "Pack selection",
+                        ["Whites only (4 rows)", "Whites + Reds (8 rows)"],
+                        index=0 if st.session_state.get("_cfs_listed_pack", "whites") == "whites" else 1,
+                        horizontal=True,
+                        key="_cfs_pack_radio",
+                    )
+                    _pack_mode = "whites" if _pack_sel.startswith("Whites only") else "both"
+                    st.session_state["_cfs_listed_pack"] = _pack_mode
+                else:
+                    _pack_mode = "whites"
+            with _le_col3:
+                if _use_listed:
+                    _n_edits = len(st.session_state.get("_cfs_listed_session_edits", {}) or {})
+                    if _n_edits > 0:
+                        st.markdown(
+                            f"<div style='font-size:12px;color:#f59e0b;padding-top:8px;'>"
+                            f"⚠ {_n_edits} unsaved edit(s)</div>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.markdown(
+                            "<div style='font-size:12px;color:#64748b;padding-top:8px;'>"
+                            "No session edits</div>",
+                            unsafe_allow_html=True,
+                        )
+
+            if _use_listed:
+                # Load current SR3 rows (with session edits already overlaid)
+                _sr3_rows_le = _load_sr3_latest_usd_with_session_edits()
+                if not _sr3_rows_le:
+                    st.info("No SR3 snapshot loaded. Save a snapshot from the SR3 tab first.")
+                else:
+                    # Filter to the contracts we want to show.
+                    # Whites: front 4 quarterlies with underlyings matching the front 4 packs
+                    # from today's date. Reds: next 4.
+                    # We use pack_index computed from SR3 scaffolding to pick contracts.
+                    _today_le = __import__("datetime").date.today()
+
+                    def _t_mid(row):
+                        """Fixing midpoint T for sorting."""
+                        try:
+                            ed = row.get("expiry_date")
+                            md = row.get("maturity_date")
+                            from datetime import date as _d, timedelta as _td
+                            ed_d = ed if hasattr(ed, "toordinal") else _d.fromisoformat(str(ed)[:10])
+                            md_d = md if hasattr(md, "toordinal") else _d.fromisoformat(str(md)[:10])
+                            mid = ed_d + _td(days=(md_d - ed_d).days // 2)
+                            return (mid - _today_le).days / 365.25
+                        except Exception:
+                            return 999.0
+
+                    _all_rows = [(c, r) for c, r in _sr3_rows_le.items()
+                                 if "MC" not in r.get("contract_type", "")]
+                    _all_rows.sort(key=lambda x: _t_mid(x[1]))
+
+                    # Split by pack via pack index on underlying (W=0..3, R=4..7)
+                    _white_rows = []
+                    _red_rows = []
+                    for c, r in _all_rows:
+                        und = r.get("underlying")
+                        if not und:
+                            continue
+                        pidx = _sr3_pack_index(und)
+                        if 0 <= pidx <= 3:
+                            _white_rows.append((c, r))
+                        elif 4 <= pidx <= 7:
+                            _red_rows.append((c, r))
+
+                    if _pack_mode == "whites":
+                        _editor_rows = _white_rows[:4]   # front 4 whites
+                        _otc_first_wedge = "1y1y"
+                    else:
+                        _editor_rows = _white_rows[:4] + _red_rows[:4]
+                        _otc_first_wedge = "2y1y"
+
+                    if not _editor_rows:
+                        st.warning("No white/red contracts found in current snapshot.")
+                    else:
+                        st.markdown(
+                            f"<div style='font-size:11px;color:#64748b;margin-top:4px;'>"
+                            f"Editing {len(_editor_rows)} contracts. "
+                            f"OTC wedges start at <b style='color:#22c55e'>{_otc_first_wedge}</b>. "
+                            f"3m1y{' and 1y1y' if _pack_mode == 'both' else ''} wedge"
+                            f"{'s are' if _pack_mode == 'both' else ' is'} skipped.</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                        # Header row
+                        _LE_CW = [0.9, 0.5, 0.95, 0.75, 0.85, 0.75, 0.95]
+                        _lh = st.columns(_LE_CW)
+                        _lh[0].markdown("<div style='font-size:11px;font-weight:600;color:#64748b'>Code</div>",
+                                        unsafe_allow_html=True)
+                        _lh[1].markdown("<div style='font-size:11px;font-weight:600;color:#64748b'>Pack</div>",
+                                        unsafe_allow_html=True)
+                        _lh[2].markdown("<div style='font-size:11px;font-weight:600;color:#38bdf8;text-align:center'>Listed ATM</div>",
+                                        unsafe_allow_html=True)
+                        _lh[3].markdown("<div style='font-size:11px;font-weight:600;color:#f59e0b;text-align:center'>Mode</div>",
+                                        unsafe_allow_html=True)
+                        _lh[4].markdown("<div style='font-size:11px;font-weight:600;color:#f59e0b;text-align:center'>Ratio</div>",
+                                        unsafe_allow_html=True)
+                        _lh[5].markdown("<div style='font-size:11px;font-weight:600;color:#f59e0b;text-align:center'>+bp</div>",
+                                        unsafe_allow_html=True)
+                        _lh[6].markdown("<div style='font-size:11px;font-weight:600;color:#22c55e;text-align:center'>Delivered</div>",
+                                        unsafe_allow_html=True)
+
+                        # Rows
+                        _session_edits = st.session_state.get("_cfs_listed_session_edits", {}) or {}
+
+                        for code, row in _editor_rows:
+                            pidx = _sr3_pack_index(row.get("underlying", ""))
+                            _pack_col = _sr3_pack_color(row.get("underlying", ""))
+                            _pack_bg  = _sr3_pack_bg(row.get("underlying", ""))
+                            _pack_lbl = "W" if 0 <= pidx <= 3 else "R" if 4 <= pidx <= 7 else "?"
+
+                            atm_val = row.get("atm_vol")
+                            _cur_mode = (row.get("listed_adj_mode") or "ratio").lower()
+                            _cur_ratio = float(row.get("listed_adj_ratio") or 1.0)
+                            _cur_bp    = float(row.get("listed_adj_bp") or 0.0)
+
+                            # Row band
+                            st.markdown(
+                                f"""<div style='
+                                    height:5px;
+                                    background:{_pack_bg};
+                                    border-left:4px solid {_pack_col};
+                                    margin-top:4px;
+                                    margin-bottom:-2px;
+                                '></div>""",
+                                unsafe_allow_html=True,
+                            )
+
+                            _lr = st.columns(_LE_CW)
+                            _lr[0].markdown(
+                                f"<div style='font-size:12px;padding-top:8px;font-weight:700;color:{_pack_col};'>{code}</div>",
+                                unsafe_allow_html=True,
+                            )
+                            _lr[1].markdown(
+                                f"<div style='font-size:11px;padding-top:9px;color:#94a3b8;'>{_pack_lbl}</div>",
+                                unsafe_allow_html=True,
+                            )
+                            _lr[2].markdown(
+                                f"<div style='font-size:12px;padding-top:9px;text-align:center;color:#e2e8f0;'>"
+                                f"{atm_val:.2f}</div>" if atm_val else
+                                "<div style='font-size:12px;padding-top:9px;text-align:center;color:#475569;'>—</div>",
+                                unsafe_allow_html=True,
+                            )
+
+                            _new_mode = _lr[3].selectbox(
+                                "", ["ratio", "bp"],
+                                index=0 if _cur_mode == "ratio" else 1,
+                                key=f"_cfs_le_{code}_mode",
+                                label_visibility="collapsed",
+                            )
+                            _new_ratio = _lr[4].number_input(
+                                "", value=_cur_ratio,
+                                min_value=0.50, max_value=3.00, step=0.0001, format="%.4f",
+                                key=f"_cfs_le_{code}_ratio",
+                                label_visibility="collapsed",
+                                disabled=(_new_mode != "ratio"),
+                            )
+                            _new_bp = _lr[5].number_input(
+                                "", value=_cur_bp,
+                                min_value=-100.0, max_value=500.0, step=0.1, format="%.1f",
+                                key=f"_cfs_le_{code}_bp",
+                                label_visibility="collapsed",
+                                disabled=(_new_mode != "bp"),
+                            )
+
+                            # Compute delivered
+                            if atm_val is not None and float(atm_val) > 0:
+                                if _new_mode == "ratio":
+                                    _deliv = float(atm_val) * _new_ratio
+                                else:
+                                    _deliv = float(atm_val) + _new_bp
+                                _is_edited = (
+                                    _new_mode != (row.get("listed_adj_mode") or "ratio").lower()
+                                    or abs(_new_ratio - float(row.get("listed_adj_ratio") or 1.0)) > 1e-6
+                                    or abs(_new_bp - float(row.get("listed_adj_bp") or 0.0)) > 1e-4
+                                )
+                                _is_non_default = (
+                                    (_new_mode == "ratio" and abs(_new_ratio - 1.0) > 1e-6)
+                                    or (_new_mode == "bp" and abs(_new_bp) > 1e-4)
+                                )
+                                _col_style = "color:#22c55e;font-weight:700" if _is_non_default else "color:#94a3b8"
+                                _deliv_str = f"{_deliv:.2f}"
+                            else:
+                                _deliv_str = "—"
+                                _col_style = "color:#475569"
+                                _is_edited = False
+
+                            _lr[6].markdown(
+                                f"<div style='font-size:12px;padding-top:9px;text-align:center;{_col_style};'>{_deliv_str}</div>",
+                                unsafe_allow_html=True,
+                            )
+
+                            # Track session edits — only if different from DB state
+                            # We compare to the ORIGINAL DB row (not already-overlaid row),
+                            # so reload from DB directly for comparison.
+                            _db_rows = _load_sr3_latest_usd()
+                            _db_row  = _db_rows.get(code, {}) if _db_rows else {}
+                            _db_mode  = (_db_row.get("listed_adj_mode") or "ratio").lower()
+                            _db_ratio = float(_db_row.get("listed_adj_ratio") or 1.0)
+                            _db_bp    = float(_db_row.get("listed_adj_bp") or 0.0)
+                            _differs = (
+                                _new_mode != _db_mode
+                                or abs(_new_ratio - _db_ratio) > 1e-6
+                                or abs(_new_bp - _db_bp) > 1e-4
+                            )
+                            if _differs:
+                                _session_edits[code] = {
+                                    "listed_adj_mode":  _new_mode,
+                                    "listed_adj_ratio": _new_ratio,
+                                    "listed_adj_bp":    _new_bp,
+                                }
+                            else:
+                                # User reverted to DB state — clear edit
+                                _session_edits.pop(code, None)
+
+                        st.session_state["_cfs_listed_session_edits"] = _session_edits
+
+                        # ── Save / Discard controls ──
+                        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+                        _save_col, _discard_col, _info_col = st.columns([1, 1, 2.5])
+                        with _save_col:
+                            if st.button("💾 Save to snapshot", key="_cfs_le_save",
+                                         use_container_width=True,
+                                         disabled=(len(_session_edits) == 0)):
+                                # Write the edits to DB for the current snapshot
+                                _db_rows_for_save = _load_sr3_latest_usd()
+                                if not _db_rows_for_save:
+                                    st.error("No current snapshot to save to.")
+                                else:
+                                    # Build save rows — pull full row state + overlay session edits
+                                    _rows_out = []
+                                    for c, edits in _session_edits.items():
+                                        base = dict(_db_rows_for_save.get(c, {}))
+                                        if not base:
+                                            continue
+                                        base.update(edits)
+                                        # Normalize field names expected by save_sr3_snapshot
+                                        _rows_out.append(base)
+                                    if _rows_out:
+                                        # Grab current snapshot key
+                                        _cur_lbl = st.session_state.get("sr3_current_label")
+                                        _sd, _lbl = None, None
+                                        if _cur_lbl and " | " in _cur_lbl:
+                                            try:
+                                                _sd_str, _lbl = _cur_lbl.split(" | ", 1)
+                                                _sd = pd.Timestamp(_sd_str).to_pydatetime()
+                                            except Exception:
+                                                _sd, _lbl = None, None
+                                        if _sd is None:
+                                            # Fallback: latest snapshot via list
+                                            _snaps_tmp = list_sr3_snapshots("USD", limit=1)
+                                            if _snaps_tmp:
+                                                _sd = pd.Timestamp(_snaps_tmp[0]["snapshot_date"]).to_pydatetime()
+                                                _lbl = _snaps_tmp[0]["label"]
+                                        if _sd is None or _lbl is None:
+                                            st.error("Couldn't identify current snapshot to save into.")
+                                        else:
+                                            _n_saved = save_sr3_snapshot("shared", _lbl, _sd, _rows_out, "")
+                                            if _n_saved > 0:
+                                                st.success(f"✅ Saved {_n_saved} row(s) to snapshot {_lbl}")
+                                                st.session_state["_cfs_listed_session_edits"] = {}
+                                                list_sr3_snapshots.clear()
+                                                st.rerun()
+                                            else:
+                                                st.error("Save returned 0 rows — check logs.")
+                        with _discard_col:
+                            if st.button("↩ Discard session edits", key="_cfs_le_discard",
+                                         use_container_width=True,
+                                         disabled=(len(_session_edits) == 0)):
+                                st.session_state["_cfs_listed_session_edits"] = {}
+                                # Also clear the widget keys for editor rows
+                                for code, _r in _editor_rows:
+                                    for suffix in ("mode", "ratio", "bp"):
+                                        _k = f"_cfs_le_{code}_{suffix}"
+                                        if _k in st.session_state:
+                                            del st.session_state[_k]
+                                st.rerun()
+                        with _info_col:
+                            st.caption(
+                                f"Active pricer feed uses delivered vol = listed × ratio "
+                                f"(or listed + bp). Changes here update the caplet chart "
+                                f"above immediately. Save commits to DB snapshot."
+                            )
 
         # ── ATM CFS Straddle Table ──────────────────────────────────
         st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
