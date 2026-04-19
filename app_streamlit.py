@@ -23389,20 +23389,59 @@ def sod_report_tab():
     # ═══════════════════════════════════════════════════════════════════
     # AI Commentary Generator (AUD SOD) — paste raw news snippets,
     # get back a polished SOD commentary in the house rates-desk voice.
+    # OR: switch to Manual mode and paste an already-finished commentary
+    # directly, skipping the AI call entirely.
     # ═══════════════════════════════════════════════════════════════════
     with st.expander("🧠 AI Commentary Generator — AUD SOD", expanded=False):
-        st.caption(
-            "Paste raw news items, Bloomberg headlines, vol moves, econ prints etc. "
-            "Produces a concise Monday-AM-style AUD SOD piece in the house voice. "
-            "You can include multiple items — the generator merges and de-duplicates."
+        # Mode toggle at top
+        _comm_mode = st.radio(
+            "Input mode",
+            ["🤖 AI Generate from raw news", "📝 Manual (paste finished commentary)"],
+            index=0 if st.session_state.get("_comm_mode", "ai") == "ai" else 1,
+            horizontal=True,
+            key="_comm_mode_radio",
         )
-        _raw_news = st.text_area(
-            "Raw news / market inputs",
-            height=220,
-            placeholder=(
-                "Example:\n"
-                "- 10Y UST closed 4.24% Friday, from 4.32% w/w\n"
-                "- 3m10y ATM swaption vol 66.9bp, down 2bp, lowest since 27-Feb\n"
+        _is_manual = _comm_mode.startswith("📝")
+        st.session_state["_comm_mode"] = "manual" if _is_manual else "ai"
+
+        if _is_manual:
+            st.caption(
+                "Paste your finished commentary below. No AI rewriting — goes straight "
+                "to the edit area where you can Publish it to the chosen reports."
+            )
+            _manual_text = st.text_area(
+                "Finished commentary",
+                value=st.session_state.get("_comm_manual_draft", ""),
+                height=300,
+                placeholder=(
+                    "Monday AM — AUD SOD\n\n"
+                    "Friday's risk-on tape is looking vulnerable into the AUD open ...\n"
+                ),
+                key="_comm_manual_input",
+            )
+            _mc1, _mc2 = st.columns([1, 3])
+            with _mc1:
+                if st.button("✓ Use This Commentary",
+                             key="_comm_manual_use",
+                             type="primary",
+                             use_container_width=True,
+                             disabled=(not _manual_text or len(_manual_text.strip()) < 30)):
+                    st.session_state["sod_ai_output"] = _manual_text.strip()
+                    st.session_state["_comm_manual_draft"] = _manual_text.strip()
+                    st.rerun()
+        else:
+            st.caption(
+                "Paste raw news items, Bloomberg headlines, vol moves, econ prints etc. "
+                "Produces a concise Monday-AM-style AUD SOD piece in the house voice. "
+                "You can include multiple items — the generator merges and de-duplicates."
+            )
+            _raw_news = st.text_area(
+                "Raw news / market inputs",
+                height=220,
+                placeholder=(
+                    "Example:\n"
+                    "- 10Y UST closed 4.24% Friday, from 4.32% w/w\n"
+                    "- 3m10y ATM swaption vol 66.9bp, down 2bp, lowest since 27-Feb\n"
                 "- OIS now pricing 16bp cuts by Dec, vs 8bp Thursday close\n"
                 "- Iran reimposed Strait of Hormuz restrictions overnight\n"
                 "- Trump: 'no more Mr. Nice Guy' — threatens Iran infrastructure\n"
@@ -23412,15 +23451,16 @@ def sod_report_tab():
             ),
             key="sod_ai_raw_news",
         )
-        _c1, _c2, _c3 = st.columns([1, 1, 2])
-        with _c1:
+        if not _is_manual:
+          _c1, _c2, _c3 = st.columns([1, 1, 2])
+          with _c1:
             _gen_btn = st.button("✨ Generate AUD SOD", key="sod_ai_generate",
                                  type="primary", use_container_width=True,
                                  disabled=(not _raw_news or len(_raw_news.strip()) < 30))
-        with _c2:
+          with _c2:
             _clear_btn = st.button("🗑 Clear", key="sod_ai_clear",
                                    use_container_width=True)
-        with _c3:
+          with _c3:
             _length_pref = st.radio(
                 "Length",
                 ["Concise (4 paras)", "Standard (6 paras)", "Detailed (8+ paras)"],
@@ -23428,13 +23468,13 @@ def sod_report_tab():
                 key="sod_ai_length",
             )
 
-        if _clear_btn:
+          if _clear_btn:
             for _k in ("sod_ai_raw_news", "sod_ai_output"):
                 if _k in st.session_state:
                     del st.session_state[_k]
             st.rerun()
 
-        if _gen_btn and _raw_news and len(_raw_news.strip()) >= 30:
+          if _gen_btn and _raw_news and len(_raw_news.strip()) >= 30:
             try:
                 _api_key = None
                 try:
