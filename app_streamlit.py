@@ -11474,6 +11474,11 @@ def caps_floors_tab(vol_mode: str):
                 st.session_state.pop("_caplet_curve_key", None)
                 st.session_state.pop("_atm_cfs_cache_key", None)
                 st.session_state.pop("_atm_cfs_rows_cache", None)
+                # Also bust SR3 + listed-bootstrap chart caches so all four
+                # overlay curves rebuild rather than flashing stale/empty
+                # data until the next natural render (20-Apr-2026 fix).
+                st.session_state.pop("_cfs_sr3_curves_cache", None)
+                st.session_state.pop("_cfs_listed_bootstrap_chart_cache", None)
                 st.rerun()
             if br.button("🔄 Refresh Swaptions", key="gen_swpt_prem", type="primary"):
                 _prem_df = st.session_state.get("atm_prem_matrix", {}).get(ccy, {}).get("prem")
@@ -12548,7 +12553,16 @@ def caps_floors_tab(vol_mode: str):
                             curve_data.append(row)
                         st.dataframe(pd.DataFrame(curve_data),
                                      use_container_width=True, hide_index=True)
-                        st.caption(f"▶ marks the active pricer feed. Toggle above to change.")
+                        st.caption(
+                            "▶ marks the active pricer feed. Toggle above to change. "
+                            "Note: **SR3 hybrid** uses listed SR3 vols to the cutoff "
+                            "(e.g. 2Y), OTC beyond. **SR3 full** uses all available SR3 "
+                            "anchors (typically out to Gold pack ~4Y), OTC beyond. So at "
+                            "long maturities both SR3 curves match OTC (they've fallen "
+                            "back). **Listed bootstrap** runs the AUD-style wedge chain "
+                            "anchored on the listed straddle (1Y whites, or 1Y+2Y if "
+                            "whites+reds ticked). **OTC only** is the baseline wedge path."
+                        )
                     else:
                         # No overlays selected — fall back to active curve
                         curve_data = [{"Maturity (Y)": f"{t:.2f}", "Vol (bp)": f"{caplet_vol_curve[t]:.2f}"}
