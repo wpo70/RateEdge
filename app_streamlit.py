@@ -2831,8 +2831,9 @@ def build_caplet_vol_curve_sr3(
     anch_t = np.array([t for t, _ in anchors_below_cutoff])
     anch_v = np.array([v for _, v in anchors_below_cutoff])
     
-    # Handle T < first anchor by flat extrapolation
+    # Handle T outside anchor range with directional fallback
     first_t, first_v = anchors_below_cutoff[0]
+    last_t,  last_v  = anchors_below_cutoff[-1]
     
     pchip = PchipInterpolator(anch_t, anch_v, extrapolate=False)
     
@@ -2842,11 +2843,14 @@ def build_caplet_vol_curve_sr3(
         t_r = round(t, 2)
         if t <= cutoff_years + 0.01:
             if t <= first_t:
-                curve[t_r] = first_v
+                curve[t_r] = first_v   # flat extrapolate below first anchor
+            elif t >= last_t:
+                curve[t_r] = last_v    # flat extrapolate above last anchor (into gap before cutoff)
             else:
                 v = pchip(t)
                 if np.isnan(v):
-                    curve[t_r] = first_v
+                    # In-range NaN shouldn't happen, but be safe
+                    curve[t_r] = last_v if t > (first_t + last_t)/2 else first_v
                 else:
                     curve[t_r] = float(v)
         else:
@@ -2904,6 +2908,7 @@ def build_caplet_vol_curve_sr3_full(
     # SR3 covers up to last anchor; beyond that use OTC
     sr3_max_t = anch_t[-1]
     first_t, first_v = anchors[0]
+    last_t,  last_v  = anchors[-1]
     
     pchip = PchipInterpolator(anch_t, anch_v, extrapolate=False)
     
@@ -2914,9 +2919,14 @@ def build_caplet_vol_curve_sr3_full(
         if t <= sr3_max_t + 0.01:
             if t <= first_t:
                 curve[t_r] = first_v
+            elif t >= last_t:
+                curve[t_r] = last_v
             else:
                 v = pchip(t)
-                curve[t_r] = float(v) if not np.isnan(v) else first_v
+                if np.isnan(v):
+                    curve[t_r] = last_v if t > (first_t + last_t)/2 else first_v
+                else:
+                    curve[t_r] = float(v)
         else:
             if otc_fallback_curve:
                 otc_keys = sorted(otc_fallback_curve.keys())
