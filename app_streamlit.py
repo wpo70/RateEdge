@@ -9337,6 +9337,19 @@ def swaptions_tab(vol_mode: str):
         st.warning(f"├ö├àÔöé {ccy} pricing coming soon. Currently supported: AUD, NZD, USD")
         return
     
+    # ── USD sub-nav: OTC Swaption Vols vs SR3 Listed Vols ─────────────
+    if ccy == "USD":
+        _usd_view = st.radio(
+            "USD View",
+            ["💱 OTC Swaption Vols", "📉 SR3 Listed Vols"],
+            horizontal=True,
+            key="usd_swap_subnav",
+            label_visibility="collapsed",
+        )
+        if _usd_view == "📉 SR3 Listed Vols":
+            sr3_vol_tab()
+            return
+    
     # Get curves and data
     fwd_matrix = st.session_state.get("fwd_matrix", {}).get(ccy)
     _cb6 = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
@@ -20170,7 +20183,6 @@ def main():
                 ("📋 IRS / Vol Upload", "tab_show_upload"),
                 ("📏 Curves", "tab_show_curves"),
                 ("📊 Historical VOL Analysis", "tab_show_hva"),
-                ("📉 SR3 Listed Vols", "tab_show_sr3vols"),
                 ("📈 FWD IRS Analysis", "tab_show_fwd"),
                 ("📊 Swaptions", "tab_show_swaptions"),
                 ("🔔 Caps & Floors", "tab_show_caps"),
@@ -20459,7 +20471,6 @@ def main():
         ("📏 Curves",                    "tab_show_curves",    curves_tab),
         ("📈 FWD IRS Analysis",          "tab_show_fwd",       fwd_analysis_tab),
         ("📊 Historical VOL Analysis",   "tab_show_hva",       backtesting_tab),
-        ("📉 SR3 Listed Vols",           "tab_show_sr3vols",   sr3_vol_tab),
         ("📊 Swaptions",                 "tab_show_swaptions", lambda: swaptions_tab(vol_mode)),
         ("🔔 Caps & Floors",             "tab_show_caps",      lambda: caps_floors_tab(vol_mode)),
         ("💼 Trade Blotter",             "tab_show_blotter",   portfolio_tab),
@@ -20747,6 +20758,177 @@ def load_sr3_snapshot(snapshot_date=None, label=None, currency: str = "USD") -> 
         except Exception: pass
 
 
+def _sr3_otc_map(ctype: str, exp_date_str, today=None):
+    """
+    Map SR3 contract (type, expiry date) to nearest OTC swaption (expiry_label, tenor_years).
+    Returns (expiry_label, tenor_years, t_exp_years) or (None, None, None) if unmappable.
+    Tenor logic:
+      - Standards/Serials: 3M SOFR → approximate to OTC 1Y tenor (no 3m tenor in OTC surface)
+      - 1Y/2Y/3Y/4Y/5Y MC: tenor = MC year (apples-to-apples for fwd-start rates)
+    """
+    from datetime import date as _d, datetime as _dt
+    if today is None:
+        today = _d.today()
+    try:
+        if hasattr(exp_date_str, "toordinal"):
+            ed = exp_date_str if isinstance(exp_date_str, _d) else exp_date_str.date()
+        else:
+            ed = _d.fromisoformat(str(exp_date_str)[:10])
+        t_exp = (ed - today).days / 365.25
+    except Exception:
+        return None, None, None
+
+    if t_exp <= 0:
+        return None, None, t_exp
+
+    _otc_labels = [
+        ("1w", 1/52), ("2w", 2/52), ("1m", 1/12), ("2m", 2/12), ("3m", 3/12),
+        ("6m", 6/12), ("9m", 9/12), ("1y", 1.0), ("18m", 1.5),
+        ("2y", 2.0), ("3y", 3.0), ("5y", 5.0), ("7y", 7.0), ("10y", 10.0),
+    ]
+    best_label = min(_otc_labels, key=lambda x: abs(x[1] - t_exp))[0]
+
+    if ctype in ("Quarterly", "Serial", "Serial-1M"):
+        tenor = 1.0  # no 3m tenor available; use 1y proxy
+    elif ctype == "1Y MC":
+        tenor = 1.0
+    elif ctype == "2Y MC":
+        tenor = 2.0
+    elif ctype == "3Y MC":
+        tenor = 3.0
+    elif ctype == "4Y MC":
+        tenor = 4.0
+    elif ctype == "5Y MC":
+        tenor = 5.0
+    else:
+        tenor = 1.0
+
+    return best_label, tenor, t_exp
+
+
+def _render_sr3_basis_panel(grid_state: dict):
+    """Read-only: SR3 ATM vs OTC USD swaption surface, with mismark flags."""
+    st.caption(
+        "Listed SR3 ATM treated as source of truth per CFS architecture lock "
+        "(19-Apr-2026). OTC cells flagged when basis exceeds threshold. "
+        "Standards/Serials compared against OTC 1Y tenor (no 3M in OTC); "
+        "mid-curves mapped to matching fwd-start tenor."
+    )
+
+    _vol_data = st.session_state.get("vol_data", {}).get("USD", {})
+    otc_atm = _vol_data.get("atm")
+    if otc_atm is None or (hasattr(otc_atm, "empty") and otc_atm.empty):
+        st.info("No OTC USD swaption surface loaded. Load USD vols via "
+                "IRS / Vol Upload tab (or the OTC Swaption Vols sub-nav) to enable comparison.")
+        return
+
+    _tc1, _tc2, _spc = st.columns([1, 1, 3])
+    with _tc1:
+        thresh = st.number_input(
+            "Mismark |Δ| > (bp)", value=5.0, min_value=0.5, max_value=50.0,
+            step=0.5, format="%.1f", key="sr3_basis_thresh",
+        )
+    with _tc2:
+        show_mc = st.checkbox("Include Mid-Curves", value=True, key="sr3_basis_incl_mc")
+
+    from datetime import date as _d
+    _today = _d.today()
+
+    _rows_std, _rows_mc = [], []
+    for (code, ctype, exp_str, underlying, maturity_str) in SR3_CONTRACTS_CANONICAL:
+        r = grid_state.get(code)
+        if not r or r.get("atm_vol") is None:
+            continue
+        sr3_atm = float(r["atm_vol"])
+
+        otc_exp, otc_tenor, t_exp = _sr3_otc_map(ctype, exp_str, _today)
+        otc_vol = None
+        if otc_exp and otc_tenor:
+            try:
+                otc_vol = get_matrix_value(otc_atm, otc_exp, otc_tenor)
+            except Exception:
+                otc_vol = None
+
+        basis = None
+        status = "—"
+        if otc_vol is not None:
+            basis = sr3_atm - otc_vol
+            status = "⚠ OTC mismark" if abs(basis) > thresh else "✓"
+
+        row = {
+            "Code":     code,
+            "Type":     ctype,
+            "T_exp (y)": f"{t_exp:.2f}" if t_exp is not None else "—",
+            "SR3 ATM":  f"{sr3_atm:.2f}",
+            "OTC Cell": f"{otc_exp} × {otc_tenor:g}y" if otc_exp else "—",
+            "OTC ATM":  f"{otc_vol:.2f}" if otc_vol is not None else "—",
+            "Basis (SR3−OTC)": f"{basis:+.2f}" if basis is not None else "—",
+            "Status":   status,
+        }
+        is_mc = "MC" in ctype
+        (_rows_mc if is_mc else _rows_std).append(row)
+
+    _rows = _rows_std + (_rows_mc if show_mc else [])
+    if not _rows:
+        st.info("No SR3 rows in grid. Load or enter SR3 vols above.")
+        return
+
+    _df = pd.DataFrame(_rows)
+
+    # Color-code status
+    def _color_status(val):
+        s = str(val)
+        if "mismark" in s:
+            return "color:#ef4444;font-weight:700"
+        if "✓" in s:
+            return "color:#22c55e"
+        return "color:#64748b"
+
+    def _color_basis(val):
+        s = str(val).strip()
+        if s in ("—", ""):
+            return "color:#64748b"
+        try:
+            v = float(s.replace("+", ""))
+            if abs(v) > thresh:
+                return "color:#ef4444;font-weight:700"
+            return "color:#22c55e"
+        except Exception:
+            return ""
+
+    _styled = _df.style.map(_color_status, subset=["Status"]).map(
+        _color_basis, subset=["Basis (SR3−OTC)"]
+    )
+    st.dataframe(_styled, use_container_width=True, hide_index=True)
+
+    _compared = sum(1 for r in _rows if r["Status"] != "—")
+    _mismarks = sum(1 for r in _rows if "mismark" in r["Status"])
+    _avg_basis = None
+    _basis_vals = []
+    for r in _rows:
+        try:
+            _basis_vals.append(float(r["Basis (SR3−OTC)"].replace("+", "")))
+        except Exception:
+            pass
+    if _basis_vals:
+        _avg_basis = sum(_basis_vals) / len(_basis_vals)
+
+    _s1, _s2, _s3 = st.columns(3)
+    with _s1:
+        st.metric("Compared", _compared)
+    with _s2:
+        st.metric(f"Mismarks (|Δ|>{thresh:g}bp)", _mismarks,
+                  delta=None if _mismarks == 0 else f"{_mismarks} contracts",
+                  delta_color="inverse")
+    with _s3:
+        if _avg_basis is not None:
+            st.metric("Avg basis (bp)", f"{_avg_basis:+.2f}")
+
+    st.caption("**Caveat:** Standards/Serials comparison is approximate — OTC surfaces "
+               "don't have 3M tenor, so 1Y is used as a proxy. Mid-curve comparisons "
+               "are apples-to-apples at the fwd-start tenor.")
+
+
 @st.fragment
 def sr3_vol_tab():
     """USD SR3 Listed Vol Builder — BBG-format grid, SOD/EOD/Intraday saves."""
@@ -20886,6 +21068,10 @@ def sr3_vol_tab():
         _render_grid_section("", SR3_CONTRACTS_CANONICAL[SR3_SPLIT_INDEX:], "sr3m")
 
     st.session_state["sr3_grid_data"] = grid_state
+
+    # ── Basis Diagnostic Panel (read-only) ────────────────────────────
+    with st.expander("🔍 Basis vs OTC Swaption Surface", expanded=False):
+        _render_sr3_basis_panel(grid_state)
 
     # ── Save buttons (NYC timestamped) ────────────────────────────────
     st.markdown("---")
