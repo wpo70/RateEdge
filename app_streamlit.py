@@ -11561,37 +11561,69 @@ def caps_floors_tab(vol_mode: str):
                 and st.session_state.get("cfs_active_vol_src", "OTC only") == "Listed bootstrap"):
             try:
                 _lf_pack_now = st.session_state.get("_cfs_listed_pack", "whites")
-                # Build the listed-only caplet curve (session edits baked in).
-                # We use SR3 hybrid with a 1Y cutoff for whites-only (front year from
-                # listed), 2Y cutoff for whites+reds (front 2Y from listed).
                 _lf_cutoff = 1.0 if _lf_pack_now == "whites" else 2.0
-                _listed_curve_for_bs = build_caplet_vol_curve_sr3(
-                    "USD",
-                    cutoff_years=_lf_cutoff,
-                    otc_fallback_curve=st.session_state.get("caplet_vol_curve_aud") or {},
-                    final_maturity_y=max(tenor_y + 0.5, 10.0),
+
+                # Cache signature: rebuild listed front curve ONLY when these change.
+                # Without this cache the SR3 builder runs every Streamlit rerun
+                # (including every keystroke/hover on another widget), causing
+                # the "constant recalc" feel.
+                _lf_edits = st.session_state.get("_cfs_listed_session_edits", {}) or {}
+                _lf_cache_sig = (
+                    _lf_pack_now,
+                    _lf_cutoff,
+                    tuple(sorted(st.session_state.get("_cfs_white_selected", []) or [])),
+                    tuple(sorted(
+                        (c, e.get("listed_adj_mode"),
+                         round(float(e.get("listed_adj_ratio") or 1.0), 6),
+                         round(float(e.get("listed_adj_bp") or 0.0), 4))
+                        for c, e in _lf_edits.items()
+                    )),
+                    st.session_state.get("sr3_current_label"),  # snapshot change busts cache
                 )
-                if _listed_curve_for_bs:
-                    _prem_1y_leg = price_caplets_with_vol_curve(
-                        "USD", 1.0, _listed_curve_for_bs, notional_mm=1.0
+                _lf_cache_key = "_cfs_listed_curve_cache"
+                _cached_lf = st.session_state.get(_lf_cache_key)
+                if _cached_lf and _cached_lf.get("sig") == _lf_cache_sig:
+                    _listed_curve_for_bs = _cached_lf.get("curve")
+                    _listed_1y_stradd   = _cached_lf.get("stradd_1y")
+                    _listed_2y_stradd   = _cached_lf.get("stradd_2y")
+                else:
+                    _listed_curve_for_bs = build_caplet_vol_curve_sr3(
+                        "USD",
+                        cutoff_years=_lf_cutoff,
+                        otc_fallback_curve=st.session_state.get("caplet_vol_curve_aud") or {},
+                        final_maturity_y=max(tenor_y + 0.5, 10.0),
                     )
-                    if _prem_1y_leg and _prem_1y_leg > 0:
-                        _listed_1y_stradd = float(_prem_1y_leg) * 2.0
-                        st.session_state.setdefault("cfs_table_data", {}).setdefault(
-                            "3m1y", {})["cfs_straddle"] = _listed_1y_stradd
-                        _listed_bootstrap_active = True
-                    if _lf_pack_now == "both":
-                        _prem_2y_leg = price_caplets_with_vol_curve(
-                            "USD", 2.0, _listed_curve_for_bs, notional_mm=1.0
+                    if _listed_curve_for_bs:
+                        _prem_1y_leg = price_caplets_with_vol_curve(
+                            "USD", 1.0, _listed_curve_for_bs, notional_mm=1.0
                         )
-                        if (_prem_2y_leg and _prem_2y_leg > 0
-                                and _listed_1y_stradd):
-                            _listed_2y_stradd = float(_prem_2y_leg) * 2.0
-                            # 1y1y gap straddle = 2Y cum − 1Y cum
-                            _1y1y_gap = _listed_2y_stradd - _listed_1y_stradd
-                            if _1y1y_gap > 0:
-                                st.session_state["cfs_table_data"].setdefault(
-                                    "1y1y", {})["cfs_straddle"] = _1y1y_gap
+                        _listed_1y_stradd = float(_prem_1y_leg) * 2.0 if (_prem_1y_leg and _prem_1y_leg > 0) else None
+                        if _lf_pack_now == "both":
+                            _prem_2y_leg = price_caplets_with_vol_curve(
+                                "USD", 2.0, _listed_curve_for_bs, notional_mm=1.0
+                            )
+                            _listed_2y_stradd = float(_prem_2y_leg) * 2.0 if (_prem_2y_leg and _prem_2y_leg > 0) else None
+                    # Stash
+                    st.session_state[_lf_cache_key] = {
+                        "sig": _lf_cache_sig,
+                        "curve": _listed_curve_for_bs,
+                        "stradd_1y": _listed_1y_stradd,
+                        "stradd_2y": _listed_2y_stradd,
+                    }
+
+                # Write 1Y/2Y straddles into cfs_table_data so AUD bootstrap
+                # picks them up. This happens every rerun (fast) — the slow
+                # part is the curve build, which is cached above.
+                if _listed_1y_stradd and _listed_1y_stradd > 0:
+                    st.session_state.setdefault("cfs_table_data", {}).setdefault(
+                        "3m1y", {})["cfs_straddle"] = _listed_1y_stradd
+                    _listed_bootstrap_active = True
+                if (_lf_pack_now == "both"
+                        and _listed_1y_stradd and _listed_2y_stradd
+                        and _listed_2y_stradd > _listed_1y_stradd):
+                    _1y1y_gap = _listed_2y_stradd - _listed_1y_stradd
+                    st.session_state["cfs_table_data"].setdefault(
+                        "1y1y", {})["cfs_straddle"] = _1y1y_gap
             except Exception as _lb_err:
                 st.caption(f"⚠ Listed bootstrap pre-calc failed: {_lb_err}")
 
@@ -11679,27 +11711,49 @@ def caps_floors_tab(vol_mode: str):
                     help="Multiple curves overlaid on Caplet Vol Curve chart below.",
                 )
 
-            # Build parallel curves (always compute both SR3 variants so overlays
-            # and the active switch work without extra rebuilds)
-            try:
-                sr3_hybrid_curve = build_caplet_vol_curve_sr3(
-                    "USD",
-                    cutoff_years=_sr3_cutoff_y,
-                    otc_fallback_curve=otc_caplet_curve,
-                    final_maturity_y=max(tenor_y + 0.5, 10.0),
-                )
-            except Exception as _e_h:
-                sr3_hybrid_curve = None
-                st.caption(f"⚠ SR3 hybrid build failed: {_e_h}")
-            try:
-                sr3_full_curve = build_caplet_vol_curve_sr3_full(
-                    "USD",
-                    otc_fallback_curve=otc_caplet_curve,
-                    final_maturity_y=max(tenor_y + 0.5, 10.0),
-                )
-            except Exception as _e_f:
-                sr3_full_curve = None
-                st.caption(f"⚠ SR3 full build failed: {_e_f}")
+            # Build parallel curves (cached per (cutoff, session edits, snapshot,
+            # otc curve length) — only rebuild when any of those change).
+            _sr3_sig = (
+                _sr3_cutoff_y,
+                tuple(sorted(
+                    (c, e.get("listed_adj_mode"),
+                     round(float(e.get("listed_adj_ratio") or 1.0), 6),
+                     round(float(e.get("listed_adj_bp") or 0.0), 4))
+                    for c, e in (st.session_state.get("_cfs_listed_session_edits", {}) or {}).items()
+                )),
+                st.session_state.get("sr3_current_label"),
+                len(otc_caplet_curve) if otc_caplet_curve else 0,
+                round(max(tenor_y + 0.5, 10.0), 2),
+            )
+            _sr3_cache = st.session_state.get("_cfs_sr3_curves_cache")
+            if _sr3_cache and _sr3_cache.get("sig") == _sr3_sig:
+                sr3_hybrid_curve = _sr3_cache.get("hybrid")
+                sr3_full_curve   = _sr3_cache.get("full")
+            else:
+                try:
+                    sr3_hybrid_curve = build_caplet_vol_curve_sr3(
+                        "USD",
+                        cutoff_years=_sr3_cutoff_y,
+                        otc_fallback_curve=otc_caplet_curve,
+                        final_maturity_y=max(tenor_y + 0.5, 10.0),
+                    )
+                except Exception as _e_h:
+                    sr3_hybrid_curve = None
+                    st.caption(f"⚠ SR3 hybrid build failed: {_e_h}")
+                try:
+                    sr3_full_curve = build_caplet_vol_curve_sr3_full(
+                        "USD",
+                        otc_fallback_curve=otc_caplet_curve,
+                        final_maturity_y=max(tenor_y + 0.5, 10.0),
+                    )
+                except Exception as _e_f:
+                    sr3_full_curve = None
+                    st.caption(f"⚠ SR3 full build failed: {_e_f}")
+                st.session_state["_cfs_sr3_curves_cache"] = {
+                    "sig": _sr3_sig,
+                    "hybrid": sr3_hybrid_curve,
+                    "full":   sr3_full_curve,
+                }
 
             # Swap the active curve
             if _active_src == "Listed bootstrap":
@@ -12275,9 +12329,10 @@ def caps_floors_tab(vol_mode: str):
                 if ccy == "USD":
                     _sel_for_table = st.session_state.get("_cfs_overlay_sel", []) or []
                     _src_curves_t = {
-                        "OTC only":   st.session_state.get("_cfs_otc_curve") or {},
-                        "SR3 hybrid": st.session_state.get("_cfs_sr3_hybrid") or {},
-                        "SR3 full":   st.session_state.get("_cfs_sr3_full") or {},
+                        "OTC only":         st.session_state.get("_cfs_otc_curve") or {},
+                        "Listed bootstrap": st.session_state.get("_cfs_listed_bootstrap") or {},
+                        "SR3 hybrid":       st.session_state.get("_cfs_sr3_hybrid") or {},
+                        "SR3 full":         st.session_state.get("_cfs_sr3_full") or {},
                     }
                     # Collect all unique T values across selected curves
                     _all_t_vals = set()
@@ -12285,9 +12340,10 @@ def caps_floors_tab(vol_mode: str):
                         _all_t_vals.update((_src_curves_t.get(_nm) or {}).keys())
                     if _all_t_vals and _sel_for_table:
                         _active_label = {
-                            "OTC only":   "OTC only",
-                            "SR3 hybrid": "SR3 hybrid",
-                            "SR3 full":   "SR3 full",
+                            "OTC only":         "OTC only",
+                            "Listed bootstrap": "Listed bootstrap",
+                            "SR3 hybrid":       "SR3 hybrid",
+                            "SR3 full":         "SR3 full",
                         }.get(_active_src, "—")
                         curve_data = []
                         for t in sorted(_all_t_vals):
@@ -12323,14 +12379,16 @@ def caps_floors_tab(vol_mode: str):
                 if ccy == "USD":
                     _sel = st.session_state.get("_cfs_overlay_sel", []) or []
                     _overlay_palette = {
-                        "OTC only":   ("#2563eb", "solid",  "OTC only"),
-                        "SR3 hybrid": ("#16a34a", "solid",  "SR3 hybrid"),
-                        "SR3 full":   ("#ef4444", "dash",   "SR3 full"),
+                        "OTC only":         ("#2563eb", "solid",  "OTC only"),
+                        "Listed bootstrap": ("#a855f7", "solid",  "Listed bootstrap"),
+                        "SR3 hybrid":       ("#16a34a", "solid",  "SR3 hybrid"),
+                        "SR3 full":         ("#ef4444", "dash",   "SR3 full"),
                     }
                     _src_curves = {
-                        "OTC only":   st.session_state.get("_cfs_otc_curve") or {},
-                        "SR3 hybrid": st.session_state.get("_cfs_sr3_hybrid") or {},
-                        "SR3 full":   st.session_state.get("_cfs_sr3_full") or {},
+                        "OTC only":         st.session_state.get("_cfs_otc_curve") or {},
+                        "Listed bootstrap": st.session_state.get("_cfs_listed_bootstrap") or {},
+                        "SR3 hybrid":       st.session_state.get("_cfs_sr3_hybrid") or {},
+                        "SR3 full":         st.session_state.get("_cfs_sr3_full") or {},
                     }
                     for _nm in _sel:
                         _c = _src_curves.get(_nm) or {}
@@ -12380,9 +12438,10 @@ def caps_floors_tab(vol_mode: str):
                     _all_t = []
                     for _nm in _usd_overlays:
                         _c = st.session_state.get({
-                            "OTC only": "_cfs_otc_curve",
-                            "SR3 hybrid": "_cfs_sr3_hybrid",
-                            "SR3 full": "_cfs_sr3_full",
+                            "OTC only":         "_cfs_otc_curve",
+                            "Listed bootstrap": "_cfs_listed_bootstrap",
+                            "SR3 hybrid":       "_cfs_sr3_hybrid",
+                            "SR3 full":         "_cfs_sr3_full",
                         }[_nm]) or {}
                         _all_t.extend(_c.keys())
                     max_yr = int(np.ceil(max(_all_t))) if _all_t else 10
