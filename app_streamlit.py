@@ -20760,13 +20760,16 @@ def load_sr3_snapshot(snapshot_date=None, label=None, currency: str = "USD") -> 
 
 def _sr3_otc_map(ctype: str, exp_date_str, today=None):
     """
-    Map SR3 contract (type, expiry date) to nearest OTC swaption (expiry_label, tenor_years).
-    Returns (expiry_label, tenor_years, t_exp_years) or (None, None, None) if unmappable.
-    Tenor logic:
-      - Standards/Serials: 3M SOFR → approximate to OTC 1Y tenor (no 3m tenor in OTC surface)
-      - 1Y/2Y/3Y/4Y/5Y MC: tenor = MC year (apples-to-apples for fwd-start rates)
+    Map SR3 contract type to the OTC swaption cell a trader would eyeball as
+    the apples-to-apples comparator. Mid-curves anchor to (pack_year × 1y) —
+    e.g. 1Y MC → 1y × 1y (Red pack area), 2Y MC → 2y × 1y (Green), etc.
+    Standards/Serials have no clean OTC comparator (no 3m tenor) — returned
+    as a flagged-approx mapping against spot × 1y.
+
+    Returns (expiry_label, tenor_years, t_exp_years, approx_flag)
+       approx_flag = True for Std/Serial (wide caveat), False for MC (clean).
     """
-    from datetime import date as _d, datetime as _dt
+    from datetime import date as _d
     if today is None:
         today = _d.today()
     try:
@@ -20776,34 +20779,37 @@ def _sr3_otc_map(ctype: str, exp_date_str, today=None):
             ed = _d.fromisoformat(str(exp_date_str)[:10])
         t_exp = (ed - today).days / 365.25
     except Exception:
-        return None, None, None
+        return None, None, None, False
 
     if t_exp <= 0:
-        return None, None, t_exp
+        return None, None, t_exp, False
 
+    # Mid-Curves: pack-anchor mapping (trader convention)
+    #   1Y MC → 1y × 1y vol  (Red pack — 1y1y fwd rate area)
+    #   2Y MC → 2y × 1y vol  (Green pack)
+    #   3Y MC → 3y × 1y vol  (Blue pack)
+    #   4Y MC → 4y × 1y vol  (Gold pack)
+    #   5Y MC → 5y × 1y vol  (Purple pack)
+    mc_anchor = {
+        "1Y MC": ("1y", 1.0),
+        "2Y MC": ("2y", 1.0),
+        "3Y MC": ("3y", 1.0),
+        # OTC surfaces usually don't carry 4y expiry — fall back to 5y
+        "4Y MC": ("5y", 1.0),
+        "5Y MC": ("5y", 1.0),
+    }
+    if ctype in mc_anchor:
+        lbl, ten = mc_anchor[ctype]
+        return lbl, ten, t_exp, False
+
+    # Standards/Serials: no 3m tenor on OTC. Best we can do is nearest-expiry × 1y.
+    # Flag as approximation — basis here is expected to be wide and not actionable.
     _otc_labels = [
         ("1w", 1/52), ("2w", 2/52), ("1m", 1/12), ("2m", 2/12), ("3m", 3/12),
-        ("6m", 6/12), ("9m", 9/12), ("1y", 1.0), ("18m", 1.5),
-        ("2y", 2.0), ("3y", 3.0), ("5y", 5.0), ("7y", 7.0), ("10y", 10.0),
+        ("6m", 6/12), ("9m", 9/12), ("1y", 1.0),
     ]
     best_label = min(_otc_labels, key=lambda x: abs(x[1] - t_exp))[0]
-
-    if ctype in ("Quarterly", "Serial", "Serial-1M"):
-        tenor = 1.0  # no 3m tenor available; use 1y proxy
-    elif ctype == "1Y MC":
-        tenor = 1.0
-    elif ctype == "2Y MC":
-        tenor = 2.0
-    elif ctype == "3Y MC":
-        tenor = 3.0
-    elif ctype == "4Y MC":
-        tenor = 4.0
-    elif ctype == "5Y MC":
-        tenor = 5.0
-    else:
-        tenor = 1.0
-
-    return best_label, tenor, t_exp
+    return best_label, 1.0, t_exp, True
 
 
 def _render_sr3_basis_panel(grid_state: dict):
@@ -20841,7 +20847,7 @@ def _render_sr3_basis_panel(grid_state: dict):
             continue
         sr3_atm = float(r["atm_vol"])
 
-        otc_exp, otc_tenor, t_exp = _sr3_otc_map(ctype, exp_str, _today)
+        otc_exp, otc_tenor, t_exp, is_approx = _sr3_otc_map(ctype, exp_str, _today)
         otc_vol = None
         if otc_exp and otc_tenor:
             try:
@@ -20853,7 +20859,12 @@ def _render_sr3_basis_panel(grid_state: dict):
         status = "—"
         if otc_vol is not None:
             basis = sr3_atm - otc_vol
-            status = "⚠ OTC mismark" if abs(basis) > thresh else "✓"
+            if is_approx:
+                status = "~ approx (no 3m OTC)"
+            elif abs(basis) > thresh:
+                status = "⚠ OTC mismark"
+            else:
+                status = "✓"
 
         row = {
             "Code":     code,
@@ -20882,6 +20893,8 @@ def _render_sr3_basis_panel(grid_state: dict):
             return "color:#ef4444;font-weight:700"
         if "✓" in s:
             return "color:#22c55e"
+        if "approx" in s:
+            return "color:#eab308"  # yellow — flagged but not actionable
         return "color:#64748b"
 
     def _color_basis(val):
@@ -20901,11 +20914,14 @@ def _render_sr3_basis_panel(grid_state: dict):
     )
     st.dataframe(_styled, use_container_width=True, hide_index=True)
 
-    _compared = sum(1 for r in _rows if r["Status"] != "—")
+    _compared = sum(1 for r in _rows if r["Status"] not in ("—",))
+    # Mismarks = actionable rows only (exclude approx Std/Serial rows)
     _mismarks = sum(1 for r in _rows if "mismark" in r["Status"])
     _avg_basis = None
     _basis_vals = []
     for r in _rows:
+        if "approx" in r["Status"]:
+            continue
         try:
             _basis_vals.append(float(r["Basis (SR3−OTC)"].replace("+", "")))
         except Exception:
@@ -20922,11 +20938,15 @@ def _render_sr3_basis_panel(grid_state: dict):
                   delta_color="inverse")
     with _s3:
         if _avg_basis is not None:
-            st.metric("Avg basis (bp)", f"{_avg_basis:+.2f}")
+            st.metric("Avg basis (MC only, bp)", f"{_avg_basis:+.2f}")
 
-    st.caption("**Caveat:** Standards/Serials comparison is approximate — OTC surfaces "
-               "don't have 3M tenor, so 1Y is used as a proxy. Mid-curve comparisons "
-               "are apples-to-apples at the fwd-start tenor.")
+    st.caption(
+        "**Mid-curve mapping (apples-to-apples):** 1Y MC → OTC 1y×1y (Red pack), "
+        "2Y MC → 2y×1y (Green), 3Y MC → 3y×1y (Blue), 4Y/5Y MC → 5y×1y (Gold/Purple). "
+        "**Standards/Serials:** flagged yellow (`~ approx`) — OTC surface has no 3m tenor, "
+        "so comparison is against OTC y×1y and not directly actionable. "
+        "Avg basis and mismark count exclude approx rows."
+    )
 
 
 @st.fragment
