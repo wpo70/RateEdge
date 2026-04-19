@@ -11205,17 +11205,40 @@ def caps_floors_tab(vol_mode: str):
                 st.markdown("<hr style='margin:2px 0 0 0;border-color:#334155'>", unsafe_allow_html=True)
 
                 new_spread_values = {}
+                # ── Determine which wedges are SKIPPED by Listed Front (USD only) ──
+                # When Use Listed Front toggle is ON, the listed contracts handle
+                # the front of the curve and certain OTC wedges are inactive.
+                _skip_wedge_keys = set()
+                if ccy == "USD" and st.session_state.get("_cfs_use_listed", False):
+                    _lf_pack = st.session_state.get("_cfs_listed_pack", "whites")
+                    _skip_wedge_keys.add("3m1y")
+                    if _lf_pack == "both":
+                        _skip_wedge_keys.add("1y1y")
+
                 for spr_key, wedge_lbl, tbl_lbl, tbl_wedge, cfs_lbl, spread in ROW_DATA:
+                    _row_skipped = tbl_lbl in _skip_wedge_keys
                     last_val = st.session_state[spr_key]
                     cur_val  = st.session_state.get(f"{spr_key}_temp", last_val)
                     tdata  = st.session_state["cfs_table_data"].get(tbl_lbl, {})
                     swpt   = tdata.get("swaption", None)  # spot premium (post-conversion)
                     new_val = cur_val
                     rc = st.columns(CW)
-                    fs = "font-size:0.80rem;padding-top:6px"
-                    rc[0].markdown(f"<div style='{fs}'>{wedge_lbl}</div>", unsafe_allow_html=True)
+                    # Greyed style when this wedge is superseded by Listed Front
+                    if _row_skipped:
+                        fs = "font-size:0.80rem;padding-top:6px;color:#475569;text-decoration:line-through"
+                        rc[0].markdown(
+                            f"<div style='{fs}' title='Superseded by Listed Front editor'>"
+                            f"{wedge_lbl} <span style='color:#f59e0b;text-decoration:none;'>⦸ listed</span></div>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        fs = "font-size:0.80rem;padding-top:6px"
+                        rc[0].markdown(f"<div style='{fs}'>{wedge_lbl}</div>", unsafe_allow_html=True)
                     rc[1].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{last_val:.1f}</div>", unsafe_allow_html=True)
-                    new_val = rc[2].number_input("", value=cur_val, key=f"{spr_key}_new", format="%.1f", step=0.5, label_visibility="collapsed")
+                    new_val = rc[2].number_input("", value=cur_val, key=f"{spr_key}_new",
+                                                  format="%.1f", step=0.5,
+                                                  label_visibility="collapsed",
+                                                  disabled=_row_skipped)
                     delta = new_val - last_val
                     dc = "#22c55e" if delta > 0 else "#ef4444" if delta < 0 else "#94a3b8"
                     rc[3].markdown(f"<div style='{fs};text-align:right;color:{dc}'>{delta:+.1f}</div>", unsafe_allow_html=True)
@@ -11731,15 +11754,58 @@ def caps_floors_tab(vol_mode: str):
                         elif 4 <= pidx <= 7:
                             _red_rows.append((c, r))
 
+                    # ── White selection: checkbox per row, must pick exactly 4 ──
+                    # Session state stores the selected contract codes as a set.
+                    _prev_white_sel = st.session_state.get("_cfs_white_selected")
+                    if _prev_white_sel is None:
+                        # Default: first 4 whites
+                        _prev_white_sel = {c for c, _ in _white_rows[:4]}
+                        st.session_state["_cfs_white_selected"] = _prev_white_sel
+
+                    _white_codes_available = [c for c, _ in _white_rows]
+                    if len(_white_codes_available) > 4:
+                        st.markdown(
+                            f"<div style='font-size:11px;color:#64748b;margin-top:6px;'>"
+                            f"<b>White selection</b> — tick exactly 4 of the "
+                            f"{len(_white_codes_available)} available whites:</div>",
+                            unsafe_allow_html=True,
+                        )
+                        _ws_cols = st.columns(min(len(_white_codes_available), 8))
+                        _new_white_sel = set()
+                        for _i, (c, r) in enumerate(_white_rows):
+                            with _ws_cols[_i % len(_ws_cols)]:
+                                _ticked = st.checkbox(
+                                    c,
+                                    value=(c in _prev_white_sel),
+                                    key=f"_cfs_white_cb_{c}",
+                                )
+                                if _ticked:
+                                    _new_white_sel.add(c)
+                        st.session_state["_cfs_white_selected"] = _new_white_sel
+
+                        if len(_new_white_sel) != 4:
+                            st.warning(
+                                f"⚠ Please tick exactly 4 whites "
+                                f"(currently {len(_new_white_sel)}). "
+                                f"Editor and pricer feed disabled until resolved."
+                            )
+                            _white_selected_rows = []
+                        else:
+                            _white_selected_rows = [(c, r) for c, r in _white_rows if c in _new_white_sel]
+                    else:
+                        # ≤ 4 whites available — use all of them
+                        _white_selected_rows = _white_rows
+                        st.session_state["_cfs_white_selected"] = {c for c, _ in _white_rows}
+
                     if _pack_mode == "whites":
-                        _editor_rows = _white_rows[:4]   # front 4 whites
+                        _editor_rows = _white_selected_rows
                         _otc_first_wedge = "1y1y"
                     else:
-                        _editor_rows = _white_rows[:4] + _red_rows[:4]
+                        _editor_rows = _white_selected_rows + _red_rows[:4]
                         _otc_first_wedge = "2y1y"
 
                     if not _editor_rows:
-                        st.warning("No white/red contracts found in current snapshot.")
+                        st.warning("No white/red contracts found in current snapshot, or white selection incomplete.")
                     else:
                         st.markdown(
                             f"<div style='font-size:11px;color:#64748b;margin-top:4px;'>"
