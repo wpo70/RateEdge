@@ -2698,6 +2698,208 @@ def build_caplet_vol_curve_from_surface(ccy: str, atm_surface):
     return final
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# SR3-driven Caplet Vol Curve builders (Step 5 — CFS pricer read-side)
+# ═══════════════════════════════════════════════════════════════════════
+# Three vol source modes for USD CFS:
+#   "otc"       — existing wedge-based OTC path (default, unchanged)
+#   "sr3_hybrid"— listed SR3 wins 0→cutoff_y, OTC wedges handle > cutoff_y
+#   "sr3_full"  — listed SR3 everywhere it exists (diagnostic/debug)
+# These coexist — curves can be built in parallel and overlaid for comparison.
+
+
+def _load_sr3_latest_usd() -> dict:
+    """Load latest USD SR3 snapshot as {contract_code: row_dict}. Cached per-session."""
+    try:
+        snaps = list_sr3_snapshots("USD", limit=1)
+        if not snaps:
+            return {}
+        return load_sr3_snapshot(currency="USD")
+    except Exception:
+        return {}
+
+
+def _sr3_anchor_points(sr3_rows: dict, today=None) -> list:
+    """
+    Extract (T_yrs, atm_vol_bp) anchor points from SR3 snapshot for CFS caplet.
+    Returns list sorted by T. Uses expiry_date → T_yrs conversion.
+    Quarterlies and serials both contribute; mid-curves are skipped here (their
+    vol is on fwd-start rates, not spot-starting caplets).
+    """
+    from datetime import date as _d
+    if today is None:
+        today = _d.today()
+    anchors = []
+    for code, row in (sr3_rows or {}).items():
+        ctype = row.get("contract_type", "")
+        if "MC" in ctype:
+            # Mid-curve vols are on fwd-start 3m fixings — handle separately
+            continue
+        atm = row.get("atm_vol")
+        if atm is None:
+            continue
+        ed = row.get("expiry_date")
+        if ed is None:
+            continue
+        try:
+            if hasattr(ed, "toordinal"):
+                t = (ed - today).days / 365.25
+            else:
+                t = (_d.fromisoformat(str(ed)[:10]) - today).days / 365.25
+        except Exception:
+            continue
+        if t <= 0:
+            continue
+        anchors.append((t, float(atm)))
+    anchors.sort(key=lambda x: x[0])
+    return anchors
+
+
+def build_caplet_vol_curve_sr3(
+    ccy: str,
+    cutoff_years: float = 2.0,
+    otc_fallback_curve: dict | None = None,
+    final_maturity_y: float = 10.0,
+) -> dict | None:
+    """
+    Build a caplet vol curve using LISTED SR3 vols for maturities ≤ cutoff_years,
+    and falling back to the OTC-derived curve for maturities > cutoff_years.
+    
+    Returns {T_yrs: vol_bp} at quarterly steps from 0.25 out to final_maturity_y.
+    
+    Only USD is supported — AUD/NZD/EUR fall through to otc_fallback_curve.
+    """
+    if ccy != "USD":
+        return otc_fallback_curve
+    
+    sr3_rows = _load_sr3_latest_usd()
+    if not sr3_rows:
+        return otc_fallback_curve
+    
+    anchors = _sr3_anchor_points(sr3_rows)
+    if not anchors:
+        return otc_fallback_curve
+    
+    # Build interpolator over SR3 anchors (up to cutoff)
+    anchors_below_cutoff = [(t, v) for t, v in anchors if t <= cutoff_years + 0.01]
+    if len(anchors_below_cutoff) < 2:
+        # Need at least 2 points for interpolation
+        return otc_fallback_curve
+    
+    from scipy.interpolate import PchipInterpolator
+    anch_t = np.array([t for t, _ in anchors_below_cutoff])
+    anch_v = np.array([v for _, v in anchors_below_cutoff])
+    
+    # Handle T < first anchor by flat extrapolation
+    first_t, first_v = anchors_below_cutoff[0]
+    
+    pchip = PchipInterpolator(anch_t, anch_v, extrapolate=False)
+    
+    curve = {}
+    t = 0.25
+    while t <= final_maturity_y + 1e-6:
+        t_r = round(t, 2)
+        if t <= cutoff_years + 0.01:
+            if t <= first_t:
+                curve[t_r] = first_v
+            else:
+                v = pchip(t)
+                if np.isnan(v):
+                    curve[t_r] = first_v
+                else:
+                    curve[t_r] = float(v)
+        else:
+            # Beyond cutoff — use OTC fallback
+            if otc_fallback_curve:
+                # Find nearest OTC point
+                otc_keys = sorted(otc_fallback_curve.keys())
+                if t_r in otc_fallback_curve:
+                    curve[t_r] = otc_fallback_curve[t_r]
+                else:
+                    # Linear interp or nearest
+                    below = [k for k in otc_keys if k <= t_r]
+                    above = [k for k in otc_keys if k >= t_r]
+                    if below and above:
+                        lo, hi = below[-1], above[0]
+                        if lo == hi:
+                            curve[t_r] = otc_fallback_curve[lo]
+                        else:
+                            w = (t_r - lo) / (hi - lo)
+                            curve[t_r] = (1 - w) * otc_fallback_curve[lo] + w * otc_fallback_curve[hi]
+                    elif below:
+                        curve[t_r] = otc_fallback_curve[below[-1]]
+                    elif above:
+                        curve[t_r] = otc_fallback_curve[above[0]]
+                    else:
+                        curve[t_r] = anch_v[-1]  # last SR3 anchor
+            else:
+                curve[t_r] = anch_v[-1]  # flat extend last SR3 point
+        t += 0.25
+    return curve
+
+
+def build_caplet_vol_curve_sr3_full(
+    ccy: str,
+    otc_fallback_curve: dict | None = None,
+    final_maturity_y: float = 10.0,
+) -> dict | None:
+    """
+    Diagnostic mode: use ALL SR3 anchor points (standards/serials/quarterlies
+    up to whatever liquidity exists, typically Gold ~4y). OTC fallback beyond.
+    """
+    if ccy != "USD":
+        return otc_fallback_curve
+    sr3_rows = _load_sr3_latest_usd()
+    if not sr3_rows:
+        return otc_fallback_curve
+    anchors = _sr3_anchor_points(sr3_rows)
+    if len(anchors) < 2:
+        return otc_fallback_curve
+    
+    from scipy.interpolate import PchipInterpolator
+    anch_t = np.array([t for t, _ in anchors])
+    anch_v = np.array([v for _, v in anchors])
+    
+    # SR3 covers up to last anchor; beyond that use OTC
+    sr3_max_t = anch_t[-1]
+    first_t, first_v = anchors[0]
+    
+    pchip = PchipInterpolator(anch_t, anch_v, extrapolate=False)
+    
+    curve = {}
+    t = 0.25
+    while t <= final_maturity_y + 1e-6:
+        t_r = round(t, 2)
+        if t <= sr3_max_t + 0.01:
+            if t <= first_t:
+                curve[t_r] = first_v
+            else:
+                v = pchip(t)
+                curve[t_r] = float(v) if not np.isnan(v) else first_v
+        else:
+            if otc_fallback_curve:
+                otc_keys = sorted(otc_fallback_curve.keys())
+                below = [k for k in otc_keys if k <= t_r]
+                above = [k for k in otc_keys if k >= t_r]
+                if t_r in otc_fallback_curve:
+                    curve[t_r] = otc_fallback_curve[t_r]
+                elif below and above:
+                    lo, hi = below[-1], above[0]
+                    if lo == hi:
+                        curve[t_r] = otc_fallback_curve[lo]
+                    else:
+                        w = (t_r - lo) / (hi - lo)
+                        curve[t_r] = (1 - w) * otc_fallback_curve[lo] + w * otc_fallback_curve[hi]
+                elif below:
+                    curve[t_r] = otc_fallback_curve[below[-1]]
+                else:
+                    curve[t_r] = anch_v[-1]
+            else:
+                curve[t_r] = anch_v[-1]
+        t += 0.25
+    return curve
+
+
 def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None, 
                           spread_3m1y=-3.0, spread_1y1y=12.0, spread_2y1y=15.0, 
                           spread_3y1y=19.0, spread_4y1y=22.0, spread_5y2y=40.0, spread_7y3y=60.0,
@@ -11274,6 +11476,89 @@ def caps_floors_tab(vol_mode: str):
         if caplet_vol_curve is None or len(caplet_vol_curve) == 0:
             caplet_vol_curve = {t: 35.0 for t in [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0]}
 
+        # ═════════════════════════════════════════════════════════════════
+        # USD-only: SR3 Listed Vol Mode (Step 5 of CFS build, 19-Apr-2026)
+        # ═════════════════════════════════════════════════════════════════
+        # Three independent caplet vol curves:
+        #   (a) OTC      — existing wedge-based path (caplet_vol_curve above)
+        #   (b) SR3 hybrid — listed SR3 wins 0→cutoff, OTC wedges handle >cutoff
+        #   (c) SR3 full — listed SR3 everywhere it exists, OTC beyond
+        # User picks which is ACTIVE (feeds pricer) and which overlay on chart.
+        otc_caplet_curve = dict(caplet_vol_curve) if caplet_vol_curve else {}
+        sr3_hybrid_curve = None
+        sr3_full_curve   = None
+        if ccy == "USD":
+            st.markdown("<hr style='margin:10px 0;border-color:#1e3050'>", unsafe_allow_html=True)
+            st.markdown("##### 🔀 USD Vol Source")
+            _mc1, _mc2, _mc3 = st.columns([1.2, 1.8, 1.8])
+            with _mc1:
+                _sr3_cutoff_lbl = st.radio(
+                    "SR3 wins up to",
+                    ["1Y", "2Y", "3Y"],
+                    index=1,
+                    horizontal=True,
+                    key="cfs_sr3_cutoff",
+                )
+                _sr3_cutoff_y = float(_sr3_cutoff_lbl[:-1])
+            with _mc2:
+                _active_src = st.radio(
+                    "Active pricer feed",
+                    ["OTC only", "SR3 hybrid", "SR3 full"],
+                    index=0,
+                    horizontal=True,
+                    key="cfs_active_vol_src",
+                    help="OTC only = existing behavior. SR3 hybrid = listed wins 0→cutoff. "
+                         "SR3 full = listed everywhere available.",
+                )
+            with _mc3:
+                _overlay_choices = st.multiselect(
+                    "Overlay on chart",
+                    ["OTC only", "SR3 hybrid", "SR3 full"],
+                    default=["OTC only", "SR3 hybrid"],
+                    key="cfs_overlay_choices",
+                    help="Multiple curves overlaid on Caplet Vol Curve chart below.",
+                )
+
+            # Build parallel curves (always compute both SR3 variants so overlays
+            # and the active switch work without extra rebuilds)
+            try:
+                sr3_hybrid_curve = build_caplet_vol_curve_sr3(
+                    "USD",
+                    cutoff_years=_sr3_cutoff_y,
+                    otc_fallback_curve=otc_caplet_curve,
+                    final_maturity_y=max(tenor_y + 0.5, 10.0),
+                )
+            except Exception as _e_h:
+                sr3_hybrid_curve = None
+                st.caption(f"⚠ SR3 hybrid build failed: {_e_h}")
+            try:
+                sr3_full_curve = build_caplet_vol_curve_sr3_full(
+                    "USD",
+                    otc_fallback_curve=otc_caplet_curve,
+                    final_maturity_y=max(tenor_y + 0.5, 10.0),
+                )
+            except Exception as _e_f:
+                sr3_full_curve = None
+                st.caption(f"⚠ SR3 full build failed: {_e_f}")
+
+            # Swap the active curve
+            if _active_src == "SR3 hybrid" and sr3_hybrid_curve:
+                caplet_vol_curve = sr3_hybrid_curve
+                st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
+                st.caption(f"🟢 **Active:** SR3 hybrid (listed ≤{_sr3_cutoff_lbl}, OTC >{_sr3_cutoff_lbl})")
+            elif _active_src == "SR3 full" and sr3_full_curve:
+                caplet_vol_curve = sr3_full_curve
+                st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
+                st.caption("🟢 **Active:** SR3 full (listed everywhere available)")
+            else:
+                st.caption("🟢 **Active:** OTC only (existing wedge path)")
+
+            # Stash for chart use
+            st.session_state["_cfs_otc_curve"]   = otc_caplet_curve
+            st.session_state["_cfs_sr3_hybrid"]  = sr3_hybrid_curve
+            st.session_state["_cfs_sr3_full"]    = sr3_full_curve
+            st.session_state["_cfs_overlay_sel"] = _overlay_choices
+
         # ── ATM CFS Straddle Table ──────────────────────────────────
         st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
         if "atm_cfs_expanded" not in st.session_state:
@@ -11436,7 +11721,7 @@ def caps_floors_tab(vol_mode: str):
                     _t30 += 0.25
 
             with st.expander("📊 Resulting Caplet Vol Curve", expanded=False):
-                # Show exact bootstrapped vols in table
+                # Show exact bootstrapped vols in table (ACTIVE curve)
                 curve_data = []
                 for t in sorted(caplet_vol_curve.keys()):
                     curve_data.append({"Maturity (Y)": f"{t:.2f}", "Vol (bp)": f"{caplet_vol_curve[t]:.2f}"})
@@ -11445,32 +11730,77 @@ def caps_floors_tab(vol_mode: str):
                 from scipy.interpolate import CubicSpline
                 import plotly.graph_objects as _pgo
 
-                maturities = np.array(sorted(caplet_vol_curve.keys()))
-                vols       = np.array([caplet_vol_curve[t] for t in maturities])
-
                 fig = _pgo.Figure()
 
-                # Smooth spline line
-                if len(maturities) >= 4:
-                    cs       = CubicSpline(maturities, vols)
-                    mat_fine = np.linspace(maturities[0], maturities[-1], 300)
-                    vol_fine = cs(mat_fine)
+                # ── USD: overlay ticked curves (OTC / SR3 hybrid / SR3 full) ──
+                _usd_overlays = []
+                if ccy == "USD":
+                    _sel = st.session_state.get("_cfs_overlay_sel", []) or []
+                    _overlay_palette = {
+                        "OTC only":   ("#2563eb", "solid",  "OTC only"),
+                        "SR3 hybrid": ("#16a34a", "solid",  "SR3 hybrid"),
+                        "SR3 full":   ("#ef4444", "dash",   "SR3 full"),
+                    }
+                    _src_curves = {
+                        "OTC only":   st.session_state.get("_cfs_otc_curve") or {},
+                        "SR3 hybrid": st.session_state.get("_cfs_sr3_hybrid") or {},
+                        "SR3 full":   st.session_state.get("_cfs_sr3_full") or {},
+                    }
+                    for _nm in _sel:
+                        _c = _src_curves.get(_nm) or {}
+                        if not _c:
+                            continue
+                        _col, _dash, _lbl = _overlay_palette[_nm]
+                        _mts = np.array(sorted(_c.keys()))
+                        _vls = np.array([_c[t] for t in _mts])
+                        if len(_mts) >= 4:
+                            _cs = CubicSpline(_mts, _vls)
+                            _fine = np.linspace(_mts[0], _mts[-1], 300)
+                            fig.add_trace(_pgo.Scatter(
+                                x=_fine, y=_cs(_fine), mode="lines",
+                                line=dict(color=_col, width=2, dash=_dash),
+                                name=_lbl, hovertemplate=f"<b>{_lbl}</b><br>T=%{{x:.2f}}Y<br>Vol=%{{y:.2f}} bp<extra></extra>",
+                            ))
+                        fig.add_trace(_pgo.Scatter(
+                            x=_mts, y=_vls, mode="markers",
+                            marker=dict(color=_col, size=5, line=dict(color="white", width=1)),
+                            name=f"{_lbl} pts", showlegend=False,
+                            hovertemplate=f"<b>{_lbl}</b><br>T=%{{x:.2f}}Y<br>Vol=%{{y:.2f}} bp<extra></extra>",
+                        ))
+                        _usd_overlays.append(_nm)
+
+                # Fallback: if no overlays (AUD/NZD, or USD with none ticked), plot active curve
+                if not _usd_overlays:
+                    maturities = np.array(sorted(caplet_vol_curve.keys()))
+                    vols       = np.array([caplet_vol_curve[t] for t in maturities])
+                    if len(maturities) >= 4:
+                        cs       = CubicSpline(maturities, vols)
+                        mat_fine = np.linspace(maturities[0], maturities[-1], 300)
+                        vol_fine = cs(mat_fine)
+                        fig.add_trace(_pgo.Scatter(
+                            x=mat_fine, y=vol_fine, mode="lines",
+                            line=dict(color="#2563eb", width=2),
+                            hoverinfo="skip", name="Spline"
+                        ))
+                    hover_text = [f"T = {t:.2f}Y<br>Vol = {v:.2f} bp" for t, v in zip(maturities, vols)]
                     fig.add_trace(_pgo.Scatter(
-                        x=mat_fine, y=vol_fine, mode="lines",
-                        line=dict(color="#2563eb", width=2),
-                        hoverinfo="skip", name="Spline"
+                        x=maturities, y=vols, mode="markers",
+                        marker=dict(color="#2563eb", size=5, line=dict(color="white", width=1)),
+                        text=hover_text, hovertemplate="%{text}<extra></extra>",
+                        name="Bootstrapped"
                     ))
+                    max_yr = int(np.ceil(maturities[-1]))
+                else:
+                    _all_t = []
+                    for _nm in _usd_overlays:
+                        _c = st.session_state.get({
+                            "OTC only": "_cfs_otc_curve",
+                            "SR3 hybrid": "_cfs_sr3_hybrid",
+                            "SR3 full": "_cfs_sr3_full",
+                        }[_nm]) or {}
+                        _all_t.extend(_c.keys())
+                    max_yr = int(np.ceil(max(_all_t))) if _all_t else 10
 
-                # Dots with hover
-                hover_text = [f"T = {t:.2f}Y<br>Vol = {v:.2f} bp" for t, v in zip(maturities, vols)]
-                fig.add_trace(_pgo.Scatter(
-                    x=maturities, y=vols, mode="markers",
-                    marker=dict(color="#2563eb", size=5, line=dict(color="white", width=1)),
-                    text=hover_text, hovertemplate="%{text}<extra></extra>",
-                    name="Bootstrapped"
-                ))
-
-                max_yr = int(np.ceil(maturities[-1]))
                 fig.update_layout(
                     xaxis=dict(
                         title="Maturity (Years)",
@@ -11482,8 +11812,9 @@ def caps_floors_tab(vol_mode: str):
                     yaxis=dict(title="Vol (bp)", gridcolor="#e2e8f0"),
                     plot_bgcolor="#f8fafc", paper_bgcolor="white",
                     margin=dict(l=50, r=20, t=30, b=40),
-                    height=320,
-                    showlegend=False,
+                    height=360,
+                    showlegend=bool(_usd_overlays),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     hovermode="closest",
                 )
                 st.plotly_chart(fig, use_container_width=True)
