@@ -9545,6 +9545,12 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
     while t <= t_end + 1e-9:
         times.append(min(t, t_end))
         t += freq
+    # Add final stub period if tenor is NOT a clean multiple of freq.
+    # Without this, when tenor=0.75 and freq=0.5, schedule is [0.754] and
+    # the 0.25y stub to t_end is missing from the annuity, inflating the
+    # computed rate by ~1.5x. Critical for short-tenor forwards (CFS 1Y etc).
+    if not times or (times[-1] < t_end - 1e-9):
+        times.append(t_end)
     if not times:
         return 0.0
 
@@ -11556,9 +11562,11 @@ def caps_floors_tab(vol_mode: str):
         _listed_bootstrap_active = False
         _listed_1y_stradd = None
         _listed_2y_stradd = None
-        if (ccy == "USD"
-                and st.session_state.get("_cfs_use_listed", False)
-                and st.session_state.get("cfs_active_vol_src", "OTC only") == "Listed bootstrap"):
+        # Compute listed 1Y/2Y straddles whenever Listed Front toggle is ON —
+        # even if Active is not "Listed bootstrap". This way the chart can
+        # show the Listed bootstrap curve as an overlay for comparison, without
+        # forcing the user to switch their Active pricer feed.
+        if ccy == "USD" and st.session_state.get("_cfs_use_listed", False):
             try:
                 _lf_pack_now = st.session_state.get("_cfs_listed_pack", "whites")
                 _lf_cutoff = 1.0 if _lf_pack_now == "whites" else 2.0
@@ -11612,18 +11620,23 @@ def caps_floors_tab(vol_mode: str):
                     }
 
                 # Write 1Y/2Y straddles into cfs_table_data so AUD bootstrap
-                # picks them up. This happens every rerun (fast) — the slow
-                # part is the curve build, which is cached above.
-                if _listed_1y_stradd and _listed_1y_stradd > 0:
-                    st.session_state.setdefault("cfs_table_data", {}).setdefault(
-                        "3m1y", {})["cfs_straddle"] = _listed_1y_stradd
-                    _listed_bootstrap_active = True
-                if (_lf_pack_now == "both"
-                        and _listed_1y_stradd and _listed_2y_stradd
-                        and _listed_2y_stradd > _listed_1y_stradd):
-                    _1y1y_gap = _listed_2y_stradd - _listed_1y_stradd
-                    st.session_state["cfs_table_data"].setdefault(
-                        "1y1y", {})["cfs_straddle"] = _1y1y_gap
+                # picks them up AS 1Y anchor — BUT ONLY when Active=Listed bootstrap.
+                # If Active is OTC or SR3, leave cfs_table_data alone so the
+                # normal OTC path / SR3 path works undisturbed. We still produce
+                # the listed-bootstrapped curve (via a side build) for chart overlay.
+                _lf_is_active = (st.session_state.get("cfs_active_vol_src", "OTC only")
+                                 == "Listed bootstrap")
+                if _lf_is_active:
+                    if _listed_1y_stradd and _listed_1y_stradd > 0:
+                        st.session_state.setdefault("cfs_table_data", {}).setdefault(
+                            "3m1y", {})["cfs_straddle"] = _listed_1y_stradd
+                        _listed_bootstrap_active = True
+                    if (_lf_pack_now == "both"
+                            and _listed_1y_stradd and _listed_2y_stradd
+                            and _listed_2y_stradd > _listed_1y_stradd):
+                        _1y1y_gap = _listed_2y_stradd - _listed_1y_stradd
+                        st.session_state["cfs_table_data"].setdefault(
+                            "1y1y", {})["cfs_straddle"] = _1y1y_gap
             except Exception as _lb_err:
                 st.caption(f"⚠ Listed bootstrap pre-calc failed: {_lb_err}")
 
@@ -11774,9 +11787,64 @@ def caps_floors_tab(vol_mode: str):
             else:
                 st.caption("🟢 **Active:** OTC only (existing wedge path)")
 
-            # Stash for chart use
+            # Build a STANDALONE listed-bootstrap curve for chart overlay,
+            # regardless of which Active source is selected. If Active IS
+            # Listed bootstrap, reuse caplet_vol_curve (already built that way).
+            # If Active is something else, run the AUD bootstrap once with a
+            # temporary listed anchor override, then restore cfs_table_data.
+            _listed_bootstrap_curve_for_chart = None
+            _lf_toggle_on = (ccy == "USD" and st.session_state.get("_cfs_use_listed", False))
+            if _lf_toggle_on and _listed_1y_stradd and _listed_1y_stradd > 0:
+                if _active_src == "Listed bootstrap" and caplet_vol_curve:
+                    _listed_bootstrap_curve_for_chart = dict(caplet_vol_curve)
+                else:
+                    # Cache by listed sig so we don't rebuild needlessly
+                    _lbc_sig = (_listed_1y_stradd, _listed_2y_stradd,
+                                spread_1y1y, spread_2y1y, spread_3y1y,
+                                spread_4y1y, spread_5y2y, spread_7y3y,
+                                spread_10y2y, spread_12y3y, _atm_hash)
+                    _lbc_cache = st.session_state.get("_cfs_listed_bootstrap_chart_cache")
+                    if _lbc_cache and _lbc_cache.get("sig") == _lbc_sig:
+                        _listed_bootstrap_curve_for_chart = _lbc_cache.get("curve")
+                    else:
+                        try:
+                            # Temporary override — will restore after build
+                            _cfs_td = st.session_state.setdefault("cfs_table_data", {})
+                            _orig_3m1y = dict(_cfs_td.get("3m1y", {}))
+                            _orig_1y1y = dict(_cfs_td.get("1y1y", {}))
+                            _cfs_td.setdefault("3m1y", {})["cfs_straddle"] = _listed_1y_stradd
+                            if (_lf_pack_now == "both" and _listed_2y_stradd
+                                    and _listed_2y_stradd > _listed_1y_stradd):
+                                _cfs_td.setdefault("1y1y", {})["cfs_straddle"] = _listed_2y_stradd - _listed_1y_stradd
+                            _listed_bootstrap_curve_for_chart = build_caplet_vol_curve(
+                                ccy, atm, None,
+                                spread_3m1y=spread_3m1y,
+                                spread_1y1y=spread_1y1y,
+                                spread_2y1y=spread_2y1y,
+                                spread_3y1y=spread_3y1y,
+                                spread_4y1y=spread_4y1y,
+                                spread_5y2y=spread_5y2y,
+                                spread_7y3y=spread_7y3y,
+                                spread_10y2y=spread_10y2y,
+                                spread_12y3y=spread_12y3y,
+                            )
+                            # Restore original — we don't want to disturb
+                            # the Active path's CFS table.
+                            if _orig_3m1y:
+                                _cfs_td["3m1y"] = _orig_3m1y
+                            if _orig_1y1y:
+                                _cfs_td["1y1y"] = _orig_1y1y
+                            st.session_state["_cfs_listed_bootstrap_chart_cache"] = {
+                                "sig": _lbc_sig,
+                                "curve": _listed_bootstrap_curve_for_chart,
+                            }
+                        except Exception as _lbc_err:
+                            _listed_bootstrap_curve_for_chart = None
+                            st.caption(f"⚠ Listed bootstrap overlay build failed: {_lbc_err}")
+
+            # Stash for chart use.
             st.session_state["_cfs_otc_curve"]        = otc_caplet_curve
-            st.session_state["_cfs_listed_bootstrap"] = dict(caplet_vol_curve) if _active_src == "Listed bootstrap" and caplet_vol_curve else None
+            st.session_state["_cfs_listed_bootstrap"] = _listed_bootstrap_curve_for_chart
             st.session_state["_cfs_sr3_hybrid"]       = sr3_hybrid_curve
             st.session_state["_cfs_sr3_full"]         = sr3_full_curve
             st.session_state["_cfs_overlay_sel"]      = _overlay_choices
@@ -11801,7 +11869,14 @@ def caps_floors_tab(vol_mode: str):
                 # If toggle state changed, force a FULL page rerun (not fragment)
                 # because structural changes in a fragment break Streamlit's delta
                 # protocol ("Bad delta path index" frontend error).
+                # Also overwrite the active pricer feed to "Listed bootstrap" when
+                # toggle goes ON, or "OTC only" when it goes OFF — because Streamlit
+                # ignores `index` param once a widget key has a session_state value.
                 if _use_listed != _prev_use_listed:
+                    if _use_listed:
+                        st.session_state["cfs_active_vol_src"] = "Listed bootstrap"
+                    else:
+                        st.session_state["cfs_active_vol_src"] = "OTC only"
                     st.rerun(scope="app")
             with _le_col2:
                 if _use_listed:
@@ -11961,6 +12036,9 @@ def caps_floors_tab(vol_mode: str):
 
                         # Rows
                         _session_edits = st.session_state.get("_cfs_listed_session_edits", {}) or {}
+                        # DB baseline read ONCE before the loop (was called per row
+                        # = 4-8× per rerun, causing recalc storm).
+                        _db_rows_baseline = _load_sr3_latest_usd() or {}
 
                         for code, row in _editor_rows:
                             pidx = _sr3_pack_index(row.get("underlying", ""))
@@ -12050,10 +12128,9 @@ def caps_floors_tab(vol_mode: str):
                             )
 
                             # Track session edits — only if different from DB state
-                            # We compare to the ORIGINAL DB row (not already-overlaid row),
-                            # so reload from DB directly for comparison.
-                            _db_rows = _load_sr3_latest_usd()
-                            _db_row  = _db_rows.get(code, {}) if _db_rows else {}
+                            # We compare to the ORIGINAL DB row using the single
+                            # baseline loaded before the loop (no per-row DB hit).
+                            _db_row  = _db_rows_baseline.get(code, {})
                             _db_mode  = (_db_row.get("listed_adj_mode") or "ratio").lower()
                             _db_ratio = float(_db_row.get("listed_adj_ratio") or 1.0)
                             _db_bp    = float(_db_row.get("listed_adj_bp") or 0.0)
