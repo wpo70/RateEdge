@@ -23537,28 +23537,122 @@ def sod_report_tab():
         _cached_out = st.session_state.get("sod_ai_output")
         if _cached_out:
             st.markdown("---")
+            # Check current published state
+            _published_sig = st.session_state.get("_published_commentary_sig")
+            _pub_day_key = f"market_commentary_{__import__('datetime').date.today().strftime('%Y%m%d')}"
+            if _published_sig is None and HAS_POSTGRES:
+                try:
+                    _uid_pub = st.session_state.get("username", "default")
+                    _db_pub = load_user_config(_uid_pub, _pub_day_key, "AUD")
+                    if _db_pub and _db_pub.get("commentary"):
+                        _published_sig = _db_pub
+                        st.session_state["_published_commentary_sig"] = _published_sig
+                except Exception:
+                    pass
+
+            if _published_sig and _published_sig.get("commentary"):
+                _tgt_disp = _published_sig.get("target_label", "Both reports")
+                # Back-compat for older records without target info — default to Both
+                _show_rv_disp  = _published_sig.get("show_on_rv",  True)
+                _show_sod_disp = _published_sig.get("show_on_sod", True)
+                if "target_label" not in _published_sig:
+                    _tgt_disp = "Both reports"
+                st.success(
+                    f"✅ **Published → {_tgt_disp}** — last updated "
+                    f"{_published_sig.get('published_at', 'unknown')}. "
+                    f"Sticky until re-published or unpublished."
+                )
+            else:
+                st.info("Draft only — not yet on today's reports. Click Publish to add it.")
+
             st.markdown("**Generated Commentary:**")
             st.text_area(
-                "Output (editable — tweak before copying)",
+                "Output (editable — tweak before publishing)",
                 value=_cached_out,
                 height=450,
                 key="sod_ai_output_display",
             )
-            _dl_col1, _dl_col2, _dl_col3 = st.columns([1, 1, 2])
-            with _dl_col1:
+
+            _btn_pub, _btn_unpub, _btn_dl, _btn_regen = st.columns([1.3, 1.3, 1, 1])
+            with _btn_pub:
+                # Target selector — which PDF(s) should this commentary appear on?
+                _target_opts = ["Both reports", "RV Daily only", "SOD only"]
+                _prev_target = st.session_state.get("_commentary_target", "Both reports")
+                _target_sel = st.selectbox(
+                    "Publish to",
+                    _target_opts,
+                    index=_target_opts.index(_prev_target) if _prev_target in _target_opts else 0,
+                    key="_commentary_target_select",
+                    label_visibility="collapsed",
+                )
+                st.session_state["_commentary_target"] = _target_sel
+                if st.button("📤 Publish",
+                             key="sod_ai_publish",
+                             type="primary",
+                             use_container_width=True):
+                    _current_text = st.session_state.get("sod_ai_output_display", _cached_out)
+                    # Map selector → internal flags
+                    _targets_map = {
+                        "Both reports":   {"rv": True,  "sod": True},
+                        "RV Daily only":  {"rv": True,  "sod": False},
+                        "SOD only":       {"rv": False, "sod": True},
+                    }
+                    _tgts = _targets_map.get(_target_sel, {"rv": True, "sod": True})
+                    _pub_payload = {
+                        "commentary": _current_text,
+                        "published_at": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M %Z").strip(),
+                        "currency": "AUD",
+                        "date": __import__("datetime").date.today().isoformat(),
+                        "show_on_rv":  _tgts["rv"],
+                        "show_on_sod": _tgts["sod"],
+                        "target_label": _target_sel,
+                    }
+                    if HAS_POSTGRES:
+                        try:
+                            _uid_pub2 = st.session_state.get("username", "default")
+                            save_user_config(_uid_pub2, _pub_day_key, "AUD", _pub_payload)
+                            st.session_state["_published_commentary_sig"] = _pub_payload
+                            _dest_lbl = ("RV Daily + SOD" if _tgts["rv"] and _tgts["sod"] else
+                                         "RV Daily" if _tgts["rv"] else
+                                         "SOD" if _tgts["sod"] else "nothing")
+                            st.success(f"✅ Published to {_dest_lbl}.")
+                            st.rerun()
+                        except Exception as _pe:
+                            st.error(f"Publish failed: {_pe}")
+                    else:
+                        st.session_state["_published_commentary_sig"] = _pub_payload
+                        st.success("✅ Published (session only — DB not connected).")
+                        st.rerun()
+
+            with _btn_unpub:
+                _pub_exists = bool(_published_sig and _published_sig.get("commentary"))
+                if st.button("🗑 Unpublish",
+                             key="sod_ai_unpublish",
+                             use_container_width=True,
+                             disabled=(not _pub_exists)):
+                    if HAS_POSTGRES:
+                        try:
+                            _uid_unp = st.session_state.get("username", "default")
+                            save_user_config(_uid_unp, _pub_day_key, "AUD", {})
+                        except Exception:
+                            pass
+                    if "_published_commentary_sig" in st.session_state:
+                        del st.session_state["_published_commentary_sig"]
+                    st.success("Commentary removed from today's reports.")
+                    st.rerun()
+
+            with _btn_dl:
                 st.download_button(
-                    "📋 Download .txt",
+                    "📋 .txt",
                     data=st.session_state.get("sod_ai_output_display", _cached_out),
                     file_name=f"AUD_SOD_{__import__('datetime').date.today().strftime('%Y%m%d')}.txt",
                     mime="text/plain",
                     use_container_width=True,
                     key="sod_ai_dl",
                 )
-            with _dl_col2:
-                if st.button("🔄 Regenerate", key="sod_ai_regen",
+            with _btn_regen:
+                if st.button("🔄 Regen", key="sod_ai_regen",
                              use_container_width=True):
-                    # Re-use existing raw_news, kick the generator again by clearing output
-                    # User then hits Generate manually (prevents accidental double-send)
                     if "sod_ai_output" in st.session_state:
                         del st.session_state["sod_ai_output"]
                     st.rerun()
@@ -24383,6 +24477,45 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                         f"USD T-2: {_usd_t2_sel[:50]}   |   AUD: {_aud_sel[:40]}", _sMeta))
                     _sod_story.append(HRFlowable(width="100%", thickness=0.5,
                                                   color=colors.HexColor("#e2e8f0"), spaceAfter=8))
+
+                    # Published Market Commentary (from SOD Report AI generator) — sticky
+                    # until re-published or cleared on the SOD tab above. Only appears if
+                    # published with "SOD only" or "Both" target.
+                    try:
+                        _pub_day_key_sod = f"market_commentary_{pd.Timestamp.now(tz='Australia/Sydney').date().strftime('%Y%m%d')}"
+                        _pub_data_sod = None
+                        if HAS_POSTGRES:
+                            _uid_sod_pub = st.session_state.get("username", "default")
+                            _pub_data_sod = load_user_config(_uid_sod_pub, _pub_day_key_sod, "AUD")
+                        if not _pub_data_sod:
+                            _sig_sod = st.session_state.get("_published_commentary_sig")
+                            if _sig_sod and _sig_sod.get("commentary"):
+                                _pub_data_sod = _sig_sod
+                        _show_sod = _pub_data_sod.get("show_on_sod", True) if _pub_data_sod else False
+                        if _pub_data_sod and _pub_data_sod.get("commentary") and _show_sod:
+                            _comm_text_sod = _pdf_clean(_pub_data_sod["commentary"].strip())
+                            if _comm_text_sod:
+                                _sCommHd = ParagraphStyle(
+                                    "sCommHd", parent=_ss["Normal"], fontSize=11,
+                                    fontName="Helvetica-Bold",
+                                    textColor=colors.HexColor("#1e3a5f"),
+                                    spaceBefore=0, spaceAfter=4,
+                                )
+                                _sCommBd = ParagraphStyle(
+                                    "sCommBd", parent=_ss["Normal"], fontSize=8.5,
+                                    textColor=colors.HexColor("#1e293b"), leading=12,
+                                    spaceAfter=4, alignment=4,  # justified
+                                )
+                                _sod_story.append(Paragraph("Market Commentary", _sCommHd))
+                                for _cpara in _comm_text_sod.split("\n\n"):
+                                    _cpara = _cpara.strip()
+                                    if _cpara:
+                                        _sod_story.append(Paragraph(_cpara.replace("\n", "<br/>"), _sCommBd))
+                                        _sod_story.append(Spacer(1, 3))
+                                _sod_story.append(HRFlowable(width="100%", thickness=0.3,
+                                    color=colors.HexColor("#cbd5e1"), spaceBefore=2, spaceAfter=8))
+                    except Exception:
+                        pass  # Non-fatal
 
                     # Narrative - split paragraphs; Tactical note gets bold heading + italic body
                     import re as _re_pdf
@@ -25893,6 +26026,40 @@ h2{{color:#1e3a5f;margin-top:20px}}
                     f"{_ts_curr_clean} AEST  |  vs prev close {_ts_prev_clean}", _sTsLineRV))
                 _story.append(HRFlowable(width="100%", thickness=0.5,
                                           color=colors.HexColor("#e2e8f0"), spaceAfter=8))
+
+                # Published Market Commentary (from SOD Report AI generator) — sticky
+                # until re-published or cleared on the SOD tab. Only appears if
+                # published with "RV Daily" or "Both" target.
+                try:
+                    _pub_day_key_rv = f"market_commentary_{pd.Timestamp.now(tz='Australia/Sydney').date().strftime('%Y%m%d')}"
+                    _pub_data_rv = None
+                    if HAS_POSTGRES:
+                        _uid_rv_pub = st.session_state.get("username", "default")
+                        _pub_data_rv = load_user_config(_uid_rv_pub, _pub_day_key_rv, "AUD")
+                    if not _pub_data_rv:
+                        _sig_rv = st.session_state.get("_published_commentary_sig")
+                        if _sig_rv and _sig_rv.get("commentary"):
+                            _pub_data_rv = _sig_rv
+                    # Target gate: back-compat default True if flag missing
+                    _show_rv = _pub_data_rv.get("show_on_rv", True) if _pub_data_rv else False
+                    if _pub_data_rv and _pub_data_rv.get("commentary") and _show_rv:
+                        _comm_text = _pdf_clean(_pub_data_rv["commentary"].strip())
+                        if _comm_text:
+                            _story.append(Paragraph("Market Commentary", _h2_style))
+                            _comm_style = ParagraphStyle(
+                                "CommBody", parent=_styles["Normal"], fontSize=8.5,
+                                textColor=colors.HexColor("#1e293b"), leading=12,
+                                spaceAfter=4, alignment=4,  # justified
+                            )
+                            for _para in _comm_text.split("\n\n"):
+                                _para = _para.strip()
+                                if _para:
+                                    _story.append(Paragraph(_para.replace("\n", "<br/>"), _comm_style))
+                                    _story.append(Spacer(1, 3))
+                            _story.append(HRFlowable(width="100%", thickness=0.3,
+                                color=colors.HexColor("#cbd5e1"), spaceBefore=2, spaceAfter=8))
+                except Exception:
+                    pass  # Non-fatal — commentary just won't appear
 
                 # Overnight narrative
                 _narr = _pdf_clean((_rate_summary + " " + _vol_summary).strip() or \
