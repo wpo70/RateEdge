@@ -23373,11 +23373,17 @@ def sod_report_tab():
             ("💡",""),("🔔",""),("📅",""),("📂",""),("💼",""),
             ("≈","~"),("→","->"),("←","<-"),("≥",">="),("≤","<="),
             ("σ","s"),("α","a"),("β","b"),("ρ","r"),("ν","v"),
+            # Dashes + smart quotes — preserve readability
+            ("—","—"),("–","-"),("…","..."),
+            ("\u2018","'"),("\u2019","'"),("\u201C","\""),("\u201D","\""),
         ]
         for _e, _r in _em:
             text = text.replace(_e, _r)
         text = text.replace("**","").replace("*","*")
-        text = _re_pdf.sub(r'[^\x20-\x7E\u00A0-\u024F]', '', text)
+        # Keep em-dash (U+2014), en-dash (U+2013), and newlines. Previously
+        # \n was outside the allow range (< 0x20) so paragraph breaks were
+        # silently stripped — that's why commentary rendered as one flat blob.
+        text = _re_pdf.sub(r'[^\n\x20-\x7E\u00A0-\u024F\u2013\u2014]', '', text)
         return text.strip()
     st.subheader("📋 Start-of-Day Report   —   USD Overnight → AUD Implied Open")
     st.caption(
@@ -24604,7 +24610,17 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                                     _clines = _cpara.split("\n")
                                     _cfirst = _clines[0].strip()
                                     _crest  = "\n".join(_clines[1:]).strip()
-                                    if _is_main_heading_sod(_cfirst):
+                                    # Inline "Stance into ...:" — split at colon
+                                    _stance_m_sod = _re_hdr_sod.match(
+                                        r'^(Stance\s+into\s+[^:]{0,40}:)\s*(.*)$',
+                                        _cfirst, _re_hdr_sod.IGNORECASE | _re_hdr_sod.DOTALL)
+                                    if _stance_m_sod and _stance_m_sod.group(2).strip():
+                                        _sod_story.append(Paragraph(_stance_m_sod.group(1).strip(), _sCommSubHdr))
+                                        _body_after_sod = _stance_m_sod.group(2).strip()
+                                        if _crest:
+                                            _body_after_sod = _body_after_sod + "\n" + _crest
+                                        _sod_story.append(Paragraph(_body_after_sod.replace("\n","<br/>"), _sCommBd))
+                                    elif _is_main_heading_sod(_cfirst):
                                         _sod_story.append(Paragraph(_cfirst, _sCommMainHdr))
                                         if _crest:
                                             _sod_story.append(Paragraph(_crest.replace("\n","<br/>"), _sCommBd))
@@ -26192,7 +26208,18 @@ h2{{color:#1e3a5f;margin-top:20px}}
                                 _lines = _para.split("\n")
                                 _first = _lines[0].strip()
                                 _rest  = "\n".join(_lines[1:]).strip()
-                                if _is_main_heading(_first):
+                                # Inline "Stance into ...:" at start — split at colon
+                                # so just the label bolds and the rest flows as body
+                                _stance_m = _re_hdr.match(
+                                    r'^(Stance\s+into\s+[^:]{0,40}:)\s*(.*)$',
+                                    _first, _re_hdr.IGNORECASE | _re_hdr.DOTALL)
+                                if _stance_m and _stance_m.group(2).strip():
+                                    _story.append(Paragraph(_stance_m.group(1).strip(), _comm_hdr_sub))
+                                    _body_after = _stance_m.group(2).strip()
+                                    if _rest:
+                                        _body_after = _body_after + "\n" + _rest
+                                    _story.append(Paragraph(_body_after.replace("\n","<br/>"), _comm_style))
+                                elif _is_main_heading(_first):
                                     _story.append(Paragraph(_first, _comm_hdr_main))
                                     if _rest:
                                         _story.append(Paragraph(_rest.replace("\n","<br/>"), _comm_style))
