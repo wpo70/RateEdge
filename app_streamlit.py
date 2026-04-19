@@ -11642,23 +11642,33 @@ def caps_floors_tab(vol_mode: str):
             st.markdown("<hr style='margin:10px 0;border-color:#1e3050'>", unsafe_allow_html=True)
             _le_col1, _le_col2, _le_col3 = st.columns([1.5, 2.0, 2.0])
             with _le_col1:
+                _prev_use_listed = st.session_state.get("_cfs_use_listed", False)
                 _use_listed = st.checkbox(
                     "📋 Use Listed Front editor",
-                    value=st.session_state.get("_cfs_use_listed", False),
+                    value=_prev_use_listed,
                     key="_cfs_use_listed",
                     help="Edit listed-to-delivered adjustments inline here. "
                          "Session-only until you click Save.",
                 )
+                # If toggle state changed, force a FULL page rerun (not fragment)
+                # because structural changes in a fragment break Streamlit's delta
+                # protocol ("Bad delta path index" frontend error).
+                if _use_listed != _prev_use_listed:
+                    st.rerun(scope="app")
             with _le_col2:
                 if _use_listed:
+                    _prev_pack = st.session_state.get("_cfs_listed_pack", "whites")
                     _pack_sel = st.radio(
                         "Pack selection",
                         ["Whites only (4 rows)", "Whites + Reds (8 rows)"],
-                        index=0 if st.session_state.get("_cfs_listed_pack", "whites") == "whites" else 1,
+                        index=0 if _prev_pack == "whites" else 1,
                         horizontal=True,
                         key="_cfs_pack_radio",
                     )
                     _pack_mode = "whites" if _pack_sel.startswith("Whites only") else "both"
+                    if _pack_mode != _prev_pack:
+                        st.session_state["_cfs_listed_pack"] = _pack_mode
+                        st.rerun(scope="app")
                     st.session_state["_cfs_listed_pack"] = _pack_mode
                 else:
                     _pack_mode = "whites"
