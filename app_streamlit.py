@@ -11679,6 +11679,7 @@ def caps_floors_tab(vol_mode: str):
                         )
 
             if _use_listed:
+              try:
                 # Load current SR3 rows (with session edits already overlaid)
                 _sr3_rows_le = _load_sr3_latest_usd_with_session_edits()
                 if not _sr3_rows_le:
@@ -11938,6 +11939,11 @@ def caps_floors_tab(vol_mode: str):
                                 f"(or listed + bp). Changes here update the caplet chart "
                                 f"above immediately. Save commits to DB snapshot."
                             )
+              except Exception as _le_err:
+                import traceback as _tb
+                st.error(f"Listed Front editor error: {_le_err}")
+                with st.expander("Traceback"):
+                    st.code(_tb.format_exc())
 
         # ── ATM CFS Straddle Table ──────────────────────────────────
         st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
