@@ -896,7 +896,39 @@ def init_database():
 
 
 def save_user_config(user_id: str, config_type: str, currency: str, data: dict, _conn=None):
-    """Save user config to database. Pass _conn to reuse an existing connection."""
+    """Save user config to database. Pass _conn to reuse an existing connection.
+    
+    AUD LOCK GUARD (20-Apr-2026): config types that are genuinely tied to a
+    currency (cf_spreads, cfs_table_data, sabr_*, etc.) must not write to the
+    AUD row when the active caps/floors tab ccy is not AUD. This prevents the
+    class of bug where a USD edit overwrites AUD's stored wedges/SABR params
+    because of a stale hardcoded "AUD" literal somewhere in the save path.
+    Global configs (GLOBAL, GLB prefixes) and AUD-specific tools (morning
+    rates, RV snap, conviction book, SPI blotter) are exempt.
+    """
+    # Guard: if writing to AUD row on a ccy-bound config, confirm active ccy is AUD
+    _CCY_BOUND_CONFIGS = {
+        "cf_spreads", "cfs_table_data", "sabr_alpha", "sabr_rho", "sabr_nu",
+        "sabr_beta", "sabr_shift", "atm_surface",
+    }
+    if config_type in _CCY_BOUND_CONFIGS and currency == "AUD":
+        try:
+            import streamlit as _st_guard
+            _active_cf_ccy = _st_guard.session_state.get("_cf_last_active_ccy")
+            if _active_cf_ccy is not None and _active_cf_ccy != "AUD":
+                # Active caps/floors tab is not AUD — silently abort this write
+                # to prevent cross-ccy contamination. This is a defensive rail;
+                # caller should already pass the correct ccy. Log to a session
+                # list so we can surface in UI if it happens.
+                _guard_log = _st_guard.session_state.setdefault("_aud_lock_blocks", [])
+                _guard_log.append({
+                    "config_type": config_type,
+                    "attempted_ccy": currency,
+                    "active_ccy":    _active_cf_ccy,
+                })
+                return False
+        except Exception:
+            pass  # If Streamlit isn't available (non-UI context), proceed
     own_conn = _conn is None
     conn = get_db_connection() if own_conn else _conn
     if not conn:
@@ -1054,19 +1086,21 @@ def save_all_session_data(user_id: str):
             }
             _save("aud_par_rates", "AUD", _aud_db_payload)
 
-        # CFS spreads — save all 9 wedge spread values
+        # CFS spreads — save all 9 wedge spread values under whichever ccy
+        # was last active in the caps_floors tab (defaults to AUD if unset).
         _cf_spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
                            "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y",
                            "cf_spr_12y3y","cf_spr_15v20"]
         _cf_spread_data = {k: float(st.session_state.get(k, 0)) for k in _cf_spread_keys
                            if k in st.session_state}
+        _cf_save_ccy = st.session_state.get("_cf_last_active_ccy", "AUD")
         if _cf_spread_data:
-            _save("cf_spreads", "AUD", _cf_spread_data)
+            _save("cf_spreads", _cf_save_ccy, _cf_spread_data)
 
         # CFS table data — manually entered straddle overrides per wedge
         _cfs_tdata = st.session_state.get("cfs_table_data", {})
         if _cfs_tdata:
-            _save("cfs_table_data", "AUD", _cfs_tdata)
+            _save("cfs_table_data", _cf_save_ccy, _cfs_tdata)
 
         # FWD prefs
         _fwd_prefs = {
@@ -10833,6 +10867,84 @@ def caps_floors_tab(vol_mode: str):
         st.warning(f"├ö├àÔöé {ccy} pricing coming soon. Currently supported: AUD, NZD, USD")
         return
 
+    # ═══════════════════════════════════════════════════════════════════
+    # Per-ccy wedge spread isolation (20-Apr-2026 bugfix).
+    # The cf_spr_* session keys were shared across currencies, so editing
+    # USD wedges would overwrite AUD wedges in session AND in the DB
+    # (save hardcoded "AUD" as the ccy). This block stashes the current
+    # tab's wedge values under the previous ccy before switching, and
+    # restores the new ccy's values (from DB, file, or defaults).
+    # ═══════════════════════════════════════════════════════════════════
+    _cf_spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
+                       "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y",
+                       "cf_spr_12y3y","cf_spr_15v20"]
+    _spread_defaults_by_ccy = {
+        # AUD baseline — the values the hardcoded init used historically
+        "AUD": {"cf_spr_3m1y":10.0, "cf_spr_1y1y":11.5, "cf_spr_2y1y":13.0,
+                "cf_spr_3y1y":17.5, "cf_spr_4y1y":20.0, "cf_spr_5y2y":45.0,
+                "cf_spr_7y3y":50.0, "cf_spr_10y2y":35.0, "cf_spr_12y3y":100.0,
+                "cf_spr_15v20":-5.0},
+        # USD baseline — typical USD wedge spreads (will be replaced once user saves)
+        "USD": {"cf_spr_3m1y":5.0,  "cf_spr_1y1y":11.5, "cf_spr_2y1y":12.5,
+                "cf_spr_3y1y":13.5, "cf_spr_4y1y":15.0, "cf_spr_5y2y":40.0,
+                "cf_spr_7y3y":70.5, "cf_spr_10y2y":39.0, "cf_spr_12y3y":39.0,
+                "cf_spr_15v20":-5.0},
+        # NZD baseline
+        "NZD": {"cf_spr_3m1y":8.0,  "cf_spr_1y1y":10.0, "cf_spr_2y1y":12.0,
+                "cf_spr_3y1y":15.0, "cf_spr_4y1y":18.0, "cf_spr_5y2y":30.0,
+                "cf_spr_7y3y":40.0, "cf_spr_10y2y":30.0, "cf_spr_12y3y":60.0,
+                "cf_spr_15v20":-5.0},
+    }
+    _prev_ccy = st.session_state.get("_cf_last_active_ccy")
+    if _prev_ccy != ccy:
+        # Stash current values under prev ccy (if we had any)
+        if _prev_ccy is not None:
+            _prev_stash = {k: st.session_state.get(k) for k in _cf_spread_keys
+                           if k in st.session_state}
+            if _prev_stash:
+                st.session_state.setdefault("_cf_spread_stash", {})[_prev_ccy] = _prev_stash
+        # Restore new ccy values: prefer in-memory stash, else DB, else defaults
+        _new_stash = (st.session_state.get("_cf_spread_stash", {}) or {}).get(ccy)
+        if not _new_stash and HAS_POSTGRES:
+            try:
+                _uid_sw = st.session_state.get("username", "default")
+                _db_sw = load_user_config(_uid_sw, "cf_spreads", ccy)
+                if _db_sw:
+                    _new_stash = _db_sw
+            except Exception:
+                _new_stash = None
+        if not _new_stash:
+            _new_stash = _spread_defaults_by_ccy.get(
+                ccy, _spread_defaults_by_ccy["AUD"])
+        # Apply
+        for _k, _v in _new_stash.items():
+            if _k in _cf_spread_keys:
+                st.session_state[_k] = float(_v)
+                # Also clear the _temp working copy so the UI reflects the swap
+                st.session_state.pop(f"{_k}_temp", None)
+                st.session_state.pop(f"{_k}_new", None)
+        st.session_state["_cf_last_active_ccy"] = ccy
+        # Bust caplet cache so curve rebuilds with new ccy's wedges
+        st.session_state.pop("_caplet_curve_key", None)
+        st.session_state.pop("_atm_cfs_cache_key", None)
+        st.session_state.pop("_atm_cfs_rows_cache", None)
+
+    # AUD lock guard report — if any saves were blocked during this session,
+    # display a banner so the user knows (and can address any stale caller).
+    _guard_blocks = st.session_state.get("_aud_lock_blocks", [])
+    if _guard_blocks:
+        _latest = _guard_blocks[-1]
+        st.warning(
+            f"🔒 **AUD write-lock triggered** — a `{_latest['config_type']}` save "
+            f"to AUD was blocked because active CFS tab is `{_latest['active_ccy']}`. "
+            f"Total blocks this session: {len(_guard_blocks)}. "
+            f"This means the code correctly prevented cross-ccy contamination. "
+            f"Report to dev if unexpected."
+        )
+        if st.button("✓ Clear lock-block log", key="_aud_lock_clear"):
+            st.session_state["_aud_lock_blocks"] = []
+            st.rerun()
+
     col_type, col_model, col_prem_mode = st.columns(3)
     with col_type:
         cf_type = st.selectbox("Instrument", ["Cap", "Floor", "Straddle", "Collar", "Strangle", "Cap Corridor", "Floordoor", "Digital Cap", "Digital Floor"], index=2, key="cf_type")
@@ -11346,7 +11458,8 @@ def caps_floors_tab(vol_mode: str):
                         json.dump({k: st.session_state[k] for k, *_ in ROW_DATA}, _f)
                 except Exception:
                     pass
-                # DB persist — save spreads immediately so they survive logout
+                # DB persist — save spreads immediately so they survive logout.
+                # Namespace by ccy so USD wedges don't overwrite AUD wedges (bug 20-Apr-2026).
                 try:
                     _cf_spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
                                        "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y",
@@ -11354,7 +11467,7 @@ def caps_floors_tab(vol_mode: str):
                     _cf_data = {k: float(st.session_state.get(k, 0)) for k in _cf_spread_keys}
                     _uid_cf = st.session_state.get("username", "default")
                     if HAS_POSTGRES:
-                        save_user_config(_uid_cf, "cf_spreads", "AUD", _cf_data)
+                        save_user_config(_uid_cf, "cf_spreads", ccy, _cf_data)
                 except Exception:
                     pass
                 # Bust caplet and CFS cache so curve re-builds with new spreads
@@ -17779,9 +17892,49 @@ def rv_tab():
                                       help="ICE BofA MOVE Index. >120 = elevated bond vol, "
                                            "swaption richness may be justified.")
                         elif ccy == "AUD":
+                            # Auto-load SPI from DB if not in session (cold-start case).
+                            # Previously only spi_vol_surface was loaded; spi_vol_override
+                            # was never cold-loaded, so the "SPI vol feed pending" warning
+                            # always showed until user manually clicked Apply SPI Surface.
+                            if HAS_POSTGRES and not st.session_state.get("spi_vol_override"):
+                                for _try_uid_spi in ["wpo@rateedge.au", st.session_state.get("username","")]:
+                                    if not _try_uid_spi:
+                                        continue
+                                    try:
+                                        _db_ov = load_user_config(_try_uid_spi, "spi_vol_override", "AUD")
+                                        if _db_ov and isinstance(_db_ov, dict) and "value" in _db_ov:
+                                            st.session_state["spi_vol_override"] = float(_db_ov["value"])
+                                            break
+                                    except Exception:
+                                        pass
+                            # Also cold-load the surface if missing (mirror the pattern)
+                            if HAS_POSTGRES and not st.session_state.get("spi_vol_surface"):
+                                for _try_uid_spi in ["wpo@rateedge.au", st.session_state.get("username","")]:
+                                    if not _try_uid_spi:
+                                        continue
+                                    try:
+                                        _db_surf = load_user_config(_try_uid_spi, "spi_vol_surface", "AUD")
+                                        if _db_surf:
+                                            st.session_state["spi_vol_surface"] = _db_surf
+                                            break
+                                    except Exception:
+                                        pass
+                            # Derive override from surface front if still missing
                             _spi_note = st.session_state.get("spi_vol_override")
+                            if not _spi_note:
+                                _surf_tmp = st.session_state.get("spi_vol_surface", {}) or {}
+                                if _surf_tmp:
+                                    # Prefer Jun-26 front; else first contract
+                                    _front_key = "Jun-26" if "Jun-26" in _surf_tmp else next(iter(_surf_tmp), None)
+                                    if _front_key:
+                                        _fv = _surf_tmp.get(_front_key, {}).get("50D")
+                                        if _fv and float(_fv) > 0:
+                                            _spi_note = float(_fv)
+                                            st.session_state["spi_vol_override"] = _spi_note
                             if _spi_note:
-                                st.metric("ASX SPI Vol (manual)", f"{_spi_note:.1f}%")
+                                st.metric("ASX SPI Vol (front 50D)", f"{_spi_note:.2f}%",
+                                          help="Front-month SPI 200 implied vol, "
+                                               "used as cross-asset context for rates vol.")
                             else:
                                 st.caption("🗒 SPI vol feed pending. Enter manually via CB Calendar override below.")
                     else:
@@ -23233,6 +23386,185 @@ def sod_report_tab():
         "Useful for time-sensitive gamma trades after large overnight USD moves."
     )
 
+    # ═══════════════════════════════════════════════════════════════════
+    # AI Commentary Generator (AUD SOD) — paste raw news snippets,
+    # get back a polished SOD commentary in the house rates-desk voice.
+    # ═══════════════════════════════════════════════════════════════════
+    with st.expander("🧠 AI Commentary Generator — AUD SOD", expanded=False):
+        st.caption(
+            "Paste raw news items, Bloomberg headlines, vol moves, econ prints etc. "
+            "Produces a concise Monday-AM-style AUD SOD piece in the house voice. "
+            "You can include multiple items — the generator merges and de-duplicates."
+        )
+        _raw_news = st.text_area(
+            "Raw news / market inputs",
+            height=220,
+            placeholder=(
+                "Example:\n"
+                "- 10Y UST closed 4.24% Friday, from 4.32% w/w\n"
+                "- 3m10y ATM swaption vol 66.9bp, down 2bp, lowest since 27-Feb\n"
+                "- OIS now pricing 16bp cuts by Dec, vs 8bp Thursday close\n"
+                "- Iran reimposed Strait of Hormuz restrictions overnight\n"
+                "- Trump: 'no more Mr. Nice Guy' — threatens Iran infrastructure\n"
+                "- Initial claims 207k vs 213k est\n"
+                "- NASDAQ 13 up days in a row, best since 1992\n"
+                "..."
+            ),
+            key="sod_ai_raw_news",
+        )
+        _c1, _c2, _c3 = st.columns([1, 1, 2])
+        with _c1:
+            _gen_btn = st.button("✨ Generate AUD SOD", key="sod_ai_generate",
+                                 type="primary", use_container_width=True,
+                                 disabled=(not _raw_news or len(_raw_news.strip()) < 30))
+        with _c2:
+            _clear_btn = st.button("🗑 Clear", key="sod_ai_clear",
+                                   use_container_width=True)
+        with _c3:
+            _length_pref = st.radio(
+                "Length",
+                ["Concise (4 paras)", "Standard (6 paras)", "Detailed (8+ paras)"],
+                index=1, horizontal=True, label_visibility="collapsed",
+                key="sod_ai_length",
+            )
+
+        if _clear_btn:
+            for _k in ("sod_ai_raw_news", "sod_ai_output"):
+                if _k in st.session_state:
+                    del st.session_state[_k]
+            st.rerun()
+
+        if _gen_btn and _raw_news and len(_raw_news.strip()) >= 30:
+            try:
+                _api_key = None
+                try:
+                    _api_key = st.secrets.get("ANTHROPIC_API_KEY")
+                except Exception:
+                    pass
+                if not _api_key:
+                    _api_key = os.environ.get("ANTHROPIC_API_KEY")
+                if not _api_key:
+                    st.error(
+                        "ANTHROPIC_API_KEY not configured. "
+                        "Add it in Streamlit Cloud → Manage app → Settings → Secrets "
+                        "as `ANTHROPIC_API_KEY = \"sk-ant-...\"` (or set as env var locally)."
+                    )
+                else:
+                    _system_prompt = (
+                        "You are writing the Monday-AM Start-of-Day commentary for an "
+                        "Australian interest-rate options desk. The audience is senior rates "
+                        "traders and portfolio managers.\n\n"
+                        "STYLE RULES — follow exactly:\n"
+                        "• Concise, professional rates-desk voice. No fluff, no cliché openers "
+                        "(no 'In today's market...', no 'As we start the week...').\n"
+                        "• Lead with the narrative hook, not a data dump.\n"
+                        "• Short factual clauses. Use em-dashes (—) for parenthetical detail.\n"
+                        "• Always cite specific numbers when provided (e.g. '10Y UST at 4.24%, "
+                        "from 4.32% w/w'; '3m10y ATM at 66.9bp').\n"
+                        "• Use market shorthand: bp, bps, w/w, y/y, ATM, OIS, UST, SOH, ACGB, "
+                        "2s10s, gamma, vega, vol, front-end, long-end.\n"
+                        "• Australian English spelling (favour, sympathise, behaviour).\n"
+                        "• Always close with a clearly labelled 'Stance into AUD open:' "
+                        "paragraph giving directional view (duration, curve, vol, AUD).\n"
+                        "• Flag asymmetric risks explicitly ('one tanker headline resets the "
+                        "narrative', 'gamma reacts first', etc.).\n"
+                        "• DO NOT make up numbers. If a figure isn't in the input, don't cite it.\n"
+                        "• DO NOT use bullet points. Flowing paragraphs only.\n"
+                        "• Start the response with 'Monday AM — AUD SOD' (or appropriate day) "
+                        "as a header on its own line.\n\n"
+                        "STRUCTURE (roughly):\n"
+                        "1. Narrative hook + macro setup\n"
+                        "2. Oil / inflation / second-round effects (if relevant)\n"
+                        "3. What was/wasn't in Friday's price — UST, vol, OIS\n"
+                        "4. US vol dynamics + AUD sympathy move\n"
+                        "5. Economic data + equity tape sidebar (brief)\n"
+                        "6. Stance into AUD open\n\n"
+                        f"LENGTH: {st.session_state.get('sod_ai_length', 'Standard (6 paras)')}"
+                    )
+                    _user_prompt = (
+                        "Here are the raw inputs for today's AUD SOD commentary. "
+                        "Synthesise into a single polished piece following the house style. "
+                        "Merge duplicate items, resolve contradictions by noting both, and "
+                        "prioritise the most market-moving headlines for the lede.\n\n"
+                        "=== RAW INPUTS ===\n"
+                        f"{_raw_news.strip()}\n"
+                        "=== END ==="
+                    )
+
+                    # Call Anthropic API directly via urllib (no extra deps)
+                    import urllib.request as _ur
+                    import urllib.error as _ue
+                    import json as _json_api
+
+                    _body = _json_api.dumps({
+                        "model": "claude-sonnet-4-20250514",
+                        "max_tokens": 2000,
+                        "system": _system_prompt,
+                        "messages": [{"role": "user", "content": _user_prompt}],
+                    }).encode("utf-8")
+                    _req = _ur.Request(
+                        "https://api.anthropic.com/v1/messages",
+                        data=_body,
+                        headers={
+                            "x-api-key": _api_key,
+                            "anthropic-version": "2023-06-01",
+                            "content-type": "application/json",
+                        },
+                        method="POST",
+                    )
+                    with st.spinner("✨ Writing commentary..."):
+                        try:
+                            with _ur.urlopen(_req, timeout=60) as _resp:
+                                _result = _json_api.loads(_resp.read().decode("utf-8"))
+                            _content = _result.get("content", [])
+                            _text_blocks = [b.get("text", "") for b in _content if b.get("type") == "text"]
+                            _commentary = "\n\n".join(_text_blocks).strip()
+                            if _commentary:
+                                st.session_state["sod_ai_output"] = _commentary
+                            else:
+                                st.warning("Empty response from API. Try again.")
+                        except _ue.HTTPError as _he:
+                            _err_txt = _he.read().decode("utf-8", errors="replace")
+                            st.error(f"API error {_he.code}: {_err_txt[:500]}")
+                        except _ue.URLError as _urle:
+                            st.error(f"Network error: {_urle.reason}")
+                        except Exception as _gen_e:
+                            st.error(f"Unexpected error: {_gen_e}")
+            except Exception as _outer_e:
+                st.error(f"Commentary generator error: {_outer_e}")
+
+        # Display generated commentary
+        _cached_out = st.session_state.get("sod_ai_output")
+        if _cached_out:
+            st.markdown("---")
+            st.markdown("**Generated Commentary:**")
+            st.text_area(
+                "Output (editable — tweak before copying)",
+                value=_cached_out,
+                height=450,
+                key="sod_ai_output_display",
+            )
+            _dl_col1, _dl_col2, _dl_col3 = st.columns([1, 1, 2])
+            with _dl_col1:
+                st.download_button(
+                    "📋 Download .txt",
+                    data=st.session_state.get("sod_ai_output_display", _cached_out),
+                    file_name=f"AUD_SOD_{__import__('datetime').date.today().strftime('%Y%m%d')}.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                    key="sod_ai_dl",
+                )
+            with _dl_col2:
+                if st.button("🔄 Regenerate", key="sod_ai_regen",
+                             use_container_width=True):
+                    # Re-use existing raw_news, kick the generator again by clearing output
+                    # User then hits Generate manually (prevents accidental double-send)
+                    if "sod_ai_output" in st.session_state:
+                        del st.session_state["sod_ai_output"]
+                    st.rerun()
+
+    st.markdown("---")
+
     user_id = st.session_state.get("username", "default")
 
     # ── Load available snapshots ──────────────────────────────────
@@ -24906,6 +25238,36 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         _book   = st.session_state.get(_book_key, {})     # {idea_id: {entry_date, entry_vol, structure, ...}}
         _closed = st.session_state.get(_closed_key, [])   # list of closed trades
 
+        # Closed-position display filter (20-Apr-2026): show closed trades on
+        # today's report ONLY if they were closed today or yesterday. Anything
+        # 2+ days old drops off the report. Underlying storage is untouched —
+        # this is display-side only so history is preserved in the DB.
+        def _recent_closed(closed_list, days=2):
+            from datetime import date as _d, timedelta as _td, datetime as _dt
+            _cutoff = _d.today() - _td(days=days)
+            _out = []
+            for _c in (closed_list or []):
+                _cd = _c.get("close_date")
+                if _cd is None:
+                    # No close_date — keep it (legacy / safety)
+                    _out.append(_c)
+                    continue
+                # close_date may be stored as date, datetime, or ISO string
+                _cd_obj = None
+                if isinstance(_cd, _d) and not isinstance(_cd, _dt):
+                    _cd_obj = _cd
+                elif isinstance(_cd, _dt):
+                    _cd_obj = _cd.date()
+                else:
+                    try:
+                        _cd_obj = _d.fromisoformat(str(_cd)[:10])
+                    except Exception:
+                        _cd_obj = None
+                if _cd_obj is None or _cd_obj >= _cutoff:
+                    _out.append(_c)
+            return _out
+        _closed_display = _recent_closed(_closed, days=2)
+
         # Helper: get ATM vol for a tenor key from current surface
         _atm_now = _curr.get("atm") or {}
         def _get_atm_vol(tenor_key):
@@ -25165,10 +25527,11 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         else:
             st.info("Run Generate Trade Ideas on the RV tab first, then re-publish.")
 
-        # ── Closed Trade Log ─────────────────────────────────────────
-        if _closed:
+        # ── Closed Trade Log — only show trades closed in last 2 days ────
+        if _closed_display:
             st.markdown("##### 📋 Closed Positions")
-            for _ct in reversed(_closed[-6:]):  # show last 6 closed
+            st.caption("Showing positions closed in the last 2 days (older closures preserved in history).")
+            for _ct in reversed(_closed_display[-6:]):  # show last 6 closed
                 _cpnl_col = "#22c55e" if _ct.get("bp_pnl",0)>=0 else "#ef4444"
                 _highlight = "border-left:3px solid #7c3aed;" if _ct.get("status")=="CLOSED" else ""
                 st.markdown(
@@ -25573,7 +25936,26 @@ h2{{color:#1e3a5f;margin-top:20px}}
 
                 # Conviction trade P&L
                 _pdf_book = st.session_state.get("rv_conviction_book", {})
-                _pdf_closed = st.session_state.get("rv_conviction_closed", [])
+                _pdf_closed_all = st.session_state.get("rv_conviction_closed", [])
+                # Apply 2-day display window — matches the UI behaviour
+                def _pdf_recent_closed(closed_list, days=2):
+                    from datetime import date as _d, timedelta as _td, datetime as _dt
+                    _cutoff = _d.today() - _td(days=days)
+                    _out = []
+                    for _c in (closed_list or []):
+                        _cd = _c.get("close_date")
+                        if _cd is None:
+                            _out.append(_c); continue
+                        _cd_obj = None
+                        if isinstance(_cd, _d) and not isinstance(_cd, _dt): _cd_obj = _cd
+                        elif isinstance(_cd, _dt): _cd_obj = _cd.date()
+                        else:
+                            try: _cd_obj = _d.fromisoformat(str(_cd)[:10])
+                            except Exception: _cd_obj = None
+                        if _cd_obj is None or _cd_obj >= _cutoff:
+                            _out.append(_c)
+                    return _out
+                _pdf_closed = _pdf_recent_closed(_pdf_closed_all, days=2)
                 if _pdf_book or _pdf_closed:
                     _story.append(Paragraph("Conviction Trade Book — Running P&amp;L", _h2_style))
                     _pnl_hdr = ParagraphStyle("PnlHdr", parent=_styles["Normal"], fontSize=8,
