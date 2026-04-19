@@ -9337,6 +9337,19 @@ def swaptions_tab(vol_mode: str):
         st.warning(f"├ö├àÔöé {ccy} pricing coming soon. Currently supported: AUD, NZD, USD")
         return
     
+    # ── USD sub-nav: OTC Swaption Vols vs SR3 Listed Vols ─────────────
+    if ccy == "USD":
+        _usd_view = st.radio(
+            "USD View",
+            ["💱 OTC Swaption Vols", "📉 SR3 Listed Vols"],
+            horizontal=True,
+            key="usd_swap_subnav",
+            label_visibility="collapsed",
+        )
+        if _usd_view == "📉 SR3 Listed Vols":
+            sr3_vol_tab()
+            return
+    
     # Get curves and data
     fwd_matrix = st.session_state.get("fwd_matrix", {}).get(ccy)
     _cb6 = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
@@ -20170,7 +20183,6 @@ def main():
                 ("📋 IRS / Vol Upload", "tab_show_upload"),
                 ("📏 Curves", "tab_show_curves"),
                 ("📊 Historical VOL Analysis", "tab_show_hva"),
-                ("📉 SR3 Listed Vols", "tab_show_sr3vols"),
                 ("📈 FWD IRS Analysis", "tab_show_fwd"),
                 ("📊 Swaptions", "tab_show_swaptions"),
                 ("🔔 Caps & Floors", "tab_show_caps"),
@@ -20459,7 +20471,6 @@ def main():
         ("📏 Curves",                    "tab_show_curves",    curves_tab),
         ("📈 FWD IRS Analysis",          "tab_show_fwd",       fwd_analysis_tab),
         ("📊 Historical VOL Analysis",   "tab_show_hva",       backtesting_tab),
-        ("📉 SR3 Listed Vols",           "tab_show_sr3vols",   sr3_vol_tab),
         ("📊 Swaptions",                 "tab_show_swaptions", lambda: swaptions_tab(vol_mode)),
         ("🔔 Caps & Floors",             "tab_show_caps",      lambda: caps_floors_tab(vol_mode)),
         ("💼 Trade Blotter",             "tab_show_blotter",   portfolio_tab),
