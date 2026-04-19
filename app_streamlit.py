@@ -20520,17 +20520,37 @@ SR3_SMILE_LABELS = ["10DP", "15DP", "25DP", "35DP", "50D", "35DC", "25DC", "15DC
 #   Golds   = next 4                          (pack_idx 16..19)
 #   Purples = next 4                          (pack_idx 20..23)
 SR3_PACK_COLORS_BY_IDX = [
-    # Whites 0..3 — conventional CME display is WHITE on quote boards; adjusted
-    # for dark-mode terminal legibility. The key signal is "front pack".
-    "#e2e8f0",  # W0 — slightly tinted white
-    "#e2e8f0",
-    "#e2e8f0",
-    "#e2e8f0",
+    # Whites 0..3 — true CME white (fg); bg handled separately (faint)
+    "#e2e8f0", "#e2e8f0", "#e2e8f0", "#e2e8f0",
     "#ef4444", "#ef4444", "#ef4444", "#ef4444",   # Reds
     "#22c55e", "#22c55e", "#22c55e", "#22c55e",   # Greens
     "#3b82f6", "#3b82f6", "#3b82f6", "#3b82f6",   # Blues
     "#eab308", "#eab308", "#eab308", "#eab308",   # Golds
     "#a855f7", "#a855f7", "#a855f7", "#a855f7",   # Purples
+]
+
+# Background tint per pack — scaled-down alpha version of fg color for
+# row highlighting without overwhelming the input fields. Medium intensity:
+# rgba with ~10% alpha on dark theme.
+SR3_PACK_BG_BY_IDX = [
+    # Whites — faint cool gray
+    "rgba(226,232,240,0.07)", "rgba(226,232,240,0.07)",
+    "rgba(226,232,240,0.07)", "rgba(226,232,240,0.07)",
+    # Reds
+    "rgba(239,68,68,0.12)", "rgba(239,68,68,0.12)",
+    "rgba(239,68,68,0.12)", "rgba(239,68,68,0.12)",
+    # Greens
+    "rgba(34,197,94,0.12)", "rgba(34,197,94,0.12)",
+    "rgba(34,197,94,0.12)", "rgba(34,197,94,0.12)",
+    # Blues
+    "rgba(59,130,246,0.13)", "rgba(59,130,246,0.13)",
+    "rgba(59,130,246,0.13)", "rgba(59,130,246,0.13)",
+    # Golds
+    "rgba(234,179,8,0.12)", "rgba(234,179,8,0.12)",
+    "rgba(234,179,8,0.12)", "rgba(234,179,8,0.12)",
+    # Purples
+    "rgba(168,85,247,0.13)", "rgba(168,85,247,0.13)",
+    "rgba(168,85,247,0.13)", "rgba(168,85,247,0.13)",
 ]
 SR3_PACK_NAMES_BY_IDX = (
     ["W"]*4 + ["R"]*4 + ["G"]*4 + ["B"]*4 + ["Gd"]*4 + ["P"]*4
@@ -20648,6 +20668,14 @@ def _sr3_pack_color(underlying: str) -> str:
     if idx < 0 or idx >= len(SR3_PACK_COLORS_BY_IDX):
         return "#64748b"   # slate for unmapped / beyond Purples
     return SR3_PACK_COLORS_BY_IDX[idx]
+
+
+def _sr3_pack_bg(underlying: str) -> str:
+    """Tinted rgba background for the whole row based on CME pack."""
+    idx = _sr3_pack_index(underlying)
+    if idx < 0 or idx >= len(SR3_PACK_BG_BY_IDX):
+        return "rgba(100,116,139,0.05)"
+    return SR3_PACK_BG_BY_IDX[idx]
 
 
 def _sr3_pack_name(underlying: str) -> str:
@@ -21509,8 +21537,24 @@ def sr3_vol_tab():
         for (code, ctype, exp_str, underlying, maturity_str) in contracts_slice:
             rstate = grid_state.get(code, {})
             pack = _sr3_pack_color(underlying)
+            pack_bg = _sr3_pack_bg(underlying)
             override = rstate.get("manual_override", False)
             badge = " 🅜" if override else ""
+
+            # Row band: left-border pack color + tinted full-width strip for
+            # visual pack grouping. Sits just above the row's input columns.
+            st.markdown(
+                f"""<div style='
+                    height:6px;
+                    background:{pack_bg};
+                    border-left:5px solid {pack};
+                    margin-top:6px;
+                    margin-bottom:-2px;
+                    border-top-right-radius:3px;
+                    border-bottom-right-radius:3px;
+                '></div>""",
+                unsafe_allow_html=True,
+            )
 
             _rcols = st.columns([1.1, 1.0, 1.05] + [0.85]*9)
             _rcols[0].markdown(
