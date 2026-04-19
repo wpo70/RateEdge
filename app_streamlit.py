@@ -21397,12 +21397,18 @@ SR3_QUARTERLY_MONTHS = [3, 6, 9, 12]  # Mar, Jun, Sep, Dec
 # Split point: rows 0-22 are standards/serials (23), rows 23-38 are mid-curves (16).
 SR3_CONTRACTS_CANONICAL = [
     # (code, type, exp_date, underlying, maturity_date)
-    ("SFRK6",  "Serial",     "2026-05-15", "SFRM6 Comdty", "2026-09-15"),
-    ("SFRM6s", "Serial-1M",  "2026-06-12", "SFRM6 Comdty", "2026-09-15"),
-    ("SFRN6",  "Serial",     "2026-07-10", "SFRU6 Comdty", "2026-12-15"),
-    ("SFRQ6",  "Serial",     "2026-08-14", "SFRU6 Comdty", "2026-12-15"),
+    # ── Standards & Serials — 23 rows ──
+    # Scaffold matches Excel SR3_VOL_BBG 1904_2030 exactly.
+    # Serial options exercise into their OWN future (SFRN6 Serial on SFRN6 future),
+    # not the next quarterly. Quarterlies exercise into their named future.
+    # NOTE: SFRM6s (Serial-1M) was dropped 20-Apr-2026 — was a scaffold artifact,
+    # not an actual BBG-listed contract. Replaced by SFRM6 Quarterly at same expiry.
+    ("SFRK6",  "Serial",     "2026-05-15", "SFRK6 Comdty", "2026-09-15"),
+    ("SFRM6",  "Quarterly",  "2026-06-12", "SFRM6 Comdty", "2026-09-15"),
+    ("SFRN6",  "Serial",     "2026-07-10", "SFRN6 Comdty", "2026-12-15"),
+    ("SFRQ6",  "Serial",     "2026-08-14", "SFRQ6 Comdty", "2026-12-15"),
     ("SFRU6",  "Quarterly",  "2026-09-11", "SFRU6 Comdty", "2026-12-15"),
-    ("SFRV6",  "Serial",     "2026-10-16", "SFRZ6 Comdty", "2027-03-16"),
+    ("SFRV6",  "Serial",     "2026-10-16", "SFRV6 Comdty", "2027-03-16"),
     ("SFRZ6",  "Quarterly",  "2026-12-11", "SFRZ6 Comdty", "2027-03-16"),
     ("SFRH7",  "Quarterly",  "2027-03-12", "SFRH7 Comdty", "2027-06-15"),
     ("SFRM7",  "Quarterly",  "2027-06-11", "SFRM7 Comdty", "2027-09-14"),
@@ -21420,23 +21426,27 @@ SR3_CONTRACTS_CANONICAL = [
     ("SFRM0",  "Quarterly",  "2030-06-14", "SFRM0 Comdty", "2030-09-17"),  # Gold
     ("SFRU0",  "Quarterly",  "2030-09-13", "SFRU0 Comdty", "2030-12-17"),  # Gold
     ("SFRZ0",  "Quarterly",  "2030-12-13", "SFRZ0 Comdty", "2031-03-18"),  # Gold — last liquid
-    # ── Mid-Curves — ticker uses UNDERLYING year (0QM27 = 1Y MC on SFRM27 = Jun-27 future) ──
-    ("0QM27",  "1Y MC",      "2026-06-12", "SFRM7 Comdty", "2027-09-14"),
-    ("0QU27",  "1Y MC",      "2026-09-11", "SFRU7 Comdty", "2027-12-14"),
-    ("0QZ27",  "1Y MC",      "2026-12-11", "SFRZ7 Comdty", "2028-03-14"),
-    ("0QH28",  "1Y MC",      "2027-03-12", "SFRH8 Comdty", "2028-06-20"),
-    ("2QM28",  "2Y MC",      "2026-06-12", "SFRM8 Comdty", "2028-09-19"),
-    ("2QU28",  "2Y MC",      "2026-09-11", "SFRU8 Comdty", "2028-12-19"),
-    ("2QZ28",  "2Y MC",      "2026-12-11", "SFRZ8 Comdty", "2029-03-20"),
-    ("2QH29",  "2Y MC",      "2027-03-12", "SFRH9 Comdty", "2029-06-18"),
-    ("3QM29",  "3Y MC",      "2026-06-12", "SFRM9 Comdty", "2029-09-18"),
-    ("3QU29",  "3Y MC",      "2026-09-11", "SFRU9 Comdty", "2029-12-18"),
-    ("3QZ29",  "3Y MC",      "2026-12-11", "SFRZ9 Comdty", "2030-03-19"),
-    ("3QH30",  "3Y MC",      "2027-03-12", "SFRH0 Comdty", "2030-06-18"),
-    ("4QZ6",   "4Y MC",      "2026-12-11", "SFRZ0 Comdty", "2031-03-18"),
-    ("4QH7",   "4Y MC",      "2027-03-12", "SFRH1 Comdty", "2031-06-17"),
-    ("5QZ6",   "5Y MC",      "2026-12-11", "SFRZ1 Comdty", "2032-03-17"),
-    ("5QH7",   "5Y MC",      "2027-03-12", "SFRH2 Comdty", "2032-06-16"),
+    # ── Mid-Curves — 16 rows ──
+    # Ticker uses UNDERLYING year: 0QM27 = 1Y MC expiring Jun-26, on SFRM27 = Jun-27 future.
+    # Per Excel 1904_2030, MC underlying cell holds own ticker (e.g. "0QM27 Comdty") —
+    # the REAL underlying future is derived from code convention, not this field.
+    # We keep the comdty-string as-is for display; pricing uses the implied future.
+    ("0QM27",  "1Y MC",      "2026-06-12", "0QM27 Comdty", "2027-09-14"),
+    ("0QU27",  "1Y MC",      "2026-09-11", "0QU27 Comdty", "2027-12-14"),
+    ("0QZ27",  "1Y MC",      "2026-12-11", "0QZ27 Comdty", "2028-03-14"),
+    ("0QH28",  "1Y MC",      "2027-03-12", "0QH28 Comdty", "2028-06-20"),
+    ("2QM28",  "2Y MC",      "2026-06-12", "2QM28 Comdty", "2028-09-19"),
+    ("2QU28",  "2Y MC",      "2026-09-11", "2QU28 Comdty", "2028-12-19"),
+    ("2QZ28",  "2Y MC",      "2026-12-11", "2QZ28 Comdty", "2029-03-20"),
+    ("2QH29",  "2Y MC",      "2027-03-12", "2QH29 Comdty", "2029-06-18"),
+    ("3QM29",  "3Y MC",      "2026-06-12", "3QM29 Comdty", "2029-09-18"),
+    ("3QU29",  "3Y MC",      "2026-09-11", "3QU29 Comdty", "2029-12-18"),
+    ("3QZ29",  "3Y MC",      "2026-12-11", "3QZ29 Comdty", "2030-03-19"),
+    ("3QH30",  "3Y MC",      "2027-03-12", "3QH30 Comdty", "2030-06-18"),
+    ("4QZ26",  "4Y MC",      "2026-12-11", "4QZ26 Comdty", "2031-03-18"),
+    ("4QH27",  "4Y MC",      "2027-03-12", "4QH27 Comdty", "2031-06-17"),
+    ("5QZ26",  "5Y MC",      "2026-12-11", "5QZ26 Comdty", "2032-03-17"),
+    ("5QH27",  "5Y MC",      "2027-03-12", "5QH27 Comdty", "2032-06-16"),
 ]
 SR3_SPLIT_INDEX = 23  # rows 0..22 = standards/serials, 23..38 = mid-curves
 
@@ -21481,13 +21491,28 @@ def _sr3_pack_index(underlying: str, today=None) -> int:
     """
     How many quarterlies separate this underlying from the current front
     quarterly contract. 0..3 = White, 4..7 = Red, etc. Returns -1 if unparseable.
+    
+    For SERIAL underlyings (month letter not in [H, M, U, Z]), we roll the
+    underlying forward to the next quarterly month. That way SFRN6 (serial
+    on a Jul-26-month future) maps to the same pack as SFRU6 (Sep-26 Q),
+    because they both settle into the same SOFR rate region.
     """
     from datetime import date as _d
     if today is None:
         today = _d.today()
     u_yr, u_mo = _sr3_parse_underlying(underlying, today.year)
-    if u_yr is None or u_mo not in SR3_QUARTERLY_MONTHS:
+    if u_yr is None:
         return -1
+    # If underlying month is a serial (not Mar/Jun/Sep/Dec), roll forward
+    # to the next quarterly cycle. E.g. Jul-26 → Sep-26, Oct-26 → Dec-26.
+    if u_mo not in SR3_QUARTERLY_MONTHS:
+        for qm in SR3_QUARTERLY_MONTHS:
+            if qm >= u_mo:
+                u_mo = qm
+                break
+        else:
+            u_mo = 3
+            u_yr += 1
     f_yr, f_mo = _sr3_front_quarterly(today.year, today.month)
     f_idx_abs = f_yr * 4 + SR3_QUARTERLY_MONTHS.index(f_mo)
     u_idx_abs = u_yr * 4 + SR3_QUARTERLY_MONTHS.index(u_mo)
