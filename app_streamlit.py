@@ -11323,6 +11323,8 @@ def caps_floors_tab(vol_mode: str):
                 st.markdown("<hr style='margin:2px 0 0 0;border-color:#334155'>", unsafe_allow_html=True)
 
                 new_spread_values = {}
+                # Reset wedge debug buffer each render
+                st.session_state["_wedge_fwd_debug"] = []
                 # ── Determine which wedges are SKIPPED by Listed Front (USD only) ──
                 # When Use Listed Front toggle is ON, the listed contracts handle
                 # the front of the curve and certain OTC wedges are inactive.
@@ -11367,6 +11369,7 @@ def caps_floors_tab(vol_mode: str):
                         _prem_df_row = st.session_state.get("atm_prem_matrix", {}).get(ccy, {}).get("prem")
                         _exp_lbl_row = tdata.get("_exp_lbl", "")
                         fwd_swpt_str = "—"
+                        _fwd_debug = None
                         if _prem_df_row is not None and not _prem_df_row.empty:
                             try:
                                 _exp_for_row = {"3m1y":"3m","1y1y":"1y","2y1y":"2y","3y1y":"3y",
@@ -11377,8 +11380,17 @@ def caps_floors_tab(vol_mode: str):
                                     _fv = get_matrix_value(_prem_df_row, _exp_for_row, _ten_for_row)
                                     if _fv is not None:
                                         fwd_swpt_str = f"{float(_fv):.4f}"
-                            except Exception:
-                                pass
+                                    else:
+                                        _fwd_debug = f"{tbl_lbl}: matrix lookup returned None for ({_exp_for_row},{_ten_for_row})"
+                                else:
+                                    _fwd_debug = f"{tbl_lbl}: no exp/ten mapping"
+                            except Exception as _fwd_e:
+                                _fwd_debug = f"{tbl_lbl}: exception {_fwd_e}"
+                        else:
+                            _fwd_debug = f"{tbl_lbl}: atm_prem_matrix empty/None at render time"
+                        # Stash debug info for optional display below table
+                        if _fwd_debug:
+                            st.session_state.setdefault("_wedge_fwd_debug", []).append(_fwd_debug)
                         spot_str = f"{swpt:.4f}"
                         cfs_str  = f"{cfs:.4f}"
                     else:
@@ -11444,6 +11456,25 @@ def caps_floors_tab(vol_mode: str):
             new_spread_10y2y = new_spread_values["cf_spr_10y2y"]
             new_spread_12y3y = new_spread_values["cf_spr_12y3y"]
 
+            # ── Debug: surface why FWD Swptn column might be blank ──
+            _fwd_debug_msgs = st.session_state.get("_wedge_fwd_debug", [])
+            if _fwd_debug_msgs:
+                with st.expander(f"🔧 Debug — Swptn column ({len(_fwd_debug_msgs)} issues)", expanded=False):
+                    _pm_check = st.session_state.get("atm_prem_matrix", {}).get(ccy, {})
+                    _prem_avail = "prem" in _pm_check and _pm_check["prem"] is not None
+                    _prem_empty = _prem_avail and _pm_check["prem"].empty
+                    st.markdown(f"**atm_prem_matrix[{ccy}]:** "
+                                f"exists={ccy in st.session_state.get('atm_prem_matrix', {})}, "
+                                f"has 'prem' key={_prem_avail}, "
+                                f"empty={_prem_empty if _prem_avail else 'N/A'}")
+                    if _prem_avail and not _prem_empty:
+                        _pm_df = _pm_check["prem"]
+                        st.markdown(f"**Shape:** {_pm_df.shape} — **columns:** {list(_pm_df.columns)[:10]}")
+                        st.markdown(f"**Index:** {list(_pm_df.index)[:5]}... (name: `{_pm_df.index.name}`)")
+                    st.markdown("**Per-row issues:**")
+                    for _m in _fwd_debug_msgs:
+                        st.text(_m)
+
             st.markdown("<hr style='margin:4px 0;border-color:#334155'>", unsafe_allow_html=True)
 
             bl, _, br = st.columns([2, 0.2, 2])
@@ -11481,6 +11512,10 @@ def caps_floors_tab(vol_mode: str):
                 st.session_state.pop("_cfs_listed_bootstrap_chart_cache", None)
                 st.rerun()
             if br.button("🔄 Refresh Swaptions", key="gen_swpt_prem", type="primary"):
+                # Mark this render so the Listed bootstrap pre-calc block
+                # doesn't immediately overwrite the refreshed swaption values.
+                # Cleared automatically on the NEXT render.
+                st.session_state["_refresh_swpt_just_clicked"] = True
                 _prem_df = st.session_state.get("atm_prem_matrix", {}).get(ccy, {}).get("prem")
                 if _prem_df is not None and not _prem_df.empty:
                     # Get OIS curve for forward→spot conversion
@@ -11744,7 +11779,12 @@ def caps_floors_tab(vol_mode: str):
                 # the listed-bootstrapped curve (via a side build) for chart overlay.
                 _lf_is_active = (st.session_state.get("cfs_active_vol_src", "OTC only")
                                  == "Listed bootstrap")
-                if _lf_is_active:
+                # If user just clicked Refresh Swaptions, skip overwriting
+                # the cfs_table_data this render so their refreshed swaption
+                # values show through instead of being clobbered. The flag
+                # is consumed here so the overwrite resumes on next render.
+                _just_refreshed = st.session_state.pop("_refresh_swpt_just_clicked", False)
+                if _lf_is_active and not _just_refreshed:
                     if _listed_1y_stradd and _listed_1y_stradd > 0:
                         st.session_state.setdefault("cfs_table_data", {}).setdefault(
                             "3m1y", {})["cfs_straddle"] = _listed_1y_stradd
@@ -11755,6 +11795,9 @@ def caps_floors_tab(vol_mode: str):
                         _1y1y_gap = _listed_2y_stradd - _listed_1y_stradd
                         st.session_state["cfs_table_data"].setdefault(
                             "1y1y", {})["cfs_straddle"] = _1y1y_gap
+                elif _lf_is_active and _just_refreshed:
+                    # Still flag as active so caplet rebuild key changes
+                    _listed_bootstrap_active = True
             except Exception as _lb_err:
                 st.caption(f"⚠ Listed bootstrap pre-calc failed: {_lb_err}")
 
@@ -11780,6 +11823,35 @@ def caps_floors_tab(vol_mode: str):
                     spread_10y2y=spread_10y2y,
                     spread_12y3y=spread_12y3y,
                 )
+
+                # ── Option A patch (20-Apr-2026) ─────────────────────────
+                # When Listed bootstrap is Active AND we have a listed-derived
+                # term-structure caplet curve (_listed_curve_for_bs), OVERWRITE
+                # the flat 0.25/0.5/0.75/1.0 entries with the listed values.
+                # Without this, build_caplet_vol_curve() solves for ONE flat
+                # vol to match the 1Y CFS straddle premium — throwing away
+                # the per-quarter term structure that SFRM6/U6/Z6/H7 give us.
+                # With the patch, the front year's caplet curve is exactly
+                # the listed SR3 caplet curve, and wedge-chain bootstrapping
+                # continues unchanged from 2Y onwards. If whites+reds are on
+                # (cutoff=2Y), the listed block extends to 2Y as well.
+                if (caplet_vol_curve
+                        and ccy == "USD"
+                        and _listed_bootstrap_active
+                        and _listed_curve_for_bs):
+                    _lf_pack_dbg = st.session_state.get("_cfs_listed_pack", "whites")
+                    _override_end = 2.0 if _lf_pack_dbg == "both" else 1.0
+                    _overrode_pts = 0
+                    for _t_pt in sorted(_listed_curve_for_bs.keys()):
+                        if _t_pt <= _override_end + 1e-6:
+                            caplet_vol_curve[_t_pt] = _listed_curve_for_bs[_t_pt]
+                            _overrode_pts += 1
+                    # Diagnostic stash so the UI can surface "N front caplets from listed"
+                    st.session_state["_cfs_listed_front_override_n"] = _overrode_pts
+                    st.session_state["_cfs_listed_front_override_end"] = _override_end
+                else:
+                    st.session_state["_cfs_listed_front_override_n"] = 0
+
             st.session_state["_caplet_curve_key"] = _caplet_key
         else:
             caplet_vol_curve = st.session_state.get("caplet_vol_curve_aud")
@@ -11893,7 +11965,16 @@ def caps_floors_tab(vol_mode: str):
                 # Nothing to swap — it IS the active curve.
                 st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
                 _anchor_lbl = "1Y" if st.session_state.get("_cfs_listed_pack","whites")=="whites" else "2Y"
-                st.caption(f"🟢 **Active:** Listed bootstrap (listed {_anchor_lbl} straddle anchors AUD-style wedge chain)")
+                _override_n = st.session_state.get("_cfs_listed_front_override_n", 0)
+                _override_end_lbl = st.session_state.get("_cfs_listed_front_override_end", 1.0)
+                if _override_n > 0:
+                    st.caption(
+                        f"🟢 **Active:** Listed bootstrap — **front {_override_end_lbl:.0f}Y "
+                        f"caplet vols taken directly from SR3 term structure** "
+                        f"({_override_n} quarterly points), wedge chain extends from {_override_end_lbl:.0f}Y."
+                    )
+                else:
+                    st.caption(f"🟢 **Active:** Listed bootstrap (listed {_anchor_lbl} straddle anchors AUD-style wedge chain)")
             elif _active_src == "SR3 hybrid" and sr3_hybrid_curve:
                 caplet_vol_curve = sr3_hybrid_curve
                 st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
@@ -11952,6 +12033,13 @@ def caps_floors_tab(vol_mode: str):
                                 _cfs_td["3m1y"] = _orig_3m1y
                             if _orig_1y1y:
                                 _cfs_td["1y1y"] = _orig_1y1y
+                            # Option A: overwrite flat front-year with listed
+                            # term-structure so chart overlay matches Active.
+                            if _listed_bootstrap_curve_for_chart and _listed_curve_for_bs:
+                                _chart_override_end = 2.0 if _lf_pack_now == "both" else 1.0
+                                for _t_pt in sorted(_listed_curve_for_bs.keys()):
+                                    if _t_pt <= _chart_override_end + 1e-6:
+                                        _listed_bootstrap_curve_for_chart[_t_pt] = _listed_curve_for_bs[_t_pt]
                             st.session_state["_cfs_listed_bootstrap_chart_cache"] = {
                                 "sig": _lbc_sig,
                                 "curve": _listed_bootstrap_curve_for_chart,
@@ -11996,6 +12084,47 @@ def caps_floors_tab(vol_mode: str):
                     else:
                         st.session_state["cfs_active_vol_src"] = "OTC only"
                     st.rerun(scope="app")
+
+                # ── Curve sources explainer ───────────────────────────
+                with st.expander("ℹ️ What do the curve sources mean?", expanded=False):
+                    st.markdown(
+                        """
+**OTC only** — Wedge-based caplet bootstrap from ATM swaption premiums plus
+your spread adjustments. The classic AUD method, extended to USD. Covers
+0→30Y. This is your baseline curve — always built, no external data
+dependencies.
+
+**Listed bootstrap** — Same AUD-style wedge chain, but **anchored on the
+listed SR3 straddle** instead of the OTC-implied 1Y straddle. Anchor is:
+- **Whites only**: 1Y listed straddle only; wedges cascade to 2Y, 3Y, …
+- **Whites + Reds**: 1Y AND 2Y listed straddles; wedges cascade from 2y1y
+  onwards
+
+Covers 0→30Y. Only relevant when the Listed Front editor checkbox is ON.
+
+**SR3 hybrid** — Uses listed SR3 caplet vols up to the **"SR3 wins up to"**
+cutoff you set above (e.g. 2Y). Beyond that, it falls back to the OTC
+wedge curve. So at 2Y cutoff with whites+reds data loaded, SR3 hybrid is
+your cleanest view: listed truth where liquid, OTC where extrapolation is
+needed.
+
+**SR3 full** — Diagnostic mode. Uses ALL SR3 anchor points in the DB
+(standards, serials, quarterlies, Greens, Reds, Golds — whatever's
+loaded). Typically covers 0→~4Y (Gold pack extent). OTC beyond. Useful
+for sanity-checking the listed vol surface as a whole, but can be noisy
+where liquidity thins out.
+
+---
+
+**ATM CFS Straddles → Flat Vol column:** reads from whichever curve is
+Active. If you're on SR3 hybrid, near tenors (1Y, 2Y) are SR3-derived;
+far tenors (3Y+) are OTC-derived because they fall beyond the cutoff.
+20Y is always 15Y flat vol + the 15v20 vol spread.
+
+**Pack selection** (Whites vs Whites+Reds) affects **Listed bootstrap
+only** — it does NOT change SR3 hybrid/full behaviour.
+"""
+                    )
             with _le_col2:
                 if _use_listed:
                     _prev_pack = st.session_state.get("_cfs_listed_pack", "whites")
