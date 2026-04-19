@@ -21063,9 +21063,11 @@ def save_sr3_snapshot(user_id: str, label: str, snapshot_date, rows: list, notes
                     expiry_date, underlying, maturity_date, futures_price, vol_type,
                     vol_10dp, vol_15dp, vol_25dp, vol_35dp, atm_vol,
                     vol_35dc, vol_25dc, vol_15dc, vol_10dc,
-                    label, notes, manual_override
+                    label, notes, manual_override,
+                    listed_adj_ratio, listed_adj_bp, listed_adj_mode
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                          %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                          %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                          %s, %s, %s)
                 ON CONFLICT (currency, snapshot_date, contract_code, label)
                 DO UPDATE SET
                     contract_type = EXCLUDED.contract_type,
@@ -21080,7 +21082,10 @@ def save_sr3_snapshot(user_id: str, label: str, snapshot_date, rows: list, notes
                     vol_35dc = EXCLUDED.vol_35dc, vol_25dc = EXCLUDED.vol_25dc,
                     vol_15dc = EXCLUDED.vol_15dc, vol_10dc = EXCLUDED.vol_10dc,
                     notes            = EXCLUDED.notes,
-                    manual_override  = EXCLUDED.manual_override
+                    manual_override  = EXCLUDED.manual_override,
+                    listed_adj_ratio = EXCLUDED.listed_adj_ratio,
+                    listed_adj_bp    = EXCLUDED.listed_adj_bp,
+                    listed_adj_mode  = EXCLUDED.listed_adj_mode
             """, (
                 'shared', 'USD', snapshot_date, r["contract_code"], r.get("contract_type"),
                 r.get("expiry_date"), r.get("underlying"), r.get("maturity_date"),
@@ -21089,6 +21094,9 @@ def save_sr3_snapshot(user_id: str, label: str, snapshot_date, rows: list, notes
                 r.get("atm_vol"),
                 r.get("vol_35dc"), r.get("vol_25dc"), r.get("vol_15dc"), r.get("vol_10dc"),
                 label, notes or None, bool(r.get("manual_override", False)),
+                float(r.get("listed_adj_ratio", 1.0) or 1.0),
+                float(r.get("listed_adj_bp", 0.0) or 0.0),
+                (r.get("listed_adj_mode") or "ratio").lower(),
             ))
             n_written += 1
         conn.commit()
@@ -21154,7 +21162,8 @@ def load_sr3_snapshot(snapshot_date=None, label=None, currency: str = "USD") -> 
                        futures_price, vol_type,
                        vol_10dp, vol_15dp, vol_25dp, vol_35dp, atm_vol,
                        vol_35dc, vol_25dc, vol_15dc, vol_10dc,
-                       manual_override, notes, snapshot_date, label
+                       manual_override, notes, snapshot_date, label,
+                       listed_adj_ratio, listed_adj_bp, listed_adj_mode
                 FROM sr3_vol_history
                 WHERE currency = %s
                   AND (snapshot_date, label) = (
@@ -21169,7 +21178,8 @@ def load_sr3_snapshot(snapshot_date=None, label=None, currency: str = "USD") -> 
                        futures_price, vol_type,
                        vol_10dp, vol_15dp, vol_25dp, vol_35dp, atm_vol,
                        vol_35dc, vol_25dc, vol_15dc, vol_10dc,
-                       manual_override, notes, snapshot_date, label
+                       manual_override, notes, snapshot_date, label,
+                       listed_adj_ratio, listed_adj_bp, listed_adj_mode
                 FROM sr3_vol_history
                 WHERE currency = %s AND snapshot_date = %s AND label = %s
             """, (currency, snapshot_date, label))
@@ -21195,6 +21205,10 @@ def load_sr3_snapshot(snapshot_date=None, label=None, currency: str = "USD") -> 
                 "notes":           r[17],
                 "_snapshot_date":  r[18],
                 "_label":          r[19],
+                # Listed-to-delivered adjustment (Chunk 1 DDL, 19-Apr-2026)
+                "listed_adj_ratio": float(r[20]) if r[20] is not None else 1.0,
+                "listed_adj_bp":    float(r[21]) if r[21] is not None else 0.0,
+                "listed_adj_mode":  r[22] if r[22] in ("ratio", "bp") else "ratio",
             }
         return out
     except Exception as e:
@@ -21788,6 +21802,7 @@ def sr3_vol_tab():
         Push grid_state values into st.session_state under the widget keys
         so number_inputs actually show the loaded values. Must be called
         BEFORE the widgets are instantiated (i.e. before _render_grid_section).
+        Covers smile cells + adjustment cells (Mode / Ratio / +bp).
         """
         gs = st.session_state.get("sr3_grid_data", {}) or {}
         for (code, ctype, exp_str, und, mat) in SR3_CONTRACTS_CANONICAL:
@@ -21798,6 +21813,13 @@ def sr3_vol_tab():
                 st.session_state[f"{prefix}_{code}_{col_key}"] = (
                     float(v) if v is not None else 0.0
                 )
+            # Adjustment widgets (Chunk 3, 19-Apr-2026)
+            _adj_mode = (row.get("listed_adj_mode") or "ratio").lower()
+            if _adj_mode not in ("ratio", "bp"):
+                _adj_mode = "ratio"
+            st.session_state[f"{prefix}_{code}_adj_mode"]  = _adj_mode
+            st.session_state[f"{prefix}_{code}_adj_ratio"] = float(row.get("listed_adj_ratio") or 1.0)
+            st.session_state[f"{prefix}_{code}_adj_bp"]    = float(row.get("listed_adj_bp") or 0.0)
 
     # Auto-load latest on first open, OR when:
     #   (a) the DB's latest snapshot key differs from what's loaded, OR
@@ -21869,8 +21891,14 @@ def sr3_vol_tab():
     # ── Grid ──────────────────────────────────────────────────────────
     def _render_grid_section(title: str, contracts_slice: list, key_prefix: str):
         st.markdown(f"### {title}")
-        # Header row: Code | Type | Exp | 9 smile cols
-        _hcols = st.columns([1.1, 1.0, 1.05] + [0.85]*9)
+        # Column layout:
+        #   [0..2] Code | Type | Exp
+        #   [3..11] 9 smile delta cells (10DP..10DC)
+        #   [12] Mode  [13] Ratio  [14] +bp  [15] Delivered (read-only)
+        _COL_WIDTHS = [1.1, 1.0, 1.05] + [0.85]*9 + [0.85, 0.85, 0.85, 0.95]
+
+        # Header row
+        _hcols = st.columns(_COL_WIDTHS)
         _hcols[0].markdown("<div style='font-size:11px;font-weight:600;color:#64748b'>Code</div>",
                            unsafe_allow_html=True)
         _hcols[1].markdown("<div style='font-size:11px;font-weight:600;color:#64748b'>Type</div>",
@@ -21883,6 +21911,24 @@ def sr3_vol_tab():
                 f"<div style='font-size:11px;{_col_style};text-align:center'>{_sk}</div>",
                 unsafe_allow_html=True,
             )
+        # Adjustment column headers — divider bar before them visually grouped
+        _hcols[12].markdown(
+            "<div style='font-size:11px;font-weight:600;color:#f59e0b;text-align:center;"
+            "border-left:2px solid #334155;padding-left:4px;'>Mode</div>",
+            unsafe_allow_html=True,
+        )
+        _hcols[13].markdown(
+            "<div style='font-size:11px;font-weight:600;color:#f59e0b;text-align:center'>Ratio</div>",
+            unsafe_allow_html=True,
+        )
+        _hcols[14].markdown(
+            "<div style='font-size:11px;font-weight:600;color:#f59e0b;text-align:center'>+bp</div>",
+            unsafe_allow_html=True,
+        )
+        _hcols[15].markdown(
+            "<div style='font-size:11px;font-weight:600;color:#22c55e;text-align:center'>Delivered</div>",
+            unsafe_allow_html=True,
+        )
 
         for (code, ctype, exp_str, underlying, maturity_str) in contracts_slice:
             rstate = grid_state.get(code, {})
@@ -21906,7 +21952,7 @@ def sr3_vol_tab():
                 unsafe_allow_html=True,
             )
 
-            _rcols = st.columns([1.1, 1.0, 1.05] + [0.85]*9)
+            _rcols = st.columns(_COL_WIDTHS)
             _rcols[0].markdown(
                 f"<div style='font-size:12px;padding-top:8px;font-weight:700;"
                 f"color:{pack};'>{code}{badge}</div>",
@@ -21946,6 +21992,63 @@ def sr3_vol_tab():
                 else:
                     if code in grid_state and col_key in grid_state[code]:
                         grid_state[code][col_key] = None
+
+            # ── Adjustment columns (Mode / Ratio / +bp / Delivered) ─────
+            _cur_mode  = (rstate.get("listed_adj_mode") or "ratio").lower()
+            _cur_ratio = float(rstate.get("listed_adj_ratio") or 1.0)
+            _cur_bp    = float(rstate.get("listed_adj_bp")    or 0.0)
+            _cur_atm   = rstate.get("atm_vol")
+
+            _mode = _rcols[12].selectbox(
+                "", ["ratio", "bp"],
+                index=0 if _cur_mode == "ratio" else 1,
+                key=f"{key_prefix}_{code}_adj_mode",
+                label_visibility="collapsed",
+            )
+            _ratio = _rcols[13].number_input(
+                "", value=_cur_ratio,
+                min_value=0.50, max_value=3.00, step=0.0001, format="%.4f",
+                key=f"{key_prefix}_{code}_adj_ratio",
+                label_visibility="collapsed",
+                disabled=(_mode != "ratio"),
+            )
+            _bp = _rcols[14].number_input(
+                "", value=_cur_bp,
+                min_value=-100.0, max_value=500.0, step=0.1, format="%.1f",
+                key=f"{key_prefix}_{code}_adj_bp",
+                label_visibility="collapsed",
+                disabled=(_mode != "bp"),
+            )
+
+            # Compute delivered vol for display (read-only)
+            if _cur_atm is not None and float(_cur_atm) > 0:
+                _delivered = (float(_cur_atm) * _ratio
+                              if _mode == "ratio"
+                              else float(_cur_atm) + _bp)
+                _delivered_str = f"{_delivered:.2f}"
+                # Highlight if delivered ≠ listed (adjustment active)
+                _is_adj = ((_mode == "ratio" and abs(_ratio - 1.0) > 1e-6)
+                           or (_mode == "bp" and abs(_bp) > 1e-4))
+                _col_style = "color:#22c55e;font-weight:700" if _is_adj else "color:#94a3b8"
+            else:
+                _delivered_str = "—"
+                _col_style = "color:#475569"
+            _rcols[15].markdown(
+                f"<div style='font-size:12px;padding-top:9px;text-align:center;"
+                f"{_col_style};'>{_delivered_str}</div>",
+                unsafe_allow_html=True,
+            )
+
+            # Persist adjustments into grid_state (create row dict if needed)
+            if code not in grid_state:
+                grid_state[code] = {
+                    "contract_code": code, "contract_type": ctype,
+                    "expiry_date": exp_str, "underlying": underlying,
+                    "maturity_date": maturity_str,
+                }
+            grid_state[code]["listed_adj_mode"]  = _mode
+            grid_state[code]["listed_adj_ratio"] = _ratio
+            grid_state[code]["listed_adj_bp"]    = _bp
 
     with st.expander("📊 SR3 Vol Grid — Standards & Serials (23 rows)", expanded=True):
         _render_grid_section("", SR3_CONTRACTS_CANONICAL[:SR3_SPLIT_INDEX], "sr3s")
