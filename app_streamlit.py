@@ -11762,14 +11762,53 @@ def caps_floors_tab(vol_mode: str):
                     _t30 += 0.25
 
             with st.expander("📊 Resulting Caplet Vol Curve", expanded=False):
-                # Show exact bootstrapped vols in table (ACTIVE curve)
-                curve_data = []
-                for t in sorted(caplet_vol_curve.keys()):
-                    curve_data.append({"Maturity (Y)": f"{t:.2f}", "Vol (bp)": f"{caplet_vol_curve[t]:.2f}"})
-                st.dataframe(pd.DataFrame(curve_data), use_container_width=True, hide_index=True)
-                
                 from scipy.interpolate import CubicSpline
                 import plotly.graph_objects as _pgo
+
+                # ── Table: show ALL selected overlays side-by-side ──
+                if ccy == "USD":
+                    _sel_for_table = st.session_state.get("_cfs_overlay_sel", []) or []
+                    _src_curves_t = {
+                        "OTC only":   st.session_state.get("_cfs_otc_curve") or {},
+                        "SR3 hybrid": st.session_state.get("_cfs_sr3_hybrid") or {},
+                        "SR3 full":   st.session_state.get("_cfs_sr3_full") or {},
+                    }
+                    # Collect all unique T values across selected curves
+                    _all_t_vals = set()
+                    for _nm in _sel_for_table:
+                        _all_t_vals.update((_src_curves_t.get(_nm) or {}).keys())
+                    if _all_t_vals and _sel_for_table:
+                        _active_label = {
+                            "OTC only":   "OTC only",
+                            "SR3 hybrid": "SR3 hybrid",
+                            "SR3 full":   "SR3 full",
+                        }.get(_active_src, "—")
+                        curve_data = []
+                        for t in sorted(_all_t_vals):
+                            row = {"Maturity (Y)": f"{t:.2f}"}
+                            for _nm in _sel_for_table:
+                                c = _src_curves_t.get(_nm) or {}
+                                if t in c:
+                                    lbl = f"{_nm} (bp)"
+                                    if _nm == _active_src:
+                                        lbl = f"▶ {_nm} (bp)"   # mark active
+                                    row[lbl] = f"{c[t]:.2f}"
+                            curve_data.append(row)
+                        st.dataframe(pd.DataFrame(curve_data),
+                                     use_container_width=True, hide_index=True)
+                        st.caption(f"▶ marks the active pricer feed. Toggle above to change.")
+                    else:
+                        # No overlays selected — fall back to active curve
+                        curve_data = [{"Maturity (Y)": f"{t:.2f}", "Vol (bp)": f"{caplet_vol_curve[t]:.2f}"}
+                                      for t in sorted(caplet_vol_curve.keys())]
+                        st.dataframe(pd.DataFrame(curve_data),
+                                     use_container_width=True, hide_index=True)
+                else:
+                    # AUD / NZD / EUR — unchanged single-curve table
+                    curve_data = [{"Maturity (Y)": f"{t:.2f}", "Vol (bp)": f"{caplet_vol_curve[t]:.2f}"}
+                                  for t in sorted(caplet_vol_curve.keys())]
+                    st.dataframe(pd.DataFrame(curve_data),
+                                 use_container_width=True, hide_index=True)
 
                 fig = _pgo.Figure()
 
