@@ -21405,13 +21405,44 @@ def sr3_vol_tab():
     snaps = list_sr3_snapshots("USD", limit=50)
     cur_key = st.session_state.get("sr3_current_label")
 
-    # Auto-load latest on first open
-    if "sr3_grid_data" not in st.session_state:
+    def _sync_grid_to_widgets():
+        """
+        Push grid_state values into st.session_state under the widget keys
+        so number_inputs actually show the loaded values. Must be called
+        BEFORE the widgets are instantiated (i.e. before _render_grid_section).
+        """
+        gs = st.session_state.get("sr3_grid_data", {}) or {}
+        for (code, ctype, exp_str, und, mat) in SR3_CONTRACTS_CANONICAL:
+            prefix = "sr3m" if "MC" in ctype else "sr3s"
+            row = gs.get(code, {})
+            for col_key in SR3_SMILE_COLS:
+                v = row.get(col_key)
+                st.session_state[f"{prefix}_{code}_{col_key}"] = (
+                    float(v) if v is not None else 0.0
+                )
+
+    # Auto-load latest on first open, OR when:
+    #   (a) the DB's latest snapshot key differs from what's loaded, OR
+    #   (b) the DB has more rows for the current snapshot than we have in memory
+    _db_latest_key = None
+    _db_latest_n = 0
+    if snaps:
+        _db_latest_key = f"{snaps[0]['snapshot_date']} | {snaps[0]['label']}"
+        _db_latest_n = int(snaps[0].get("n", 0))
+
+    _mem_n = len(st.session_state.get("sr3_grid_data", {}))
+    _need_autoload = (
+        "sr3_grid_data" not in st.session_state
+        or (_db_latest_key is not None and _db_latest_key != cur_key)
+        or (_db_latest_key == cur_key and _db_latest_n > _mem_n)
+    )
+    if _need_autoload:
         latest = load_sr3_snapshot(currency="USD")
         st.session_state["sr3_grid_data"] = latest
         if snaps:
-            st.session_state["sr3_current_label"] = f"{snaps[0]['snapshot_date']} | {snaps[0]['label']}"
-            cur_key = st.session_state["sr3_current_label"]
+            st.session_state["sr3_current_label"] = _db_latest_key
+            cur_key = _db_latest_key
+        _sync_grid_to_widgets()
 
     _tl, _tm, _tr = st.columns([3, 2, 2])
     with _tl:
@@ -21439,11 +21470,13 @@ def sr3_vol_tab():
                 st.session_state["sr3_grid_data"] = grid
                 st.session_state["sr3_current_label"] = picked
             list_sr3_snapshots.clear()
+            _sync_grid_to_widgets()
             st.rerun()
     with _tr:
         if st.button("🧹 Clear Grid", key="sr3_clear_btn", use_container_width=True,
                      help="Clear all cells (doesn't delete from DB)"):
             st.session_state["sr3_grid_data"] = {}
+            _sync_grid_to_widgets()
             st.rerun()
 
     # Status line
