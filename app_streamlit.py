@@ -1090,7 +1090,7 @@ def save_all_session_data(user_id: str):
         # was last active in the caps_floors tab (defaults to AUD if unset).
         _cf_spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
                            "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y",
-                           "cf_spr_12y3y","cf_spr_15v20"]
+                           "cf_spr_12y3y","cf_spr_15v20","cf_spr_20v30"]
         _cf_spread_data = {k: float(st.session_state.get(k, 0)) for k in _cf_spread_keys
                            if k in st.session_state}
         _cf_save_ccy = st.session_state.get("_cf_last_active_ccy", "AUD")
@@ -4179,7 +4179,8 @@ def init_session():
     _spread_defaults = {
         "cf_spr_3m1y": 10.0, "cf_spr_1y1y": 11.5, "cf_spr_2y1y": 13.0,
         "cf_spr_3y1y": 17.5, "cf_spr_4y1y": 20.0, "cf_spr_5y2y": 45.0,
-        "cf_spr_7y3y": 50.0, "cf_spr_10y2y": 35.0, "cf_spr_12y3y": 100.0, "cf_spr_15v20": -5.0,
+        "cf_spr_7y3y": 50.0, "cf_spr_10y2y": 35.0, "cf_spr_12y3y": 100.0,
+        "cf_spr_15v20": -5.0, "cf_spr_20v30": -5.0,
     }
     _spreads_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cfs_spreads.json")
     if not any(k in st.session_state for k in _spread_defaults):
@@ -10990,23 +10991,23 @@ def caps_floors_tab(vol_mode: str):
     # ═══════════════════════════════════════════════════════════════════
     _cf_spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
                        "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y",
-                       "cf_spr_12y3y","cf_spr_15v20"]
+                       "cf_spr_12y3y","cf_spr_15v20","cf_spr_20v30"]
     _spread_defaults_by_ccy = {
         # AUD baseline — the values the hardcoded init used historically
         "AUD": {"cf_spr_3m1y":10.0, "cf_spr_1y1y":11.5, "cf_spr_2y1y":13.0,
                 "cf_spr_3y1y":17.5, "cf_spr_4y1y":20.0, "cf_spr_5y2y":45.0,
                 "cf_spr_7y3y":50.0, "cf_spr_10y2y":35.0, "cf_spr_12y3y":100.0,
-                "cf_spr_15v20":-5.0},
+                "cf_spr_15v20":-5.0, "cf_spr_20v30":-5.0},
         # USD baseline — typical USD wedge spreads (will be replaced once user saves)
         "USD": {"cf_spr_3m1y":5.0,  "cf_spr_1y1y":11.5, "cf_spr_2y1y":12.5,
                 "cf_spr_3y1y":13.5, "cf_spr_4y1y":15.0, "cf_spr_5y2y":40.0,
                 "cf_spr_7y3y":70.5, "cf_spr_10y2y":39.0, "cf_spr_12y3y":39.0,
-                "cf_spr_15v20":-5.0},
+                "cf_spr_15v20":-5.0, "cf_spr_20v30":-5.0},
         # NZD baseline
         "NZD": {"cf_spr_3m1y":8.0,  "cf_spr_1y1y":10.0, "cf_spr_2y1y":12.0,
                 "cf_spr_3y1y":15.0, "cf_spr_4y1y":18.0, "cf_spr_5y2y":30.0,
                 "cf_spr_7y3y":40.0, "cf_spr_10y2y":30.0, "cf_spr_12y3y":60.0,
-                "cf_spr_15v20":-5.0},
+                "cf_spr_15v20":-5.0, "cf_spr_20v30":-5.0},
     }
     _prev_ccy = st.session_state.get("_cf_last_active_ccy")
     if _prev_ccy != ccy:
@@ -11298,6 +11299,7 @@ def caps_floors_tab(vol_mode: str):
     spread_10y2y = st.session_state.get("cf_spr_10y2y", 35.0)
     spread_12y3y = st.session_state.get("cf_spr_12y3y", 75.0)
     spread_15v20   = st.session_state.get("cf_spr_15v20", -5.0)
+    spread_20v30   = st.session_state.get("cf_spr_20v30", -5.0)
     caplet_vol_curve = None  # Initialize
     
     if vol_src == "Manual Flat":
@@ -11363,6 +11365,7 @@ def caps_floors_tab(vol_mode: str):
         spread_10y2y = st.session_state["cf_spr_10y2y"]
         spread_12y3y = st.session_state["cf_spr_12y3y"]
         spread_15v20 = st.session_state.get("cf_spr_15v20", -5.0)
+        spread_20v30 = st.session_state.get("cf_spr_20v30", -5.0)
 
         # Toggle
         if "wedges_expanded" not in st.session_state:
@@ -11549,6 +11552,25 @@ def caps_floors_tab(vol_mode: str):
                 st.session_state["cf_spr_15v20_temp"] = _spread_15v20_new
                 new_spread_values["cf_spr_15v20"] = _spread_15v20_new
 
+                # ── Vol spread row for 20y → 30y extension (not a wedge) ──
+                _vs_cols30 = st.columns(CW)
+                _vs_cols30[0].markdown(f"<div style='{_fs};color:#f59e0b'>20y vs 30y Vol Spd</div>", unsafe_allow_html=True)
+                _spread_20v30_last = st.session_state.get("cf_spr_20v30", -5.0)
+                _spread_20v30_cur  = st.session_state.get("cf_spr_20v30_temp", _spread_20v30_last)
+                _vs_cols30[1].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>{_spread_20v30_last:.1f}</div>", unsafe_allow_html=True)
+                _spread_20v30_new = _vs_cols30[2].number_input("", value=_spread_20v30_cur, key="cf_spr_20v30_new",
+                                                               format="%.1f", step=0.5, label_visibility="collapsed")
+                _delta_20v30 = _spread_20v30_new - _spread_20v30_last
+                _dc30 = "#22c55e" if _delta_20v30 > 0 else "#ef4444" if _delta_20v30 < 0 else "#94a3b8"
+                _vs_cols30[3].markdown(f"<div style='{_fs};text-align:right;color:{_dc30}'>{_delta_20v30:+.1f}</div>", unsafe_allow_html=True)
+                _vs_cols30[5].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>vol spd</div>", unsafe_allow_html=True)
+                _vs_cols30[8].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>20→30</div>", unsafe_allow_html=True)
+                _vs_cols30[9].markdown(f"<div style='{_fs};text-align:right;color:#f59e0b'>{_spread_20v30_new:.1f}bp</div>", unsafe_allow_html=True)
+                _vs_cols30[10].markdown(f"<div style='{_fs};text-align:right;color:#38bdf8;font-weight:600'>30Y CFS</div>", unsafe_allow_html=True)
+                _vs_cols30[11].markdown(f"<div style='{_fs};text-align:right;color:#64748b'>vol ext</div>", unsafe_allow_html=True)
+                st.session_state["cf_spr_20v30_temp"] = _spread_20v30_new
+                new_spread_values["cf_spr_20v30"] = _spread_20v30_new
+
             with col_sabr:
                 with st.expander("⚙️ SABR Skew Params", expanded=False):
                  st.markdown("<div style='font-size:0.75rem;font-weight:600;color:#64748b;margin-bottom:2px'>SABR Parameters (Caplet Skew)</div>", unsafe_allow_html=True)
@@ -11607,6 +11629,8 @@ def caps_floors_tab(vol_mode: str):
                     st.session_state[spr_key] = new_spread_values[spr_key]
                 st.session_state["cf_spr_15v20"] = new_spread_values.get(
                     "cf_spr_15v20", st.session_state.get("cf_spr_15v20", -5.0))
+                st.session_state["cf_spr_20v30"] = new_spread_values.get(
+                    "cf_spr_20v30", st.session_state.get("cf_spr_20v30", -5.0))
                 try:
                     _spreads_file = os.path.join(
                         os.path.dirname(os.path.abspath(__file__)), "cfs_spreads.json")
@@ -11617,7 +11641,7 @@ def caps_floors_tab(vol_mode: str):
                 try:
                     _cf_spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
                                        "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y",
-                                       "cf_spr_12y3y","cf_spr_15v20"]
+                                       "cf_spr_12y3y","cf_spr_15v20","cf_spr_20v30"]
                     _cf_data = {k: float(st.session_state.get(k, 0)) for k in _cf_spread_keys}
                     _uid_cf = st.session_state.get("username", "default")
                     if HAS_POSTGRES:
@@ -12400,8 +12424,11 @@ def caps_floors_tab(vol_mode: str):
                 if _use_listed != _prev_use_listed:
                     if _use_listed:
                         st.session_state["cfs_active_vol_src"] = "Listed bootstrap"
+                        # v2004ae: opening editor by default when toggle flips ON
+                        st.session_state["_cfs_le_expanded"] = True
                     else:
                         st.session_state["cfs_active_vol_src"] = "OTC only"
+                        st.session_state["_cfs_le_expanded"] = False
                     st.rerun(scope="app")
 
                 # ── Curve sources explainer ───────────────────────────
@@ -12455,13 +12482,15 @@ def caps_floors_tab(vol_mode: str):
                         )
 
             if _use_listed:
-              # v2004x: wrap body in collapsible expander so editor doesn't
-              # dominate viewport. Auto-opens if there are unsaved edits so
-              # the user sees what's going on; otherwise stays collapsed
-              # unless they've previously toggled it open.
-              _le_n_edits = len(st.session_state.get("_cfs_listed_session_edits", {}) or {})
-              _le_body_open = (st.session_state.get("_cfs_le_expanded", False)
-                               or _le_n_edits > 0)
+              # v2004ae: expander state controlled by _cfs_le_expanded flag so
+              # user's collapse decision persists across Calculate reruns. A
+              # small toggle button flips the flag; the expander's native
+              # chevron does not persist (by Streamlit design).
+              _le_body_open = bool(st.session_state.get("_cfs_le_expanded", False))
+              _le_btn_lbl = "▼ Hide Listed Front editor" if _le_body_open else "▶ Show Listed Front editor"
+              if st.button(_le_btn_lbl, key="_cfs_le_toggle_btn"):
+                  st.session_state["_cfs_le_expanded"] = not _le_body_open
+                  st.rerun(scope="app")
               _le_exp = st.expander("Listed Front editor - ratio/bp overrides", expanded=_le_body_open)
               with _le_exp:
                 try:
@@ -12808,7 +12837,8 @@ def caps_floors_tab(vol_mode: str):
         if st.session_state["atm_cfs_expanded"]:
             _CFS_MAP = [
                 (1, "3m1y"), (2, "1y1y"), (3, "2y1y"), (4, "3y1y"), (5, "4y1y"),
-                (7, "5y2y"), (10, "7y3y"), (12, "10y2y"), (15, "12y3y"), (20, None),
+                (7, "5y2y"), (10, "7y3y"), (12, "10y2y"), (15, "12y3y"),
+                (20, "ext_15v20"), (30, "ext_20v30"),
             ]
             _cfs_tdata = st.session_state.get("cfs_table_data", {})
             _caplet_vc = st.session_state.get("caplet_vol_curve_aud")
@@ -12854,6 +12884,7 @@ def caps_floors_tab(vol_mode: str):
                 _cum_prem = 0.0
                 _atm_cfs_rows = []
                 _atm_cfs_data = {}
+                _caplet_vc_ext_20 = None  # v2004ae: stashed 20Y-extended curve for 30Y row
 
                 for _t, _key in _CFS_MAP:
                     try:
@@ -12885,7 +12916,7 @@ def caps_floors_tab(vol_mode: str):
                             else:
                                 _fwd_rate = fast_forward_rate(_cx, _cy, _fwd_start_y, _cap_swap_tenor, ccy, freq_override=None, ois_x=_ox, ois_y=_oy, basis6v3_x=_bx, basis6v3_y=_by)
                         # Cumulative CFS straddle
-                        if _key is not None:
+                        if _key is not None and not str(_key).startswith("ext_"):
                             _wedge_straddle = _cfs_tdata.get(_key, {}).get("cfs_straddle")
                             if _wedge_straddle is not None:
                                 _cum_prem += float(_wedge_straddle)
@@ -12975,7 +13006,7 @@ def caps_floors_tab(vol_mode: str):
                                         _flat_vol = _caplet_vc[_mats[_j]] + _a * (_caplet_vc[_mats[_j+1]] - _caplet_vc[_mats[_j]])
                                         break
                         # For 20Y: extend using vol spread on 15Y flat vol
-                        if _key is None:
+                        if _key == "ext_15v20":
                             _vol_spd_20 = st.session_state.get("cf_spr_15v20", -5.0)
                             # Get 15Y flat vol from solved caplet curve
                             _vol_15 = _caplet_vc.get(15.0) if _caplet_vc else None
@@ -12994,6 +13025,42 @@ def caps_floors_tab(vol_mode: str):
                                     _cum_prem += _gap_straddle
                                     _straddle_prem = round(_cum_prem, 4)
                                     _flat_vol = _vol_20  # for display
+                                    # Stash the extended curve so 20v30 can build on top
+                                    _caplet_vc_ext_20 = _ext_curve
+                                except Exception:
+                                    _straddle_prem = None
+                                    _caplet_vc_ext_20 = None
+                            else:
+                                _straddle_prem = None
+                                _caplet_vc_ext_20 = None
+
+                        # For 30Y: extend using vol spread on 20Y flat vol
+                        elif _key == "ext_20v30":
+                            _vol_spd_30 = st.session_state.get("cf_spr_20v30", -5.0)
+                            # Prefer the 20Y-extended curve if available from the
+                            # previous row, else fall back to the base caplet curve.
+                            _base_for_30 = _caplet_vc_ext_20 if _caplet_vc_ext_20 else _caplet_vc
+                            _vol_20_for_30 = None
+                            if _base_for_30:
+                                # Read the flat value we extended to 20Y (if ext_15v20 set it)
+                                _vol_20_for_30 = _base_for_30.get(20.0)
+                                if _vol_20_for_30 is None:
+                                    # Fallback: interpolate at 20.0 from existing curve
+                                    _vol_20_for_30 = _base_for_30.get(max(_base_for_30.keys()))
+                            if _vol_20_for_30 is not None and _base_for_30:
+                                try:
+                                    _vol_30 = max(_vol_20_for_30 + _vol_spd_30, 1.0)
+                                    _ext_curve_30 = dict(_base_for_30)
+                                    _t30 = 20.25
+                                    while _t30 <= 30.01:
+                                        _ext_curve_30[round(_t30, 2)] = _vol_30
+                                        _t30 += 0.25
+                                    _prem_30 = price_caplets_with_vol_curve(ccy, 30.0, _ext_curve_30, notional_mm=1.0)
+                                    _prem_20_ref = price_caplets_with_vol_curve(ccy, 20.0, _base_for_30, notional_mm=1.0)
+                                    _gap_straddle_30 = max(_prem_30 - _prem_20_ref, 0.0) * 2
+                                    _cum_prem += _gap_straddle_30
+                                    _straddle_prem = round(_cum_prem, 4)
+                                    _flat_vol = _vol_30  # for display
                                 except Exception:
                                     _straddle_prem = None
                             else:
