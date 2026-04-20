@@ -2796,9 +2796,14 @@ def _apply_listed_adjustment(atm_vol, row: dict) -> float:
     return float(atm_vol) * ratio
 
 
-def _sr3_anchor_points(sr3_rows: dict, today=None) -> list:
+def _sr3_anchor_points(sr3_rows: dict, today=None, apply_adjustment: bool = True) -> list:
     """
-    Extract (T_yrs, delivered_vol_bp) anchor points for CFS caplet curve.
+    Extract (T_yrs, vol_bp) anchor points for CFS caplet curve.
+    
+    apply_adjustment=True (default): returns delivered vol = listed * ratio (or + bp).
+        Used by Listed bootstrap which treats delivered as the caplet vol.
+    apply_adjustment=False: returns RAW listed ATM vol with no adjustment.
+        Used by SR3 hybrid / SR3 full — these display the listed surface as-is.
     
     CRITICAL: The vol of an SR3 option is on the 3M SOFR fixing that occurs
     in the underlying future's reference period. The caplet being priced at
@@ -2806,11 +2811,6 @@ def _sr3_anchor_points(sr3_rows: dict, today=None) -> list:
     (option expires 12-Jun-26, underlying is SFRM6 future referencing Jun→Sep
     3M SOFR) is the MIDPOINT of that Jun→Sep reference period (~T=0.5y for
     today=19-Apr-26), NOT the option's expiry (~T=0.15y).
-    
-    DELIVERED VOL: Each anchor applies the per-row listed-to-delivered
-    adjustment (ratio or bp) to raw listed ATM. Default = no adjustment
-    (delivered == listed), but users can tune each contract's adjustment
-    in the SR3 tab grid to match broker prints.
     
     Returns list sorted by T. Mid-curves skipped (forward-start rate vols,
     handled via a separate path).
@@ -2844,11 +2844,13 @@ def _sr3_anchor_points(sr3_rows: dict, today=None) -> list:
             continue
         if t <= 0:
             continue
-        # Apply listed-to-delivered adjustment per row
-        delivered = _apply_listed_adjustment(atm, row)
-        if delivered is None or delivered <= 0:
+        if apply_adjustment:
+            vol = _apply_listed_adjustment(atm, row)
+        else:
+            vol = float(atm)
+        if vol is None or vol <= 0:
             continue
-        anchors.append((t, delivered))
+        anchors.append((t, vol))
     anchors.sort(key=lambda x: x[0])
     return anchors
 
@@ -2858,10 +2860,14 @@ def build_caplet_vol_curve_sr3(
     cutoff_years: float = 2.0,
     otc_fallback_curve: dict | None = None,
     final_maturity_y: float = 10.0,
+    apply_adjustment: bool = False,
 ) -> dict | None:
     """
     Build a caplet vol curve using LISTED SR3 vols for maturities ≤ cutoff_years,
     and falling back to the OTC-derived curve for maturities > cutoff_years.
+    
+    apply_adjustment=False (default): uses RAW listed ATM vols.
+    apply_adjustment=True: uses delivered vols (listed * ratio or listed + bp).
     
     Returns {T_yrs: vol_bp} at quarterly steps from 0.25 out to final_maturity_y.
     
@@ -2874,7 +2880,7 @@ def build_caplet_vol_curve_sr3(
     if not sr3_rows:
         return otc_fallback_curve
     
-    anchors = _sr3_anchor_points(sr3_rows)
+    anchors = _sr3_anchor_points(sr3_rows, apply_adjustment=apply_adjustment)
     if not anchors:
         return otc_fallback_curve
     
@@ -2944,17 +2950,21 @@ def build_caplet_vol_curve_sr3_full(
     ccy: str,
     otc_fallback_curve: dict | None = None,
     final_maturity_y: float = 10.0,
+    apply_adjustment: bool = False,
 ) -> dict | None:
     """
     Diagnostic mode: use ALL SR3 anchor points (standards/serials/quarterlies
     up to whatever liquidity exists, typically Gold ~4y). OTC fallback beyond.
+    
+    apply_adjustment=False (default): uses RAW listed ATM vols.
+    apply_adjustment=True: uses delivered vols.
     """
     if ccy != "USD":
         return otc_fallback_curve
     sr3_rows = _load_sr3_latest_usd_with_session_edits()
     if not sr3_rows:
         return otc_fallback_curve
-    anchors = _sr3_anchor_points(sr3_rows)
+    anchors = _sr3_anchor_points(sr3_rows, apply_adjustment=apply_adjustment)
     if len(anchors) < 2:
         return otc_fallback_curve
     
@@ -11825,6 +11835,7 @@ def caps_floors_tab(vol_mode: str):
                         cutoff_years=_lf_cutoff,
                         otc_fallback_curve=st.session_state.get("caplet_vol_curve_aud") or {},
                         final_maturity_y=max(tenor_y + 0.5, 10.0),
+                        apply_adjustment=True,  # Listed bootstrap uses DELIVERED vols
                     )
                     if _listed_term_curve:
                         _prem_1y_leg = price_caplets_with_vol_curve(
