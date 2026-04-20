@@ -11797,19 +11797,21 @@ def caps_floors_tab(vol_mode: str):
         _listed_bootstrap_active = False
         _listed_1y_stradd = None
         _listed_2y_stradd = None
-        # Compute listed 1Y/2Y straddles whenever Listed Front toggle is ON —
-        # even if Active is not "Listed bootstrap". This way the chart can
-        # show the Listed bootstrap curve as an overlay for comparison, without
-        # forcing the user to switch their Active pricer feed.
-        if ccy == "USD" and st.session_state.get("_cfs_use_listed", False):
+        _listed_curve_for_bs = None
+        # v2004t: Compute listed 1Y/2Y straddles UNCONDITIONALLY for USD.
+        # Previously this was gated on _cfs_use_listed, which meant that on
+        # fragment reruns where that session key got wiped by Streamlit, the
+        # block was skipped, _listed_curve_for_bs stayed None, and the
+        # Listed bootstrap overlay curve never got built. The Active
+        # selector below decides whether the listed-derived straddles feed
+        # the OTC table; this block just PRODUCES them if SR3 data is
+        # available, regardless of any UI toggle. Cache prevents thrash.
+        if ccy == "USD":
             try:
                 _lf_pack_now = st.session_state.get("_cfs_listed_pack", "whites")
                 _lf_cutoff = 1.0 if _lf_pack_now == "whites" else 2.0
 
                 # Cache signature: rebuild listed front curve ONLY when these change.
-                # Without this cache the SR3 builder runs every Streamlit rerun
-                # (including every keystroke/hover on another widget), causing
-                # the "constant recalc" feel.
                 _lf_edits = st.session_state.get("_cfs_listed_session_edits", {}) or {}
                 _lf_cache_sig = (
                     _lf_pack_now,
@@ -11856,15 +11858,8 @@ def caps_floors_tab(vol_mode: str):
 
                 # Write 1Y/2Y straddles into cfs_table_data so AUD bootstrap
                 # picks them up AS 1Y anchor — BUT ONLY when Active=Listed bootstrap.
-                # If Active is OTC or SR3, leave cfs_table_data alone so the
-                # normal OTC path / SR3 path works undisturbed. We still produce
-                # the listed-bootstrapped curve (via a side build) for chart overlay.
                 _lf_is_active = (st.session_state.get("cfs_active_vol_src", "OTC only")
                                  == "Listed bootstrap")
-                # If user just clicked Refresh Swaptions, skip overwriting
-                # the cfs_table_data this render so their refreshed swaption
-                # values show through instead of being clobbered. The flag
-                # is consumed here so the overwrite resumes on next render.
                 _just_refreshed = st.session_state.pop("_refresh_swpt_just_clicked", False)
                 if _lf_is_active and not _just_refreshed:
                     if _listed_1y_stradd and _listed_1y_stradd > 0:
@@ -11878,7 +11873,6 @@ def caps_floors_tab(vol_mode: str):
                         st.session_state["cfs_table_data"].setdefault(
                             "1y1y", {})["cfs_straddle"] = _1y1y_gap
                 elif _lf_is_active and _just_refreshed:
-                    # Still flag as active so caplet rebuild key changes
                     _listed_bootstrap_active = True
             except Exception as _lb_err:
                 st.caption(f"⚠ Listed bootstrap pre-calc failed: {_lb_err}")
@@ -11958,22 +11952,6 @@ def caps_floors_tab(vol_mode: str):
         if ccy == "USD":
             st.markdown("<hr style='margin:10px 0;border-color:#1e3050'>", unsafe_allow_html=True)
             st.markdown("##### 🔀 USD Vol Source")
-
-            # ── DIAGNOSTIC (temporary, v2004o) ─────────────────────────────
-            # Surfaces the exact session state values at this point in the
-            # render so we can see why _active_src might end up wrong.
-            with st.expander("🔧 DEBUG — session state at Active pricer feed setup", expanded=True):
-                _ss_dbg = {
-                    "cfs_active_vol_src":  st.session_state.get("cfs_active_vol_src"),
-                    "_cfs_use_listed":     st.session_state.get("_cfs_use_listed"),
-                    "_cfs_listed_pack":    st.session_state.get("_cfs_listed_pack"),
-                    "_cfs_white_selected": sorted(list(st.session_state.get("_cfs_white_selected", []) or [])),
-                    "cfs_sr3_cutoff":      st.session_state.get("cfs_sr3_cutoff"),
-                    "cfs_overlay_choices": st.session_state.get("cfs_overlay_choices"),
-                    "_cfs_calc_requested": st.session_state.get("_cfs_calc_requested"),
-                }
-                for _k, _v in _ss_dbg.items():
-                    st.text(f"  {_k}: {_v!r}")
 
             _mc1, _mc2, _mc3 = st.columns([1.2, 1.8, 1.8])
             with _mc1:
@@ -12104,19 +12082,6 @@ def caps_floors_tab(vol_mode: str):
             #   SR3 hybrid       → 0 to sr3_cutoff (e.g. 2Y)
             #   SR3 full         → 0 to last SR3 anchor (typically ~4Y)
             if ccy == "USD" and st.session_state.pop("_cfs_calc_requested", False):
-                # DIAGNOSTIC (temporary, v2004o)
-                _lcb_dbg = locals().get("_listed_curve_for_bs")
-                _otc_dbg = locals().get("otc_caplet_curve")
-                _h_dbg   = locals().get("sr3_hybrid_curve")
-                _f_dbg   = locals().get("sr3_full_curve")
-                st.info(
-                    f"🔧 **Splice block entered** — _active_src={_active_src!r}, "
-                    f"_lf_on_now={st.session_state.get('_cfs_use_listed')!r}, "
-                    f"_listed_curve_for_bs={'populated' if _lcb_dbg else 'None'}, "
-                    f"otc_caplet_curve={'populated' if _otc_dbg else 'None'}, "
-                    f"sr3_hybrid_curve={'populated' if _h_dbg else 'None'}, "
-                    f"sr3_full_curve={'populated' if _f_dbg else 'None'}"
-                )
                 try:
                     from scipy.interpolate import PchipInterpolator as _Pchip
                     import numpy as _np_cfs
@@ -12191,9 +12156,11 @@ def caps_floors_tab(vol_mode: str):
             # Listed bootstrap, reuse caplet_vol_curve (already built that way).
             # If Active is something else, run the AUD bootstrap once with a
             # temporary listed anchor override, then restore cfs_table_data.
+            # v2004t: No longer gated on _cfs_use_listed — always build for USD
+            # if listed straddles are available. This makes the overlay work
+            # regardless of whether the Listed editor is expanded or not.
             _listed_bootstrap_curve_for_chart = None
-            _lf_toggle_on = (ccy == "USD" and st.session_state.get("_cfs_use_listed", False))
-            if _lf_toggle_on and _listed_1y_stradd and _listed_1y_stradd > 0:
+            if ccy == "USD" and _listed_1y_stradd and _listed_1y_stradd > 0:
                 if _active_src == "Listed bootstrap" and caplet_vol_curve:
                     _listed_bootstrap_curve_for_chart = dict(caplet_vol_curve)
                 else:
@@ -12369,7 +12336,11 @@ only** — it does NOT change SR3 hybrid/full behaviour.
                         )
 
             if _use_listed:
-              try:
+              # v2004t: wrap body in a collapsed expander so the editor doesn't
+              # take over the whole viewport. Users can still see at a glance
+              # that it's active via the checkbox + "unsaved edits" indicator.
+              with st.expander("📋 Listed Front editor — ratio/bp overrides", expanded=False):
+               try:
                 # Load current SR3 rows (with session edits already overlaid)
                 _sr3_rows_le = _load_sr3_latest_usd_with_session_edits()
                 if not _sr3_rows_le:
@@ -12695,7 +12666,7 @@ only** — it does NOT change SR3 hybrid/full behaviour.
                                 f"(or listed + bp). Changes here update the caplet chart "
                                 f"above immediately. Save commits to DB snapshot."
                             )
-              except Exception as _le_err:
+               except Exception as _le_err:
                 import traceback as _tb
                 st.error(f"Listed Front editor error: {_le_err}")
                 with st.expander("Traceback"):
