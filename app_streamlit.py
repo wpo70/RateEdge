@@ -11798,20 +11798,19 @@ def caps_floors_tab(vol_mode: str):
         _listed_1y_stradd = None
         _listed_2y_stradd = None
         _listed_curve_for_bs = None
-        # v2004t: Compute listed 1Y/2Y straddles UNCONDITIONALLY for USD.
-        # Previously this was gated on _cfs_use_listed, which meant that on
-        # fragment reruns where that session key got wiped by Streamlit, the
-        # block was skipped, _listed_curve_for_bs stayed None, and the
-        # Listed bootstrap overlay curve never got built. The Active
-        # selector below decides whether the listed-derived straddles feed
-        # the OTC table; this block just PRODUCES them if SR3 data is
-        # available, regardless of any UI toggle. Cache prevents thrash.
+        # v2004u: Compute listed 1Y/2Y straddles UNCONDITIONALLY for USD.
+        # Previously gated on _cfs_use_listed; now runs whenever SR3 data
+        # exists so Listed bootstrap overlay is always available without
+        # requiring the editor to be expanded.
         if ccy == "USD":
             try:
                 _lf_pack_now = st.session_state.get("_cfs_listed_pack", "whites")
                 _lf_cutoff = 1.0 if _lf_pack_now == "whites" else 2.0
 
                 # Cache signature: rebuild listed front curve ONLY when these change.
+                # Without this cache the SR3 builder runs every Streamlit rerun
+                # (including every keystroke/hover on another widget), causing
+                # the "constant recalc" feel.
                 _lf_edits = st.session_state.get("_cfs_listed_session_edits", {}) or {}
                 _lf_cache_sig = (
                     _lf_pack_now,
@@ -11858,8 +11857,15 @@ def caps_floors_tab(vol_mode: str):
 
                 # Write 1Y/2Y straddles into cfs_table_data so AUD bootstrap
                 # picks them up AS 1Y anchor — BUT ONLY when Active=Listed bootstrap.
+                # If Active is OTC or SR3, leave cfs_table_data alone so the
+                # normal OTC path / SR3 path works undisturbed. We still produce
+                # the listed-bootstrapped curve (via a side build) for chart overlay.
                 _lf_is_active = (st.session_state.get("cfs_active_vol_src", "OTC only")
                                  == "Listed bootstrap")
+                # If user just clicked Refresh Swaptions, skip overwriting
+                # the cfs_table_data this render so their refreshed swaption
+                # values show through instead of being clobbered. The flag
+                # is consumed here so the overwrite resumes on next render.
                 _just_refreshed = st.session_state.pop("_refresh_swpt_just_clicked", False)
                 if _lf_is_active and not _just_refreshed:
                     if _listed_1y_stradd and _listed_1y_stradd > 0:
@@ -11873,6 +11879,7 @@ def caps_floors_tab(vol_mode: str):
                         st.session_state["cfs_table_data"].setdefault(
                             "1y1y", {})["cfs_straddle"] = _1y1y_gap
                 elif _lf_is_active and _just_refreshed:
+                    # Still flag as active so caplet rebuild key changes
                     _listed_bootstrap_active = True
             except Exception as _lb_err:
                 st.caption(f"⚠ Listed bootstrap pre-calc failed: {_lb_err}")
@@ -11900,33 +11907,19 @@ def caps_floors_tab(vol_mode: str):
                     spread_12y3y=spread_12y3y,
                 )
 
-                # ── Option A patch (20-Apr-2026) ─────────────────────────
-                # When Listed bootstrap is Active AND we have a listed-derived
-                # term-structure caplet curve (_listed_curve_for_bs), OVERWRITE
-                # the flat 0.25/0.5/0.75/1.0 entries with the listed values.
-                # Without this, build_caplet_vol_curve() solves for ONE flat
-                # vol to match the 1Y CFS straddle premium — throwing away
-                # the per-quarter term structure that SFRM6/U6/Z6/H7 give us.
-                # With the patch, the front year's caplet curve is exactly
-                # the listed SR3 caplet curve, and wedge-chain bootstrapping
-                # continues unchanged from 2Y onwards. If whites+reds are on
-                # (cutoff=2Y), the listed block extends to 2Y as well.
-                if (caplet_vol_curve
-                        and ccy == "USD"
-                        and _listed_bootstrap_active
-                        and _listed_curve_for_bs):
-                    _lf_pack_dbg = st.session_state.get("_cfs_listed_pack", "whites")
-                    _override_end = 2.0 if _lf_pack_dbg == "both" else 1.0
-                    _overrode_pts = 0
-                    for _t_pt in sorted(_listed_curve_for_bs.keys()):
-                        if _t_pt <= _override_end + 1e-6:
-                            caplet_vol_curve[_t_pt] = _listed_curve_for_bs[_t_pt]
-                            _overrode_pts += 1
-                    # Diagnostic stash so the UI can surface "N front caplets from listed"
-                    st.session_state["_cfs_listed_front_override_n"] = _overrode_pts
-                    st.session_state["_cfs_listed_front_override_end"] = _override_end
-                else:
-                    st.session_state["_cfs_listed_front_override_n"] = 0
+                # ── Option A REMOVED (v2004u) ────────────────────────────
+                # Previously we overwrote the flat front-year vols with the
+                # SR3 term-structure curve. That made Listed bootstrap
+                # semantically identical to SR3 hybrid in the front — they
+                # rendered the same curve, defeating the whole point of
+                # having both options. Now Listed bootstrap is a true
+                # wedge bootstrap anchored on the LISTED straddle premium
+                # (flat front-year calibrated to match the premium), with
+                # wedges cascading from 1y1y (or 2y1y if whites+reds).
+                # SR3 hybrid/full remain their own thing — direct SR3 term
+                # structure. This makes all four Active sources genuinely
+                # different.
+                st.session_state["_cfs_listed_front_override_n"] = 0
 
             st.session_state["_caplet_curve_key"] = _caplet_key
         else:
@@ -12156,9 +12149,6 @@ def caps_floors_tab(vol_mode: str):
             # Listed bootstrap, reuse caplet_vol_curve (already built that way).
             # If Active is something else, run the AUD bootstrap once with a
             # temporary listed anchor override, then restore cfs_table_data.
-            # v2004t: No longer gated on _cfs_use_listed — always build for USD
-            # if listed straddles are available. This makes the overlay work
-            # regardless of whether the Listed editor is expanded or not.
             _listed_bootstrap_curve_for_chart = None
             if ccy == "USD" and _listed_1y_stradd and _listed_1y_stradd > 0:
                 if _active_src == "Listed bootstrap" and caplet_vol_curve:
@@ -12200,13 +12190,11 @@ def caps_floors_tab(vol_mode: str):
                                 _cfs_td["3m1y"] = _orig_3m1y
                             if _orig_1y1y:
                                 _cfs_td["1y1y"] = _orig_1y1y
-                            # Option A: overwrite flat front-year with listed
-                            # term-structure so chart overlay matches Active.
-                            if _listed_bootstrap_curve_for_chart and _listed_curve_for_bs:
-                                _chart_override_end = 2.0 if _lf_pack_now == "both" else 1.0
-                                for _t_pt in sorted(_listed_curve_for_bs.keys()):
-                                    if _t_pt <= _chart_override_end + 1e-6:
-                                        _listed_bootstrap_curve_for_chart[_t_pt] = _listed_curve_for_bs[_t_pt]
+                            # Option A REMOVED (v2004u) — see main build block.
+                            # Listed bootstrap is now a pure flat-front wedge
+                            # curve calibrated to the listed straddle premium,
+                            # not an SR3 term-structure paste-in. That makes
+                            # it genuinely different from SR3 hybrid.
                             st.session_state["_cfs_listed_bootstrap_chart_cache"] = {
                                 "sig": _lbc_sig,
                                 "curve": _listed_bootstrap_curve_for_chart,
@@ -12336,7 +12324,7 @@ only** — it does NOT change SR3 hybrid/full behaviour.
                         )
 
             if _use_listed:
-              # v2004t: wrap body in a collapsed expander so the editor doesn't
+              # v2004u: wrap body in a collapsed expander so the editor doesn't
               # take over the whole viewport. Users can still see at a glance
               # that it's active via the checkbox + "unsaved edits" indicator.
               with st.expander("📋 Listed Front editor — ratio/bp overrides", expanded=False):
