@@ -2855,6 +2855,84 @@ def _sr3_anchor_points(sr3_rows: dict, today=None, apply_adjustment: bool = True
     return anchors
 
 
+def _build_listed_caplet_curve_by_date(
+    sr3_rows: dict,
+    whites_selected: set,
+    strip_expiry_y: float,
+    strip_tenor_y: float,
+    today=None,
+    apply_adjustment: bool = True,
+) -> dict | None:
+    """
+    Build a caplet vol curve for a CFS strip by mapping each caplet fixing date
+    to the CLOSEST selected white contract's expiry. This is the correct
+    approach for pricing CFS caps off listed vols — each caplet gets the vol
+    of the listed option whose expiry is nearest its fixing date, rather than
+    a T-midpoint PCHIP interpolation (which mis-maps contracts to the wrong
+    fixings and produces vols too high for the 1Y strip).
+    
+    strip_expiry_y: forward start of the cap (e.g. 0.25 for 3m start)
+    strip_tenor_y: cap length (e.g. 1.0 for 1Y cap)
+    whites_selected: set of contract codes (e.g. {"SFRM6", "SFRU6", "SFRZ6", "SFRH7"})
+    apply_adjustment: if True, use delivered vol (listed*ratio or listed+bp). Listed bootstrap passes True.
+    
+    Returns {T_fix_y: vol_bp} dict. Caller PCHIPs this to quarterly grid if needed.
+    """
+    from datetime import date as _d, timedelta as _td
+    if today is None:
+        today = _d.today()
+    if not sr3_rows or not whites_selected:
+        return None
+    # Get selected whites with their expiry dates
+    white_expiry = []
+    for code in whites_selected:
+        row = sr3_rows.get(code)
+        if not row:
+            continue
+        ed = row.get("expiry_date")
+        atm = row.get("atm_vol")
+        if ed is None or atm is None:
+            continue
+        try:
+            ed_d = ed if hasattr(ed, "toordinal") else _d.fromisoformat(str(ed)[:10])
+        except Exception:
+            continue
+        if apply_adjustment:
+            vol = _apply_listed_adjustment(atm, row)
+        else:
+            vol = float(atm)
+        if vol is None or vol <= 0:
+            continue
+        white_expiry.append((code, ed_d, float(vol)))
+    if not white_expiry:
+        return None
+    # Build caplet fixing schedule for the strip (same logic as
+    # price_caplets_with_vol_curve): quarterly from strip_expiry_y to
+    # strip_expiry_y+strip_tenor_y, FIRST FIXING SKIPPED.
+    # For each caplet, we record BOTH the accrual end (T_fix, the key in
+    # caplet_vol_dict) and the accrual start (T_start, the date used to
+    # find the closest SR3 contract).
+    cap_start = strip_expiry_y if strip_expiry_y > 0 else 1.0 / 252.0
+    cap_end = cap_start + strip_tenor_y
+    caplet_pairs = []  # list of (T_start, T_fix)
+    t = cap_start
+    while t < cap_end - 1e-8:
+        t_next = min(t + 0.25, cap_end)
+        caplet_pairs.append((t, round(t_next, 4)))
+        t = t_next
+    # Skip first fixing (forward rate is known)
+    caplet_pairs = caplet_pairs[1:] if len(caplet_pairs) > 1 else caplet_pairs
+    # For each caplet, match by accrual START date to the closest white expiry.
+    # (e.g. 3m→6m caplet's START is 3m from today; closest white to "3m from
+    # today" is SFRM6 for whites starting 20-Apr-26.)
+    result = {}
+    for T_start, T_fix in caplet_pairs:
+        match_date = today + _td(days=int(round(T_start * 365.25)))
+        best = min(white_expiry, key=lambda w: abs((w[1] - match_date).days))
+        result[T_fix] = best[2]
+    return result
+
+
 def build_caplet_vol_curve_sr3(
     ccy: str,
     cutoff_years: float = 2.0,
@@ -11830,13 +11908,81 @@ def caps_floors_tab(vol_mode: str):
                     _listed_1y_stradd  = _cached_lf.get("stradd_1y")
                     _listed_2y_stradd  = _cached_lf.get("stradd_2y")
                 else:
-                    _listed_term_curve = build_caplet_vol_curve_sr3(
-                        "USD",
-                        cutoff_years=_lf_cutoff,
-                        otc_fallback_curve=st.session_state.get("caplet_vol_curve_aud") or {},
-                        final_maturity_y=max(tenor_y + 0.5, 10.0),
-                        apply_adjustment=True,  # Listed bootstrap uses DELIVERED vols
+                    # v2004ab: Build the listed caplet vol curve by DATE-MATCHING
+                    # the user-selected whites (and reds if pack=both) to each
+                    # caplet fixing date in the 1Y (and 2Y) CFS strip. This
+                    # replaces the previous midpoint-T PCHIP approach which was
+                    # producing vols too high at T=1Y (SFRH7 landing at T=1.0).
+                    # Each caplet gets the vol of the CLOSEST selected contract
+                    # by expiry date.
+                    _sr3_rows = _load_sr3_latest_usd_with_session_edits() or {}
+                    _whites_sel = set(st.session_state.get("_cfs_white_selected", []) or [])
+                    if _lf_pack_now == "both":
+                        # For pack=both, also include the 4 reds (SFRM7/U7/Z7/H8)
+                        # so the 2Y strip's later caplets can map to them.
+                        # Get all reds from sr3_rows that are quarterlies in the
+                        # reds range (~1.25→2.25y from today) — use contract_type.
+                        _reds_available = set()
+                        from datetime import date as _d3
+                        _today_dt = _d3.today()
+                        for _code, _row in _sr3_rows.items():
+                            _ct = _row.get("contract_type", "")
+                            if "MC" in _ct:
+                                continue
+                            _ed = _row.get("expiry_date")
+                            if _ed is None:
+                                continue
+                            try:
+                                _ed_d = _ed if hasattr(_ed, "toordinal") else _d3.fromisoformat(str(_ed)[:10])
+                                _t_exp = (_ed_d - _today_dt).days / 365.25
+                            except Exception:
+                                continue
+                            if 1.0 <= _t_exp <= 2.2:  # reds band
+                                _reds_available.add(_code)
+                        _contracts_for_2y = _whites_sel | _reds_available
+                    else:
+                        _contracts_for_2y = _whites_sel
+                    # Build per-caplet vols for 1Y strip (expiry_y=0 matches
+                    # price_caplets_with_vol_curve default: cap_start ~ 0)
+                    _listed_caplet_1y = _build_listed_caplet_curve_by_date(
+                        _sr3_rows, _whites_sel,
+                        strip_expiry_y=0.0, strip_tenor_y=1.0,
+                        apply_adjustment=True,
                     )
+                    # Build per-caplet vols for 2Y strip (uses whites + reds if pack=both, else whites only)
+                    _listed_caplet_2y = None
+                    if _lf_pack_now == "both":
+                        _listed_caplet_2y = _build_listed_caplet_curve_by_date(
+                            _sr3_rows, _contracts_for_2y,
+                            strip_expiry_y=0.0, strip_tenor_y=2.0,
+                            apply_adjustment=True,
+                        )
+                    # Compose _listed_term_curve: extend caplet vols onto the
+                    # quarterly 0.25 grid. For points not matching a fixing T,
+                    # interpolate linearly between nearest fixings. Beyond the
+                    # covered range, fall back to OTC.
+                    _listed_term_curve = {}
+                    _base_caplet = _listed_caplet_2y if (_lf_pack_now == "both" and _listed_caplet_2y) else _listed_caplet_1y
+                    if _base_caplet:
+                        _bTs = sorted(_base_caplet.keys())
+                        _bvs = [_base_caplet[_T] for _T in _bTs]
+                        # Sample quarterly grid 0.25 → cutoff
+                        _grid_t = 0.25
+                        while _grid_t <= _lf_cutoff + 1e-6:
+                            _gr = round(_grid_t, 2)
+                            if _gr in _base_caplet:
+                                _listed_term_curve[_gr] = _base_caplet[_gr]
+                            elif _gr <= _bTs[0]:
+                                _listed_term_curve[_gr] = _bvs[0]
+                            elif _gr >= _bTs[-1]:
+                                _listed_term_curve[_gr] = _bvs[-1]
+                            else:
+                                for _jj in range(len(_bTs) - 1):
+                                    if _bTs[_jj] <= _gr <= _bTs[_jj+1]:
+                                        _alp = (_gr - _bTs[_jj]) / (_bTs[_jj+1] - _bTs[_jj])
+                                        _listed_term_curve[_gr] = _bvs[_jj] + _alp * (_bvs[_jj+1] - _bvs[_jj])
+                                        break
+                            _grid_t += 0.25
                     if _listed_term_curve:
                         _prem_1y_leg = price_caplets_with_vol_curve(
                             "USD", 1.0, _listed_term_curve, notional_mm=1.0
@@ -12744,9 +12890,56 @@ def caps_floors_tab(vol_mode: str):
                                 _cum_prem += float(_wedge_straddle)
                         _straddle_prem = round(_cum_prem, 4) if _cum_prem else None
 
-                        # Flat vol from caplet curve
+                        # Flat vol: solve the strip flat vol that reproduces the
+                        # straddle premium from the wedge chain. For AUD (and OTC
+                        # only USD) this gives ~the same as reading caplet_vol_curve[T]
+                        # because the curve is already flat on that segment. For
+                        # USD Listed/SR3 curves with per-quarter term structure,
+                        # reading caplet_vol_curve[T] would give the INSTANTANEOUS
+                        # vol at T, not the strip flat — so solve it properly.
                         _flat_vol = None
-                        if _caplet_vc:
+                        if _straddle_prem is not None and _straddle_prem > 0 and _caplet_vc:
+                            try:
+                                import scipy.optimize as _opt_fv
+                                _target_leg_prem = float(_straddle_prem) / 2.0
+                                def _leg_prem_flat(_vol_bp):
+                                    _flat_curve = {}
+                                    _tt = 0.25
+                                    while _tt <= float(_t) + 1e-6:
+                                        _flat_curve[round(_tt, 2)] = float(_vol_bp)
+                                        _tt += 0.25
+                                    return price_caplets_with_vol_curve(
+                                        ccy, float(_t), _flat_curve, notional_mm=1.0
+                                    )
+                                # Seed brackets from reading the curve at T (usually close)
+                                _seed = None
+                                _mats = sorted(_caplet_vc.keys())
+                                if float(_t) in _caplet_vc:
+                                    _seed = _caplet_vc[float(_t)]
+                                elif _t <= _mats[0]:
+                                    _seed = _caplet_vc[_mats[0]]
+                                elif _t >= _mats[-1]:
+                                    _seed = _caplet_vc[_mats[-1]]
+                                else:
+                                    for _j in range(len(_mats)-1):
+                                        if _mats[_j] <= _t <= _mats[_j+1]:
+                                            _a = (_t - _mats[_j]) / (_mats[_j+1] - _mats[_j])
+                                            _seed = _caplet_vc[_mats[_j]] + _a * (_caplet_vc[_mats[_j+1]] - _caplet_vc[_mats[_j]])
+                                            break
+                                if _seed is None or _seed <= 0:
+                                    _seed = 50.0
+                                # Solve
+                                _lo, _hi = 1.0, 500.0
+                                _sol = _opt_fv.brentq(
+                                    lambda v: _leg_prem_flat(v) - _target_leg_prem,
+                                    _lo, _hi, xtol=1e-4, maxiter=100,
+                                )
+                                _flat_vol = float(_sol)
+                            except Exception:
+                                # Fallback to direct read if solve fails
+                                _flat_vol = None
+                        # Fallback: read from curve directly (legacy behavior)
+                        if _flat_vol is None and _caplet_vc:
                             _mats = sorted(_caplet_vc.keys())
                             if float(_t) in _caplet_vc:
                                 _flat_vol = _caplet_vc[float(_t)]
