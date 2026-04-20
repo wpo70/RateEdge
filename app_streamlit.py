@@ -12250,40 +12250,13 @@ def caps_floors_tab(vol_mode: str):
                 with st.expander("ℹ️ What do the curve sources mean?", expanded=False):
                     st.markdown(
                         """
-**OTC only** — Wedge-based caplet bootstrap from ATM swaption premiums plus
-your spread adjustments. The classic AUD method, extended to USD. Covers
-0→30Y. This is your baseline curve — always built, no external data
-dependencies.
+**OTC only** — Wedge bootstrap from OTC ATM swaption premiums + your spread adjustments. Baseline curve, 0→30Y, no external data dependencies.
 
-**Listed bootstrap** — Same AUD-style wedge chain, but **anchored on the
-listed SR3 straddle** instead of the OTC-implied 1Y straddle. Anchor is:
-- **Whites only**: 1Y listed straddle only; wedges cascade to 2Y, 3Y, …
-- **Whites + Reds**: 1Y AND 2Y listed straddles; wedges cascade from 2y1y
-  onwards
+**Listed bootstrap** — Same wedge chain, but anchored on the **listed SR3 straddle** instead of the OTC-implied 1Y. Whites only = 1Y anchor, wedges cascade from 1y1y. Whites + Reds = 1Y and 2Y anchors, wedges cascade from 2y1y. Covers 0→30Y.
 
-Covers 0→30Y. Only relevant when the Listed Front editor checkbox is ON.
+**SR3 hybrid** — Uses listed SR3 caplet vols up to the **"SR3 wins up to"** cutoff (e.g. 2Y). Beyond the cutoff, falls back to the OTC wedge curve. Cleanest view when you have liquid listed vols out to the cutoff.
 
-**SR3 hybrid** — Uses listed SR3 caplet vols up to the **"SR3 wins up to"**
-cutoff you set above (e.g. 2Y). Beyond that, it falls back to the OTC
-wedge curve. So at 2Y cutoff with whites+reds data loaded, SR3 hybrid is
-your cleanest view: listed truth where liquid, OTC where extrapolation is
-needed.
-
-**SR3 full** — Diagnostic mode. Uses ALL SR3 anchor points in the DB
-(standards, serials, quarterlies, Greens, Reds, Golds — whatever's
-loaded). Typically covers 0→~4Y (Gold pack extent). OTC beyond. Useful
-for sanity-checking the listed vol surface as a whole, but can be noisy
-where liquidity thins out.
-
----
-
-**ATM CFS Straddles → Flat Vol column:** reads from whichever curve is
-Active. If you're on SR3 hybrid, near tenors (1Y, 2Y) are SR3-derived;
-far tenors (3Y+) are OTC-derived because they fall beyond the cutoff.
-20Y is always 15Y flat vol + the 15v20 vol spread.
-
-**Pack selection** (Whites vs Whites+Reds) affects **Listed bootstrap
-only** — it does NOT change SR3 hybrid/full behaviour.
+**SR3 full** — Diagnostic. Uses ALL SR3 anchor points available in the DB (whatever's loaded — typically out to ~4Y). OTC beyond. Useful for sanity-checking the listed surface; can be noisy where liquidity thins.
 """
                     )
             with _le_col2:
@@ -12324,11 +12297,7 @@ only** — it does NOT change SR3 hybrid/full behaviour.
                         )
 
             if _use_listed:
-              # v2004u: wrap body in a collapsed expander so the editor doesn't
-              # take over the whole viewport. Users can still see at a glance
-              # that it's active via the checkbox + "unsaved edits" indicator.
-              with st.expander("📋 Listed Front editor — ratio/bp overrides", expanded=False):
-               try:
+              try:
                 # Load current SR3 rows (with session edits already overlaid)
                 _sr3_rows_le = _load_sr3_latest_usd_with_session_edits()
                 if not _sr3_rows_le:
@@ -12654,7 +12623,7 @@ only** — it does NOT change SR3 hybrid/full behaviour.
                                 f"(or listed + bp). Changes here update the caplet chart "
                                 f"above immediately. Save commits to DB snapshot."
                             )
-               except Exception as _le_err:
+              except Exception as _le_err:
                 import traceback as _tb
                 st.error(f"Listed Front editor error: {_le_err}")
                 with st.expander("Traceback"):
