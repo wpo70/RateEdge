@@ -23909,7 +23909,7 @@ def sod_report_tab():
                     import json as _json_api
 
                     _body = _json_api.dumps({
-                        "model": "claude-sonnet-4-20250514",
+                        "model": "claude-sonnet-4-6",
                         "max_tokens": 2000,
                         "system": _system_prompt,
                         "messages": [{"role": "user", "content": _user_prompt}],
