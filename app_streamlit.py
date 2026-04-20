@@ -11478,19 +11478,24 @@ def caps_floors_tab(vol_mode: str):
             st.markdown("<hr style='margin:4px 0;border-color:#334155'>", unsafe_allow_html=True)
 
             bl, _, br = st.columns([2, 0.2, 2])
-            if bl.button("✅ Calculate CFS from Spreads", key="apply_spreads", type="primary") and require_admin("Edit Spreads"):
+            if bl.button("🧮 Calculate CFS Curve", key="apply_spreads", type="primary",
+                         help="Takes the Active pricer feed (OTC / Listed bootstrap / "
+                              "SR3 hybrid / SR3 full) as the FRONT END, applies your wedge "
+                              "spreads for the LONG END, and PCHIP-splines the join to "
+                              "produce a unified caplet vol curve. Persists spread edits "
+                              "to DB + disk.") and require_admin("Edit Spreads"):
+                # ── Step 1: persist the edited spreads ────────────────
                 for spr_key, *_ in ROW_DATA:
                     st.session_state[spr_key] = new_spread_values[spr_key]
-                st.session_state["cf_spr_15v20"] = new_spread_values.get("cf_spr_15v20", st.session_state.get("cf_spr_15v20", -5.0))
-                # Persist to disk
+                st.session_state["cf_spr_15v20"] = new_spread_values.get(
+                    "cf_spr_15v20", st.session_state.get("cf_spr_15v20", -5.0))
                 try:
-                    _spreads_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cfs_spreads.json")
+                    _spreads_file = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)), "cfs_spreads.json")
                     with open(_spreads_file, "w") as _f:
                         json.dump({k: st.session_state[k] for k, *_ in ROW_DATA}, _f)
                 except Exception:
                     pass
-                # DB persist — save spreads immediately so they survive logout.
-                # Namespace by ccy so USD wedges don't overwrite AUD wedges (bug 20-Apr-2026).
                 try:
                     _cf_spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
                                        "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y",
@@ -11501,15 +11506,18 @@ def caps_floors_tab(vol_mode: str):
                         save_user_config(_uid_cf, "cf_spreads", ccy, _cf_data)
                 except Exception:
                     pass
-                # Bust caplet and CFS cache so curve re-builds with new spreads
+
+                # ── Step 2: mark request for the render pipeline ──────
+                # The caplet rebuild pipeline downstream already uses the spreads
+                # in its cache key, so changing the spreads here (Step 1) will
+                # trigger a natural rebuild. The _cfs_calc_requested flag tells
+                # the render pipeline to splice the Active source's front end
+                # with the wedge-chain long end and PCHIP-spline the join.
+                st.session_state["_cfs_calc_requested"] = True
+                # Invalidate only the caplet cache — do NOT touch SR3 / listed
+                # chart caches (they don't depend on spreads, and busting them
+                # was what caused the "chart flash empty / revert to OTC" bugs).
                 st.session_state.pop("_caplet_curve_key", None)
-                st.session_state.pop("_atm_cfs_cache_key", None)
-                st.session_state.pop("_atm_cfs_rows_cache", None)
-                # Also bust SR3 + listed-bootstrap chart caches so all four
-                # overlay curves rebuild rather than flashing stale/empty
-                # data until the next natural render (20-Apr-2026 fix).
-                st.session_state.pop("_cfs_sr3_curves_cache", None)
-                st.session_state.pop("_cfs_listed_bootstrap_chart_cache", None)
                 st.rerun()
             if br.button("🔄 Refresh Swaptions", key="gen_swpt_prem", type="primary"):
                 # Mark this render so the Listed bootstrap pre-calc block
@@ -12016,6 +12024,88 @@ def caps_floors_tab(vol_mode: str):
             else:
                 st.caption("🟢 **Active:** OTC only (existing wedge path)")
 
+            # ═══════════════════════════════════════════════════════════════
+            # Calculate CFS Curve — splice active front-end + wedge long-end
+            # with PCHIP spline at the join (20-Apr-2026).
+            # ═══════════════════════════════════════════════════════════════
+            # When the user clicks Calculate CFS Curve, this block takes the
+            # NATURAL COVERAGE of the Active source as the front end, and the
+            # wedge-built OTC curve as the long end, joining them smoothly.
+            # Coverage windows:
+            #   OTC only         → entire curve (no splice needed)
+            #   Listed bootstrap → 0 to override_end (1Y whites / 2Y both)
+            #   SR3 hybrid       → 0 to sr3_cutoff (e.g. 2Y)
+            #   SR3 full         → 0 to last SR3 anchor (typically ~4Y)
+            if ccy == "USD" and st.session_state.pop("_cfs_calc_requested", False):
+                try:
+                    from scipy.interpolate import PchipInterpolator as _Pchip
+                    import numpy as _np_cfs
+                    _front_end_y = None
+                    if _active_src == "Listed bootstrap":
+                        _front_end_y = st.session_state.get(
+                            "_cfs_listed_front_override_end", 1.0)
+                    elif _active_src == "SR3 hybrid":
+                        _front_end_y = _sr3_cutoff_y
+                    elif _active_src == "SR3 full":
+                        if sr3_full_curve:
+                            # Find where SR3 coverage ends (where values equal OTC again)
+                            _srf_keys = sorted(sr3_full_curve.keys())
+                            _otc_keys = sorted(otc_caplet_curve.keys())
+                            _cmn = [k for k in _srf_keys if k in otc_caplet_curve]
+                            _last_sr3_only = 0.5
+                            for _k in _cmn:
+                                if abs(sr3_full_curve[_k] - otc_caplet_curve[_k]) > 0.05:
+                                    _last_sr3_only = max(_last_sr3_only, _k)
+                            _front_end_y = _last_sr3_only
+                    # _active_src == "OTC only" → no splice, use OTC everywhere
+                    if _front_end_y and _front_end_y > 0 and caplet_vol_curve and otc_caplet_curve:
+                        # Build unified curve: front source for t<=join, wedge OTC for t>join.
+                        # Use PCHIP over combined anchors to splinesmooth the seam.
+                        _all_keys = sorted(set(list(caplet_vol_curve.keys()) + list(otc_caplet_curve.keys())))
+                        _anchor_t, _anchor_v = [], []
+                        for _k in _all_keys:
+                            if _k <= _front_end_y + 1e-6:
+                                # Front end: take from active source
+                                if _k in caplet_vol_curve:
+                                    _anchor_t.append(_k); _anchor_v.append(caplet_vol_curve[_k])
+                            else:
+                                # Long end: take from OTC wedge curve
+                                if _k in otc_caplet_curve:
+                                    _anchor_t.append(_k); _anchor_v.append(otc_caplet_curve[_k])
+                        if len(_anchor_t) >= 2:
+                            _at = _np_cfs.array(_anchor_t, dtype=float)
+                            _av = _np_cfs.array(_anchor_v, dtype=float)
+                            # Sort and deduplicate anchor points (PCHIP requires strict monotonic)
+                            _order = _np_cfs.argsort(_at)
+                            _at = _at[_order]; _av = _av[_order]
+                            _unique_mask = _np_cfs.concatenate(([True], _np_cfs.diff(_at) > 1e-6))
+                            _at = _at[_unique_mask]; _av = _av[_unique_mask]
+                            if len(_at) >= 2:
+                                _pchip = _Pchip(_at, _av, extrapolate=False)
+                                # Sample at quarterly grid
+                                _spliced = {}
+                                _t = 0.25
+                                _max_t = max(_at[-1], max(caplet_vol_curve.keys()))
+                                while _t <= _max_t + 1e-6:
+                                    _tr = round(_t, 2)
+                                    _val = float(_pchip(_tr))
+                                    if _np_cfs.isnan(_val):
+                                        # Outside range — clamp to nearest anchor
+                                        _val = _av[0] if _tr < _at[0] else _av[-1]
+                                    _spliced[_tr] = _val
+                                    _t += 0.25
+                                caplet_vol_curve = _spliced
+                                st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
+                                st.success(
+                                    f"✅ **CFS Curve calculated** — front end from "
+                                    f"{_active_src} (0→{_front_end_y:.1f}Y), long end from "
+                                    f"wedge chain ({_front_end_y:.1f}Y→{_max_t:.1f}Y), PCHIP spline at join."
+                                )
+                    elif _active_src == "OTC only":
+                        st.success("✅ **CFS Curve calculated** — OTC wedge chain (no splice needed).")
+                except Exception as _spl_e:
+                    st.warning(f"⚠ Splice build failed — falling back to Active curve. Error: {_spl_e}")
+
             # Build a STANDALONE listed-bootstrap curve for chart overlay,
             # regardless of which Active source is selected. If Active IS
             # Listed bootstrap, reuse caplet_vol_curve (already built that way).
@@ -12095,9 +12185,15 @@ def caps_floors_tab(vol_mode: str):
             _le_col1, _le_col2, _le_col3 = st.columns([1.5, 2.0, 2.0])
             with _le_col1:
                 _prev_use_listed = st.session_state.get("_cfs_use_listed", False)
+                # IMPORTANT: do NOT pass value=_prev_use_listed alongside key= —
+                # that creates a race on st.rerun() where the widget briefly
+                # reverts to the `value` default while session_state is being
+                # re-applied, causing the checkbox to visibly untick after
+                # Calculate from Spreads (bug 20-Apr-2026). The key alone is
+                # enough; Streamlit reads session_state[key] for the checkbox
+                # state on each render.
                 _use_listed = st.checkbox(
                     "📋 Use Listed Front editor",
-                    value=_prev_use_listed,
                     key="_cfs_use_listed",
                     help="Edit listed-to-delivered adjustments inline here. "
                          "Session-only until you click Save.",
