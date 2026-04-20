@@ -12515,11 +12515,11 @@ def caps_floors_tab(vol_mode: str):
                           st.session_state["_cfs_white_selected"] = _prev_white_sel
 
                       _white_codes_available = [c for c, _ in _white_rows]
-                      if len(_white_codes_available) > 4:
+                      if len(_white_codes_available) >= 1:
                           st.markdown(
                               f"<div style='font-size:11px;color:#64748b;margin-top:6px;'>"
-                              f"<b>White selection</b> — tick exactly 4 of the "
-                              f"{len(_white_codes_available)} available whites:</div>",
+                              f"<b>White selection</b> — tick exactly 4 contracts for the 1Y/2Y CFS strip "
+                              f"(quarterlies + serials, from {len(_white_codes_available)} available):</div>",
                               unsafe_allow_html=True,
                           )
                           _ws_cols = st.columns(min(len(_white_codes_available), 8))
@@ -12550,9 +12550,9 @@ def caps_floors_tab(vol_mode: str):
                           else:
                               _white_selected_rows = [(c, r) for c, r in _white_rows if c in _new_white_sel]
                       else:
-                          # ≤ 4 whites available — use all of them
-                          _white_selected_rows = _white_rows
-                          st.session_state["_cfs_white_selected"] = {c for c, _ in _white_rows}
+                          # No whites available at all
+                          _white_selected_rows = []
+                          st.session_state["_cfs_white_selected"] = set()
 
                       if _pack_mode == "whites":
                           _editor_rows = _white_selected_rows
@@ -12837,6 +12837,7 @@ def caps_floors_tab(vol_mode: str):
                 len(_cfs_tdata),
                 len(_caplet_vc) if _caplet_vc else 0,
                 _lf_sig,
+                "v2004ad",  # version tag — bumps cache on deploy
             )
             _cfs_cached = st.session_state.get("_atm_cfs_cache_key") == _cfs_id
             if _cfs_cached and st.session_state.get("_atm_cfs_rows_cache"):
@@ -12889,6 +12890,26 @@ def caps_floors_tab(vol_mode: str):
                             if _wedge_straddle is not None:
                                 _cum_prem += float(_wedge_straddle)
                         _straddle_prem = round(_cum_prem, 4) if _cum_prem else None
+
+                        # v2004ad: when Active=Listed bootstrap, override the
+                        # 1Y / 2Y straddle with the listed-derived values so
+                        # the flat vol solver below targets the LISTED strip
+                        # premium instead of the OTC one. Without this, the
+                        # Flat Vol bp column still shows OTC-implied flats
+                        # because cfs_table_data was restored after the build.
+                        if ccy == "USD":
+                            _active_src_now = st.session_state.get("cfs_active_vol_src", "OTC only")
+                            _lf_cache_now = st.session_state.get("_cfs_listed_curve_cache") or {}
+                            if _active_src_now == "Listed bootstrap":
+                                if _key == "3m1y":
+                                    _listed_stradd_now = _lf_cache_now.get("stradd_1y")
+                                    if _listed_stradd_now:
+                                        _straddle_prem = round(float(_listed_stradd_now), 4)
+                                elif _key == "1y1y":
+                                    _lst_1 = _lf_cache_now.get("stradd_1y")
+                                    _lst_2 = _lf_cache_now.get("stradd_2y")
+                                    if _lst_1 and _lst_2:
+                                        _straddle_prem = round(float(_lst_2), 4)
 
                         # Flat vol: solve the strip flat vol that reproduces the
                         # straddle premium from the wedge chain. For AUD (and OTC
@@ -23491,6 +23512,13 @@ def sr3_vol_tab():
     if _snap_type:
         _label = f"USD {_ts_str}" if _snap_type == "Intraday" else f"USD {_snap_type} {_ts_str}"
         _snap_dt = _nyc_now.replace(tzinfo=None)  # naive datetime for DB
+        # v2004ac: inherit listed_adj_* from the most recent snapshot so user's
+        # saved ratios don't get wiped every time a fresh SR3 snapshot is taken.
+        _prev_snap_rows = {}
+        try:
+            _prev_snap_rows = _load_sr3_latest_usd() or {}
+        except Exception:
+            _prev_snap_rows = {}
         _rows_to_save = []
         for (code, ctype, exp_str, underlying, maturity_str) in SR3_CONTRACTS_CANONICAL:
             if code not in grid_state:
@@ -23502,6 +23530,14 @@ def sr3_vol_tab():
             r.setdefault("underlying", underlying)
             r.setdefault("maturity_date", maturity_str)
             r.setdefault("vol_type", "normal")
+            # Inherit listed_adj_* from previous snapshot if not present in grid_state
+            _prev = _prev_snap_rows.get(code, {})
+            if "listed_adj_mode" not in r and _prev.get("listed_adj_mode"):
+                r["listed_adj_mode"] = _prev["listed_adj_mode"]
+            if "listed_adj_ratio" not in r and _prev.get("listed_adj_ratio") is not None:
+                r["listed_adj_ratio"] = _prev["listed_adj_ratio"]
+            if "listed_adj_bp" not in r and _prev.get("listed_adj_bp") is not None:
+                r["listed_adj_bp"] = _prev["listed_adj_bp"]
             _rows_to_save.append(r)
 
         if not _rows_to_save:
