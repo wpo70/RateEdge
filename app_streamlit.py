@@ -10975,6 +10975,7 @@ def caps_floors_tab(vol_mode: str):
             ("_preserve_cfs_sr3_cutoff",      "cfs_sr3_cutoff"),
             ("_preserve_cfs_overlay_choices", "cfs_overlay_choices"),
             ("_preserve_cfs_pack_radio",      "_cfs_pack_radio"),
+            ("_preserve_cfs_le_expanded",     "_cfs_le_expanded"),
         ]:
             if _preserve_key in st.session_state and _widget_key not in st.session_state:
                 st.session_state[_widget_key] = st.session_state.pop(_preserve_key)
@@ -11667,6 +11668,7 @@ def caps_floors_tab(vol_mode: str):
                     ("cfs_sr3_cutoff",      "_preserve_cfs_sr3_cutoff"),
                     ("cfs_overlay_choices", "_preserve_cfs_overlay_choices"),
                     ("_cfs_pack_radio",     "_preserve_cfs_pack_radio"),
+                    ("_cfs_le_expanded",    "_preserve_cfs_le_expanded"),
                 ]:
                     if _widget_key in st.session_state:
                         st.session_state[_preserve_key] = st.session_state[_widget_key]
@@ -12489,7 +12491,11 @@ def caps_floors_tab(vol_mode: str):
               _le_body_open = bool(st.session_state.get("_cfs_le_expanded", False))
               _le_btn_lbl = "▼ Hide Listed Front editor" if _le_body_open else "▶ Show Listed Front editor"
               if st.button(_le_btn_lbl, key="_cfs_le_toggle_btn"):
-                  st.session_state["_cfs_le_expanded"] = not _le_body_open
+                  _new_val = not _le_body_open
+                  st.session_state["_cfs_le_expanded"] = _new_val
+                  # Also preserve it so fragment cleanup on st.rerun(scope="app")
+                  # can't wipe it before the restore at top of tab runs.
+                  st.session_state["_preserve_cfs_le_expanded"] = _new_val
                   st.rerun(scope="app")
               _le_exp = st.expander("Listed Front editor - ratio/bp overrides", expanded=_le_body_open)
               with _le_exp:
@@ -12942,15 +12948,23 @@ def caps_floors_tab(vol_mode: str):
                                     if _lst_1 and _lst_2:
                                         _straddle_prem = round(float(_lst_2), 4)
 
-                        # Flat vol: solve the strip flat vol that reproduces the
-                        # straddle premium from the wedge chain. For AUD (and OTC
-                        # only USD) this gives ~the same as reading caplet_vol_curve[T]
-                        # because the curve is already flat on that segment. For
-                        # USD Listed/SR3 curves with per-quarter term structure,
-                        # reading caplet_vol_curve[T] would give the INSTANTANEOUS
-                        # vol at T, not the strip flat — so solve it properly.
+                        # Flat vol: for OTC-only / AUD / NZD / flat curves,
+                        # caplet_vol_curve[T] IS the strip flat vol (solver
+                        # would converge to the same number after 30+ iterations
+                        # per row, causing hangs). Only run the solver when the
+                        # front curve is term-structured (USD Listed bootstrap
+                        # or SR3 curves), AND only for rows whose tenor is
+                        # inside the term-structured portion (<=2y typically).
                         _flat_vol = None
-                        if _straddle_prem is not None and _straddle_prem > 0 and _caplet_vc:
+                        _active_src_now = st.session_state.get("cfs_active_vol_src", "OTC only")
+                        _needs_solve = (
+                            ccy == "USD"
+                            and _active_src_now in ("Listed bootstrap", "SR3 hybrid", "SR3 full")
+                            and float(_t) <= 2.01
+                            and _straddle_prem is not None and _straddle_prem > 0
+                            and _caplet_vc
+                        )
+                        if _needs_solve:
                             try:
                                 import scipy.optimize as _opt_fv
                                 _target_leg_prem = float(_straddle_prem) / 2.0
@@ -12963,7 +12977,7 @@ def caps_floors_tab(vol_mode: str):
                                     return price_caplets_with_vol_curve(
                                         ccy, float(_t), _flat_curve, notional_mm=1.0
                                     )
-                                # Seed brackets from reading the curve at T (usually close)
+                                # Tight bracket around the direct-read seed
                                 _seed = None
                                 _mats = sorted(_caplet_vc.keys())
                                 if float(_t) in _caplet_vc:
@@ -12980,17 +12994,21 @@ def caps_floors_tab(vol_mode: str):
                                             break
                                 if _seed is None or _seed <= 0:
                                     _seed = 50.0
-                                # Solve
-                                _lo, _hi = 1.0, 500.0
+                                _lo = max(1.0, _seed - 30.0)
+                                _hi = min(500.0, _seed + 30.0)
+                                # Check sign change; if not, widen to full range
+                                _f_lo = _leg_prem_flat(_lo) - _target_leg_prem
+                                _f_hi = _leg_prem_flat(_hi) - _target_leg_prem
+                                if _f_lo * _f_hi > 0:
+                                    _lo, _hi = 1.0, 500.0
                                 _sol = _opt_fv.brentq(
                                     lambda v: _leg_prem_flat(v) - _target_leg_prem,
-                                    _lo, _hi, xtol=1e-4, maxiter=100,
+                                    _lo, _hi, xtol=1e-3, maxiter=40,
                                 )
                                 _flat_vol = float(_sol)
                             except Exception:
-                                # Fallback to direct read if solve fails
                                 _flat_vol = None
-                        # Fallback: read from curve directly (legacy behavior)
+                        # Direct-read path (default for AUD, USD OTC only, tenors >2Y):
                         if _flat_vol is None and _caplet_vc:
                             _mats = sorted(_caplet_vc.keys())
                             if float(_t) in _caplet_vc:
