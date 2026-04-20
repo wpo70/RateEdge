@@ -24048,6 +24048,9 @@ def sod_report_tab():
         st.session_state["_comm_mode"] = "manual" if _is_manual else "ai"
 
         if _is_manual:
+            from zoneinfo import ZoneInfo as _ZI_ph
+            from datetime import datetime as _dt_ph
+            _day_ph = _dt_ph.now(_ZI_ph("Australia/Sydney")).strftime("%A")
             st.caption(
                 "Paste your finished commentary below. No AI rewriting — goes straight "
                 "to the edit area where you can Publish it to the chosen reports."
@@ -24057,7 +24060,7 @@ def sod_report_tab():
                 value=st.session_state.get("_comm_manual_draft", ""),
                 height=300,
                 placeholder=(
-                    "Monday AM — AUD SOD\n\n"
+                    f"{_day_ph} AM — AUD SOD\n\n"
                     "Friday's risk-on tape is looking vulnerable into the AUD open ...\n"
                 ),
                 key="_comm_manual_input",
@@ -24133,8 +24136,12 @@ def sod_report_tab():
                         "as `ANTHROPIC_API_KEY = \"sk-ant-...\"` (or set as env var locally)."
                     )
                 else:
+                    # Use AEST "now" to determine the weekday for the AUD SOD
+                    from zoneinfo import ZoneInfo as _ZI_sod
+                    from datetime import datetime as _dt_sod
+                    _today_dayname = _dt_sod.now(_ZI_sod("Australia/Sydney")).strftime("%A")
                     _system_prompt = (
-                        "You are writing the Monday-AM Start-of-Day commentary for an "
+                        f"You are writing the {_today_dayname}-AM Start-of-Day commentary for an "
                         "Australian interest-rate options desk. The audience is senior rates "
                         "traders and portfolio managers.\n\n"
                         "STYLE RULES — follow exactly:\n"
@@ -24153,8 +24160,9 @@ def sod_report_tab():
                         "narrative', 'gamma reacts first', etc.).\n"
                         "• DO NOT make up numbers. If a figure isn't in the input, don't cite it.\n"
                         "• DO NOT use bullet points. Flowing paragraphs only.\n"
-                        "• Start the response with 'Monday AM — AUD SOD' (or appropriate day) "
-                        "as a header on its own line.\n\n"
+                        f"• TODAY IS {_today_dayname}. Start the response with "
+                        f"'{_today_dayname} AM — AUD SOD' as a header on its own line. "
+                        "Do NOT write any other day name regardless of templates or examples.\n\n"
                         "STRUCTURE (roughly):\n"
                         "1. Narrative hook + macro setup\n"
                         "2. Oil / inflation / second-round effects (if relevant)\n"
