@@ -11355,7 +11355,12 @@ def caps_floors_tab(vol_mode: str):
                         fs = "font-size:0.80rem;padding-top:6px"
                         rc[0].markdown(f"<div style='{fs}'>{wedge_lbl}</div>", unsafe_allow_html=True)
                     rc[1].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{last_val:.1f}</div>", unsafe_allow_html=True)
-                    new_val = rc[2].number_input("", value=cur_val, key=f"{spr_key}_new",
+                    # Seed widget key from cur_val on first render only — avoids
+                    # value=/key= race on st.rerun() (20-Apr-2026 fix).
+                    _wkey = f"{spr_key}_new"
+                    if _wkey not in st.session_state:
+                        st.session_state[_wkey] = cur_val
+                    new_val = rc[2].number_input("", key=_wkey,
                                                   format="%.1f", step=0.5,
                                                   label_visibility="collapsed",
                                                   disabled=_row_skipped)
@@ -11916,10 +11921,12 @@ def caps_floors_tab(vol_mode: str):
             st.markdown("##### 🔀 USD Vol Source")
             _mc1, _mc2, _mc3 = st.columns([1.2, 1.8, 1.8])
             with _mc1:
+                # Seed once, then rely on key= (avoids index=/key= race on rerun)
+                if "cfs_sr3_cutoff" not in st.session_state:
+                    st.session_state["cfs_sr3_cutoff"] = "2Y"
                 _sr3_cutoff_lbl = st.radio(
                     "SR3 wins up to",
                     ["1Y", "2Y", "3Y"],
-                    index=1,
                     horizontal=True,
                     key="cfs_sr3_cutoff",
                 )
@@ -11932,10 +11939,14 @@ def caps_floors_tab(vol_mode: str):
                 _default_src = "Listed bootstrap" if _lf_on_now else st.session_state.get("cfs_active_vol_src", "OTC only")
                 if _default_src not in _pricer_opts:
                     _default_src = "OTC only"
+                # Seed once, then rely on key= (avoids index=/key= race on rerun)
+                if "cfs_active_vol_src" not in st.session_state:
+                    st.session_state["cfs_active_vol_src"] = _default_src
+                elif st.session_state["cfs_active_vol_src"] not in _pricer_opts:
+                    st.session_state["cfs_active_vol_src"] = _default_src
                 _active_src = st.radio(
                     "Active pricer feed",
                     _pricer_opts,
-                    index=_pricer_opts.index(_default_src),
                     horizontal=True,
                     key="cfs_active_vol_src",
                     help="OTC only = existing behavior. "
@@ -12254,10 +12265,14 @@ only** — it does NOT change SR3 hybrid/full behaviour.
             with _le_col2:
                 if _use_listed:
                     _prev_pack = st.session_state.get("_cfs_listed_pack", "whites")
+                    # Seed once, then rely on key= (avoids index=/key= race)
+                    if "_cfs_pack_radio" not in st.session_state:
+                        st.session_state["_cfs_pack_radio"] = (
+                            "Whites only (4 rows)" if _prev_pack == "whites"
+                            else "Whites + Reds (8 rows)")
                     _pack_sel = st.radio(
                         "Pack selection",
                         ["Whites only (4 rows)", "Whites + Reds (8 rows)"],
-                        index=0 if _prev_pack == "whites" else 1,
                         horizontal=True,
                         key="_cfs_pack_radio",
                     )
@@ -12347,10 +12362,15 @@ only** — it does NOT change SR3 hybrid/full behaviour.
                         _new_white_sel = set()
                         for _i, (c, r) in enumerate(_white_rows):
                             with _ws_cols[_i % len(_ws_cols)]:
+                                # Seed once from _prev_white_sel, then rely on
+                                # the key for persistence (20-Apr-2026 fix —
+                                # avoids value=/key= race resetting selections).
+                                _cb_key = f"_cfs_white_cb_{c}"
+                                if _cb_key not in st.session_state:
+                                    st.session_state[_cb_key] = (c in _prev_white_sel)
                                 _ticked = st.checkbox(
                                     c,
-                                    value=(c in _prev_white_sel),
-                                    key=f"_cfs_white_cb_{c}",
+                                    key=_cb_key,
                                 )
                                 if _ticked:
                                     _new_white_sel.add(c)
@@ -12424,6 +12444,23 @@ only** — it does NOT change SR3 hybrid/full behaviour.
                             _cur_ratio = float(row.get("listed_adj_ratio") or 1.0)
                             _cur_bp    = float(row.get("listed_adj_bp") or 0.0)
 
+                            # ── Widget state seeding (20-Apr-2026 fix) ─────
+                            # Seed session_state keys BEFORE instantiating widgets.
+                            # Then pass ONLY key= (no value= / index=) to avoid the
+                            # race where st.rerun() briefly reverts widgets to their
+                            # value= default while session_state is re-applied. This
+                            # was causing listed-editor ratios to reset when any
+                            # button triggered a rerun.
+                            _mkey = f"_cfs_le_{code}_mode"
+                            _rkey = f"_cfs_le_{code}_ratio"
+                            _bkey = f"_cfs_le_{code}_bp"
+                            if _mkey not in st.session_state:
+                                st.session_state[_mkey] = _cur_mode
+                            if _rkey not in st.session_state:
+                                st.session_state[_rkey] = _cur_ratio
+                            if _bkey not in st.session_state:
+                                st.session_state[_bkey] = _cur_bp
+
                             # Row band
                             st.markdown(
                                 f"""<div style='
@@ -12454,21 +12491,20 @@ only** — it does NOT change SR3 hybrid/full behaviour.
 
                             _new_mode = _lr[3].selectbox(
                                 "", ["ratio", "bp"],
-                                index=0 if _cur_mode == "ratio" else 1,
-                                key=f"_cfs_le_{code}_mode",
+                                key=_mkey,
                                 label_visibility="collapsed",
                             )
                             _new_ratio = _lr[4].number_input(
-                                "", value=_cur_ratio,
+                                "",
                                 min_value=0.50, max_value=3.00, step=0.0001, format="%.4f",
-                                key=f"_cfs_le_{code}_ratio",
+                                key=_rkey,
                                 label_visibility="collapsed",
                                 disabled=(_new_mode != "ratio"),
                             )
                             _new_bp = _lr[5].number_input(
-                                "", value=_cur_bp,
+                                "",
                                 min_value=-100.0, max_value=500.0, step=0.1, format="%.1f",
-                                key=f"_cfs_le_{code}_bp",
+                                key=_bkey,
                                 label_visibility="collapsed",
                                 disabled=(_new_mode != "bp"),
                             )
