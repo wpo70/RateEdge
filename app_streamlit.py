@@ -11919,6 +11919,23 @@ def caps_floors_tab(vol_mode: str):
         if ccy == "USD":
             st.markdown("<hr style='margin:10px 0;border-color:#1e3050'>", unsafe_allow_html=True)
             st.markdown("##### 🔀 USD Vol Source")
+
+            # ── DIAGNOSTIC (temporary, v2004o) ─────────────────────────────
+            # Surfaces the exact session state values at this point in the
+            # render so we can see why _active_src might end up wrong.
+            with st.expander("🔧 DEBUG — session state at Active pricer feed setup", expanded=True):
+                _ss_dbg = {
+                    "cfs_active_vol_src":  st.session_state.get("cfs_active_vol_src"),
+                    "_cfs_use_listed":     st.session_state.get("_cfs_use_listed"),
+                    "_cfs_listed_pack":    st.session_state.get("_cfs_listed_pack"),
+                    "_cfs_white_selected": sorted(list(st.session_state.get("_cfs_white_selected", []) or [])),
+                    "cfs_sr3_cutoff":      st.session_state.get("cfs_sr3_cutoff"),
+                    "cfs_overlay_choices": st.session_state.get("cfs_overlay_choices"),
+                    "_cfs_calc_requested": st.session_state.get("_cfs_calc_requested"),
+                }
+                for _k, _v in _ss_dbg.items():
+                    st.text(f"  {_k}: {_v!r}")
+
             _mc1, _mc2, _mc3 = st.columns([1.2, 1.8, 1.8])
             with _mc1:
                 # Seed once, then rely on key= (avoids index=/key= race on rerun)
@@ -12048,6 +12065,15 @@ def caps_floors_tab(vol_mode: str):
             #   SR3 hybrid       → 0 to sr3_cutoff (e.g. 2Y)
             #   SR3 full         → 0 to last SR3 anchor (typically ~4Y)
             if ccy == "USD" and st.session_state.pop("_cfs_calc_requested", False):
+                # DIAGNOSTIC (temporary, v2004o)
+                st.info(
+                    f"🔧 **Splice block entered** — _active_src={_active_src!r}, "
+                    f"_lf_on_now={st.session_state.get('_cfs_use_listed')!r}, "
+                    f"_listed_curve_for_bs={'populated' if _listed_curve_for_bs else 'None'}, "
+                    f"otc_caplet_curve={'populated' if otc_caplet_curve else 'None'}, "
+                    f"sr3_hybrid_curve={'populated' if sr3_hybrid_curve else 'None'}, "
+                    f"sr3_full_curve={'populated' if sr3_full_curve else 'None'}"
+                )
                 try:
                     from scipy.interpolate import PchipInterpolator as _Pchip
                     import numpy as _np_cfs
