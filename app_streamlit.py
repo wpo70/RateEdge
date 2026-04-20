@@ -11907,19 +11907,36 @@ def caps_floors_tab(vol_mode: str):
                     spread_12y3y=spread_12y3y,
                 )
 
-                # ── Option A REMOVED (v2004u) ────────────────────────────
-                # Previously we overwrote the flat front-year vols with the
-                # SR3 term-structure curve. That made Listed bootstrap
-                # semantically identical to SR3 hybrid in the front — they
-                # rendered the same curve, defeating the whole point of
-                # having both options. Now Listed bootstrap is a true
-                # wedge bootstrap anchored on the LISTED straddle premium
-                # (flat front-year calibrated to match the premium), with
-                # wedges cascading from 1y1y (or 2y1y if whites+reds).
-                # SR3 hybrid/full remain their own thing — direct SR3 term
-                # structure. This makes all four Active sources genuinely
-                # different.
-                st.session_state["_cfs_listed_front_override_n"] = 0
+                # ── Option A (v2004w) ────────────────────────────────────
+                # When Listed bootstrap is Active AND we have a listed-derived
+                # term-structure caplet curve (_listed_curve_for_bs), overwrite
+                # the flat 0.25/0.5/0.75/1.0 entries with the per-quarter
+                # listed vols (e.g. SFRM6 → 31.2, SFRU6 → 46.1, SFRZ6 → 61.1,
+                # SFRH7 → 63.8). Without this, build_caplet_vol_curve solves
+                # for ONE flat vol to match the 1Y straddle premium — discarding
+                # the per-quarter listed term structure that makes this mode
+                # useful in the first place.
+                #
+                # Listed bootstrap and SR3 hybrid DO use the same listed vols
+                # in the front (0→1Y whites / 0→2Y whites+reds). They DIVERGE
+                # beyond that: Listed bootstrap continues via wedge chain from
+                # 1y1y onwards; SR3 hybrid falls back to OTC beyond the cutoff.
+                # That's the genuine difference.
+                if (caplet_vol_curve
+                        and ccy == "USD"
+                        and _listed_bootstrap_active
+                        and _listed_curve_for_bs):
+                    _lf_pack_dbg = st.session_state.get("_cfs_listed_pack", "whites")
+                    _override_end = 2.0 if _lf_pack_dbg == "both" else 1.0
+                    _overrode_pts = 0
+                    for _t_pt in sorted(_listed_curve_for_bs.keys()):
+                        if _t_pt <= _override_end + 1e-6:
+                            caplet_vol_curve[_t_pt] = _listed_curve_for_bs[_t_pt]
+                            _overrode_pts += 1
+                    st.session_state["_cfs_listed_front_override_n"] = _overrode_pts
+                    st.session_state["_cfs_listed_front_override_end"] = _override_end
+                else:
+                    st.session_state["_cfs_listed_front_override_n"] = 0
 
             st.session_state["_caplet_curve_key"] = _caplet_key
         else:
@@ -12190,11 +12207,16 @@ def caps_floors_tab(vol_mode: str):
                                 _cfs_td["3m1y"] = _orig_3m1y
                             if _orig_1y1y:
                                 _cfs_td["1y1y"] = _orig_1y1y
-                            # Option A REMOVED (v2004u) — see main build block.
-                            # Listed bootstrap is now a pure flat-front wedge
-                            # curve calibrated to the listed straddle premium,
-                            # not an SR3 term-structure paste-in. That makes
-                            # it genuinely different from SR3 hybrid.
+                            # Option A (v2004w) — overlay curve uses listed
+                            # term structure for the front so the chart shows
+                            # what Listed bootstrap WOULD look like if made
+                            # Active. Without this, the overlay is flat-front
+                            # and useless.
+                            if _listed_bootstrap_curve_for_chart and _listed_curve_for_bs:
+                                _chart_override_end = 2.0 if _lf_pack_now == "both" else 1.0
+                                for _t_pt in sorted(_listed_curve_for_bs.keys()):
+                                    if _t_pt <= _chart_override_end + 1e-6:
+                                        _listed_bootstrap_curve_for_chart[_t_pt] = _listed_curve_for_bs[_t_pt]
                             st.session_state["_cfs_listed_bootstrap_chart_cache"] = {
                                 "sig": _lbc_sig,
                                 "curve": _listed_bootstrap_curve_for_chart,
@@ -12804,7 +12826,10 @@ def caps_floors_tab(vol_mode: str):
                     caplet_vol_curve[round(_t30, 2)] = max(_vol_15 + _frac * (_vol_20 - _vol_15), 1.0)
                     _t30 += 0.25
 
-            with st.expander("📊 Resulting Caplet Vol Curve", expanded=False):
+            # Default to expanded so user can see results immediately after
+            # Calculate. Streamlit expanders don't persist user's close action
+            # across reruns anyway, so defaulting open is the useful choice.
+            with st.expander("📊 Resulting Caplet Vol Curve", expanded=True):
                 from scipy.interpolate import CubicSpline
                 import plotly.graph_objects as _pgo
 
