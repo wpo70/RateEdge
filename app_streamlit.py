@@ -12066,13 +12066,17 @@ def caps_floors_tab(vol_mode: str):
             #   SR3 full         → 0 to last SR3 anchor (typically ~4Y)
             if ccy == "USD" and st.session_state.pop("_cfs_calc_requested", False):
                 # DIAGNOSTIC (temporary, v2004o)
+                _lcb_dbg = locals().get("_listed_curve_for_bs")
+                _otc_dbg = locals().get("otc_caplet_curve")
+                _h_dbg   = locals().get("sr3_hybrid_curve")
+                _f_dbg   = locals().get("sr3_full_curve")
                 st.info(
                     f"🔧 **Splice block entered** — _active_src={_active_src!r}, "
                     f"_lf_on_now={st.session_state.get('_cfs_use_listed')!r}, "
-                    f"_listed_curve_for_bs={'populated' if _listed_curve_for_bs else 'None'}, "
-                    f"otc_caplet_curve={'populated' if otc_caplet_curve else 'None'}, "
-                    f"sr3_hybrid_curve={'populated' if sr3_hybrid_curve else 'None'}, "
-                    f"sr3_full_curve={'populated' if sr3_full_curve else 'None'}"
+                    f"_listed_curve_for_bs={'populated' if _lcb_dbg else 'None'}, "
+                    f"otc_caplet_curve={'populated' if _otc_dbg else 'None'}, "
+                    f"sr3_hybrid_curve={'populated' if _h_dbg else 'None'}, "
+                    f"sr3_full_curve={'populated' if _f_dbg else 'None'}"
                 )
                 try:
                     from scipy.interpolate import PchipInterpolator as _Pchip
