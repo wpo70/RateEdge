@@ -10868,6 +10868,31 @@ def caps_floors_tab(vol_mode: str):
         return
 
     # ═══════════════════════════════════════════════════════════════════
+    # CRITICAL: Restore preserved widget state BEFORE any dependent code.
+    # ═══════════════════════════════════════════════════════════════════
+    # When the Calculate CFS Curve button fires st.rerun(), Streamlit's
+    # fragment machinery cleans up widget-bound session_state keys (like
+    # cfs_active_vol_src, _cfs_use_listed, cfs_sr3_cutoff, cfs_overlay_choices)
+    # BEFORE the widgets re-render. The Calculate callback preserves them
+    # under _preserve_* keys; we must restore them HERE at the very top of
+    # the tab so that EVERY downstream code path sees the correct values —
+    # especially the listed pre-calc block at ~line 11779 which gates on
+    # _cfs_use_listed. If restore happens later, the pre-calc is skipped
+    # and _listed_curve_for_bs never gets built.
+    if ccy == "USD":
+        for _preserve_key, _widget_key in [
+            ("_preserve_cfs_active_vol_src",  "cfs_active_vol_src"),
+            ("_preserve_cfs_use_listed",      "_cfs_use_listed"),
+            ("_preserve_cfs_sr3_cutoff",      "cfs_sr3_cutoff"),
+            ("_preserve_cfs_overlay_choices", "cfs_overlay_choices"),
+            ("_preserve_cfs_pack_radio",      "_cfs_pack_radio"),
+        ]:
+            if _preserve_key in st.session_state and _widget_key not in st.session_state:
+                st.session_state[_widget_key] = st.session_state.pop(_preserve_key)
+            elif _preserve_key in st.session_state:
+                st.session_state.pop(_preserve_key, None)
+
+    # ═══════════════════════════════════════════════════════════════════
     # Per-ccy wedge spread isolation (20-Apr-2026 bugfix).
     # The cf_spr_* session keys were shared across currencies, so editing
     # USD wedges would overwrite AUD wedges in session AND in the DB
@@ -11933,23 +11958,6 @@ def caps_floors_tab(vol_mode: str):
         if ccy == "USD":
             st.markdown("<hr style='margin:10px 0;border-color:#1e3050'>", unsafe_allow_html=True)
             st.markdown("##### 🔀 USD Vol Source")
-
-            # ── Restore preserved widget state after button-triggered rerun ──
-            # Streamlit fragment reruns can clean up widget-bound session_state
-            # keys if widgets haven't re-rendered yet. The Calculate button
-            # preserves them under _preserve_* keys; we restore now.
-            for _preserve_key, _widget_key in [
-                ("_preserve_cfs_active_vol_src",  "cfs_active_vol_src"),
-                ("_preserve_cfs_use_listed",      "_cfs_use_listed"),
-                ("_preserve_cfs_sr3_cutoff",      "cfs_sr3_cutoff"),
-                ("_preserve_cfs_overlay_choices", "cfs_overlay_choices"),
-                ("_preserve_cfs_pack_radio",      "_cfs_pack_radio"),
-            ]:
-                if _preserve_key in st.session_state and _widget_key not in st.session_state:
-                    st.session_state[_widget_key] = st.session_state.pop(_preserve_key)
-                elif _preserve_key in st.session_state:
-                    # Key already there — just clean up the preservation
-                    st.session_state.pop(_preserve_key, None)
 
             # ── DIAGNOSTIC (temporary, v2004o) ─────────────────────────────
             # Surfaces the exact session state values at this point in the
