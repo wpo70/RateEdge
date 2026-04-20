@@ -11519,11 +11519,25 @@ def caps_floors_tab(vol_mode: str):
                 # the render pipeline to splice the Active source's front end
                 # with the wedge-chain long end and PCHIP-spline the join.
                 st.session_state["_cfs_calc_requested"] = True
+                # ── CRITICAL: preserve widget session_state through rerun ──
+                # Streamlit can clean up widget-bound session_state keys during
+                # a fragment rerun if the widget hasn't re-rendered yet. Read
+                # them now and stash under parallel non-widget keys; the widget
+                # seed logic below will restore them on next render.
+                for _widget_key, _preserve_key in [
+                    ("cfs_active_vol_src",  "_preserve_cfs_active_vol_src"),
+                    ("_cfs_use_listed",     "_preserve_cfs_use_listed"),
+                    ("cfs_sr3_cutoff",      "_preserve_cfs_sr3_cutoff"),
+                    ("cfs_overlay_choices", "_preserve_cfs_overlay_choices"),
+                    ("_cfs_pack_radio",     "_preserve_cfs_pack_radio"),
+                ]:
+                    if _widget_key in st.session_state:
+                        st.session_state[_preserve_key] = st.session_state[_widget_key]
                 # Invalidate only the caplet cache — do NOT touch SR3 / listed
                 # chart caches (they don't depend on spreads, and busting them
                 # was what caused the "chart flash empty / revert to OTC" bugs).
                 st.session_state.pop("_caplet_curve_key", None)
-                st.rerun()
+                st.rerun(scope="app")
             if br.button("🔄 Refresh Swaptions", key="gen_swpt_prem", type="primary"):
                 # Mark this render so the Listed bootstrap pre-calc block
                 # doesn't immediately overwrite the refreshed swaption values.
@@ -11919,6 +11933,23 @@ def caps_floors_tab(vol_mode: str):
         if ccy == "USD":
             st.markdown("<hr style='margin:10px 0;border-color:#1e3050'>", unsafe_allow_html=True)
             st.markdown("##### 🔀 USD Vol Source")
+
+            # ── Restore preserved widget state after button-triggered rerun ──
+            # Streamlit fragment reruns can clean up widget-bound session_state
+            # keys if widgets haven't re-rendered yet. The Calculate button
+            # preserves them under _preserve_* keys; we restore now.
+            for _preserve_key, _widget_key in [
+                ("_preserve_cfs_active_vol_src",  "cfs_active_vol_src"),
+                ("_preserve_cfs_use_listed",      "_cfs_use_listed"),
+                ("_preserve_cfs_sr3_cutoff",      "cfs_sr3_cutoff"),
+                ("_preserve_cfs_overlay_choices", "cfs_overlay_choices"),
+                ("_preserve_cfs_pack_radio",      "_cfs_pack_radio"),
+            ]:
+                if _preserve_key in st.session_state and _widget_key not in st.session_state:
+                    st.session_state[_widget_key] = st.session_state.pop(_preserve_key)
+                elif _preserve_key in st.session_state:
+                    # Key already there — just clean up the preservation
+                    st.session_state.pop(_preserve_key, None)
 
             # ── DIAGNOSTIC (temporary, v2004o) ─────────────────────────────
             # Surfaces the exact session state values at this point in the
