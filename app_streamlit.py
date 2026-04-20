@@ -11558,10 +11558,11 @@ def caps_floors_tab(vol_mode: str):
                 ]:
                     if _widget_key in st.session_state:
                         st.session_state[_preserve_key] = st.session_state[_widget_key]
-                # Invalidate only the caplet cache — do NOT touch SR3 / listed
-                # chart caches (they don't depend on spreads, and busting them
-                # was what caused the "chart flash empty / revert to OTC" bugs).
-                st.session_state.pop("_caplet_curve_key", None)
+                # Invalidate build caches so curves rebuild with new spreads
+                st.session_state.pop("_caplet_curve_key", None)  # legacy
+                st.session_state.pop("_cfs_otc_build_cache", None)
+                st.session_state.pop("_cfs_listed_build_cache", None)
+                st.session_state.pop("_cfs_sr3_curves_cache", None)
                 st.rerun(scope="app")
             if br.button("🔄 Refresh Swaptions", key="gen_swpt_prem", type="primary"):
                 # Mark this render so the Listed bootstrap pre-calc block
@@ -11787,30 +11788,19 @@ def caps_floors_tab(vol_mode: str):
         atm = get_working_atm_surface(ccy)
         _atm_hash = st.session_state.get(f"_atm_hash_{ccy}", 0)
 
-        # ═════════════════════════════════════════════════════════════════
-        # USD Listed Bootstrap (Chunk 6): when "📋 Use Listed Front editor"
-        # toggle is ON AND active source = "Listed bootstrap", compute the
-        # front straddle premium(s) from the listed caplet curve and stuff
-        # into cfs_table_data so build_caplet_vol_curve picks them up as the
-        # 1Y (and optionally 2Y) anchor — same plumbing as AUD.
-        # ═════════════════════════════════════════════════════════════════
-        _listed_bootstrap_active = False
+        # v2004x: Listed term-structure pre-calc.
+        # Derives _listed_term_curve (SR3 listed caplet vols PCHIP-interpolated)
+        # plus premium-equivalent 1Y/2Y straddles. Does NOT mutate
+        # cfs_table_data - builders do that temporarily inside themselves.
+        # Runs unconditionally for USD; returns None's if no SR3 data.
+        _listed_term_curve = None
         _listed_1y_stradd = None
         _listed_2y_stradd = None
-        _listed_curve_for_bs = None
-        # v2004u: Compute listed 1Y/2Y straddles UNCONDITIONALLY for USD.
-        # Previously gated on _cfs_use_listed; now runs whenever SR3 data
-        # exists so Listed bootstrap overlay is always available without
-        # requiring the editor to be expanded.
+        _lf_pack_now = st.session_state.get("_cfs_listed_pack", "whites")
+        _lf_cache_sig = None
         if ccy == "USD":
             try:
-                _lf_pack_now = st.session_state.get("_cfs_listed_pack", "whites")
                 _lf_cutoff = 1.0 if _lf_pack_now == "whites" else 2.0
-
-                # Cache signature: rebuild listed front curve ONLY when these change.
-                # Without this cache the SR3 builder runs every Streamlit rerun
-                # (including every keystroke/hover on another widget), causing
-                # the "constant recalc" feel.
                 _lf_edits = st.session_state.get("_cfs_listed_session_edits", {}) or {}
                 _lf_cache_sig = (
                     _lf_pack_now,
@@ -11822,131 +11812,197 @@ def caps_floors_tab(vol_mode: str):
                          round(float(e.get("listed_adj_bp") or 0.0), 4))
                         for c, e in _lf_edits.items()
                     )),
-                    st.session_state.get("sr3_current_label"),  # snapshot change busts cache
+                    st.session_state.get("sr3_current_label"),
                 )
-                _lf_cache_key = "_cfs_listed_curve_cache"
-                _cached_lf = st.session_state.get(_lf_cache_key)
+                _cached_lf = st.session_state.get("_cfs_listed_curve_cache")
                 if _cached_lf and _cached_lf.get("sig") == _lf_cache_sig:
-                    _listed_curve_for_bs = _cached_lf.get("curve")
-                    _listed_1y_stradd   = _cached_lf.get("stradd_1y")
-                    _listed_2y_stradd   = _cached_lf.get("stradd_2y")
+                    _listed_term_curve = _cached_lf.get("curve")
+                    _listed_1y_stradd  = _cached_lf.get("stradd_1y")
+                    _listed_2y_stradd  = _cached_lf.get("stradd_2y")
                 else:
-                    _listed_curve_for_bs = build_caplet_vol_curve_sr3(
+                    _listed_term_curve = build_caplet_vol_curve_sr3(
                         "USD",
                         cutoff_years=_lf_cutoff,
                         otc_fallback_curve=st.session_state.get("caplet_vol_curve_aud") or {},
                         final_maturity_y=max(tenor_y + 0.5, 10.0),
                     )
-                    if _listed_curve_for_bs:
+                    if _listed_term_curve:
                         _prem_1y_leg = price_caplets_with_vol_curve(
-                            "USD", 1.0, _listed_curve_for_bs, notional_mm=1.0
+                            "USD", 1.0, _listed_term_curve, notional_mm=1.0
                         )
                         _listed_1y_stradd = float(_prem_1y_leg) * 2.0 if (_prem_1y_leg and _prem_1y_leg > 0) else None
                         if _lf_pack_now == "both":
                             _prem_2y_leg = price_caplets_with_vol_curve(
-                                "USD", 2.0, _listed_curve_for_bs, notional_mm=1.0
+                                "USD", 2.0, _listed_term_curve, notional_mm=1.0
                             )
                             _listed_2y_stradd = float(_prem_2y_leg) * 2.0 if (_prem_2y_leg and _prem_2y_leg > 0) else None
-                    # Stash
-                    st.session_state[_lf_cache_key] = {
+                    st.session_state["_cfs_listed_curve_cache"] = {
                         "sig": _lf_cache_sig,
-                        "curve": _listed_curve_for_bs,
+                        "curve": _listed_term_curve,
                         "stradd_1y": _listed_1y_stradd,
                         "stradd_2y": _listed_2y_stradd,
                     }
-
-                # Write 1Y/2Y straddles into cfs_table_data so AUD bootstrap
-                # picks them up AS 1Y anchor — BUT ONLY when Active=Listed bootstrap.
-                # If Active is OTC or SR3, leave cfs_table_data alone so the
-                # normal OTC path / SR3 path works undisturbed. We still produce
-                # the listed-bootstrapped curve (via a side build) for chart overlay.
-                _lf_is_active = (st.session_state.get("cfs_active_vol_src", "OTC only")
-                                 == "Listed bootstrap")
-                # If user just clicked Refresh Swaptions, skip overwriting
-                # the cfs_table_data this render so their refreshed swaption
-                # values show through instead of being clobbered. The flag
-                # is consumed here so the overwrite resumes on next render.
-                _just_refreshed = st.session_state.pop("_refresh_swpt_just_clicked", False)
-                if _lf_is_active and not _just_refreshed:
-                    if _listed_1y_stradd and _listed_1y_stradd > 0:
-                        st.session_state.setdefault("cfs_table_data", {}).setdefault(
-                            "3m1y", {})["cfs_straddle"] = _listed_1y_stradd
-                        _listed_bootstrap_active = True
-                    if (_lf_pack_now == "both"
-                            and _listed_1y_stradd and _listed_2y_stradd
-                            and _listed_2y_stradd > _listed_1y_stradd):
-                        _1y1y_gap = _listed_2y_stradd - _listed_1y_stradd
-                        st.session_state["cfs_table_data"].setdefault(
-                            "1y1y", {})["cfs_straddle"] = _1y1y_gap
-                elif _lf_is_active and _just_refreshed:
-                    # Still flag as active so caplet rebuild key changes
-                    _listed_bootstrap_active = True
             except Exception as _lb_err:
-                st.caption(f"⚠ Listed bootstrap pre-calc failed: {_lb_err}")
+                st.caption(f"WARN Listed term pre-calc failed: {_lb_err}")
 
-        # Cache key includes listed bootstrap state so edits trigger rebuild
-        _caplet_key = (spread_3m1y, spread_1y1y, spread_2y1y, spread_3y1y,
-                       spread_4y1y, spread_5y2y, spread_7y3y, spread_10y2y, spread_12y3y,
-                       _atm_hash,
-                       _listed_bootstrap_active,
-                       round(_listed_1y_stradd, 4) if _listed_1y_stradd else None,
-                       round(_listed_2y_stradd, 4) if _listed_2y_stradd else None)
-        _cached_key = st.session_state.get("_caplet_curve_key")
-        if _cached_key != _caplet_key or st.session_state.get("caplet_vol_curve_aud") is None:
-            with st.spinner("⚙️ Bootstrapping caplet vol curve..."):
-                caplet_vol_curve = build_caplet_vol_curve(
-                    ccy, atm, None,
-                    spread_3m1y=spread_3m1y,
-                    spread_1y1y=spread_1y1y,
-                    spread_2y1y=spread_2y1y,
-                    spread_3y1y=spread_3y1y,
-                    spread_4y1y=spread_4y1y,
-                    spread_5y2y=spread_5y2y,
-                    spread_7y3y=spread_7y3y,
-                    spread_10y2y=spread_10y2y,
-                    spread_12y3y=spread_12y3y,
+        # Remember the original OTC 1Y / 2Y straddles from cfs_table_data
+        # BEFORE any builder mutates it. The OTC curve needs these.
+        _cfs_td_orig = st.session_state.get("cfs_table_data", {}) or {}
+        _otc_1y_stradd = (_cfs_td_orig.get("3m1y", {}) or {}).get("cfs_straddle")
+        _otc_1y1y_gap  = (_cfs_td_orig.get("1y1y", {}) or {}).get("cfs_straddle")
+
+        # v2004x: Four independent curve builders. Each is pure and cached.
+        # None of them reads widget session state. None leaves cfs_table_data
+        # in a mutated state (they restore in try/finally).
+        def _call_build_otc(spreads_dict):
+            """Build OTC-only caplet curve. Returns dict or None."""
+            try:
+                _cfs_td = st.session_state.setdefault("cfs_table_data", {})
+                _save_3m1y = dict(_cfs_td.get("3m1y", {}))
+                _save_1y1y = dict(_cfs_td.get("1y1y", {}))
+                try:
+                    if _otc_1y_stradd is not None:
+                        _cfs_td.setdefault("3m1y", {})["cfs_straddle"] = _otc_1y_stradd
+                    if _otc_1y1y_gap is not None:
+                        _cfs_td.setdefault("1y1y", {})["cfs_straddle"] = _otc_1y1y_gap
+                    return build_caplet_vol_curve(
+                        ccy, atm, None,
+                        spread_3m1y=spreads_dict["3m1y"],
+                        spread_1y1y=spreads_dict["1y1y"],
+                        spread_2y1y=spreads_dict["2y1y"],
+                        spread_3y1y=spreads_dict["3y1y"],
+                        spread_4y1y=spreads_dict["4y1y"],
+                        spread_5y2y=spreads_dict["5y2y"],
+                        spread_7y3y=spreads_dict["7y3y"],
+                        spread_10y2y=spreads_dict["10y2y"],
+                        spread_12y3y=spreads_dict["12y3y"],
+                    )
+                finally:
+                    if _save_3m1y:
+                        _cfs_td["3m1y"] = _save_3m1y
+                    if _save_1y1y:
+                        _cfs_td["1y1y"] = _save_1y1y
+            except Exception as _e:
+                st.caption(f"WARN OTC curve build failed: {_e}")
+                return None
+
+        def _call_build_listed(spreads_dict):
+            """Build Listed-bootstrap caplet curve. Returns dict or None.
+            Front 0-cutoff: listed SR3 term structure (Option A).
+            Tail: wedge chain anchored on listed straddles.
+            """
+            if _listed_term_curve is None or _listed_1y_stradd is None or _listed_1y_stradd <= 0:
+                return None
+            try:
+                _cfs_td = st.session_state.setdefault("cfs_table_data", {})
+                _save_3m1y = dict(_cfs_td.get("3m1y", {}))
+                _save_1y1y = dict(_cfs_td.get("1y1y", {}))
+                try:
+                    _cfs_td.setdefault("3m1y", {})["cfs_straddle"] = _listed_1y_stradd
+                    if (_lf_pack_now == "both" and _listed_2y_stradd
+                            and _listed_2y_stradd > _listed_1y_stradd):
+                        _cfs_td.setdefault("1y1y", {})["cfs_straddle"] = _listed_2y_stradd - _listed_1y_stradd
+                    _built = build_caplet_vol_curve(
+                        ccy, atm, None,
+                        spread_3m1y=spreads_dict["3m1y"],
+                        spread_1y1y=spreads_dict["1y1y"],
+                        spread_2y1y=spreads_dict["2y1y"],
+                        spread_3y1y=spreads_dict["3y1y"],
+                        spread_4y1y=spreads_dict["4y1y"],
+                        spread_5y2y=spreads_dict["5y2y"],
+                        spread_7y3y=spreads_dict["7y3y"],
+                        spread_10y2y=spreads_dict["10y2y"],
+                        spread_12y3y=spreads_dict["12y3y"],
+                    )
+                    if _built and _listed_term_curve:
+                        # Option A: overlay listed term structure on the front.
+                        # This gives per-quarter term structure (e.g. SFRM6 at
+                        # 0.25, SFRU6 at 0.5, ...) rather than one flat vol.
+                        _ovr_end = 2.0 if _lf_pack_now == "both" else 1.0
+                        for _t_pt in sorted(_listed_term_curve.keys()):
+                            if _t_pt <= _ovr_end + 1e-6:
+                                _built[_t_pt] = _listed_term_curve[_t_pt]
+                    return _built
+                finally:
+                    if _save_3m1y:
+                        _cfs_td["3m1y"] = _save_3m1y
+                    if _save_1y1y:
+                        _cfs_td["1y1y"] = _save_1y1y
+            except Exception as _e:
+                st.caption(f"WARN Listed bootstrap build failed: {_e}")
+                return None
+
+        def _call_build_sr3_hybrid(cutoff_y, otc_fallback, final_y):
+            if ccy != "USD":
+                return None
+            try:
+                return build_caplet_vol_curve_sr3(
+                    "USD",
+                    cutoff_years=cutoff_y,
+                    otc_fallback_curve=otc_fallback or {},
+                    final_maturity_y=final_y,
                 )
+            except Exception as _e:
+                st.caption(f"WARN SR3 hybrid build failed: {_e}")
+                return None
 
-                # ── Option A (v2004w) ────────────────────────────────────
-                # When Listed bootstrap is Active AND we have a listed-derived
-                # term-structure caplet curve (_listed_curve_for_bs), overwrite
-                # the flat 0.25/0.5/0.75/1.0 entries with the per-quarter
-                # listed vols (e.g. SFRM6 → 31.2, SFRU6 → 46.1, SFRZ6 → 61.1,
-                # SFRH7 → 63.8). Without this, build_caplet_vol_curve solves
-                # for ONE flat vol to match the 1Y straddle premium — discarding
-                # the per-quarter listed term structure that makes this mode
-                # useful in the first place.
-                #
-                # Listed bootstrap and SR3 hybrid DO use the same listed vols
-                # in the front (0→1Y whites / 0→2Y whites+reds). They DIVERGE
-                # beyond that: Listed bootstrap continues via wedge chain from
-                # 1y1y onwards; SR3 hybrid falls back to OTC beyond the cutoff.
-                # That's the genuine difference.
-                if (caplet_vol_curve
-                        and ccy == "USD"
-                        and _listed_bootstrap_active
-                        and _listed_curve_for_bs):
-                    _lf_pack_dbg = st.session_state.get("_cfs_listed_pack", "whites")
-                    _override_end = 2.0 if _lf_pack_dbg == "both" else 1.0
-                    _overrode_pts = 0
-                    for _t_pt in sorted(_listed_curve_for_bs.keys()):
-                        if _t_pt <= _override_end + 1e-6:
-                            caplet_vol_curve[_t_pt] = _listed_curve_for_bs[_t_pt]
-                            _overrode_pts += 1
-                    st.session_state["_cfs_listed_front_override_n"] = _overrode_pts
-                    st.session_state["_cfs_listed_front_override_end"] = _override_end
-                else:
-                    st.session_state["_cfs_listed_front_override_n"] = 0
+        def _call_build_sr3_full(otc_fallback, final_y):
+            if ccy != "USD":
+                return None
+            try:
+                return build_caplet_vol_curve_sr3_full(
+                    "USD",
+                    otc_fallback_curve=otc_fallback or {},
+                    final_maturity_y=final_y,
+                )
+            except Exception as _e:
+                st.caption(f"WARN SR3 full build failed: {_e}")
+                return None
 
-            st.session_state["_caplet_curve_key"] = _caplet_key
+        _spreads_dict = {
+            "3m1y": spread_3m1y, "1y1y": spread_1y1y, "2y1y": spread_2y1y,
+            "3y1y": spread_3y1y, "4y1y": spread_4y1y, "5y2y": spread_5y2y,
+            "7y3y": spread_7y3y, "10y2y": spread_10y2y, "12y3y": spread_12y3y,
+        }
+        _spreads_tuple = tuple(_spreads_dict[k] for k in sorted(_spreads_dict.keys()))
+
+        # Cache and build OTC curve
+        _otc_cache_sig = (_spreads_tuple, _atm_hash,
+                          round(_otc_1y_stradd, 4) if _otc_1y_stradd else None,
+                          round(_otc_1y1y_gap, 4) if _otc_1y1y_gap else None)
+        _otc_cached = st.session_state.get("_cfs_otc_build_cache")
+        if _otc_cached and _otc_cached.get("sig") == _otc_cache_sig:
+            _otc_curve_built = _otc_cached.get("curve")
         else:
-            caplet_vol_curve = st.session_state.get("caplet_vol_curve_aud")
-        if caplet_vol_curve and len(caplet_vol_curve) > 0:
-            st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
-        if caplet_vol_curve is None or len(caplet_vol_curve) == 0:
-            caplet_vol_curve = st.session_state.get("caplet_vol_curve_aud")
-        if caplet_vol_curve is None or len(caplet_vol_curve) == 0:
-            caplet_vol_curve = {t: 35.0 for t in [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0]}
+            with st.spinner("Building OTC curve..."):
+                _otc_curve_built = _call_build_otc(_spreads_dict)
+            st.session_state["_cfs_otc_build_cache"] = {
+                "sig": _otc_cache_sig,
+                "curve": _otc_curve_built,
+            }
+
+        # Cache and build Listed bootstrap curve (USD only)
+        _listed_cache_sig = (_spreads_tuple, _atm_hash,
+                             round(_listed_1y_stradd, 4) if _listed_1y_stradd else None,
+                             round(_listed_2y_stradd, 4) if _listed_2y_stradd else None,
+                             _lf_pack_now if ccy == "USD" else None,
+                             _lf_cache_sig)
+        _listed_cached = st.session_state.get("_cfs_listed_build_cache")
+        if _listed_cached and _listed_cached.get("sig") == _listed_cache_sig:
+            _listed_curve_built = _listed_cached.get("curve")
+        else:
+            if ccy == "USD":
+                with st.spinner("Building Listed bootstrap curve..."):
+                    _listed_curve_built = _call_build_listed(_spreads_dict)
+            else:
+                _listed_curve_built = None
+            st.session_state["_cfs_listed_build_cache"] = {
+                "sig": _listed_cache_sig,
+                "curve": _listed_curve_built,
+            }
+
+        # Default active to OTC until widgets render and we pick
+        caplet_vol_curve = _otc_curve_built or {t: 35.0 for t in [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0]}
 
         # ═════════════════════════════════════════════════════════════════
         # USD-only: SR3 Listed Vol Mode (Step 5 of CFS build, 19-Apr-2026)
@@ -11956,12 +12012,14 @@ def caps_floors_tab(vol_mode: str):
         #   (b) SR3 hybrid — listed SR3 wins 0→cutoff, OTC wedges handle >cutoff
         #   (c) SR3 full — listed SR3 everywhere it exists, OTC beyond
         # User picks which is ACTIVE (feeds pricer) and which overlay on chart.
-        otc_caplet_curve = dict(caplet_vol_curve) if caplet_vol_curve else {}
+        # v2004x: Make the active curve selection explicit via widget state.
+        # All 4 curves are built above; we just pick the active one here.
+        otc_caplet_curve = dict(_otc_curve_built) if _otc_curve_built else {}
         sr3_hybrid_curve = None
         sr3_full_curve   = None
         if ccy == "USD":
             st.markdown("<hr style='margin:10px 0;border-color:#1e3050'>", unsafe_allow_html=True)
-            st.markdown("##### 🔀 USD Vol Source")
+            st.markdown("##### USD Vol Source")
 
             _mc1, _mc2, _mc3 = st.columns([1.2, 1.8, 1.8])
             with _mc1:
@@ -11976,14 +12034,11 @@ def caps_floors_tab(vol_mode: str):
                 )
                 _sr3_cutoff_y = float(_sr3_cutoff_lbl[:-1])
             with _mc2:
-                # 4-way radio now includes "Listed bootstrap" — auto-default
-                # to that option when the Listed Front editor toggle is ON.
                 _pricer_opts = ["OTC only", "Listed bootstrap", "SR3 hybrid", "SR3 full"]
                 _lf_on_now = st.session_state.get("_cfs_use_listed", False)
                 _default_src = "Listed bootstrap" if _lf_on_now else st.session_state.get("cfs_active_vol_src", "OTC only")
                 if _default_src not in _pricer_opts:
                     _default_src = "OTC only"
-                # Seed once, then rely on key= (avoids index=/key= race on rerun)
                 if "cfs_active_vol_src" not in st.session_state:
                     st.session_state["cfs_active_vol_src"] = _default_src
                 elif st.session_state["cfs_active_vol_src"] not in _pricer_opts:
@@ -11993,22 +12048,27 @@ def caps_floors_tab(vol_mode: str):
                     _pricer_opts,
                     horizontal=True,
                     key="cfs_active_vol_src",
-                    help="OTC only = existing behavior. "
-                         "Listed bootstrap = AUD-style bootstrap with listed 1Y/2Y straddle as anchor. "
-                         "SR3 hybrid = listed wins 0→cutoff caplet vols directly. "
-                         "SR3 full = listed everywhere available.",
+                    help="OTC only = wedge chain from OTC 1Y straddle. "
+                         "Listed bootstrap = listed SR3 term-structure front + wedge tail. "
+                         "SR3 hybrid = listed to cutoff, OTC beyond. "
+                         "SR3 full = all listed anchors, OTC beyond.",
                 )
             with _mc3:
+                # Seed once, then rely on key=
+                if "cfs_overlay_choices" not in st.session_state:
+                    st.session_state["cfs_overlay_choices"] = (
+                        ["OTC only", "Listed bootstrap"] if _lf_on_now
+                        else ["OTC only", "SR3 hybrid"]
+                    )
                 _overlay_choices = st.multiselect(
                     "Overlay on chart",
                     ["OTC only", "Listed bootstrap", "SR3 hybrid", "SR3 full"],
-                    default=["OTC only", "Listed bootstrap"] if _lf_on_now else ["OTC only", "SR3 hybrid"],
                     key="cfs_overlay_choices",
                     help="Multiple curves overlaid on Caplet Vol Curve chart below.",
                 )
 
-            # Build parallel curves (cached per (cutoff, session edits, snapshot,
-            # otc curve length) — only rebuild when any of those change).
+            # v2004x: Build SR3 hybrid + full via new closure helpers.
+            # Cache per (cutoff, session edits, snapshot, otc length).
             _sr3_sig = (
                 _sr3_cutoff_y,
                 tuple(sorted(
@@ -12026,118 +12086,75 @@ def caps_floors_tab(vol_mode: str):
                 sr3_hybrid_curve = _sr3_cache.get("hybrid")
                 sr3_full_curve   = _sr3_cache.get("full")
             else:
-                try:
-                    sr3_hybrid_curve = build_caplet_vol_curve_sr3(
-                        "USD",
-                        cutoff_years=_sr3_cutoff_y,
-                        otc_fallback_curve=otc_caplet_curve,
-                        final_maturity_y=max(tenor_y + 0.5, 10.0),
-                    )
-                except Exception as _e_h:
-                    sr3_hybrid_curve = None
-                    st.caption(f"⚠ SR3 hybrid build failed: {_e_h}")
-                try:
-                    sr3_full_curve = build_caplet_vol_curve_sr3_full(
-                        "USD",
-                        otc_fallback_curve=otc_caplet_curve,
-                        final_maturity_y=max(tenor_y + 0.5, 10.0),
-                    )
-                except Exception as _e_f:
-                    sr3_full_curve = None
-                    st.caption(f"⚠ SR3 full build failed: {_e_f}")
+                _final_y = max(tenor_y + 0.5, 10.0)
+                sr3_hybrid_curve = _call_build_sr3_hybrid(_sr3_cutoff_y, otc_caplet_curve, _final_y)
+                sr3_full_curve   = _call_build_sr3_full(otc_caplet_curve, _final_y)
                 st.session_state["_cfs_sr3_curves_cache"] = {
                     "sig": _sr3_sig,
                     "hybrid": sr3_hybrid_curve,
                     "full":   sr3_full_curve,
                 }
 
-            # Swap the active curve
-            if _active_src == "Listed bootstrap":
-                # caplet_vol_curve already bootstrapped at line ~11554 using
-                # the listed-derived 1Y (& possibly 2Y) straddle in cfs_table_data.
-                # Nothing to swap — it IS the active curve.
-                st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
-                _anchor_lbl = "1Y" if st.session_state.get("_cfs_listed_pack","whites")=="whites" else "2Y"
-                _override_n = st.session_state.get("_cfs_listed_front_override_n", 0)
-                _override_end_lbl = st.session_state.get("_cfs_listed_front_override_end", 1.0)
-                if _override_n > 0:
-                    st.caption(
-                        f"🟢 **Active:** Listed bootstrap — **front {_override_end_lbl:.0f}Y "
-                        f"caplet vols taken directly from SR3 term structure** "
-                        f"({_override_n} quarterly points), wedge chain extends from {_override_end_lbl:.0f}Y."
-                    )
-                else:
-                    st.caption(f"🟢 **Active:** Listed bootstrap (listed {_anchor_lbl} straddle anchors AUD-style wedge chain)")
-            elif _active_src == "SR3 hybrid" and sr3_hybrid_curve:
-                caplet_vol_curve = sr3_hybrid_curve
-                st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
-                st.caption(f"🟢 **Active:** SR3 hybrid (listed ≤{_sr3_cutoff_lbl}, OTC >{_sr3_cutoff_lbl})")
-            elif _active_src == "SR3 full" and sr3_full_curve:
-                caplet_vol_curve = sr3_full_curve
-                st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
-                st.caption("🟢 **Active:** SR3 full (listed everywhere available)")
-            else:
-                st.caption("🟢 **Active:** OTC only (existing wedge path)")
+            # v2004x: Active selection via dict lookup (no more per-branch mutation).
+            _curves_by_src = {
+                "OTC only":         otc_caplet_curve,
+                "Listed bootstrap": _listed_curve_built or otc_caplet_curve,
+                "SR3 hybrid":       sr3_hybrid_curve or otc_caplet_curve,
+                "SR3 full":         sr3_full_curve or otc_caplet_curve,
+            }
+            caplet_vol_curve = dict(_curves_by_src.get(_active_src, otc_caplet_curve))
+            st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
 
-            # ═══════════════════════════════════════════════════════════════
-            # Calculate CFS Curve — splice active front-end + wedge long-end
-            # with PCHIP spline at the join (20-Apr-2026).
-            # ═══════════════════════════════════════════════════════════════
-            # When the user clicks Calculate CFS Curve, this block takes the
-            # NATURAL COVERAGE of the Active source as the front end, and the
-            # wedge-built OTC curve as the long end, joining them smoothly.
-            # Coverage windows:
-            #   OTC only         → entire curve (no splice needed)
-            #   Listed bootstrap → 0 to override_end (1Y whites / 2Y both)
-            #   SR3 hybrid       → 0 to sr3_cutoff (e.g. 2Y)
-            #   SR3 full         → 0 to last SR3 anchor (typically ~4Y)
-            if ccy == "USD" and st.session_state.pop("_cfs_calc_requested", False):
+            if _active_src == "Listed bootstrap":
+                _anchor_lbl = "1Y" if _lf_pack_now == "whites" else "2Y"
+                st.caption(f"Active: Listed bootstrap "
+                           f"(listed SR3 term-structure front + wedge chain from {_anchor_lbl})")
+            elif _active_src == "SR3 hybrid":
+                st.caption(f"Active: SR3 hybrid "
+                           f"(listed <={_sr3_cutoff_lbl}, OTC >{_sr3_cutoff_lbl})")
+            elif _active_src == "SR3 full":
+                st.caption("Active: SR3 full (all listed anchors, OTC beyond)")
+            else:
+                st.caption("Active: OTC only (wedge chain from OTC 1Y straddle)")
+
+            # v2004x: Splice block - PCHIP join of active front with OTC tail.
+            # When Calculate is pressed, take the active source's "natural front"
+            # and splice OTC wedge tail onto it, smoothed at the join.
+            if st.session_state.pop("_cfs_calc_requested", False):
                 try:
                     from scipy.interpolate import PchipInterpolator as _Pchip
                     import numpy as _np_cfs
                     _front_end_y = None
                     if _active_src == "Listed bootstrap":
-                        _front_end_y = st.session_state.get(
-                            "_cfs_listed_front_override_end", 1.0)
+                        _front_end_y = 2.0 if _lf_pack_now == "both" else 1.0
                     elif _active_src == "SR3 hybrid":
                         _front_end_y = _sr3_cutoff_y
-                    elif _active_src == "SR3 full":
-                        if sr3_full_curve:
-                            # Find where SR3 coverage ends (where values equal OTC again)
-                            _srf_keys = sorted(sr3_full_curve.keys())
-                            _otc_keys = sorted(otc_caplet_curve.keys())
-                            _cmn = [k for k in _srf_keys if k in otc_caplet_curve]
-                            _last_sr3_only = 0.5
-                            for _k in _cmn:
-                                if abs(sr3_full_curve[_k] - otc_caplet_curve[_k]) > 0.05:
-                                    _last_sr3_only = max(_last_sr3_only, _k)
-                            _front_end_y = _last_sr3_only
-                    # _active_src == "OTC only" → no splice, use OTC everywhere
+                    elif _active_src == "SR3 full" and sr3_full_curve:
+                        # Find where SR3 coverage effectively ends (values diverge from OTC)
+                        _last_sr3_only = 0.5
+                        for _k in sorted(sr3_full_curve.keys()):
+                            if _k in otc_caplet_curve and abs(sr3_full_curve[_k] - otc_caplet_curve[_k]) > 0.05:
+                                _last_sr3_only = max(_last_sr3_only, _k)
+                        _front_end_y = _last_sr3_only
                     if _front_end_y and _front_end_y > 0 and caplet_vol_curve and otc_caplet_curve:
-                        # Build unified curve: front source for t<=join, wedge OTC for t>join.
-                        # Use PCHIP over combined anchors to splinesmooth the seam.
                         _all_keys = sorted(set(list(caplet_vol_curve.keys()) + list(otc_caplet_curve.keys())))
                         _anchor_t, _anchor_v = [], []
                         for _k in _all_keys:
                             if _k <= _front_end_y + 1e-6:
-                                # Front end: take from active source
                                 if _k in caplet_vol_curve:
                                     _anchor_t.append(_k); _anchor_v.append(caplet_vol_curve[_k])
                             else:
-                                # Long end: take from OTC wedge curve
                                 if _k in otc_caplet_curve:
                                     _anchor_t.append(_k); _anchor_v.append(otc_caplet_curve[_k])
                         if len(_anchor_t) >= 2:
                             _at = _np_cfs.array(_anchor_t, dtype=float)
                             _av = _np_cfs.array(_anchor_v, dtype=float)
-                            # Sort and deduplicate anchor points (PCHIP requires strict monotonic)
                             _order = _np_cfs.argsort(_at)
                             _at = _at[_order]; _av = _av[_order]
                             _unique_mask = _np_cfs.concatenate(([True], _np_cfs.diff(_at) > 1e-6))
                             _at = _at[_unique_mask]; _av = _av[_unique_mask]
                             if len(_at) >= 2:
                                 _pchip = _Pchip(_at, _av, extrapolate=False)
-                                # Sample at quarterly grid
                                 _spliced = {}
                                 _t = 0.25
                                 _max_t = max(_at[-1], max(caplet_vol_curve.keys()))
@@ -12145,92 +12162,30 @@ def caps_floors_tab(vol_mode: str):
                                     _tr = round(_t, 2)
                                     _val = float(_pchip(_tr))
                                     if _np_cfs.isnan(_val):
-                                        # Outside range — clamp to nearest anchor
                                         _val = _av[0] if _tr < _at[0] else _av[-1]
                                     _spliced[_tr] = _val
                                     _t += 0.25
                                 caplet_vol_curve = _spliced
                                 st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
                                 st.success(
-                                    f"✅ **CFS Curve calculated** — front end from "
-                                    f"{_active_src} (0→{_front_end_y:.1f}Y), long end from "
-                                    f"wedge chain ({_front_end_y:.1f}Y→{_max_t:.1f}Y), PCHIP spline at join."
+                                    f"CFS Curve calculated - front end from "
+                                    f"{_active_src} (0->{_front_end_y:.1f}Y), long end from "
+                                    f"wedge chain ({_front_end_y:.1f}Y->{_max_t:.1f}Y), PCHIP splined."
                                 )
                     elif _active_src == "OTC only":
-                        st.success("✅ **CFS Curve calculated** — OTC wedge chain (no splice needed).")
+                        st.success("CFS Curve calculated - OTC wedge chain (no splice needed).")
                 except Exception as _spl_e:
-                    st.warning(f"⚠ Splice build failed — falling back to Active curve. Error: {_spl_e}")
+                    st.warning(f"Splice build failed - falling back to Active. Error: {_spl_e}")
 
-            # Build a STANDALONE listed-bootstrap curve for chart overlay,
-            # regardless of which Active source is selected. If Active IS
-            # Listed bootstrap, reuse caplet_vol_curve (already built that way).
-            # If Active is something else, run the AUD bootstrap once with a
-            # temporary listed anchor override, then restore cfs_table_data.
-            _listed_bootstrap_curve_for_chart = None
-            if ccy == "USD" and _listed_1y_stradd and _listed_1y_stradd > 0:
-                if _active_src == "Listed bootstrap" and caplet_vol_curve:
-                    _listed_bootstrap_curve_for_chart = dict(caplet_vol_curve)
-                else:
-                    # Cache by listed sig so we don't rebuild needlessly
-                    _lbc_sig = (_listed_1y_stradd, _listed_2y_stradd,
-                                spread_1y1y, spread_2y1y, spread_3y1y,
-                                spread_4y1y, spread_5y2y, spread_7y3y,
-                                spread_10y2y, spread_12y3y, _atm_hash)
-                    _lbc_cache = st.session_state.get("_cfs_listed_bootstrap_chart_cache")
-                    if _lbc_cache and _lbc_cache.get("sig") == _lbc_sig:
-                        _listed_bootstrap_curve_for_chart = _lbc_cache.get("curve")
-                    else:
-                        try:
-                            # Temporary override — will restore after build
-                            _cfs_td = st.session_state.setdefault("cfs_table_data", {})
-                            _orig_3m1y = dict(_cfs_td.get("3m1y", {}))
-                            _orig_1y1y = dict(_cfs_td.get("1y1y", {}))
-                            _cfs_td.setdefault("3m1y", {})["cfs_straddle"] = _listed_1y_stradd
-                            if (_lf_pack_now == "both" and _listed_2y_stradd
-                                    and _listed_2y_stradd > _listed_1y_stradd):
-                                _cfs_td.setdefault("1y1y", {})["cfs_straddle"] = _listed_2y_stradd - _listed_1y_stradd
-                            _listed_bootstrap_curve_for_chart = build_caplet_vol_curve(
-                                ccy, atm, None,
-                                spread_3m1y=spread_3m1y,
-                                spread_1y1y=spread_1y1y,
-                                spread_2y1y=spread_2y1y,
-                                spread_3y1y=spread_3y1y,
-                                spread_4y1y=spread_4y1y,
-                                spread_5y2y=spread_5y2y,
-                                spread_7y3y=spread_7y3y,
-                                spread_10y2y=spread_10y2y,
-                                spread_12y3y=spread_12y3y,
-                            )
-                            # Restore original — we don't want to disturb
-                            # the Active path's CFS table.
-                            if _orig_3m1y:
-                                _cfs_td["3m1y"] = _orig_3m1y
-                            if _orig_1y1y:
-                                _cfs_td["1y1y"] = _orig_1y1y
-                            # Option A (v2004w) — overlay curve uses listed
-                            # term structure for the front so the chart shows
-                            # what Listed bootstrap WOULD look like if made
-                            # Active. Without this, the overlay is flat-front
-                            # and useless.
-                            if _listed_bootstrap_curve_for_chart and _listed_curve_for_bs:
-                                _chart_override_end = 2.0 if _lf_pack_now == "both" else 1.0
-                                for _t_pt in sorted(_listed_curve_for_bs.keys()):
-                                    if _t_pt <= _chart_override_end + 1e-6:
-                                        _listed_bootstrap_curve_for_chart[_t_pt] = _listed_curve_for_bs[_t_pt]
-                            st.session_state["_cfs_listed_bootstrap_chart_cache"] = {
-                                "sig": _lbc_sig,
-                                "curve": _listed_bootstrap_curve_for_chart,
-                            }
-                        except Exception as _lbc_err:
-                            _listed_bootstrap_curve_for_chart = None
-                            st.caption(f"⚠ Listed bootstrap overlay build failed: {_lbc_err}")
-
-            # Stash for chart use.
+            # v2004x: Stash all 4 pre-built curves for the overlay table + chart.
+            # No separate chart-overlay-build path needed; _listed_curve_built is
+            # already a complete 0->30Y curve.
             st.session_state["_cfs_otc_curve"]        = otc_caplet_curve
-            st.session_state["_cfs_listed_bootstrap"] = _listed_bootstrap_curve_for_chart
+            st.session_state["_cfs_listed_bootstrap"] = _listed_curve_built
             st.session_state["_cfs_sr3_hybrid"]       = sr3_hybrid_curve
             st.session_state["_cfs_sr3_full"]         = sr3_full_curve
             st.session_state["_cfs_overlay_sel"]      = _overlay_choices
+
 
             # ═════════════════════════════════════════════════════════════
             # Listed Front Editor — edit adjustments here, see impact live
@@ -12319,337 +12274,346 @@ def caps_floors_tab(vol_mode: str):
                         )
 
             if _use_listed:
-              try:
-                # Load current SR3 rows (with session edits already overlaid)
-                _sr3_rows_le = _load_sr3_latest_usd_with_session_edits()
-                if not _sr3_rows_le:
-                    st.info("No SR3 snapshot loaded. Save a snapshot from the SR3 tab first.")
-                else:
-                    # Filter to the contracts we want to show.
-                    # Whites: front 4 quarterlies with underlyings matching the front 4 packs
-                    # from today's date. Reds: next 4.
-                    # We use pack_index computed from SR3 scaffolding to pick contracts.
-                    _today_le = __import__("datetime").date.today()
+              # v2004x: wrap body in collapsible expander so editor doesn't
+              # dominate viewport. Auto-opens if there are unsaved edits so
+              # the user sees what's going on; otherwise stays collapsed
+              # unless they've previously toggled it open.
+              _le_n_edits = len(st.session_state.get("_cfs_listed_session_edits", {}) or {})
+              _le_body_open = (st.session_state.get("_cfs_le_expanded", False)
+                               or _le_n_edits > 0)
+              _le_exp = st.expander("Listed Front editor - ratio/bp overrides", expanded=_le_body_open)
+              with _le_exp:
+                try:
+                  # Load current SR3 rows (with session edits already overlaid)
+                  _sr3_rows_le = _load_sr3_latest_usd_with_session_edits()
+                  if not _sr3_rows_le:
+                      st.info("No SR3 snapshot loaded. Save a snapshot from the SR3 tab first.")
+                  else:
+                      # Filter to the contracts we want to show.
+                      # Whites: front 4 quarterlies with underlyings matching the front 4 packs
+                      # from today's date. Reds: next 4.
+                      # We use pack_index computed from SR3 scaffolding to pick contracts.
+                      _today_le = __import__("datetime").date.today()
 
-                    def _t_mid(row):
-                        """Fixing midpoint T for sorting."""
-                        try:
-                            ed = row.get("expiry_date")
-                            md = row.get("maturity_date")
-                            from datetime import date as _d, timedelta as _td
-                            ed_d = ed if hasattr(ed, "toordinal") else _d.fromisoformat(str(ed)[:10])
-                            md_d = md if hasattr(md, "toordinal") else _d.fromisoformat(str(md)[:10])
-                            mid = ed_d + _td(days=(md_d - ed_d).days // 2)
-                            return (mid - _today_le).days / 365.25
-                        except Exception:
-                            return 999.0
+                      def _t_mid(row):
+                          """Fixing midpoint T for sorting."""
+                          try:
+                              ed = row.get("expiry_date")
+                              md = row.get("maturity_date")
+                              from datetime import date as _d, timedelta as _td
+                              ed_d = ed if hasattr(ed, "toordinal") else _d.fromisoformat(str(ed)[:10])
+                              md_d = md if hasattr(md, "toordinal") else _d.fromisoformat(str(md)[:10])
+                              mid = ed_d + _td(days=(md_d - ed_d).days // 2)
+                              return (mid - _today_le).days / 365.25
+                          except Exception:
+                              return 999.0
 
-                    _all_rows = [(c, r) for c, r in _sr3_rows_le.items()
-                                 if "MC" not in r.get("contract_type", "")]
-                    _all_rows.sort(key=lambda x: _t_mid(x[1]))
+                      _all_rows = [(c, r) for c, r in _sr3_rows_le.items()
+                                   if "MC" not in r.get("contract_type", "")]
+                      _all_rows.sort(key=lambda x: _t_mid(x[1]))
 
-                    # Split by pack via pack index on underlying (W=0..3, R=4..7)
-                    _white_rows = []
-                    _red_rows = []
-                    for c, r in _all_rows:
-                        und = r.get("underlying")
-                        if not und:
-                            continue
-                        pidx = _sr3_pack_index(und)
-                        if 0 <= pidx <= 3:
-                            _white_rows.append((c, r))
-                        elif 4 <= pidx <= 7:
-                            _red_rows.append((c, r))
+                      # Split by pack via pack index on underlying (W=0..3, R=4..7)
+                      _white_rows = []
+                      _red_rows = []
+                      for c, r in _all_rows:
+                          und = r.get("underlying")
+                          if not und:
+                              continue
+                          pidx = _sr3_pack_index(und)
+                          if 0 <= pidx <= 3:
+                              _white_rows.append((c, r))
+                          elif 4 <= pidx <= 7:
+                              _red_rows.append((c, r))
 
-                    # ── White selection: checkbox per row, must pick exactly 4 ──
-                    # Session state stores the selected contract codes as a set.
-                    _prev_white_sel = st.session_state.get("_cfs_white_selected")
-                    if _prev_white_sel is None:
-                        # Default: first 4 whites
-                        _prev_white_sel = {c for c, _ in _white_rows[:4]}
-                        st.session_state["_cfs_white_selected"] = _prev_white_sel
+                      # ── White selection: checkbox per row, must pick exactly 4 ──
+                      # Session state stores the selected contract codes as a set.
+                      _prev_white_sel = st.session_state.get("_cfs_white_selected")
+                      if _prev_white_sel is None:
+                          # Default: first 4 whites
+                          _prev_white_sel = {c for c, _ in _white_rows[:4]}
+                          st.session_state["_cfs_white_selected"] = _prev_white_sel
 
-                    _white_codes_available = [c for c, _ in _white_rows]
-                    if len(_white_codes_available) > 4:
-                        st.markdown(
-                            f"<div style='font-size:11px;color:#64748b;margin-top:6px;'>"
-                            f"<b>White selection</b> — tick exactly 4 of the "
-                            f"{len(_white_codes_available)} available whites:</div>",
-                            unsafe_allow_html=True,
-                        )
-                        _ws_cols = st.columns(min(len(_white_codes_available), 8))
-                        _new_white_sel = set()
-                        for _i, (c, r) in enumerate(_white_rows):
-                            with _ws_cols[_i % len(_ws_cols)]:
-                                # Seed once from _prev_white_sel, then rely on
-                                # the key for persistence (20-Apr-2026 fix —
-                                # avoids value=/key= race resetting selections).
-                                _cb_key = f"_cfs_white_cb_{c}"
-                                if _cb_key not in st.session_state:
-                                    st.session_state[_cb_key] = (c in _prev_white_sel)
-                                _ticked = st.checkbox(
-                                    c,
-                                    key=_cb_key,
-                                )
-                                if _ticked:
-                                    _new_white_sel.add(c)
-                        st.session_state["_cfs_white_selected"] = _new_white_sel
+                      _white_codes_available = [c for c, _ in _white_rows]
+                      if len(_white_codes_available) > 4:
+                          st.markdown(
+                              f"<div style='font-size:11px;color:#64748b;margin-top:6px;'>"
+                              f"<b>White selection</b> — tick exactly 4 of the "
+                              f"{len(_white_codes_available)} available whites:</div>",
+                              unsafe_allow_html=True,
+                          )
+                          _ws_cols = st.columns(min(len(_white_codes_available), 8))
+                          _new_white_sel = set()
+                          for _i, (c, r) in enumerate(_white_rows):
+                              with _ws_cols[_i % len(_ws_cols)]:
+                                  # Seed once from _prev_white_sel, then rely on
+                                  # the key for persistence (20-Apr-2026 fix —
+                                  # avoids value=/key= race resetting selections).
+                                  _cb_key = f"_cfs_white_cb_{c}"
+                                  if _cb_key not in st.session_state:
+                                      st.session_state[_cb_key] = (c in _prev_white_sel)
+                                  _ticked = st.checkbox(
+                                      c,
+                                      key=_cb_key,
+                                  )
+                                  if _ticked:
+                                      _new_white_sel.add(c)
+                          st.session_state["_cfs_white_selected"] = _new_white_sel
 
-                        if len(_new_white_sel) != 4:
-                            st.warning(
-                                f"⚠ Please tick exactly 4 whites "
-                                f"(currently {len(_new_white_sel)}). "
-                                f"Editor and pricer feed disabled until resolved."
-                            )
-                            _white_selected_rows = []
-                        else:
-                            _white_selected_rows = [(c, r) for c, r in _white_rows if c in _new_white_sel]
-                    else:
-                        # ≤ 4 whites available — use all of them
-                        _white_selected_rows = _white_rows
-                        st.session_state["_cfs_white_selected"] = {c for c, _ in _white_rows}
+                          if len(_new_white_sel) != 4:
+                              st.warning(
+                                  f"⚠ Please tick exactly 4 whites "
+                                  f"(currently {len(_new_white_sel)}). "
+                                  f"Editor and pricer feed disabled until resolved."
+                              )
+                              _white_selected_rows = []
+                          else:
+                              _white_selected_rows = [(c, r) for c, r in _white_rows if c in _new_white_sel]
+                      else:
+                          # ≤ 4 whites available — use all of them
+                          _white_selected_rows = _white_rows
+                          st.session_state["_cfs_white_selected"] = {c for c, _ in _white_rows}
 
-                    if _pack_mode == "whites":
-                        _editor_rows = _white_selected_rows
-                        _otc_first_wedge = "1y1y"
-                    else:
-                        _editor_rows = _white_selected_rows + _red_rows[:4]
-                        _otc_first_wedge = "2y1y"
+                      if _pack_mode == "whites":
+                          _editor_rows = _white_selected_rows
+                          _otc_first_wedge = "1y1y"
+                      else:
+                          _editor_rows = _white_selected_rows + _red_rows[:4]
+                          _otc_first_wedge = "2y1y"
 
-                    if not _editor_rows:
-                        st.warning("No white/red contracts found in current snapshot, or white selection incomplete.")
-                    else:
-                        st.markdown(
-                            f"<div style='font-size:11px;color:#64748b;margin-top:4px;'>"
-                            f"Editing {len(_editor_rows)} contracts. "
-                            f"OTC wedges start at <b style='color:#22c55e'>{_otc_first_wedge}</b>. "
-                            f"3m1y{' and 1y1y' if _pack_mode == 'both' else ''} wedge"
-                            f"{'s are' if _pack_mode == 'both' else ' is'} skipped.</div>",
-                            unsafe_allow_html=True,
-                        )
+                      if not _editor_rows:
+                          st.warning("No white/red contracts found in current snapshot, or white selection incomplete.")
+                      else:
+                          st.markdown(
+                              f"<div style='font-size:11px;color:#64748b;margin-top:4px;'>"
+                              f"Editing {len(_editor_rows)} contracts. "
+                              f"OTC wedges start at <b style='color:#22c55e'>{_otc_first_wedge}</b>. "
+                              f"3m1y{' and 1y1y' if _pack_mode == 'both' else ''} wedge"
+                              f"{'s are' if _pack_mode == 'both' else ' is'} skipped.</div>",
+                              unsafe_allow_html=True,
+                          )
 
-                        # Header row
-                        _LE_CW = [0.9, 0.5, 0.95, 0.75, 0.85, 0.75, 0.95]
-                        _lh = st.columns(_LE_CW)
-                        _lh[0].markdown("<div style='font-size:11px;font-weight:600;color:#64748b'>Code</div>",
-                                        unsafe_allow_html=True)
-                        _lh[1].markdown("<div style='font-size:11px;font-weight:600;color:#64748b'>Pack</div>",
-                                        unsafe_allow_html=True)
-                        _lh[2].markdown("<div style='font-size:11px;font-weight:600;color:#38bdf8;text-align:center'>Listed ATM</div>",
-                                        unsafe_allow_html=True)
-                        _lh[3].markdown("<div style='font-size:11px;font-weight:600;color:#f59e0b;text-align:center'>Mode</div>",
-                                        unsafe_allow_html=True)
-                        _lh[4].markdown("<div style='font-size:11px;font-weight:600;color:#f59e0b;text-align:center'>Ratio</div>",
-                                        unsafe_allow_html=True)
-                        _lh[5].markdown("<div style='font-size:11px;font-weight:600;color:#f59e0b;text-align:center'>+bp</div>",
-                                        unsafe_allow_html=True)
-                        _lh[6].markdown("<div style='font-size:11px;font-weight:600;color:#22c55e;text-align:center'>Delivered</div>",
-                                        unsafe_allow_html=True)
+                          # Header row
+                          _LE_CW = [0.9, 0.5, 0.95, 0.75, 0.85, 0.75, 0.95]
+                          _lh = st.columns(_LE_CW)
+                          _lh[0].markdown("<div style='font-size:11px;font-weight:600;color:#64748b'>Code</div>",
+                                          unsafe_allow_html=True)
+                          _lh[1].markdown("<div style='font-size:11px;font-weight:600;color:#64748b'>Pack</div>",
+                                          unsafe_allow_html=True)
+                          _lh[2].markdown("<div style='font-size:11px;font-weight:600;color:#38bdf8;text-align:center'>Listed ATM</div>",
+                                          unsafe_allow_html=True)
+                          _lh[3].markdown("<div style='font-size:11px;font-weight:600;color:#f59e0b;text-align:center'>Mode</div>",
+                                          unsafe_allow_html=True)
+                          _lh[4].markdown("<div style='font-size:11px;font-weight:600;color:#f59e0b;text-align:center'>Ratio</div>",
+                                          unsafe_allow_html=True)
+                          _lh[5].markdown("<div style='font-size:11px;font-weight:600;color:#f59e0b;text-align:center'>+bp</div>",
+                                          unsafe_allow_html=True)
+                          _lh[6].markdown("<div style='font-size:11px;font-weight:600;color:#22c55e;text-align:center'>Delivered</div>",
+                                          unsafe_allow_html=True)
 
-                        # Rows
-                        _session_edits = st.session_state.get("_cfs_listed_session_edits", {}) or {}
-                        # DB baseline read ONCE before the loop (was called per row
-                        # = 4-8× per rerun, causing recalc storm).
-                        _db_rows_baseline = _load_sr3_latest_usd() or {}
+                          # Rows
+                          _session_edits = st.session_state.get("_cfs_listed_session_edits", {}) or {}
+                          # DB baseline read ONCE before the loop (was called per row
+                          # = 4-8× per rerun, causing recalc storm).
+                          _db_rows_baseline = _load_sr3_latest_usd() or {}
 
-                        for code, row in _editor_rows:
-                            pidx = _sr3_pack_index(row.get("underlying", ""))
-                            _pack_col = _sr3_pack_color(row.get("underlying", ""))
-                            _pack_bg  = _sr3_pack_bg(row.get("underlying", ""))
-                            _pack_lbl = "W" if 0 <= pidx <= 3 else "R" if 4 <= pidx <= 7 else "?"
+                          for code, row in _editor_rows:
+                              pidx = _sr3_pack_index(row.get("underlying", ""))
+                              _pack_col = _sr3_pack_color(row.get("underlying", ""))
+                              _pack_bg  = _sr3_pack_bg(row.get("underlying", ""))
+                              _pack_lbl = "W" if 0 <= pidx <= 3 else "R" if 4 <= pidx <= 7 else "?"
 
-                            atm_val = row.get("atm_vol")
-                            _cur_mode = (row.get("listed_adj_mode") or "ratio").lower()
-                            _cur_ratio = float(row.get("listed_adj_ratio") or 1.0)
-                            _cur_bp    = float(row.get("listed_adj_bp") or 0.0)
+                              atm_val = row.get("atm_vol")
+                              _cur_mode = (row.get("listed_adj_mode") or "ratio").lower()
+                              _cur_ratio = float(row.get("listed_adj_ratio") or 1.0)
+                              _cur_bp    = float(row.get("listed_adj_bp") or 0.0)
 
-                            # ── Widget state seeding (20-Apr-2026 fix) ─────
-                            # Seed session_state keys BEFORE instantiating widgets.
-                            # Then pass ONLY key= (no value= / index=) to avoid the
-                            # race where st.rerun() briefly reverts widgets to their
-                            # value= default while session_state is re-applied. This
-                            # was causing listed-editor ratios to reset when any
-                            # button triggered a rerun.
-                            _mkey = f"_cfs_le_{code}_mode"
-                            _rkey = f"_cfs_le_{code}_ratio"
-                            _bkey = f"_cfs_le_{code}_bp"
-                            if _mkey not in st.session_state:
-                                st.session_state[_mkey] = _cur_mode
-                            if _rkey not in st.session_state:
-                                st.session_state[_rkey] = _cur_ratio
-                            if _bkey not in st.session_state:
-                                st.session_state[_bkey] = _cur_bp
+                              # ── Widget state seeding (20-Apr-2026 fix) ─────
+                              # Seed session_state keys BEFORE instantiating widgets.
+                              # Then pass ONLY key= (no value= / index=) to avoid the
+                              # race where st.rerun() briefly reverts widgets to their
+                              # value= default while session_state is re-applied. This
+                              # was causing listed-editor ratios to reset when any
+                              # button triggered a rerun.
+                              _mkey = f"_cfs_le_{code}_mode"
+                              _rkey = f"_cfs_le_{code}_ratio"
+                              _bkey = f"_cfs_le_{code}_bp"
+                              if _mkey not in st.session_state:
+                                  st.session_state[_mkey] = _cur_mode
+                              if _rkey not in st.session_state:
+                                  st.session_state[_rkey] = _cur_ratio
+                              if _bkey not in st.session_state:
+                                  st.session_state[_bkey] = _cur_bp
 
-                            # Row band
-                            st.markdown(
-                                f"""<div style='
-                                    height:5px;
-                                    background:{_pack_bg};
-                                    border-left:4px solid {_pack_col};
-                                    margin-top:4px;
-                                    margin-bottom:-2px;
-                                '></div>""",
-                                unsafe_allow_html=True,
-                            )
+                              # Row band
+                              st.markdown(
+                                  f"""<div style='
+                                      height:5px;
+                                      background:{_pack_bg};
+                                      border-left:4px solid {_pack_col};
+                                      margin-top:4px;
+                                      margin-bottom:-2px;
+                                  '></div>""",
+                                  unsafe_allow_html=True,
+                              )
 
-                            _lr = st.columns(_LE_CW)
-                            _lr[0].markdown(
-                                f"<div style='font-size:12px;padding-top:8px;font-weight:700;color:{_pack_col};'>{code}</div>",
-                                unsafe_allow_html=True,
-                            )
-                            _lr[1].markdown(
-                                f"<div style='font-size:11px;padding-top:9px;color:#94a3b8;'>{_pack_lbl}</div>",
-                                unsafe_allow_html=True,
-                            )
-                            _lr[2].markdown(
-                                f"<div style='font-size:12px;padding-top:9px;text-align:center;color:#e2e8f0;'>"
-                                f"{atm_val:.2f}</div>" if atm_val else
-                                "<div style='font-size:12px;padding-top:9px;text-align:center;color:#475569;'>—</div>",
-                                unsafe_allow_html=True,
-                            )
+                              _lr = st.columns(_LE_CW)
+                              _lr[0].markdown(
+                                  f"<div style='font-size:12px;padding-top:8px;font-weight:700;color:{_pack_col};'>{code}</div>",
+                                  unsafe_allow_html=True,
+                              )
+                              _lr[1].markdown(
+                                  f"<div style='font-size:11px;padding-top:9px;color:#94a3b8;'>{_pack_lbl}</div>",
+                                  unsafe_allow_html=True,
+                              )
+                              _lr[2].markdown(
+                                  f"<div style='font-size:12px;padding-top:9px;text-align:center;color:#e2e8f0;'>"
+                                  f"{atm_val:.2f}</div>" if atm_val else
+                                  "<div style='font-size:12px;padding-top:9px;text-align:center;color:#475569;'>—</div>",
+                                  unsafe_allow_html=True,
+                              )
 
-                            _new_mode = _lr[3].selectbox(
-                                "", ["ratio", "bp"],
-                                key=_mkey,
-                                label_visibility="collapsed",
-                            )
-                            _new_ratio = _lr[4].number_input(
-                                "",
-                                min_value=0.50, max_value=3.00, step=0.0001, format="%.4f",
-                                key=_rkey,
-                                label_visibility="collapsed",
-                                disabled=(_new_mode != "ratio"),
-                            )
-                            _new_bp = _lr[5].number_input(
-                                "",
-                                min_value=-100.0, max_value=500.0, step=0.1, format="%.1f",
-                                key=_bkey,
-                                label_visibility="collapsed",
-                                disabled=(_new_mode != "bp"),
-                            )
+                              _new_mode = _lr[3].selectbox(
+                                  "", ["ratio", "bp"],
+                                  key=_mkey,
+                                  label_visibility="collapsed",
+                              )
+                              _new_ratio = _lr[4].number_input(
+                                  "",
+                                  min_value=0.50, max_value=3.00, step=0.0001, format="%.4f",
+                                  key=_rkey,
+                                  label_visibility="collapsed",
+                                  disabled=(_new_mode != "ratio"),
+                              )
+                              _new_bp = _lr[5].number_input(
+                                  "",
+                                  min_value=-100.0, max_value=500.0, step=0.1, format="%.1f",
+                                  key=_bkey,
+                                  label_visibility="collapsed",
+                                  disabled=(_new_mode != "bp"),
+                              )
 
-                            # Compute delivered
-                            if atm_val is not None and float(atm_val) > 0:
-                                if _new_mode == "ratio":
-                                    _deliv = float(atm_val) * _new_ratio
-                                else:
-                                    _deliv = float(atm_val) + _new_bp
-                                _is_edited = (
-                                    _new_mode != (row.get("listed_adj_mode") or "ratio").lower()
-                                    or abs(_new_ratio - float(row.get("listed_adj_ratio") or 1.0)) > 1e-6
-                                    or abs(_new_bp - float(row.get("listed_adj_bp") or 0.0)) > 1e-4
-                                )
-                                _is_non_default = (
-                                    (_new_mode == "ratio" and abs(_new_ratio - 1.0) > 1e-6)
-                                    or (_new_mode == "bp" and abs(_new_bp) > 1e-4)
-                                )
-                                _col_style = "color:#22c55e;font-weight:700" if _is_non_default else "color:#94a3b8"
-                                _deliv_str = f"{_deliv:.2f}"
-                            else:
-                                _deliv_str = "—"
-                                _col_style = "color:#475569"
-                                _is_edited = False
+                              # Compute delivered
+                              if atm_val is not None and float(atm_val) > 0:
+                                  if _new_mode == "ratio":
+                                      _deliv = float(atm_val) * _new_ratio
+                                  else:
+                                      _deliv = float(atm_val) + _new_bp
+                                  _is_edited = (
+                                      _new_mode != (row.get("listed_adj_mode") or "ratio").lower()
+                                      or abs(_new_ratio - float(row.get("listed_adj_ratio") or 1.0)) > 1e-6
+                                      or abs(_new_bp - float(row.get("listed_adj_bp") or 0.0)) > 1e-4
+                                  )
+                                  _is_non_default = (
+                                      (_new_mode == "ratio" and abs(_new_ratio - 1.0) > 1e-6)
+                                      or (_new_mode == "bp" and abs(_new_bp) > 1e-4)
+                                  )
+                                  _col_style = "color:#22c55e;font-weight:700" if _is_non_default else "color:#94a3b8"
+                                  _deliv_str = f"{_deliv:.2f}"
+                              else:
+                                  _deliv_str = "—"
+                                  _col_style = "color:#475569"
+                                  _is_edited = False
 
-                            _lr[6].markdown(
-                                f"<div style='font-size:12px;padding-top:9px;text-align:center;{_col_style};'>{_deliv_str}</div>",
-                                unsafe_allow_html=True,
-                            )
+                              _lr[6].markdown(
+                                  f"<div style='font-size:12px;padding-top:9px;text-align:center;{_col_style};'>{_deliv_str}</div>",
+                                  unsafe_allow_html=True,
+                              )
 
-                            # Track session edits — only if different from DB state
-                            # We compare to the ORIGINAL DB row using the single
-                            # baseline loaded before the loop (no per-row DB hit).
-                            _db_row  = _db_rows_baseline.get(code, {})
-                            _db_mode  = (_db_row.get("listed_adj_mode") or "ratio").lower()
-                            _db_ratio = float(_db_row.get("listed_adj_ratio") or 1.0)
-                            _db_bp    = float(_db_row.get("listed_adj_bp") or 0.0)
-                            _differs = (
-                                _new_mode != _db_mode
-                                or abs(_new_ratio - _db_ratio) > 1e-6
-                                or abs(_new_bp - _db_bp) > 1e-4
-                            )
-                            if _differs:
-                                _session_edits[code] = {
-                                    "listed_adj_mode":  _new_mode,
-                                    "listed_adj_ratio": _new_ratio,
-                                    "listed_adj_bp":    _new_bp,
-                                }
-                            else:
-                                # User reverted to DB state — clear edit
-                                _session_edits.pop(code, None)
+                              # Track session edits — only if different from DB state
+                              # We compare to the ORIGINAL DB row using the single
+                              # baseline loaded before the loop (no per-row DB hit).
+                              _db_row  = _db_rows_baseline.get(code, {})
+                              _db_mode  = (_db_row.get("listed_adj_mode") or "ratio").lower()
+                              _db_ratio = float(_db_row.get("listed_adj_ratio") or 1.0)
+                              _db_bp    = float(_db_row.get("listed_adj_bp") or 0.0)
+                              _differs = (
+                                  _new_mode != _db_mode
+                                  or abs(_new_ratio - _db_ratio) > 1e-6
+                                  or abs(_new_bp - _db_bp) > 1e-4
+                              )
+                              if _differs:
+                                  _session_edits[code] = {
+                                      "listed_adj_mode":  _new_mode,
+                                      "listed_adj_ratio": _new_ratio,
+                                      "listed_adj_bp":    _new_bp,
+                                  }
+                              else:
+                                  # User reverted to DB state — clear edit
+                                  _session_edits.pop(code, None)
 
-                        st.session_state["_cfs_listed_session_edits"] = _session_edits
+                          st.session_state["_cfs_listed_session_edits"] = _session_edits
 
-                        # ── Save / Discard controls ──
-                        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-                        _save_col, _discard_col, _info_col = st.columns([1, 1, 2.5])
-                        with _save_col:
-                            if st.button("💾 Save to snapshot", key="_cfs_le_save",
-                                         use_container_width=True,
-                                         disabled=(len(_session_edits) == 0)):
-                                # Write the edits to DB for the current snapshot
-                                _db_rows_for_save = _load_sr3_latest_usd()
-                                if not _db_rows_for_save:
-                                    st.error("No current snapshot to save to.")
-                                else:
-                                    # Build save rows — pull full row state + overlay session edits
-                                    _rows_out = []
-                                    for c, edits in _session_edits.items():
-                                        base = dict(_db_rows_for_save.get(c, {}))
-                                        if not base:
-                                            continue
-                                        base.update(edits)
-                                        # Normalize field names expected by save_sr3_snapshot
-                                        _rows_out.append(base)
-                                    if _rows_out:
-                                        # Grab current snapshot key
-                                        _cur_lbl = st.session_state.get("sr3_current_label")
-                                        _sd, _lbl = None, None
-                                        if _cur_lbl and " | " in _cur_lbl:
-                                            try:
-                                                _sd_str, _lbl = _cur_lbl.split(" | ", 1)
-                                                _sd = pd.Timestamp(_sd_str).to_pydatetime()
-                                            except Exception:
-                                                _sd, _lbl = None, None
-                                        if _sd is None:
-                                            # Fallback: latest snapshot via list
-                                            _snaps_tmp = list_sr3_snapshots("USD", limit=1)
-                                            if _snaps_tmp:
-                                                _sd = pd.Timestamp(_snaps_tmp[0]["snapshot_date"]).to_pydatetime()
-                                                _lbl = _snaps_tmp[0]["label"]
-                                        if _sd is None or _lbl is None:
-                                            st.error("Couldn't identify current snapshot to save into.")
-                                        else:
-                                            _n_saved = save_sr3_snapshot("shared", _lbl, _sd, _rows_out, "")
-                                            if _n_saved > 0:
-                                                st.success(f"✅ Saved {_n_saved} row(s) to snapshot {_lbl}")
-                                                st.session_state["_cfs_listed_session_edits"] = {}
-                                                list_sr3_snapshots.clear()
-                                                st.rerun()
-                                            else:
-                                                st.error("Save returned 0 rows — check logs.")
-                        with _discard_col:
-                            if st.button("↩ Discard session edits", key="_cfs_le_discard",
-                                         use_container_width=True,
-                                         disabled=(len(_session_edits) == 0)):
-                                st.session_state["_cfs_listed_session_edits"] = {}
-                                # Also clear the widget keys for editor rows
-                                for code, _r in _editor_rows:
-                                    for suffix in ("mode", "ratio", "bp"):
-                                        _k = f"_cfs_le_{code}_{suffix}"
-                                        if _k in st.session_state:
-                                            del st.session_state[_k]
-                                st.rerun()
-                        with _info_col:
-                            st.caption(
-                                f"Active pricer feed uses delivered vol = listed × ratio "
-                                f"(or listed + bp). Changes here update the caplet chart "
-                                f"above immediately. Save commits to DB snapshot."
-                            )
-              except Exception as _le_err:
-                import traceback as _tb
-                st.error(f"Listed Front editor error: {_le_err}")
-                with st.expander("Traceback"):
-                    st.code(_tb.format_exc())
+                          # ── Save / Discard controls ──
+                          st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+                          _save_col, _discard_col, _info_col = st.columns([1, 1, 2.5])
+                          with _save_col:
+                              if st.button("💾 Save to snapshot", key="_cfs_le_save",
+                                           use_container_width=True,
+                                           disabled=(len(_session_edits) == 0)):
+                                  # Write the edits to DB for the current snapshot
+                                  _db_rows_for_save = _load_sr3_latest_usd()
+                                  if not _db_rows_for_save:
+                                      st.error("No current snapshot to save to.")
+                                  else:
+                                      # Build save rows — pull full row state + overlay session edits
+                                      _rows_out = []
+                                      for c, edits in _session_edits.items():
+                                          base = dict(_db_rows_for_save.get(c, {}))
+                                          if not base:
+                                              continue
+                                          base.update(edits)
+                                          # Normalize field names expected by save_sr3_snapshot
+                                          _rows_out.append(base)
+                                      if _rows_out:
+                                          # Grab current snapshot key
+                                          _cur_lbl = st.session_state.get("sr3_current_label")
+                                          _sd, _lbl = None, None
+                                          if _cur_lbl and " | " in _cur_lbl:
+                                              try:
+                                                  _sd_str, _lbl = _cur_lbl.split(" | ", 1)
+                                                  _sd = pd.Timestamp(_sd_str).to_pydatetime()
+                                              except Exception:
+                                                  _sd, _lbl = None, None
+                                          if _sd is None:
+                                              # Fallback: latest snapshot via list
+                                              _snaps_tmp = list_sr3_snapshots("USD", limit=1)
+                                              if _snaps_tmp:
+                                                  _sd = pd.Timestamp(_snaps_tmp[0]["snapshot_date"]).to_pydatetime()
+                                                  _lbl = _snaps_tmp[0]["label"]
+                                          if _sd is None or _lbl is None:
+                                              st.error("Couldn't identify current snapshot to save into.")
+                                          else:
+                                              _n_saved = save_sr3_snapshot("shared", _lbl, _sd, _rows_out, "")
+                                              if _n_saved > 0:
+                                                  st.success(f"✅ Saved {_n_saved} row(s) to snapshot {_lbl}")
+                                                  st.session_state["_cfs_listed_session_edits"] = {}
+                                                  list_sr3_snapshots.clear()
+                                                  st.rerun()
+                                              else:
+                                                  st.error("Save returned 0 rows — check logs.")
+                          with _discard_col:
+                              if st.button("↩ Discard session edits", key="_cfs_le_discard",
+                                           use_container_width=True,
+                                           disabled=(len(_session_edits) == 0)):
+                                  st.session_state["_cfs_listed_session_edits"] = {}
+                                  # Also clear the widget keys for editor rows
+                                  for code, _r in _editor_rows:
+                                      for suffix in ("mode", "ratio", "bp"):
+                                          _k = f"_cfs_le_{code}_{suffix}"
+                                          if _k in st.session_state:
+                                              del st.session_state[_k]
+                                  st.rerun()
+                          with _info_col:
+                              st.caption(
+                                  f"Active pricer feed uses delivered vol = listed × ratio "
+                                  f"(or listed + bp). Changes here update the caplet chart "
+                                  f"above immediately. Save commits to DB snapshot."
+                              )
+                except Exception as _le_err:
+                  import traceback as _tb
+                  st.error(f"Listed Front editor error: {_le_err}")
+                  with st.expander("Traceback"):
+                      st.code(_tb.format_exc())
 
         # ── ATM CFS Straddle Table ──────────────────────────────────
         st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
@@ -12688,7 +12652,10 @@ def caps_floors_tab(vol_mode: str):
                 )
             _cfs_id = (
                 ccy,
-                st.session_state.get("_caplet_curve_key", 0),
+                # v2004x: caplet_vol_curve_aud is the active curve; its id/len
+                # changes whenever we rebuild. _caplet_curve_key is legacy.
+                len(st.session_state.get("caplet_vol_curve_aud") or {}),
+                id(st.session_state.get("caplet_vol_curve_aud")),
                 len(_cfs_tdata),
                 len(_caplet_vc) if _caplet_vc else 0,
                 _lf_sig,
@@ -12826,9 +12793,6 @@ def caps_floors_tab(vol_mode: str):
                     caplet_vol_curve[round(_t30, 2)] = max(_vol_15 + _frac * (_vol_20 - _vol_15), 1.0)
                     _t30 += 0.25
 
-            # Default to expanded so user can see results immediately after
-            # Calculate. Streamlit expanders don't persist user's close action
-            # across reruns anyway, so defaulting open is the useful choice.
             with st.expander("📊 Resulting Caplet Vol Curve", expanded=True):
                 from scipy.interpolate import CubicSpline
                 import plotly.graph_objects as _pgo
