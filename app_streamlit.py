@@ -24359,6 +24359,10 @@ def sod_report_tab():
         for _sk in list(st.session_state.keys()):
             if _sk.startswith("_snap_list_"):
                 del st.session_state[_sk]
+        # v2004ag: also bust the Currently Loaded Status cache (60s TTL)
+        # so the Home tab picks up the newest snapshot from DB immediately
+        st.session_state.pop("_latest_vol_snaps_cache", None)
+        st.session_state.pop("_latest_vol_snaps_ts", None)
         st.rerun()
     # Cache snapshot list in session state to avoid repeated DB calls within same render
     _snap_cache_key = f"_snap_list_{user_id}"
