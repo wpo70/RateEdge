@@ -12004,6 +12004,20 @@ def caps_floors_tab(vol_mode: str):
         # Default active to OTC until widgets render and we pick
         caplet_vol_curve = _otc_curve_built or {t: 35.0 for t in [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0]}
 
+        # v2004x AUD FIX: write caplet_vol_curve_aud FOR ALL ccy here, before
+        # any USD-specific code. AUD/NZD need this for downstream ATM CFS
+        # Straddle table (Flat Vol bp column) and pricer consumers. Previously
+        # this was only written inside the USD-only Active-swap block, which
+        # broke AUD. Also write _caplet_curve_key with a stable hash so the
+        # ATM CFS table cache invalidates correctly.
+        if caplet_vol_curve:
+            st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
+            # Cache key for ATM CFS table (matches v2004s shape for AUD)
+            st.session_state["_caplet_curve_key"] = (
+                ccy, _spreads_tuple, _atm_hash,
+                tuple(sorted(round(v, 4) for v in caplet_vol_curve.values())[:5]),
+            )
+
         # ═════════════════════════════════════════════════════════════════
         # USD-only: SR3 Listed Vol Mode (Step 5 of CFS build, 19-Apr-2026)
         # ═════════════════════════════════════════════════════════════════
@@ -12104,6 +12118,16 @@ def caps_floors_tab(vol_mode: str):
             }
             caplet_vol_curve = dict(_curves_by_src.get(_active_src, otc_caplet_curve))
             st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
+            # v2004x: write _caplet_curve_key so downstream ATM CFS Straddle
+            # table cache invalidates when USD curves change. The key shape is
+            # (active_src, spreads, atm_hash, listed state) so it changes on
+            # ANY input change.
+            st.session_state["_caplet_curve_key"] = (
+                _active_src, _spreads_tuple, _atm_hash,
+                round(_listed_1y_stradd, 4) if _listed_1y_stradd else None,
+                round(_listed_2y_stradd, 4) if _listed_2y_stradd else None,
+                _sr3_cutoff_y,
+            )
 
             if _active_src == "Listed bootstrap":
                 _anchor_lbl = "1Y" if _lf_pack_now == "whites" else "2Y"
@@ -12652,10 +12676,7 @@ def caps_floors_tab(vol_mode: str):
                 )
             _cfs_id = (
                 ccy,
-                # v2004x: caplet_vol_curve_aud is the active curve; its id/len
-                # changes whenever we rebuild. _caplet_curve_key is legacy.
-                len(st.session_state.get("caplet_vol_curve_aud") or {}),
-                id(st.session_state.get("caplet_vol_curve_aud")),
+                st.session_state.get("_caplet_curve_key", 0),
                 len(_cfs_tdata),
                 len(_caplet_vc) if _caplet_vc else 0,
                 _lf_sig,
