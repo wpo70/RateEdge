@@ -13372,6 +13372,211 @@ def caps_floors_tab(vol_mode: str):
                     hovermode="closest",
                 )
                 st.plotly_chart(fig, use_container_width=True)
+
+                # ══════════════════════════════════════════════════════════
+                # AUD-only: 🎚️ Smooth Mode — edit caplet curve → reverse-
+                # engineer wedges to hit the smoothed targets.
+                # Safe implementation: edit table of per-T target vols,
+                # click Solve, see proposed wedges side-by-side with current.
+                # User must click "Apply" to overwrite actual wedges.
+                # ══════════════════════════════════════════════════════════
+                if ccy == "AUD" and caplet_vol_curve and len(caplet_vol_curve) >= 4:
+                    with st.expander("🎚️ Smooth Mode — Edit Curve → Solve Wedges",
+                                     expanded=False):
+                        st.caption(
+                            "Edit vols in the table below to smooth the caplet curve "
+                            "to your desired shape, then click **Solve Wedges** to "
+                            "reverse-engineer the wedge spreads that fit. Review "
+                            "proposed vs current, then **Apply** to overwrite."
+                        )
+
+                        # Wedge-maturity anchor points (end-of-wedge T):
+                        # 1y1y→2Y, 2y1y→3Y, 3y1y→4Y, 4y1y→5Y, 5y2y→7Y,
+                        # 7y3y→10Y, 10y2y→12Y, 12y3y→15Y
+                        _SMOOTH_ANCHORS = [
+                            ("1y1y", 2.0), ("2y1y", 3.0), ("3y1y", 4.0),
+                            ("4y1y", 5.0), ("5y2y", 7.0), ("7y3y", 10.0),
+                            ("10y2y", 12.0), ("12y3y", 15.0),
+                        ]
+
+                        # Read current vols at anchor T values from caplet_vol_curve.
+                        # If exact T not in curve, use nearest available.
+                        def _vol_at(T, curve):
+                            if T in curve:
+                                return float(curve[T])
+                            _ks = np.array(sorted(curve.keys()))
+                            _i  = int(np.argmin(np.abs(_ks - T)))
+                            return float(curve[_ks[_i]])
+
+                        # Initial table: current caplet vol at each anchor maturity
+                        _smooth_key = f"_smooth_targets_{ccy}"
+                        if _smooth_key not in st.session_state:
+                            st.session_state[_smooth_key] = {
+                                w: round(_vol_at(T, caplet_vol_curve), 2)
+                                for w, T in _SMOOTH_ANCHORS
+                            }
+
+                        _reset_col, _solve_col, _apply_col = st.columns([1, 1, 1])
+                        with _reset_col:
+                            if st.button("↺ Reset to Current", key="smooth_reset"):
+                                st.session_state[_smooth_key] = {
+                                    w: round(_vol_at(T, caplet_vol_curve), 2)
+                                    for w, T in _SMOOTH_ANCHORS
+                                }
+                                st.session_state.pop("_smooth_proposed_wedges", None)
+                                st.rerun(scope="fragment")
+
+                        # Editable table of vol targets
+                        import pandas as _pd_sm
+                        _edit_df = _pd_sm.DataFrame([
+                            {
+                                "Wedge": w,
+                                "T (Y)": T,
+                                "Current Vol (bp)": round(_vol_at(T, caplet_vol_curve), 2),
+                                "Target Vol (bp)": float(
+                                    st.session_state[_smooth_key].get(w,
+                                        round(_vol_at(T, caplet_vol_curve), 2))),
+                            }
+                            for w, T in _SMOOTH_ANCHORS
+                        ])
+                        _edited = st.data_editor(
+                            _edit_df,
+                            key="smooth_editor",
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Wedge":           st.column_config.TextColumn(disabled=True),
+                                "T (Y)":           st.column_config.NumberColumn(disabled=True, format="%.1f"),
+                                "Current Vol (bp)": st.column_config.NumberColumn(disabled=True, format="%.2f"),
+                                "Target Vol (bp)":  st.column_config.NumberColumn(format="%.2f", step=0.25),
+                            },
+                        )
+                        # Stash edits
+                        for _, _r in _edited.iterrows():
+                            st.session_state[_smooth_key][_r["Wedge"]] = float(_r["Target Vol (bp)"])
+
+                        # ── Solve ──
+                        with _solve_col:
+                            _do_solve = st.button("▶ Solve Wedges", key="smooth_solve",
+                                                  use_container_width=True)
+                        if _do_solve:
+                            # Build a smoothed caplet-vol curve from the targets:
+                            # keep the short end (≤1Y) from current curve, then
+                            # interpolate linearly between anchor T points.
+                            _targets_full = {}
+                            # short end: 0.25..1.0 from current curve
+                            for _t in sorted(caplet_vol_curve.keys()):
+                                if _t <= 1.001:
+                                    _targets_full[round(_t, 2)] = float(caplet_vol_curve[_t])
+                            # anchor targets
+                            _anchors_t = [1.0] + [T for _, T in _SMOOTH_ANCHORS]
+                            _anchors_v = [_targets_full.get(1.0,
+                                           _vol_at(1.0, caplet_vol_curve))] + \
+                                         [st.session_state[_smooth_key][w]
+                                          for w, _ in _SMOOTH_ANCHORS]
+                            # linear interp between anchors on quarterly grid
+                            _t = 1.25
+                            _max_t = _anchors_t[-1] + 1e-6
+                            while _t <= _max_t:
+                                _v = float(np.interp(_t, _anchors_t, _anchors_v))
+                                _targets_full[round(_t, 2)] = _v
+                                _t += 0.25
+
+                            # Now reverse-engineer wedges: for each wedge, price
+                            # the caplet strip with the smoothed vols up to the
+                            # wedge's end-of-period T, compare against spot
+                            # swaption premium at that (expiry, tenor) point,
+                            # the difference = wedge spread.
+                            _cfs_td = st.session_state.get("cfs_table_data", {})
+                            _proposed = {}
+                            # Map of wedge → (table_label, expiry_label, tenor_y, end_T)
+                            _WEDGE_DEFS = [
+                                ("1y1y",  "3m1y",  "3m",  1.0, 2.0),
+                                ("2y1y",  "1y1y",  "1y",  1.0, 3.0),
+                                ("3y1y",  "2y1y",  "2y",  1.0, 4.0),
+                                ("4y1y",  "3y1y",  "3y",  1.0, 5.0),
+                                ("5y2y",  "4y1y",  "4y",  2.0, 7.0),
+                                ("7y3y",  "5y2y",  "5y",  3.0, 10.0),
+                                ("10y2y", "7y3y",  "7y",  2.0, 12.0),
+                                ("12y3y", "10y2y", "10y", 3.0, 15.0),
+                            ]
+
+                            for wedge_key, prev_tbl, exp_lbl, ten_y, end_T in _WEDGE_DEFS:
+                                try:
+                                    # Cumulative leg premium up to end_T using smoothed vols
+                                    _full_leg = price_caplets_with_vol_curve(
+                                        ccy, end_T, _targets_full, notional_mm=1.0
+                                    )
+                                    # Previous leg premium (up to start of this wedge)
+                                    _prev_end_T = end_T - ten_y
+                                    if _prev_end_T > 0.25:
+                                        _prev_leg = price_caplets_with_vol_curve(
+                                            ccy, _prev_end_T, _targets_full, notional_mm=1.0
+                                        )
+                                    else:
+                                        _prev_leg = 0.0
+                                    # Wedge CFS = leg premium over this tenor
+                                    _wedge_cfs_prem = float(_full_leg) - float(_prev_leg)
+                                    # Get underlying swaption premium at (exp, ten)
+                                    _pm = (st.session_state.get("atm_prem_matrix", {})
+                                           .get(ccy, {}).get("prem"))
+                                    _swpt_prem = None
+                                    if _pm is not None and not _pm.empty:
+                                        _v = get_matrix_value(_pm, exp_lbl, float(ten_y))
+                                        if _v is not None:
+                                            _swpt_prem = float(_v)
+                                    if _swpt_prem is None:
+                                        _proposed[wedge_key] = None
+                                        continue
+                                    # Wedge spread = CFS premium − underlying swaption premium
+                                    _proposed[wedge_key] = round(_wedge_cfs_prem - _swpt_prem, 2)
+                                except Exception:
+                                    _proposed[wedge_key] = None
+
+                            st.session_state["_smooth_proposed_wedges"] = _proposed
+
+                        # ── Display current vs proposed side-by-side ──
+                        _proposed = st.session_state.get("_smooth_proposed_wedges")
+                        if _proposed:
+                            _sp_keys = ["cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
+                                        "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y",
+                                        "cf_spr_10y2y","cf_spr_12y3y"]
+                            _wedge_keys = ["1y1y","2y1y","3y1y","4y1y","5y2y",
+                                           "7y3y","10y2y","12y3y"]
+                            _compare_rows = []
+                            for _wk, _sk in zip(_wedge_keys, _sp_keys):
+                                _cur = float(st.session_state.get(_sk, 0.0))
+                                _new = _proposed.get(_wk)
+                                _diff = (_new - _cur) if _new is not None else None
+                                _compare_rows.append({
+                                    "Wedge":    _wk,
+                                    "Current":  round(_cur, 2),
+                                    "Proposed": round(_new, 2) if _new is not None else None,
+                                    "Δ":        round(_diff, 2) if _diff is not None else None,
+                                })
+                            _cmp_df = _pd_sm.DataFrame(_compare_rows)
+                            st.markdown("**Wedge spread comparison**")
+                            st.dataframe(_cmp_df, use_container_width=True, hide_index=True,
+                                         column_config={
+                                             "Current":  st.column_config.NumberColumn(format="%.2f bp"),
+                                             "Proposed": st.column_config.NumberColumn(format="%.2f bp"),
+                                             "Δ":        st.column_config.NumberColumn(format="%+.2f bp"),
+                                         })
+                            with _apply_col:
+                                if st.button("✓ Apply Proposed", key="smooth_apply",
+                                             use_container_width=True, type="primary"):
+                                    for _wk, _sk in zip(_wedge_keys, _sp_keys):
+                                        _new = _proposed.get(_wk)
+                                        if _new is not None:
+                                            st.session_state[_sk] = float(_new)
+                                            # Clear temp/new widget keys so the
+                                            # wedge inputs pick up new values
+                                            st.session_state.pop(f"{_sk}_temp", None)
+                                            st.session_state.pop(f"{_sk}_new", None)
+                                    st.session_state.pop("_smooth_proposed_wedges", None)
+                                    st.success("Wedges updated — rerunning pricer")
+                                    st.rerun(scope="app")
+
         
     else:  # Surface (Auto)
         atm = get_working_atm_surface(ccy)
