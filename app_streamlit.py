@@ -24011,7 +24011,7 @@ def vol_lookup_tab():
         "Expiries: w/m/y. Tenors: y only."
     )
 
-    _vlc1, _vlc2 = st.columns([1, 4])
+    _vlc1, _vlc2, _vlc3 = st.columns([1, 2, 1])
     with _vlc1:
         _vl_ccy = st.radio("Currency", ["USD", "AUD", "NZD"], horizontal=True, key="vl_ccy")
     with _vlc2:
@@ -24019,6 +24019,20 @@ def vol_lookup_tab():
             "Notional (MM)", value=100.0, step=50.0, min_value=1.0,
             key="vl_notional", help="Used for $ premium column",
         )
+    with _vlc3:
+        st.markdown("")  # spacing
+        st.markdown("")
+        if st.button("🔄 Refresh", key="vl_refresh", use_container_width=True,
+                     help="Force re-read of ATM surface and vol_history from DB"):
+            # Invalidate the load_user_config + vol history caches so next
+            # call re-queries the DB
+            try:
+                load_user_config.clear()
+            except Exception:
+                pass
+            st.session_state.pop("_latest_vol_snaps_cache", None)
+            st.session_state.pop("_latest_vol_snaps_ts", None)
+            st.rerun()
 
     _vl_text = st.text_area(
         "Paste text here",
@@ -24317,6 +24331,54 @@ def vol_lookup_tab():
         r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 1e-12 else None
         return float(beta), (float(r2) if r2 is not None else None), len(pts)
 
+    # ── Shared copy helpers for beta section ──
+    def _df_to_tsv(df, fmt="{:.3f}"):
+        """Build tab-separated plaintext — pastes cleanly as a table in
+        Slack/Teams/Bloomberg chat/email."""
+        _headers = [""] + list(df.columns)
+        _lines = ["\t".join(_headers)]
+        for _idx, _row in df.iterrows():
+            _cells = [str(_idx)]
+            for _v in _row:
+                try:
+                    _cells.append(fmt.format(float(_v)))
+                except Exception:
+                    _cells.append("—")
+            _lines.append("\t".join(_cells))
+        return "\n".join(_lines)
+
+    def _render_copy_button(text, key_suffix, label="📋 Copy Table"):
+        """Always-visible Copy button using JS clipboard API."""
+        import streamlit.components.v1 as _c
+        import json as _j
+        _c.html(f"""
+            <div style="margin-top:4px;">
+              <button id="btn_{key_suffix}" style="
+                background:#ef4444;color:#fff;border:none;padding:6px 14px;
+                border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">
+                {label}
+              </button>
+              <span id="msg_{key_suffix}" style="margin-left:10px;color:#22c55e;
+                font-size:13px;font-weight:600;"></span>
+            </div>
+            <script>
+              (function() {{
+                const b = document.getElementById('btn_{key_suffix}');
+                const m = document.getElementById('msg_{key_suffix}');
+                b.onclick = async () => {{
+                  try {{
+                    await navigator.clipboard.writeText({_j.dumps(text)});
+                    m.textContent = '✓ Copied!';
+                    setTimeout(() => {{ m.textContent = ''; }}, 2000);
+                  }} catch (e) {{
+                    m.style.color = '#ef4444';
+                    m.textContent = 'Copy failed';
+                  }}
+                }};
+              }})();
+            </script>
+        """, height=50)
+
     # ── Section A: pick two pairs, show β + R² + daily pairs ──
     st.markdown("**Pick any two — detailed view**")
     _bcol1, _bcol2, _bcol3 = st.columns([2, 2, 3])
@@ -24351,6 +24413,12 @@ def vol_lookup_tab():
                 f"Δ {_pair_y}": [f"{v:+.2f}" if v is not None else "—" for v in _dy_sel],
             })
             st.dataframe(_pair_tbl, use_container_width=True, hide_index=True)
+            # TSV-style copy for the pair table (strings already formatted, so skip _df_to_tsv fmt)
+            _pair_tsv_lines = ["\t".join(_pair_tbl.columns.tolist())]
+            for _, _r_tbl in _pair_tbl.iterrows():
+                _pair_tsv_lines.append("\t".join(str(x) for x in _r_tbl.tolist()))
+            _render_copy_button("\n".join(_pair_tsv_lines), "pair_tbl",
+                                label="📋 Copy Regression Table")
     else:
         st.caption("Select two different pairs for beta analysis.")
 
@@ -24378,18 +24446,19 @@ def vol_lookup_tab():
     _df_r2   = _pd_bm.DataFrame(_r2_matrix,   index=_pair_labels, columns=_pair_labels)
 
     _bmt_c1, _bmt_c2 = st.tabs(["β matrix", "R² matrix"])
+
     with _bmt_c1:
-        # Colour gradient: red = negative, white = 0, green = positive,
-        # brighter = further from 1 (so beta=1 shows white-ish).
         st.dataframe(
             _df_beta.style.format("{:.3f}").background_gradient(cmap="RdYlGn", axis=None, vmin=-1, vmax=2),
             use_container_width=True,
         )
+        _render_copy_button(_df_to_tsv(_df_beta), "beta_mat")
     with _bmt_c2:
         st.dataframe(
             _df_r2.style.format("{:.3f}").background_gradient(cmap="Greens", axis=None, vmin=0, vmax=1),
             use_container_width=True,
         )
+        _render_copy_button(_df_to_tsv(_df_r2), "r2_mat")
 
 
 @st.fragment
