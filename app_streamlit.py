@@ -24607,6 +24607,19 @@ def vol_lookup_tab():
         with _bcol3_m:
             st.metric("Obs (days)", str(_n))
 
+        # Copy-friendly summary of the regression
+        _beta_str = f"{_beta:.3f}" if _beta is not None else "—"
+        _r2_str   = f"{_r2:.3f}"   if _r2   is not None else "—"
+        _beta_summary_tsv = (
+            f"X (independent)\t{_pair_x}\n"
+            f"Y (dependent)\t{_pair_y}\n"
+            f"β ({_pair_y} / {_pair_x})\t{_beta_str}\n"
+            f"R²\t{_r2_str}\n"
+            f"Obs (days)\t{_n}"
+        )
+        _render_copy_button(_beta_summary_tsv, "beta_summary",
+                            label="Copy Regression Summary")
+
         # Daily pair table
         with st.expander("📋 Daily Δvol pairs used in regression", expanded=False):
             import pandas as _pd_beta
