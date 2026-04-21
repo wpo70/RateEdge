@@ -24236,34 +24236,38 @@ def vol_lookup_tab():
         # st.code shows a native hover-copy button (top-right) — always works.
         st.code(_copy_text, language=None)
         # Explicit always-visible copy button via JS clipboard API.
+        # Use %-formatting instead of f-string to avoid brace-escaping issues.
         import streamlit.components.v1 as _components_vl
         import json as _json_vl
         _js_text = _json_vl.dumps(_copy_text)
-        _components_vl.html(f"""
+        _html_copy = """
             <div style="margin-top:4px;">
               <button id="vl_copy_btn" style="
                 background:#ef4444;color:#fff;border:none;padding:8px 18px;
                 border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;">
-                📋 Copy to Clipboard
+                &#x1F4CB; Copy to Clipboard
               </button>
               <span id="vl_copy_msg" style="margin-left:10px;color:#22c55e;
                 font-size:13px;font-weight:600;"></span>
             </div>
             <script>
-              const btn = document.getElementById('vl_copy_btn');
-              const msg = document.getElementById('vl_copy_msg');
-              btn.onclick = async () => {{
-                try {{
-                  await navigator.clipboard.writeText({_js_text});
-                  msg.textContent = '✓ Copied!';
-                  setTimeout(() => {{ msg.textContent = ''; }}, 2000);
-                }} catch (e) {{
-                  msg.style.color = '#ef4444';
-                  msg.textContent = 'Copy failed: ' + e;
-                }}
-              }};
+              (function() {
+                var b = document.getElementById('vl_copy_btn');
+                var m = document.getElementById('vl_copy_msg');
+                var txt = %(txt)s;
+                b.onclick = function() {
+                  navigator.clipboard.writeText(txt).then(function() {
+                    m.textContent = '\u2713 Copied!';
+                    setTimeout(function() { m.textContent = ''; }, 2000);
+                  }).catch(function(e) {
+                    m.style.color = '#ef4444';
+                    m.textContent = 'Copy failed';
+                  });
+                };
+              })();
             </script>
-        """, height=55)
+        """ % {"txt": _js_text}
+        _components_vl.html(_html_copy, height=55)
 
     # ═════════════════════════════════════════════════════════════════
     # Beta Analyzer — 7 days of daily vol changes, regression β of
@@ -24335,49 +24339,60 @@ def vol_lookup_tab():
     def _df_to_tsv(df, fmt="{:.3f}"):
         """Build tab-separated plaintext — pastes cleanly as a table in
         Slack/Teams/Bloomberg chat/email."""
-        _headers = [""] + list(df.columns)
+        _headers = [""] + [str(c) for c in df.columns]
         _lines = ["\t".join(_headers)]
         for _idx, _row in df.iterrows():
             _cells = [str(_idx)]
             for _v in _row:
                 try:
-                    _cells.append(fmt.format(float(_v)))
+                    _fv = float(_v)
+                    if _fv != _fv:  # NaN check
+                        _cells.append("-")
+                    else:
+                        _cells.append(fmt.format(_fv))
                 except Exception:
-                    _cells.append("—")
+                    _cells.append("-")
             _lines.append("\t".join(_cells))
         return "\n".join(_lines)
 
-    def _render_copy_button(text, key_suffix, label="📋 Copy Table"):
-        """Always-visible Copy button using JS clipboard API."""
+    def _render_copy_button(text, key_suffix, label="Copy Table"):
+        """Always-visible Copy button using JS clipboard API. Text is
+        JSON-encoded for safe injection into the HTML/JS payload."""
         import streamlit.components.v1 as _c
         import json as _j
-        _c.html(f"""
+        # Fully JSON-encode the text — handles newlines, tabs, unicode, quotes
+        _js_text = _j.dumps(text)
+        _js_label = _j.dumps(label)
+        # Build the HTML as a plain string with %-formatting to avoid f-string
+        # issues around literal curly braces and embedded JSON
+        _html = """
             <div style="margin-top:4px;">
-              <button id="btn_{key_suffix}" style="
+              <button id="btn_%(sfx)s" style="
                 background:#ef4444;color:#fff;border:none;padding:6px 14px;
                 border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">
-                {label}
+                &#x1F4CB; %(lbl_display)s
               </button>
-              <span id="msg_{key_suffix}" style="margin-left:10px;color:#22c55e;
+              <span id="msg_%(sfx)s" style="margin-left:10px;color:#22c55e;
                 font-size:13px;font-weight:600;"></span>
             </div>
             <script>
-              (function() {{
-                const b = document.getElementById('btn_{key_suffix}');
-                const m = document.getElementById('msg_{key_suffix}');
-                b.onclick = async () => {{
-                  try {{
-                    await navigator.clipboard.writeText({_j.dumps(text)});
-                    m.textContent = '✓ Copied!';
-                    setTimeout(() => {{ m.textContent = ''; }}, 2000);
-                  }} catch (e) {{
+              (function() {
+                var b = document.getElementById('btn_%(sfx)s');
+                var m = document.getElementById('msg_%(sfx)s');
+                var txt = %(txt)s;
+                b.onclick = function() {
+                  navigator.clipboard.writeText(txt).then(function() {
+                    m.textContent = '\u2713 Copied!';
+                    setTimeout(function() { m.textContent = ''; }, 2000);
+                  }).catch(function(e) {
                     m.style.color = '#ef4444';
                     m.textContent = 'Copy failed';
-                  }}
-                }};
-              }})();
+                  });
+                };
+              })();
             </script>
-        """, height=50)
+        """ % {"sfx": key_suffix, "lbl_display": label.replace("📋 ", ""), "txt": _js_text}
+        _c.html(_html, height=50)
 
     # ── Section A: pick two pairs, show β + R² + daily pairs ──
     st.markdown("**Pick any two — detailed view**")
