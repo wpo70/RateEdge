@@ -947,13 +947,6 @@ def save_user_config(user_id: str, config_type: str, currency: str, data: dict, 
             conn.close()
         else:
             cur.close()
-        # v2104b: clear load_user_config cache so subsequent reads see
-        # this write. The @st.cache_data(ttl=1800) on load_user_config
-        # was holding stale values for up to 30 min, defeating the save.
-        try:
-            load_user_config.clear()
-        except Exception:
-            pass
         return True
     except Exception as e:
         if own_conn:
@@ -3457,19 +3450,6 @@ def apply_rateedge_theme(theme_name: str):
             padding: 0.5rem;
             border-radius: 8px;
             border: 1px solid {border};
-        }}
-        /* v2104d: sticky top-level tab bar. Scoped to the main tabs
-           wrapper only (container with key="main_tabs_wrapper" becomes
-           <div class="st-key-main_tabs_wrapper">). Use direct-child stTabs
-           selector so NESTED tabs (inside tab bodies) remain non-sticky. */
-        .st-key-main_tabs_wrapper > div > [data-testid="stElementContainer"] > .stTabs > [data-baseweb="tab-list"],
-        .st-key-main_tabs_wrapper > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] > .stTabs > [data-baseweb="tab-list"],
-        .st-key-main_tabs_wrapper .stTabs:first-of-type > [data-baseweb="tab-list"] {{
-            position: sticky !important;
-            top: 0 !important;
-            z-index: 999 !important;
-            background-color: {card} !important;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.25);
         }}
         .stTabs [data-baseweb="tab"] {{
             color: {tab_text} !important;
@@ -11028,7 +11008,7 @@ def caps_floors_tab(vol_mode: str):
         "NZD": {"cf_spr_3m1y":8.0,  "cf_spr_1y1y":10.0, "cf_spr_2y1y":12.0,
                 "cf_spr_3y1y":15.0, "cf_spr_4y1y":18.0, "cf_spr_5y2y":30.0,
                 "cf_spr_7y3y":40.0, "cf_spr_10y2y":30.0, "cf_spr_12y3y":60.0,
-                "cf_spr_15v20":-5.0},
+                "cf_spr_15v20":-5.0, "cf_spr_20v30":-5.0},
     }
     _prev_ccy = st.session_state.get("_cf_last_active_ccy")
     if _prev_ccy != ccy:
@@ -11574,25 +11554,23 @@ def caps_floors_tab(vol_mode: str):
                 new_spread_values["cf_spr_15v20"] = _spread_15v20_new
 
                 # ── Vol spread row for 20y → 30y extension (not a wedge) ──
-                # Only rendered for AUD and USD; NZD stops at 20Y.
-                if ccy in ("AUD", "USD"):
-                    _vs_cols30 = st.columns(CW)
-                    _vs_cols30[0].markdown(f"<div style='{_fs};color:#f59e0b'>20y vs 30y Vol Spd</div>", unsafe_allow_html=True)
-                    _spread_20v30_last = st.session_state.get("cf_spr_20v30", -5.0)
-                    _spread_20v30_cur  = st.session_state.get("cf_spr_20v30_temp", _spread_20v30_last)
-                    _vs_cols30[1].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>{_spread_20v30_last:.1f}</div>", unsafe_allow_html=True)
-                    _spread_20v30_new = _vs_cols30[2].number_input("", value=_spread_20v30_cur, key="cf_spr_20v30_new",
-                                                                   format="%.1f", step=0.5, label_visibility="collapsed")
-                    _delta_20v30 = _spread_20v30_new - _spread_20v30_last
-                    _dc30 = "#22c55e" if _delta_20v30 > 0 else "#ef4444" if _delta_20v30 < 0 else "#94a3b8"
-                    _vs_cols30[3].markdown(f"<div style='{_fs};text-align:right;color:{_dc30}'>{_delta_20v30:+.1f}</div>", unsafe_allow_html=True)
-                    _vs_cols30[5].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>vol spd</div>", unsafe_allow_html=True)
-                    _vs_cols30[8].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>20→30</div>", unsafe_allow_html=True)
-                    _vs_cols30[9].markdown(f"<div style='{_fs};text-align:right;color:#f59e0b'>{_spread_20v30_new:.1f}bp</div>", unsafe_allow_html=True)
-                    _vs_cols30[10].markdown(f"<div style='{_fs};text-align:right;color:#38bdf8;font-weight:600'>30Y CFS</div>", unsafe_allow_html=True)
-                    _vs_cols30[11].markdown(f"<div style='{_fs};text-align:right;color:#64748b'>vol ext</div>", unsafe_allow_html=True)
-                    st.session_state["cf_spr_20v30_temp"] = _spread_20v30_new
-                    new_spread_values["cf_spr_20v30"] = _spread_20v30_new
+                _vs_cols30 = st.columns(CW)
+                _vs_cols30[0].markdown(f"<div style='{_fs};color:#f59e0b'>20y vs 30y Vol Spd</div>", unsafe_allow_html=True)
+                _spread_20v30_last = st.session_state.get("cf_spr_20v30", -5.0)
+                _spread_20v30_cur  = st.session_state.get("cf_spr_20v30_temp", _spread_20v30_last)
+                _vs_cols30[1].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>{_spread_20v30_last:.1f}</div>", unsafe_allow_html=True)
+                _spread_20v30_new = _vs_cols30[2].number_input("", value=_spread_20v30_cur, key="cf_spr_20v30_new",
+                                                               format="%.1f", step=0.5, label_visibility="collapsed")
+                _delta_20v30 = _spread_20v30_new - _spread_20v30_last
+                _dc30 = "#22c55e" if _delta_20v30 > 0 else "#ef4444" if _delta_20v30 < 0 else "#94a3b8"
+                _vs_cols30[3].markdown(f"<div style='{_fs};text-align:right;color:{_dc30}'>{_delta_20v30:+.1f}</div>", unsafe_allow_html=True)
+                _vs_cols30[5].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>vol spd</div>", unsafe_allow_html=True)
+                _vs_cols30[8].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>20→30</div>", unsafe_allow_html=True)
+                _vs_cols30[9].markdown(f"<div style='{_fs};text-align:right;color:#f59e0b'>{_spread_20v30_new:.1f}bp</div>", unsafe_allow_html=True)
+                _vs_cols30[10].markdown(f"<div style='{_fs};text-align:right;color:#38bdf8;font-weight:600'>30Y CFS</div>", unsafe_allow_html=True)
+                _vs_cols30[11].markdown(f"<div style='{_fs};text-align:right;color:#64748b'>vol ext</div>", unsafe_allow_html=True)
+                st.session_state["cf_spr_20v30_temp"] = _spread_20v30_new
+                new_spread_values["cf_spr_20v30"] = _spread_20v30_new
 
             with col_sabr:
                 with st.expander("⚙️ SABR Skew Params", expanded=False):
@@ -12208,27 +12186,6 @@ def caps_floors_tab(vol_mode: str):
 
         # Default active to OTC until widgets render and we pick
         caplet_vol_curve = _otc_curve_built or {t: 35.0 for t in [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0]}
-
-        # v2104b: Extend AUD caplet curve to 30Y using 20v30 spread, so the
-        # "Resulting Caplet Vol Curve" chart shows the full 30Y extension that
-        # already exists in the ATM CFS Straddles table. The extension applies
-        # the 20v30 spread onto the 20Y flat value.
-        # Only for AUD (USD handled in the USD-specific block below; NZD ends at 20Y).
-        if ccy == "AUD" and caplet_vol_curve:
-            try:
-                _keys_sorted = sorted(caplet_vol_curve.keys())
-                _max_t_now = _keys_sorted[-1] if _keys_sorted else 0
-                # Only extend if curve tops out at ~20Y (don't re-extend)
-                if _max_t_now <= 20.01 and _max_t_now >= 19.9:
-                    _vol_20 = caplet_vol_curve[_max_t_now]
-                    _spd_20v30 = float(st.session_state.get("cf_spr_20v30", -5.0))
-                    _vol_30 = max(_vol_20 + _spd_20v30, 1.0)
-                    _t_ext = round(_max_t_now + 0.25, 2)
-                    while _t_ext <= 30.01:
-                        caplet_vol_curve[round(_t_ext, 2)] = _vol_30
-                        _t_ext += 0.25
-            except Exception:
-                pass
 
         # v2004x AUD FIX: write caplet_vol_curve_aud FOR ALL ccy here, before
         # any USD-specific code. AUD/NZD need this for downstream ATM CFS
@@ -12887,10 +12844,8 @@ def caps_floors_tab(vol_mode: str):
             _CFS_MAP = [
                 (1, "3m1y"), (2, "1y1y"), (3, "2y1y"), (4, "3y1y"), (5, "4y1y"),
                 (7, "5y2y"), (10, "7y3y"), (12, "10y2y"), (15, "12y3y"),
-                (20, "ext_15v20"),
+                (20, "ext_15v20"), (30, "ext_20v30"),
             ]
-            if ccy in ("AUD", "USD"):
-                _CFS_MAP.append((30, "ext_20v30"))
             _cfs_tdata = st.session_state.get("cfs_table_data", {})
             _caplet_vc = st.session_state.get("caplet_vol_curve_aud")
             _curve_local = get_ccy_curve(ccy)
@@ -22364,15 +22319,10 @@ def main():
         _tab_funcs += [lambda: multi_ccy_tab(vol_mode)]
 
     # Tab navigation — visual tabs, single dispatch per render
-    # v2104d: wrap in a container so we can target ONLY the main tabs
-    # (not nested st.tabs inside individual tab bodies) for sticky positioning.
-    # Streamlit adds a class `st-key-main_tabs_wrapper` to this container.
-    _main_tabs_ctr = st.container(key="main_tabs_wrapper")
-    with _main_tabs_ctr:
-        tabs = st.tabs(_tab_names)
-        for _ti, _tf in enumerate(_tab_funcs):
-            with tabs[_ti]:
-                _tf()
+    tabs = st.tabs(_tab_names)
+    for _ti, _tf in enumerate(_tab_funcs):
+        with tabs[_ti]:
+            _tf()
 
 
 
@@ -24061,7 +24011,7 @@ def vol_lookup_tab():
         "Expiries: w/m/y. Tenors: y only."
     )
 
-    _vlc1, _vlc2, _vlc3 = st.columns([1, 2, 1])
+    _vlc1, _vlc2 = st.columns([1, 4])
     with _vlc1:
         _vl_ccy = st.radio("Currency", ["USD", "AUD", "NZD"], horizontal=True, key="vl_ccy")
     with _vlc2:
@@ -24069,80 +24019,6 @@ def vol_lookup_tab():
             "Notional (MM)", value=100.0, step=50.0, min_value=1.0,
             key="vl_notional", help="Used for $ premium column",
         )
-    with _vlc3:
-        st.markdown("")  # spacing
-        st.markdown("")
-        if st.button("🔄 Refresh", key="vl_refresh", use_container_width=True,
-                     help="Reload latest ATM vol surface from vol_history DB"):
-            # 1) Bust all relevant caches
-            try:
-                load_user_config.clear()
-            except Exception:
-                pass
-            try:
-                list_vol_snapshots.clear()
-            except Exception:
-                pass
-            for _k in list(st.session_state.keys()):
-                if _k.startswith("_latest_vol_snaps") or _k.startswith("_snap_list"):
-                    del st.session_state[_k]
-
-            # 2) Query latest snapshot ID per ccy from vol_history DB
-            _ccy_sel = st.session_state.get("vl_ccy", "USD")
-            _refresh_err = None
-            _refresh_ok  = None
-            if HAS_POSTGRES:
-                try:
-                    _rc = get_db_connection()
-                    if _rc:
-                        _rcur = _rc.cursor()
-                        _rcur.execute("""
-                            SELECT id, label FROM vol_history
-                            WHERE currency = %s
-                            ORDER BY snapshot_date DESC, created_at DESC
-                            LIMIT 1
-                        """, (_ccy_sel,))
-                        _row = _rcur.fetchone()
-                        _rcur.close()
-                        _rc.close()
-                        if _row:
-                            _snap_id, _snap_lbl = _row
-                            _snap_data = load_vol_snapshot(int(_snap_id))
-                            if _snap_data and _snap_data.get("atm") is not None:
-                                # Write into vol_data for this ccy
-                                if "vol_data" not in st.session_state:
-                                    st.session_state["vol_data"] = {}
-                                if _ccy_sel not in st.session_state["vol_data"]:
-                                    st.session_state["vol_data"][_ccy_sel] = {}
-                                st.session_state["vol_data"][_ccy_sel]["atm"] = _snap_data["atm"]
-                                # SABR params too if present
-                                for _k_sabr in ("alpha", "beta", "rho", "nu"):
-                                    if _snap_data.get(_k_sabr) is not None:
-                                        st.session_state["vol_data"][_ccy_sel][_k_sabr] = _snap_data[_k_sabr]
-                                _refresh_ok = _snap_lbl
-                            else:
-                                _refresh_err = f"Snapshot {_snap_lbl} loaded but ATM was empty"
-                        else:
-                            _refresh_err = f"No {_ccy_sel} snapshots found in vol_history"
-                except Exception as _re_e:
-                    _refresh_err = f"DB error: {_re_e}"
-            else:
-                _refresh_err = "Database not connected"
-
-            # 3) Stash status for next render, then force full rerun
-            if _refresh_ok:
-                st.session_state["_vl_refresh_msg"] = ("ok", f"✓ Reloaded: {_refresh_ok}")
-            else:
-                st.session_state["_vl_refresh_msg"] = ("err", f"⚠ {_refresh_err}")
-            st.rerun(scope="app")
-
-    # Display refresh status message (set by button handler above on prior run)
-    _vl_msg = st.session_state.pop("_vl_refresh_msg", None)
-    if _vl_msg:
-        if _vl_msg[0] == "ok":
-            st.success(_vl_msg[1])
-        else:
-            st.warning(_vl_msg[1])
 
     _vl_text = st.text_area(
         "Paste text here",
@@ -24197,15 +24073,8 @@ def vol_lookup_tab():
 
     # Load current ATM surface for the selected ccy
     _atm_surf = get_working_atm_surface(_vl_ccy)
-    _surface_ok = False
-    try:
-        if _atm_surf is not None and hasattr(_atm_surf, "empty") and not _atm_surf.empty:
-            _surface_ok = True
-    except Exception:
-        _surface_ok = False
-    if not _surface_ok:
-        st.warning(f"No ATM vol surface loaded for {_vl_ccy}. "
-                   "Click 🔄 Refresh above, or load a snapshot in IRS/Vol Upload first.")
+    if _atm_surf is None or _atm_surf.empty:
+        st.error(f"No ATM vol surface loaded for {_vl_ccy}. Load a snapshot first.")
         return
 
     # Load 7-day history — query vol_history for last 7 snapshots
@@ -24296,59 +24165,44 @@ def vol_lookup_tab():
     # Build output rows
     _vl_rows = []
     for _en, _tn in _vl_pairs:
-        try:
-            _exp_y = _vl_expiry_years(_en)
-            _ten_y = _vl_tenor_years(_tn)
-            if _exp_y is None or _ten_y is None:
-                _vl_rows.append({
-                    "Request": f"{_en}{_tn}",
-                    "Fwd %": "—", "Vol bp": "—", "Stradd bp": "—",
-                    "Stradd $": "—", "7d Avg": "—", "Δ T-1": "—",
-                })
-                continue
-            # Current vol from live surface
-            try:
-                _vol_now = get_matrix_value(_atm_surf, _en, _ten_y)
-            except Exception:
-                _vol_now = None
-            try:
-                _fwd = _vl_fwd(_exp_y, _ten_y)
-            except Exception:
-                _fwd = None
-            _stradd_bp = _vl_straddle_bp(_vol_now, _exp_y) if _vol_now else None
-            _stradd_dollar = (_stradd_bp * _vl_notional * 100.0) if _stradd_bp else None
-            # 7-day avg (exclude today if it's in the history too)
-            _7d_vals = []
-            for _sd, _vals in _history_surfaces[:7]:
-                try:
-                    _v = _vl_lookup_in_values(_vals, _en, _tn)
-                    if _v is not None:
-                        _7d_vals.append(_v)
-                except Exception:
-                    pass
-            _7d_avg = float(np.mean(_7d_vals)) if _7d_vals else None
-            # T-1 change
-            try:
-                _vol_t1 = _vl_lookup_in_values(_t1_surface, _en, _tn) if _t1_surface else None
-            except Exception:
-                _vol_t1 = None
-            _delta_t1 = (_vol_now - _vol_t1) if (_vol_now is not None and _vol_t1 is not None) else None
-
-            _vl_rows.append({
-                "Request":   f"{_en}{_tn}",
-                "Fwd %":     f"{_fwd:.3f}" if _fwd is not None else "—",
-                "Vol bp":    f"{_vol_now:.2f}" if _vol_now is not None else "—",
-                "Stradd bp": f"{_stradd_bp:.1f}" if _stradd_bp is not None else "—",
-                "Stradd $":  f"{_stradd_dollar:,.0f}" if _stradd_dollar is not None else "—",
-                "7d Avg":    f"{_7d_avg:.2f}" if _7d_avg is not None else "—",
-                "Δ T-1":     f"{_delta_t1:+.2f}" if _delta_t1 is not None else "—",
-            })
-        except Exception as _row_err:
+        _exp_y = _vl_expiry_years(_en)
+        _ten_y = _vl_tenor_years(_tn)
+        if _exp_y is None or _ten_y is None:
             _vl_rows.append({
                 "Request": f"{_en}{_tn}",
-                "Fwd %": "ERR", "Vol bp": "ERR", "Stradd bp": "ERR",
-                "Stradd $": "ERR", "7d Avg": "ERR", "Δ T-1": f"ERR ({type(_row_err).__name__})",
+                "Fwd %": "—",
+                "Vol bp": "—",
+                "Stradd bp": "—",
+                "Stradd $": "—",
+                "7d Avg": "—",
+                "Δ T-1": "—",
             })
+            continue
+        # Current vol from live surface
+        _vol_now = get_matrix_value(_atm_surf, _en, _ten_y)
+        _fwd = _vl_fwd(_exp_y, _ten_y)
+        _stradd_bp = _vl_straddle_bp(_vol_now, _exp_y) if _vol_now else None
+        _stradd_dollar = (_stradd_bp * _vl_notional * 100.0) if _stradd_bp else None
+        # 7-day avg (exclude today if it's in the history too)
+        _7d_vals = []
+        for _sd, _vals in _history_surfaces[:7]:
+            _v = _vl_lookup_in_values(_vals, _en, _tn)
+            if _v is not None:
+                _7d_vals.append(_v)
+        _7d_avg = float(np.mean(_7d_vals)) if _7d_vals else None
+        # T-1 change
+        _vol_t1 = _vl_lookup_in_values(_t1_surface, _en, _tn) if _t1_surface else None
+        _delta_t1 = (_vol_now - _vol_t1) if (_vol_now is not None and _vol_t1 is not None) else None
+
+        _vl_rows.append({
+            "Request":   f"{_en}{_tn}",
+            "Fwd %":     f"{_fwd:.3f}" if _fwd is not None else "—",
+            "Vol bp":    f"{_vol_now:.2f}" if _vol_now is not None else "—",
+            "Stradd bp": f"{_stradd_bp:.1f}" if _stradd_bp is not None else "—",
+            "Stradd $":  f"{_stradd_dollar:,.0f}" if _stradd_dollar is not None else "—",
+            "7d Avg":    f"{_7d_avg:.2f}" if _7d_avg is not None else "—",
+            "Δ T-1":     f"{_delta_t1:+.2f}" if _delta_t1 is not None else "—",
+        })
 
     import pandas as _pd_vl
     _df_vl = _pd_vl.DataFrame(_vl_rows)
@@ -24368,38 +24222,34 @@ def vol_lookup_tab():
         # st.code shows a native hover-copy button (top-right) — always works.
         st.code(_copy_text, language=None)
         # Explicit always-visible copy button via JS clipboard API.
-        # Use %-formatting instead of f-string to avoid brace-escaping issues.
         import streamlit.components.v1 as _components_vl
         import json as _json_vl
         _js_text = _json_vl.dumps(_copy_text)
-        _html_copy = """
+        _components_vl.html(f"""
             <div style="margin-top:4px;">
               <button id="vl_copy_btn" style="
                 background:#ef4444;color:#fff;border:none;padding:8px 18px;
                 border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;">
-                &#x1F4CB; Copy to Clipboard
+                📋 Copy to Clipboard
               </button>
               <span id="vl_copy_msg" style="margin-left:10px;color:#22c55e;
                 font-size:13px;font-weight:600;"></span>
             </div>
             <script>
-              (function() {
-                var b = document.getElementById('vl_copy_btn');
-                var m = document.getElementById('vl_copy_msg');
-                var txt = %(txt)s;
-                b.onclick = function() {
-                  navigator.clipboard.writeText(txt).then(function() {
-                    m.textContent = '\u2713 Copied!';
-                    setTimeout(function() { m.textContent = ''; }, 2000);
-                  }).catch(function(e) {
-                    m.style.color = '#ef4444';
-                    m.textContent = 'Copy failed';
-                  });
-                };
-              })();
+              const btn = document.getElementById('vl_copy_btn');
+              const msg = document.getElementById('vl_copy_msg');
+              btn.onclick = async () => {{
+                try {{
+                  await navigator.clipboard.writeText({_js_text});
+                  msg.textContent = '✓ Copied!';
+                  setTimeout(() => {{ msg.textContent = ''; }}, 2000);
+                }} catch (e) {{
+                  msg.style.color = '#ef4444';
+                  msg.textContent = 'Copy failed: ' + e;
+                }}
+              }};
             </script>
-        """ % {"txt": _js_text}
-        _components_vl.html(_html_copy, height=55)
+        """, height=55)
 
     # ═════════════════════════════════════════════════════════════════
     # Beta Analyzer — 7 days of daily vol changes, regression β of
@@ -24467,65 +24317,6 @@ def vol_lookup_tab():
         r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 1e-12 else None
         return float(beta), (float(r2) if r2 is not None else None), len(pts)
 
-    # ── Shared copy helpers for beta section ──
-    def _df_to_tsv(df, fmt="{:.3f}"):
-        """Build tab-separated plaintext — pastes cleanly as a table in
-        Slack/Teams/Bloomberg chat/email."""
-        _headers = [""] + [str(c) for c in df.columns]
-        _lines = ["\t".join(_headers)]
-        for _idx, _row in df.iterrows():
-            _cells = [str(_idx)]
-            for _v in _row:
-                try:
-                    _fv = float(_v)
-                    if _fv != _fv:  # NaN check
-                        _cells.append("-")
-                    else:
-                        _cells.append(fmt.format(_fv))
-                except Exception:
-                    _cells.append("-")
-            _lines.append("\t".join(_cells))
-        return "\n".join(_lines)
-
-    def _render_copy_button(text, key_suffix, label="Copy Table"):
-        """Always-visible Copy button using JS clipboard API. Text is
-        JSON-encoded for safe injection into the HTML/JS payload."""
-        import streamlit.components.v1 as _c
-        import json as _j
-        # Fully JSON-encode the text — handles newlines, tabs, unicode, quotes
-        _js_text = _j.dumps(text)
-        _js_label = _j.dumps(label)
-        # Build the HTML as a plain string with %-formatting to avoid f-string
-        # issues around literal curly braces and embedded JSON
-        _html = """
-            <div style="margin-top:4px;">
-              <button id="btn_%(sfx)s" style="
-                background:#ef4444;color:#fff;border:none;padding:6px 14px;
-                border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">
-                &#x1F4CB; %(lbl_display)s
-              </button>
-              <span id="msg_%(sfx)s" style="margin-left:10px;color:#22c55e;
-                font-size:13px;font-weight:600;"></span>
-            </div>
-            <script>
-              (function() {
-                var b = document.getElementById('btn_%(sfx)s');
-                var m = document.getElementById('msg_%(sfx)s');
-                var txt = %(txt)s;
-                b.onclick = function() {
-                  navigator.clipboard.writeText(txt).then(function() {
-                    m.textContent = '\u2713 Copied!';
-                    setTimeout(function() { m.textContent = ''; }, 2000);
-                  }).catch(function(e) {
-                    m.style.color = '#ef4444';
-                    m.textContent = 'Copy failed';
-                  });
-                };
-              })();
-            </script>
-        """ % {"sfx": key_suffix, "lbl_display": label.replace("📋 ", ""), "txt": _js_text}
-        _c.html(_html, height=50)
-
     # ── Section A: pick two pairs, show β + R² + daily pairs ──
     st.markdown("**Pick any two — detailed view**")
     _bcol1, _bcol2, _bcol3 = st.columns([2, 2, 3])
@@ -24560,12 +24351,6 @@ def vol_lookup_tab():
                 f"Δ {_pair_y}": [f"{v:+.2f}" if v is not None else "—" for v in _dy_sel],
             })
             st.dataframe(_pair_tbl, use_container_width=True, hide_index=True)
-            # TSV-style copy for the pair table (strings already formatted, so skip _df_to_tsv fmt)
-            _pair_tsv_lines = ["\t".join(_pair_tbl.columns.tolist())]
-            for _, _r_tbl in _pair_tbl.iterrows():
-                _pair_tsv_lines.append("\t".join(str(x) for x in _r_tbl.tolist()))
-            _render_copy_button("\n".join(_pair_tsv_lines), "pair_tbl",
-                                label="📋 Copy Regression Table")
     else:
         st.caption("Select two different pairs for beta analysis.")
 
@@ -24593,19 +24378,18 @@ def vol_lookup_tab():
     _df_r2   = _pd_bm.DataFrame(_r2_matrix,   index=_pair_labels, columns=_pair_labels)
 
     _bmt_c1, _bmt_c2 = st.tabs(["β matrix", "R² matrix"])
-
     with _bmt_c1:
+        # Colour gradient: red = negative, white = 0, green = positive,
+        # brighter = further from 1 (so beta=1 shows white-ish).
         st.dataframe(
             _df_beta.style.format("{:.3f}").background_gradient(cmap="RdYlGn", axis=None, vmin=-1, vmax=2),
             use_container_width=True,
         )
-        _render_copy_button(_df_to_tsv(_df_beta), "beta_mat")
     with _bmt_c2:
         st.dataframe(
             _df_r2.style.format("{:.3f}").background_gradient(cmap="Greens", axis=None, vmin=0, vmax=1),
             use_container_width=True,
         )
-        _render_copy_button(_df_to_tsv(_df_r2), "r2_mat")
 
 
 @st.fragment
@@ -27380,26 +27164,9 @@ h2{{color:#1e3a5f;margin-top:20px}}
                 def _clean_ts(raw):
                     import re as _re_ts
                     _s = str(raw).strip()
-                    # Pattern A: ISO "YYYY-MM-DD[T ]HH:MM"
-                    _m = _re_ts.search(r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}:\d{2})", _s)
-                    if _m:
-                        return f"{_m.group(1)}-{_m.group(2)}-{_m.group(3)} {_m.group(4)}"
-                    # Pattern B: label style "DD-MMM-YYYY HH:MM"
-                    # (e.g. "AUD EOD 20-Apr-2026 17:00 AEST")
-                    _mb = _re_ts.search(
-                        r"(\d{1,2})-([A-Za-z]{3})-(\d{4}).*?(\d{2}:\d{2})", _s)
-                    if _mb:
-                        _mon_map = {"Jan":"01","Feb":"02","Mar":"03","Apr":"04",
-                                    "May":"05","Jun":"06","Jul":"07","Aug":"08",
-                                    "Sep":"09","Oct":"10","Nov":"11","Dec":"12"}
-                        _mo = _mon_map.get(_mb.group(2).capitalize())
-                        if _mo:
-                            return f"{_mb.group(3)}-{_mo}-{int(_mb.group(1)):02d} {_mb.group(4)}"
-                    # Pattern C: ISO date only "YYYY-MM-DD" — use 16:30 NYC / 17:00 AEST as fallback close time
-                    _mc = _re_ts.search(r"^(\d{4}-\d{2}-\d{2})$", _s)
-                    if _mc:
-                        return f"{_mc.group(1)} 17:00"
-                    # Last resort: current Sydney time (preserves old fallback)
+                    _m = _re_ts.search(r"(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})", _s)
+                    if _m: return f"{_m.group(1)} {_m.group(2)}"
+                    # Date-only or label string — use current Sydney time
                     _now_syd = pd.Timestamp.now(tz="Australia/Sydney").strftime("%Y-%m-%d %H:%M")
                     return _now_syd
                 _ts_curr_clean = _clean_ts(_today_str)
