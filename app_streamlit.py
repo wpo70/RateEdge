@@ -24209,15 +24209,187 @@ def vol_lookup_tab():
     st.dataframe(_df_vl, use_container_width=True, hide_index=True)
 
     # Copy-friendly plain-text output block
-    with st.expander("📋 Copy-friendly plain text", expanded=False):
-        _lines = []
-        for _r in _vl_rows:
-            _lines.append(
-                f"{_r['Request']:<8}  Fwd={_r['Fwd %']:>6}%  "
-                f"Vol={_r['Vol bp']:>6}bp  Stradd={_r['Stradd bp']:>6}bp  "
-                f"(7dAvg={_r['7d Avg']:>6}  Δ={_r['Δ T-1']:>6})"
-            )
-        st.code("\n".join(_lines), language=None)
+    _lines = []
+    for _r in _vl_rows:
+        _lines.append(
+            f"{_r['Request']:<8}  Fwd={_r['Fwd %']:>6}%  "
+            f"Vol={_r['Vol bp']:>6}bp  Stradd={_r['Stradd bp']:>6}bp  "
+            f"(7dAvg={_r['7d Avg']:>6}  Δ={_r['Δ T-1']:>6})"
+        )
+    _copy_text = "\n".join(_lines)
+
+    with st.expander("📋 Copy-friendly plain text", expanded=True):
+        # st.code shows a native hover-copy button (top-right) — always works.
+        st.code(_copy_text, language=None)
+        # Explicit always-visible copy button via JS clipboard API.
+        import streamlit.components.v1 as _components_vl
+        import json as _json_vl
+        _js_text = _json_vl.dumps(_copy_text)
+        _components_vl.html(f"""
+            <div style="margin-top:4px;">
+              <button id="vl_copy_btn" style="
+                background:#ef4444;color:#fff;border:none;padding:8px 18px;
+                border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;">
+                📋 Copy to Clipboard
+              </button>
+              <span id="vl_copy_msg" style="margin-left:10px;color:#22c55e;
+                font-size:13px;font-weight:600;"></span>
+            </div>
+            <script>
+              const btn = document.getElementById('vl_copy_btn');
+              const msg = document.getElementById('vl_copy_msg');
+              btn.onclick = async () => {{
+                try {{
+                  await navigator.clipboard.writeText({_js_text});
+                  msg.textContent = '✓ Copied!';
+                  setTimeout(() => {{ msg.textContent = ''; }}, 2000);
+                }} catch (e) {{
+                  msg.style.color = '#ef4444';
+                  msg.textContent = 'Copy failed: ' + e;
+                }}
+              }};
+            </script>
+        """, height=55)
+
+    # ═════════════════════════════════════════════════════════════════
+    # Beta Analyzer — 7 days of daily vol changes, regression β of
+    # one pair's Δvol vs another's. Requires ≥ 2 pairs parsed above.
+    # ═════════════════════════════════════════════════════════════════
+    if len(_vl_pairs) < 2:
+        return  # need at least 2 pairs for beta
+
+    st.markdown("---")
+    st.markdown("### 📐 Beta Analyzer (7-day)")
+    st.caption(
+        "β of one pair's daily vol changes vs another's. "
+        "β > 1 = move amplified, β < 1 = dampened, β < 0 = anti-correlated. "
+        "R² tells you if β is meaningful (>0.5 generally solid, <0.2 noisy)."
+    )
+
+    # Build per-pair daily vol series from _history_surfaces (already loaded above)
+    # _history_surfaces = list of (snapshot_date, values) newest first, up to 10.
+    # Take first 8 so we get 7 daily changes.
+    _hist_window = _history_surfaces[:8]
+    if len(_hist_window) < 3:
+        st.info("Not enough history in DB for beta (need at least 3 daily snapshots).")
+        return
+
+    # Build matrix: rows = pairs, cols = vol on each historical date (oldest→newest)
+    _hist_window_rev = list(reversed(_hist_window))  # oldest first for chronological Δ
+    _pair_series = {}
+    for _en, _tn in _vl_pairs:
+        _series = []
+        for _sd, _vals in _hist_window_rev:
+            _v = _vl_lookup_in_values(_vals, _en, _tn)
+            _series.append(_v)
+        _pair_series[f"{_en}{_tn}"] = _series
+
+    # Daily changes per pair (ΔV = V_t − V_{t-1}). NaN-preserving.
+    def _daily_deltas(series):
+        out = []
+        for _i in range(1, len(series)):
+            _a, _b = series[_i-1], series[_i]
+            if _a is None or _b is None:
+                out.append(None)
+            else:
+                out.append(_b - _a)
+        return out
+
+    _pair_deltas = {_k: _daily_deltas(_v) for _k, _v in _pair_series.items()}
+
+    def _beta_regression(dx, dy):
+        """OLS β and R² for dy = β·dx + α + ε. Returns (beta, r2, n) or (None,None,0)."""
+        pts = [(x, y) for x, y in zip(dx, dy) if x is not None and y is not None]
+        if len(pts) < 3:
+            return None, None, len(pts)
+        import numpy as _np_beta
+        x_arr = _np_beta.array([p[0] for p in pts], dtype=float)
+        y_arr = _np_beta.array([p[1] for p in pts], dtype=float)
+        x_mean = x_arr.mean(); y_mean = y_arr.mean()
+        x_var = _np_beta.sum((x_arr - x_mean) ** 2)
+        if x_var < 1e-12:
+            return None, None, len(pts)
+        cov_xy = _np_beta.sum((x_arr - x_mean) * (y_arr - y_mean))
+        beta = cov_xy / x_var
+        y_pred = beta * (x_arr - x_mean) + y_mean
+        ss_res = _np_beta.sum((y_arr - y_pred) ** 2)
+        ss_tot = _np_beta.sum((y_arr - y_mean) ** 2)
+        r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 1e-12 else None
+        return float(beta), (float(r2) if r2 is not None else None), len(pts)
+
+    # ── Section A: pick two pairs, show β + R² + daily pairs ──
+    st.markdown("**Pick any two — detailed view**")
+    _bcol1, _bcol2, _bcol3 = st.columns([2, 2, 3])
+    _pair_labels = [f"{_en}{_tn}" for _en, _tn in _vl_pairs]
+    with _bcol1:
+        _pair_x = st.selectbox("X (independent)", _pair_labels, index=0, key="vl_beta_x")
+    with _bcol2:
+        _default_y_idx = 1 if len(_pair_labels) > 1 else 0
+        _pair_y = st.selectbox("Y (dependent)", _pair_labels,
+                               index=_default_y_idx, key="vl_beta_y")
+
+    if _pair_x != _pair_y:
+        _dx_sel = _pair_deltas.get(_pair_x, [])
+        _dy_sel = _pair_deltas.get(_pair_y, [])
+        _beta, _r2, _n = _beta_regression(_dx_sel, _dy_sel)
+        _bcol1_m, _bcol2_m, _bcol3_m = st.columns([1, 1, 1])
+        with _bcol1_m:
+            st.metric(f"β ({_pair_y} / {_pair_x})", f"{_beta:.3f}" if _beta is not None else "—")
+        with _bcol2_m:
+            st.metric("R²", f"{_r2:.3f}" if _r2 is not None else "—")
+        with _bcol3_m:
+            st.metric("Obs (days)", str(_n))
+
+        # Daily pair table
+        with st.expander("📋 Daily Δvol pairs used in regression", expanded=False):
+            import pandas as _pd_beta
+            _date_labels = [_sd.strftime("%d-%b") if hasattr(_sd, "strftime") else str(_sd)[:10]
+                            for _sd, _ in _hist_window_rev[1:]]
+            _pair_tbl = _pd_beta.DataFrame({
+                "Date": _date_labels,
+                f"Δ {_pair_x}": [f"{v:+.2f}" if v is not None else "—" for v in _dx_sel],
+                f"Δ {_pair_y}": [f"{v:+.2f}" if v is not None else "—" for v in _dy_sel],
+            })
+            st.dataframe(_pair_tbl, use_container_width=True, hide_index=True)
+    else:
+        st.caption("Select two different pairs for beta analysis.")
+
+    # ── Section B: auto N×N beta matrix ──
+    st.markdown("**Beta matrix (all parsed pairs)**")
+    st.caption("Entry [row=Y, col=X] = β such that ΔY ≈ β·ΔX. Diagonal always 1.000.")
+    import pandas as _pd_bm
+    _beta_matrix = []
+    _r2_matrix = []
+    for _y_lbl in _pair_labels:
+        _row_b = []
+        _row_r = []
+        for _x_lbl in _pair_labels:
+            if _x_lbl == _y_lbl:
+                _row_b.append(1.0)
+                _row_r.append(1.0)
+            else:
+                _b, _r, _ = _beta_regression(_pair_deltas[_x_lbl], _pair_deltas[_y_lbl])
+                _row_b.append(_b if _b is not None else float("nan"))
+                _row_r.append(_r if _r is not None else float("nan"))
+        _beta_matrix.append(_row_b)
+        _r2_matrix.append(_row_r)
+
+    _df_beta = _pd_bm.DataFrame(_beta_matrix, index=_pair_labels, columns=_pair_labels)
+    _df_r2   = _pd_bm.DataFrame(_r2_matrix,   index=_pair_labels, columns=_pair_labels)
+
+    _bmt_c1, _bmt_c2 = st.tabs(["β matrix", "R² matrix"])
+    with _bmt_c1:
+        # Colour gradient: red = negative, white = 0, green = positive,
+        # brighter = further from 1 (so beta=1 shows white-ish).
+        st.dataframe(
+            _df_beta.style.format("{:.3f}").background_gradient(cmap="RdYlGn", axis=None, vmin=-1, vmax=2),
+            use_container_width=True,
+        )
+    with _bmt_c2:
+        st.dataframe(
+            _df_r2.style.format("{:.3f}").background_gradient(cmap="Greens", axis=None, vmin=0, vmax=1),
+            use_container_width=True,
+        )
 
 
 @st.fragment
