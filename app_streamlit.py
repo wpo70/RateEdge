@@ -24327,8 +24327,9 @@ def vol_lookup_tab():
             return None
 
     def _matrix_lookup(mat, exp_str, ten_y):
-        """Lookup by row-label (expiry string) + column (tenor years).
-        Tolerant: case-insensitive row match, exact/nearest tenor column."""
+        """Lookup by row-label (expiry string) + column (tenor).
+        fwd_matrix / atm_prem_matrix have Expiry as index and tenor columns
+        as strings like '1Y', '2Y', '30Y' (capital Y). Match flexibly."""
         if mat is None or not hasattr(mat, "index") or mat.empty:
             return None
         try:
@@ -24340,19 +24341,26 @@ def vol_lookup_tab():
             _row = mat.loc[_row_key]
             if hasattr(_row, "ndim") and _row.ndim > 1:
                 _row = _row.iloc[0]
-            # Column match: try float, int, then nearest numeric
-            _ty = float(ten_y)
-            if _ty in _row.index:
-                return _scalarize(_row[_ty])
-            _tyi = int(ten_y)
-            if _tyi in _row.index:
-                return _scalarize(_row[_tyi])
-            # Nearest numeric column
-            _cols = [c for c in _row.index if isinstance(c, (int, float))]
-            if not _cols:
-                return None
-            _cn = min(_cols, key=lambda c: abs(float(c) - _ty))
-            return _scalarize(_row[_cn])
+            # Column: build case-insensitive column map
+            _col_map = {str(_c).lower().strip(): _c for _c in _row.index}
+            # Try "NY" format first (matches actual matrix: "1Y", "2Y", etc.)
+            _ten_int = int(ten_y) if float(ten_y).is_integer() else ten_y
+            _candidates = [
+                f"{_ten_int}y",
+                f"{int(ten_y)}y",
+                f"{ten_y}y",
+                str(_ten_int),
+                str(ten_y),
+            ]
+            for _cand in _candidates:
+                if _cand in _col_map:
+                    return _scalarize(_row[_col_map[_cand]])
+            # Fallback: try exact float/int index (older shapes)
+            if float(ten_y) in _row.index:
+                return _scalarize(_row[float(ten_y)])
+            if int(ten_y) in _row.index:
+                return _scalarize(_row[int(ten_y)])
+            return None
         except Exception:
             return None
 
