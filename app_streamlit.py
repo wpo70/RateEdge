@@ -24295,50 +24295,98 @@ def vol_lookup_tab():
                         return None
         return None
 
-    # Load forward rate surface (from the fwd matrix if available, else compute)
-    _fwd_mat = st.session_state.get(f"_fwd_rate_matrix_{_vl_ccy.lower()}")
-    if _fwd_mat is None:
-        _fwd_mat = st.session_state.get(f"_fwd_rate_matrix_{_vl_ccy}")
+    # Load forward rate matrix — built on Curves tab, stored in session_state
+    # as fwd_matrix[ccy] (rows = expiry labels like "1m", "3m", "1y", ...;
+    # columns = tenors in years as floats).
+    _fwd_mat = st.session_state.get("fwd_matrix", {}).get(_vl_ccy)
 
-    def _vl_fwd(exp_y, ten_y):
-        # First try matrix lookup
-        if _fwd_mat is not None and hasattr(_fwd_mat, "values"):
-            try:
-                _fval = get_matrix_value(_fwd_mat, f"{int(round(exp_y*12))}m" if exp_y < 1 else f"{int(round(exp_y))}y",
-                                          float(ten_y))
-                if _fval is not None:
-                    return float(_fval)
-            except Exception:
-                pass
-        # Fall back: compute from zero curve directly via fast_forward_rate.
-        # get_ccy_curve returns a DataFrame with MaturityY (years) and
-        # ZeroRatePct (%) columns.
+    def _vl_fwd(exp_y, ten_y, exp_str):
+        """Look up fwd rate (%) from the pre-built fwd_matrix. Matches rows
+        by expiry string FIRST (e.g. '1m','6m','18m','2y'), falls back to
+        years-based nearest-row if label not found. Returns percent."""
+        if _fwd_mat is None or not hasattr(_fwd_mat, "index"):
+            return None
         try:
-            _curve = get_ccy_curve(_vl_ccy)
-            if _curve is None or (hasattr(_curve, "empty") and _curve.empty):
+            # 1) Try direct label match on the row index
+            _idx_lower = {str(_i).lower().strip(): _i for _i in _fwd_mat.index}
+            _row_key = _idx_lower.get(exp_str.lower().strip())
+            if _row_key is None:
+                # 2) Fallback: find index row whose numeric-years-equivalent
+                #    is closest to exp_y
+                _best = None; _bd = 1e9
+                for _i in _fwd_mat.index:
+                    _iy = _vl_expiry_years(str(_i).lower())
+                    if _iy is not None:
+                        _d = abs(_iy - exp_y)
+                        if _d < _bd:
+                            _bd = _d; _best = _i
+                _row_key = _best
+            if _row_key is None:
                 return None
-            if "MaturityY" not in _curve.columns or "ZeroRatePct" not in _curve.columns:
+            _row = _fwd_mat.loc[_row_key]
+            # Column match: exact on float tenor, then nearest
+            if float(ten_y) in _row.index:
+                return float(_row[float(ten_y)])
+            # Try int equivalent
+            if int(ten_y) in _row.index:
+                return float(_row[int(ten_y)])
+            # Nearest numeric column
+            _cols = [c for c in _row.index if isinstance(c, (int, float))]
+            if not _cols:
                 return None
-            _cx = _curve["MaturityY"].to_numpy(dtype=float)
-            _cy = _curve["ZeroRatePct"].to_numpy(dtype=float) / 100.0  # fast_forward_rate wants decimal
-            # Sort by maturity
-            _order = np.argsort(_cx)
-            _cx = _cx[_order]; _cy = _cy[_order]
-            _r = fast_forward_rate(_cx, _cy, float(exp_y), float(ten_y), _vl_ccy)
-            if _r is None:
-                return None
-            # Convert decimal → percent for display
-            return float(_r) * 100.0
+            _cn = min(_cols, key=lambda c: abs(float(c) - float(ten_y)))
+            return float(_row[_cn])
         except Exception:
             return None
 
-    # Straddle premium bp (Bachelier ATM, 2-sided): σ × √T × √(2/π)
+    # Straddle premium bp (Bachelier ATM, 2-sided).
+    # For a payer+receiver straddle on a forward swap:
+    #   Premium($) = σ × √(2 × T_exp / π) × Annuity × Notional
+    # Where Annuity ≈ Σ τ_i × DF_i, which for level-par purposes is
+    # approximately tenor_y when discounting is ignored (par rate world).
+    # Premium in bp of notional × Annuity factor:
+    #   Stradd_bp_of_notional = σ × √(2 × T_exp / π) × Annuity_approx
+    # BBG-style "premium bp" actually uses full annuity with discount curve.
+    # Simple approximation (good to <5% for most shapes):
+    #   Annuity(T_tenor) ≈ T_tenor  (ignoring discounting for display purposes)
     _SQRT_2_OVER_PI = (2.0 / np.pi) ** 0.5  # ≈ 0.7979
 
-    def _vl_straddle_bp(vol_bp, exp_y):
-        if vol_bp is None or exp_y is None or exp_y <= 0:
+    def _vl_annuity(ten_y, exp_y):
+        """Approximate annuity factor = Σ τ_i × DF_i for the forward swap.
+        Uses the currency's live curve if available for proper discounting,
+        falls back to tenor_y if curve not accessible."""
+        try:
+            _curve = get_ccy_curve(_vl_ccy)
+            if _curve is None or not hasattr(_curve, "columns"):
+                return float(ten_y)
+            if "MaturityY" not in _curve.columns or "ZeroRatePct" not in _curve.columns:
+                return float(ten_y)
+            _cx = _curve["MaturityY"].to_numpy(dtype=float)
+            _cy = _curve["ZeroRatePct"].to_numpy(dtype=float) / 100.0
+            _order = np.argsort(_cx)
+            _cx = _cx[_order]; _cy = _cy[_order]
+            # Build annuity: assume semi-annual paying structure (τ=0.5) from exp_y to exp_y+ten_y
+            _tau = 0.5
+            _ann = 0.0
+            _t = float(exp_y) + _tau
+            while _t <= float(exp_y) + float(ten_y) + 1e-6:
+                _z = float(np.interp(_t, _cx, _cy))
+                _df = np.exp(-_z * _t)
+                _ann += _tau * _df
+                _t += _tau
+            return _ann
+        except Exception:
+            return float(ten_y)
+
+    def _vl_straddle_bp(vol_bp, exp_y, ten_y):
+        """Returns ATM Bachelier straddle premium in bp-of-notional.
+        σ is in bp/yr (normal vol), exp_y in years, ten_y in years."""
+        if vol_bp is None or exp_y is None or exp_y <= 0 or ten_y is None or ten_y <= 0:
             return None
-        return float(vol_bp) * (float(exp_y) ** 0.5) * _SQRT_2_OVER_PI
+        _annuity = _vl_annuity(ten_y, exp_y)
+        # σ × √(2T/π) gives expected absolute rate move in bp;
+        # ATM straddle premium = that × annuity
+        return float(vol_bp) * (float(exp_y) ** 0.5) * _SQRT_2_OVER_PI * float(_annuity)
 
     # Build output rows
     _vl_rows = []
@@ -24359,7 +24407,7 @@ def vol_lookup_tab():
             except Exception:
                 _vol_now = None
             try:
-                _fwd = _vl_fwd(_exp_y, _ten_y)
+                _fwd = _vl_fwd(_exp_y, _ten_y, _en)
             except Exception:
                 _fwd = None
             _stradd_bp = _vl_straddle_bp(_vol_now, _exp_y) if _vol_now else None
