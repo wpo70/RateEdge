@@ -12236,7 +12236,10 @@ def caps_floors_tab(vol_mode: str):
         }
         _spreads_tuple = tuple(_spreads_dict[k] for k in sorted(_spreads_dict.keys()))
 
-        # Cache and build OTC curve
+        # Cache and build OTC curve. Note: no st.spinner here — spinners ARE
+        # widgets and appear/disappear between cache hit and miss, creating a
+        # structural tree mismatch that corrupts Streamlit's delta protocol on
+        # rapid wedge edits (v2204f fix for USD white-screen).
         _otc_cache_sig = (_spreads_tuple, _atm_hash,
                           round(_otc_1y_stradd, 4) if _otc_1y_stradd else None,
                           round(_otc_1y1y_gap, 4) if _otc_1y1y_gap else None)
@@ -12244,14 +12247,14 @@ def caps_floors_tab(vol_mode: str):
         if _otc_cached and _otc_cached.get("sig") == _otc_cache_sig:
             _otc_curve_built = _otc_cached.get("curve")
         else:
-            with st.spinner("Building OTC curve..."):
-                _otc_curve_built = _call_build_otc(_spreads_dict)
+            _otc_curve_built = _call_build_otc(_spreads_dict)
             st.session_state["_cfs_otc_build_cache"] = {
                 "sig": _otc_cache_sig,
                 "curve": _otc_curve_built,
             }
 
-        # Cache and build Listed bootstrap curve (USD only)
+        # Cache and build Listed bootstrap curve (USD only). No spinner — same
+        # reason as OTC above.
         _listed_cache_sig = (_spreads_tuple, _atm_hash,
                              round(_listed_1y_stradd, 4) if _listed_1y_stradd else None,
                              round(_listed_2y_stradd, 4) if _listed_2y_stradd else None,
@@ -12262,8 +12265,7 @@ def caps_floors_tab(vol_mode: str):
             _listed_curve_built = _listed_cached.get("curve")
         else:
             if ccy == "USD":
-                with st.spinner("Building Listed bootstrap curve..."):
-                    _listed_curve_built = _call_build_listed(_spreads_dict)
+                _listed_curve_built = _call_build_listed(_spreads_dict)
             else:
                 _listed_curve_built = None
             st.session_state["_cfs_listed_build_cache"] = {
