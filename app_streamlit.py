@@ -947,6 +947,13 @@ def save_user_config(user_id: str, config_type: str, currency: str, data: dict, 
             conn.close()
         else:
             cur.close()
+        # v2104b: clear load_user_config cache so subsequent reads see
+        # this write. The @st.cache_data(ttl=1800) on load_user_config
+        # was holding stale values for up to 30 min, defeating the save.
+        try:
+            load_user_config.clear()
+        except Exception:
+            pass
         return True
     except Exception as e:
         if own_conn:
@@ -5263,6 +5270,8 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                 if _aud_zc is not None and len(_aud_zc) > 0:
                     # Store in curves (for display / NZD-USD style access) without calling
                     # _set_aud_dual_proj_curves — bootstrap already set _aud_zc_qq/ss/qq_full
+                    import datetime as _dt_aud
+                    _aud_zc["_source_date"] = str(_dt_aud.date.today())
                     st.session_state.setdefault("curves", {})["AUD"] = _aud_zc
                     _cids = st.session_state.setdefault("_curve_commit_ids", {})
                     _cids["AUD"] = _cids.get("AUD", 0) + 1
@@ -5280,6 +5289,8 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                         except Exception:
                             curve_df = load_curve(raw_curve, curve_name)
                     if curve_df is not None and len(curve_df) > 0:
+                        import datetime as _dt_aud2
+                        curve_df["_source_date"] = str(_dt_aud2.date.today())
                         set_ccy_curve(ccy, curve_df)
                         st.session_state.setdefault("config_curves", {})[ccy] = curve_df
                         set_timestamp("curves", ccy)
@@ -5299,6 +5310,10 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                             curve_df = load_curve_flexible(raw_curve, curve_name)
                         except Exception:
                             curve_df = load_curve(raw_curve, curve_name)
+                        # v2104h: stamp NZD (and any other non-USD/AUD) with today too
+                        if curve_df is not None and len(curve_df) > 0:
+                            import datetime as _dt_nzd
+                            curve_df["_source_date"] = str(_dt_nzd.date.today())
 
                 if curve_df is not None and len(curve_df) > 0:
                     set_ccy_curve(ccy, curve_df)
@@ -6753,7 +6768,47 @@ def vol_config_tab():
 
         # IRS Curve timestamps
         if curve is not None and len(curve) > 0:
-            _src_date = curve["_source_date"].iloc[0] if "_source_date" in curve.columns else "—"
+            _src_date = curve["_source_date"].iloc[0] if "_source_date" in curve.columns else None
+            # v2104h: fallback — if _source_date missing (older AUD/NZD saves
+            # predate the stamping fix), query the DB for this ccy's latest
+            # config updated_at as the "last saved" proxy.
+            # Cache per-ccy with 5-min TTL so we don't hammer the DB on every rerun.
+            if not _src_date or _src_date == "—":
+                _src_date = None
+                if HAS_POSTGRES:
+                    _cache_key = f"_home_curve_last_saved_{ccy}"
+                    _cache_ts_key = f"_home_curve_last_saved_ts_{ccy}"
+                    import time as _t_hs
+                    _cached = st.session_state.get(_cache_key)
+                    _cached_ts = st.session_state.get(_cache_ts_key, 0)
+                    if _cached and (_t_hs.time() - _cached_ts) < 300:
+                        _src_date = _cached
+                    else:
+                        try:
+                            _uid_hs = st.session_state.get("username", "wpo@rateedge.au")
+                            _cfg_type = "aud_par_rates" if ccy == "AUD" else "nzd_curve" if ccy == "NZD" else None
+                            if _cfg_type:
+                                _conn_hs = get_db_connection()
+                                if _conn_hs:
+                                    _cur_hs = _conn_hs.cursor()
+                                    # Try both admin aliases + 'shared'. Match any of them.
+                                    _cur_hs.execute("""
+                                        SELECT updated_at FROM user_configs
+                                        WHERE user_id IN (%s, %s, %s, %s)
+                                          AND config_type = %s
+                                          AND currency = %s
+                                        ORDER BY updated_at DESC LIMIT 1
+                                    """, (_uid_hs, 'wpo@rateedge.au', 'wpo70@icloud.com',
+                                          'shared', _cfg_type, ccy))
+                                    _row_hs = _cur_hs.fetchone()
+                                    _cur_hs.close()
+                                    _conn_hs.close()
+                                    if _row_hs and _row_hs[0]:
+                                        _src_date = _row_hs[0].strftime("%Y-%m-%d")
+                                        st.session_state[_cache_key] = _src_date
+                                        st.session_state[_cache_ts_key] = _t_hs.time()
+                        except Exception:
+                            pass
             curve_status = f"✅ {len(curve)} pts"
             curve_saved  = str(_src_date) if _src_date else '—'
             curve_loaded = get_timestamp_str("curves", ccy)
@@ -6765,9 +6820,16 @@ def vol_config_tab():
             f"""
             <div style="background:{card_bg};border:1px solid {border_color};border-radius:10px;padding:1rem;margin:0.5rem 0;">
                 <div style="font-weight:600;font-size:1.1rem;color:{text_color};margin-bottom:0.5rem;">{ccy}</div>
-                <table style="width:100%;color:{text_color};font-size:0.85rem;border-collapse:collapse;">
+                <table style="width:100%;color:{text_color};font-size:0.85rem;border-collapse:collapse;table-layout:fixed;">
+                    <colgroup>
+                        <col style="width:110px;">
+                        <col style="width:120px;">
+                        <col style="width:210px;">
+                        <col style="width:210px;">
+                        <col style="width:110px;">
+                    </colgroup>
                     <tr style="color:{muted_color};font-size:0.72rem;border-bottom:1px solid {border_color};">
-                        <td style="padding:0.2rem 0.5rem 0.2rem 0;width:110px;"></td>
+                        <td style="padding:0.2rem 0.5rem 0.2rem 0;"></td>
                         <td style="padding:0.2rem 0.5rem;">Status</td>
                         <td style="padding:0.2rem 0.5rem;">Last Saved</td>
                         <td style="padding:0.2rem 0.5rem;">Loaded</td>
@@ -11008,7 +11070,7 @@ def caps_floors_tab(vol_mode: str):
         "NZD": {"cf_spr_3m1y":8.0,  "cf_spr_1y1y":10.0, "cf_spr_2y1y":12.0,
                 "cf_spr_3y1y":15.0, "cf_spr_4y1y":18.0, "cf_spr_5y2y":30.0,
                 "cf_spr_7y3y":40.0, "cf_spr_10y2y":30.0, "cf_spr_12y3y":60.0,
-                "cf_spr_15v20":-5.0, "cf_spr_20v30":-5.0},
+                "cf_spr_15v20":-5.0},
     }
     _prev_ccy = st.session_state.get("_cf_last_active_ccy")
     if _prev_ccy != ccy:
@@ -11554,23 +11616,25 @@ def caps_floors_tab(vol_mode: str):
                 new_spread_values["cf_spr_15v20"] = _spread_15v20_new
 
                 # ── Vol spread row for 20y → 30y extension (not a wedge) ──
-                _vs_cols30 = st.columns(CW)
-                _vs_cols30[0].markdown(f"<div style='{_fs};color:#f59e0b'>20y vs 30y Vol Spd</div>", unsafe_allow_html=True)
-                _spread_20v30_last = st.session_state.get("cf_spr_20v30", -5.0)
-                _spread_20v30_cur  = st.session_state.get("cf_spr_20v30_temp", _spread_20v30_last)
-                _vs_cols30[1].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>{_spread_20v30_last:.1f}</div>", unsafe_allow_html=True)
-                _spread_20v30_new = _vs_cols30[2].number_input("", value=_spread_20v30_cur, key="cf_spr_20v30_new",
-                                                               format="%.1f", step=0.5, label_visibility="collapsed")
-                _delta_20v30 = _spread_20v30_new - _spread_20v30_last
-                _dc30 = "#22c55e" if _delta_20v30 > 0 else "#ef4444" if _delta_20v30 < 0 else "#94a3b8"
-                _vs_cols30[3].markdown(f"<div style='{_fs};text-align:right;color:{_dc30}'>{_delta_20v30:+.1f}</div>", unsafe_allow_html=True)
-                _vs_cols30[5].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>vol spd</div>", unsafe_allow_html=True)
-                _vs_cols30[8].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>20→30</div>", unsafe_allow_html=True)
-                _vs_cols30[9].markdown(f"<div style='{_fs};text-align:right;color:#f59e0b'>{_spread_20v30_new:.1f}bp</div>", unsafe_allow_html=True)
-                _vs_cols30[10].markdown(f"<div style='{_fs};text-align:right;color:#38bdf8;font-weight:600'>30Y CFS</div>", unsafe_allow_html=True)
-                _vs_cols30[11].markdown(f"<div style='{_fs};text-align:right;color:#64748b'>vol ext</div>", unsafe_allow_html=True)
-                st.session_state["cf_spr_20v30_temp"] = _spread_20v30_new
-                new_spread_values["cf_spr_20v30"] = _spread_20v30_new
+                # Only rendered for AUD and USD; NZD stops at 20Y.
+                if ccy in ("AUD", "USD"):
+                    _vs_cols30 = st.columns(CW)
+                    _vs_cols30[0].markdown(f"<div style='{_fs};color:#f59e0b'>20y vs 30y Vol Spd</div>", unsafe_allow_html=True)
+                    _spread_20v30_last = st.session_state.get("cf_spr_20v30", -5.0)
+                    _spread_20v30_cur  = st.session_state.get("cf_spr_20v30_temp", _spread_20v30_last)
+                    _vs_cols30[1].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>{_spread_20v30_last:.1f}</div>", unsafe_allow_html=True)
+                    _spread_20v30_new = _vs_cols30[2].number_input("", value=_spread_20v30_cur, key="cf_spr_20v30_new",
+                                                                   format="%.1f", step=0.5, label_visibility="collapsed")
+                    _delta_20v30 = _spread_20v30_new - _spread_20v30_last
+                    _dc30 = "#22c55e" if _delta_20v30 > 0 else "#ef4444" if _delta_20v30 < 0 else "#94a3b8"
+                    _vs_cols30[3].markdown(f"<div style='{_fs};text-align:right;color:{_dc30}'>{_delta_20v30:+.1f}</div>", unsafe_allow_html=True)
+                    _vs_cols30[5].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>vol spd</div>", unsafe_allow_html=True)
+                    _vs_cols30[8].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>20→30</div>", unsafe_allow_html=True)
+                    _vs_cols30[9].markdown(f"<div style='{_fs};text-align:right;color:#f59e0b'>{_spread_20v30_new:.1f}bp</div>", unsafe_allow_html=True)
+                    _vs_cols30[10].markdown(f"<div style='{_fs};text-align:right;color:#38bdf8;font-weight:600'>30Y CFS</div>", unsafe_allow_html=True)
+                    _vs_cols30[11].markdown(f"<div style='{_fs};text-align:right;color:#64748b'>vol ext</div>", unsafe_allow_html=True)
+                    st.session_state["cf_spr_20v30_temp"] = _spread_20v30_new
+                    new_spread_values["cf_spr_20v30"] = _spread_20v30_new
 
             with col_sabr:
                 with st.expander("⚙️ SABR Skew Params", expanded=False):
@@ -12186,6 +12250,27 @@ def caps_floors_tab(vol_mode: str):
 
         # Default active to OTC until widgets render and we pick
         caplet_vol_curve = _otc_curve_built or {t: 35.0 for t in [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0]}
+
+        # v2104b: Extend AUD caplet curve to 30Y using 20v30 spread, so the
+        # "Resulting Caplet Vol Curve" chart shows the full 30Y extension that
+        # already exists in the ATM CFS Straddles table. The extension applies
+        # the 20v30 spread onto the 20Y flat value.
+        # Only for AUD (USD handled in the USD-specific block below; NZD ends at 20Y).
+        if ccy == "AUD" and caplet_vol_curve:
+            try:
+                _keys_sorted = sorted(caplet_vol_curve.keys())
+                _max_t_now = _keys_sorted[-1] if _keys_sorted else 0
+                # Only extend if curve tops out at ~20Y (don't re-extend)
+                if _max_t_now <= 20.01 and _max_t_now >= 19.9:
+                    _vol_20 = caplet_vol_curve[_max_t_now]
+                    _spd_20v30 = float(st.session_state.get("cf_spr_20v30", -5.0))
+                    _vol_30 = max(_vol_20 + _spd_20v30, 1.0)
+                    _t_ext = round(_max_t_now + 0.25, 2)
+                    while _t_ext <= 30.01:
+                        caplet_vol_curve[round(_t_ext, 2)] = _vol_30
+                        _t_ext += 0.25
+            except Exception:
+                pass
 
         # v2004x AUD FIX: write caplet_vol_curve_aud FOR ALL ccy here, before
         # any USD-specific code. AUD/NZD need this for downstream ATM CFS
@@ -12844,8 +12929,10 @@ def caps_floors_tab(vol_mode: str):
             _CFS_MAP = [
                 (1, "3m1y"), (2, "1y1y"), (3, "2y1y"), (4, "3y1y"), (5, "4y1y"),
                 (7, "5y2y"), (10, "7y3y"), (12, "10y2y"), (15, "12y3y"),
-                (20, "ext_15v20"), (30, "ext_20v30"),
+                (20, "ext_15v20"),
             ]
+            if ccy in ("AUD", "USD"):
+                _CFS_MAP.append((30, "ext_20v30"))
             _cfs_tdata = st.session_state.get("cfs_table_data", {})
             _caplet_vc = st.session_state.get("caplet_vol_curve_aud")
             _curve_local = get_ccy_curve(ccy)
@@ -27330,9 +27417,26 @@ h2{{color:#1e3a5f;margin-top:20px}}
                 def _clean_ts(raw):
                     import re as _re_ts
                     _s = str(raw).strip()
-                    _m = _re_ts.search(r"(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})", _s)
-                    if _m: return f"{_m.group(1)} {_m.group(2)}"
-                    # Date-only or label string — use current Sydney time
+                    # Pattern A: ISO "YYYY-MM-DD[T ]HH:MM"
+                    _m = _re_ts.search(r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}:\d{2})", _s)
+                    if _m:
+                        return f"{_m.group(1)}-{_m.group(2)}-{_m.group(3)} {_m.group(4)}"
+                    # Pattern B: label style "DD-MMM-YYYY HH:MM"
+                    # (e.g. "AUD EOD 20-Apr-2026 17:00 AEST")
+                    _mb = _re_ts.search(
+                        r"(\d{1,2})-([A-Za-z]{3})-(\d{4}).*?(\d{2}:\d{2})", _s)
+                    if _mb:
+                        _mon_map = {"Jan":"01","Feb":"02","Mar":"03","Apr":"04",
+                                    "May":"05","Jun":"06","Jul":"07","Aug":"08",
+                                    "Sep":"09","Oct":"10","Nov":"11","Dec":"12"}
+                        _mo = _mon_map.get(_mb.group(2).capitalize())
+                        if _mo:
+                            return f"{_mb.group(3)}-{_mo}-{int(_mb.group(1)):02d} {_mb.group(4)}"
+                    # Pattern C: ISO date only "YYYY-MM-DD" — use 16:30 NYC / 17:00 AEST as fallback close time
+                    _mc = _re_ts.search(r"^(\d{4}-\d{2}-\d{2})$", _s)
+                    if _mc:
+                        return f"{_mc.group(1)} 17:00"
+                    # Last resort: current Sydney time (preserves old fallback)
                     _now_syd = pd.Timestamp.now(tz="Australia/Sydney").strftime("%Y-%m-%d %H:%M")
                     return _now_syd
                 _ts_curr_clean = _clean_ts(_today_str)
