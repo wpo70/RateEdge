@@ -11602,7 +11602,12 @@ def caps_floors_tab(vol_mode: str):
                 _spread_15v20_last = st.session_state.get("cf_spr_15v20", -5.0)
                 _spread_15v20_cur  = st.session_state.get("cf_spr_15v20_temp", _spread_15v20_last)
                 _vs_cols[1].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>{_spread_15v20_last:.1f}</div>", unsafe_allow_html=True)
-                _spread_15v20_new = _vs_cols[2].number_input("", value=_spread_15v20_cur, key="cf_spr_15v20_new",
+                # Seed widget key from cur_val on first render only — avoids
+                # value=/key= StreamlitAPIException when the widget's key already
+                # exists in session_state on rerun (21-Apr-2026 fix).
+                if "cf_spr_15v20_new" not in st.session_state:
+                    st.session_state["cf_spr_15v20_new"] = _spread_15v20_cur
+                _spread_15v20_new = _vs_cols[2].number_input("", key="cf_spr_15v20_new",
                                                               format="%.1f", step=0.5, label_visibility="collapsed")
                 _delta_15v20 = _spread_15v20_new - _spread_15v20_last
                 _dc = "#22c55e" if _delta_15v20 > 0 else "#ef4444" if _delta_15v20 < 0 else "#94a3b8"
@@ -11623,7 +11628,12 @@ def caps_floors_tab(vol_mode: str):
                     _spread_20v30_last = st.session_state.get("cf_spr_20v30", -5.0)
                     _spread_20v30_cur  = st.session_state.get("cf_spr_20v30_temp", _spread_20v30_last)
                     _vs_cols30[1].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>{_spread_20v30_last:.1f}</div>", unsafe_allow_html=True)
-                    _spread_20v30_new = _vs_cols30[2].number_input("", value=_spread_20v30_cur, key="cf_spr_20v30_new",
+                    # Seed widget key from cur_val on first render only — avoids
+                    # value=/key= StreamlitAPIException when the widget's key already
+                    # exists in session_state on rerun (21-Apr-2026 fix).
+                    if "cf_spr_20v30_new" not in st.session_state:
+                        st.session_state["cf_spr_20v30_new"] = _spread_20v30_cur
+                    _spread_20v30_new = _vs_cols30[2].number_input("", key="cf_spr_20v30_new",
                                                                    format="%.1f", step=0.5, label_visibility="collapsed")
                     _delta_20v30 = _spread_20v30_new - _spread_20v30_last
                     _dc30 = "#22c55e" if _delta_20v30 > 0 else "#ef4444" if _delta_20v30 < 0 else "#94a3b8"
