@@ -24414,22 +24414,38 @@ def vol_lookup_tab():
                     "Stradd $": "—", "7d Avg": "—", "Δ T-1": "—",
                 })
                 continue
+            # Helper: coerce any Series/np type to plain float or None
+            def _vl_scalar(v):
+                if v is None:
+                    return None
+                try:
+                    if hasattr(v, "iloc"):
+                        v = v.iloc[0]
+                    if hasattr(v, "item"):
+                        v = v.item()
+                    fv = float(v)
+                    if fv != fv:  # NaN
+                        return None
+                    return fv
+                except Exception:
+                    return None
+
             # Current vol from live surface
             try:
-                _vol_now = get_matrix_value(_atm_surf, _en, _ten_y)
+                _vol_now = _vl_scalar(get_matrix_value(_atm_surf, _en, _ten_y))
             except Exception:
                 _vol_now = None
             try:
-                _fwd = _vl_fwd(_exp_y, _ten_y, _en)
+                _fwd = _vl_scalar(_vl_fwd(_exp_y, _ten_y, _en))
             except Exception:
                 _fwd = None
-            _stradd_bp = _vl_straddle_bp(_vol_now, _exp_y) if _vol_now else None
-            _stradd_dollar = (_stradd_bp * _vl_notional * 100.0) if _stradd_bp else None
+            _stradd_bp = _vl_straddle_bp(_vol_now, _exp_y) if _vol_now is not None else None
+            _stradd_dollar = (_stradd_bp * _vl_notional * 100.0) if _stradd_bp is not None else None
             # 7-day avg (exclude today if it's in the history too)
             _7d_vals = []
             for _sd, _vals in _history_surfaces[:7]:
                 try:
-                    _v = _vl_lookup_in_values(_vals, _en, _tn)
+                    _v = _vl_scalar(_vl_lookup_in_values(_vals, _en, _tn))
                     if _v is not None:
                         _7d_vals.append(_v)
                 except Exception:
@@ -24437,7 +24453,7 @@ def vol_lookup_tab():
             _7d_avg = float(np.mean(_7d_vals)) if _7d_vals else None
             # T-1 change
             try:
-                _vol_t1 = _vl_lookup_in_values(_t1_surface, _en, _tn) if _t1_surface else None
+                _vol_t1 = _vl_scalar(_vl_lookup_in_values(_t1_surface, _en, _tn)) if _t1_surface else None
             except Exception:
                 _vol_t1 = None
             _delta_t1 = (_vol_now - _vol_t1) if (_vol_now is not None and _vol_t1 is not None) else None
