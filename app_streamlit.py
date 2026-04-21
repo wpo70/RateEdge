@@ -22303,6 +22303,7 @@ def main():
         ("🔔 Caps & Floors",             "tab_show_caps",      lambda: caps_floors_tab(vol_mode)),
         ("💼 Trade Blotter",             "tab_show_blotter",   portfolio_tab),
         ("⚛️ RV / Calendar",            "tab_show_rv",        rv_tab),
+        ("🔍 Vol Lookup",                "tab_show_vollookup", vol_lookup_tab),
         ("🔮 Exotics",                   "tab_show_exotics",   lambda: exotics_tab(vol_mode)),
         ("📏 SOD Report",                "tab_show_sod",       sod_report_tab),
         ("✅ Vol Editor",                "tab_show_voleditor", vol_surface_editor_tab),
@@ -23990,6 +23991,223 @@ Use the ρ slider above to stress-test spread vol across the matrix.
         )
     except Exception:
         pass
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Vol Lookup Tab — quick swaption vol/fwd/premium paste tool (v2104b)
+# Paste lines like "1m3y" or "10:55:47 3m5y", returns fwd, ATM vol, premium,
+# 7-day avg vol, change vs T-1 for USD/AUD/NZD.
+# ═══════════════════════════════════════════════════════════════════════
+@st.fragment
+def vol_lookup_tab():
+    import re as _re_vl
+    from datetime import timedelta as _td_vl
+
+    st.markdown("### 🔍 Vol Lookup")
+    st.caption(
+        "Paste raw text (chat, email, BBG output). Tool extracts any swaption "
+        "expiry-tenor pairs like `1m3y`, `3m5y`, `6m20y`, `5y5y` and returns "
+        "fwd, ATM vol, straddle premium, 7-day avg vol, and change vs T-1. "
+        "Expiries: w/m/y. Tenors: y only."
+    )
+
+    _vlc1, _vlc2 = st.columns([1, 4])
+    with _vlc1:
+        _vl_ccy = st.radio("Currency", ["USD", "AUD", "NZD"], horizontal=True, key="vl_ccy")
+    with _vlc2:
+        _vl_notional = st.number_input(
+            "Notional (MM)", value=100.0, step=50.0, min_value=1.0,
+            key="vl_notional", help="Used for $ premium column",
+        )
+
+    _vl_text = st.text_area(
+        "Paste text here",
+        height=150,
+        key="vl_input",
+        placeholder="10:55:47 1m3y\n3m5y\n6m20y\n1y1y\n5y5y",
+    )
+
+    if not _vl_text.strip():
+        st.info("Paste a message above to parse swaption requests.")
+        return
+
+    # Parse: find all expiry-tenor pairs. Regex tolerates case and whitespace.
+    _vl_pattern = _re_vl.compile(r"\b(\d+\s*[wWmMyY])\s*(\d+\s*[yY])\b")
+    _vl_raw_matches = _vl_pattern.findall(_vl_text)
+    # Normalise: lowercase, strip spaces
+    _vl_pairs = []
+    _seen = set()
+    for _e, _t in _vl_raw_matches:
+        _en = _e.lower().replace(" ", "")
+        _tn = _t.lower().replace(" ", "")
+        _key = (_en, _tn)
+        if _key not in _seen:
+            _seen.add(_key)
+            _vl_pairs.append((_en, _tn))
+
+    if not _vl_pairs:
+        st.warning("No swaption pairs found (e.g. `1m3y`, `3m5y`). Check input format.")
+        return
+
+    st.caption(f"Found **{len(_vl_pairs)}** unique pair(s) in {_vl_ccy}")
+
+    # Helper: expiry string → years
+    def _vl_expiry_years(s):
+        import re as _re2
+        _m = _re2.match(r"(\d+)([wmy])", s)
+        if not _m:
+            return None
+        _n = int(_m.group(1))
+        _u = _m.group(2)
+        if _u == "w":
+            return _n / 52.0
+        if _u == "m":
+            return _n / 12.0
+        return float(_n)  # y
+
+    # Helper: tenor string → years (always y)
+    def _vl_tenor_years(s):
+        import re as _re2
+        _m = _re2.match(r"(\d+)y", s)
+        return float(_m.group(1)) if _m else None
+
+    # Load current ATM surface for the selected ccy
+    _atm_surf = get_working_atm_surface(_vl_ccy)
+    if _atm_surf is None or _atm_surf.empty:
+        st.error(f"No ATM vol surface loaded for {_vl_ccy}. Load a snapshot first.")
+        return
+
+    # Load 7-day history — query vol_history for last 7 snapshots
+    _history_surfaces = []
+    _t1_surface = None
+    if HAS_POSTGRES:
+        try:
+            _conn_vl = get_db_connection()
+            if _conn_vl:
+                _cur_vl = _conn_vl.cursor()
+                _cur_vl.execute("""
+                    SELECT snapshot_date, atm_vols
+                    FROM vol_history
+                    WHERE currency = %s
+                    ORDER BY snapshot_date DESC
+                    LIMIT 10
+                """, (_vl_ccy,))
+                _rows_vl = _cur_vl.fetchall()
+                _cur_vl.close()
+                _conn_vl.close()
+                for _i_vl, (_sd, _av) in enumerate(_rows_vl):
+                    if not _av or "values" not in _av:
+                        continue
+                    _history_surfaces.append((_sd, _av["values"]))
+                    if _i_vl == 1:  # second-most-recent = T-1
+                        _t1_surface = _av["values"]
+        except Exception as _e_vl:
+            st.caption(f"⚠ Couldn't load vol history: {_e_vl}")
+
+    def _vl_lookup_in_values(values, exp_str, ten_str):
+        """Find vol in {'values':[...]} shape. Expiry lowercase, tenor uppercase."""
+        _ten_up = ten_str.upper()
+        for _row in values or []:
+            if (_row.get("Expiry") or "").lower() == exp_str.lower():
+                _v = _row.get(_ten_up)
+                if _v is not None:
+                    try:
+                        return float(_v)
+                    except Exception:
+                        return None
+        return None
+
+    # Load forward rate surface (from the fwd matrix if available, else compute)
+    _fwd_mat = st.session_state.get(f"_fwd_rate_matrix_{_vl_ccy.lower()}")
+    if _fwd_mat is None:
+        _fwd_mat = st.session_state.get(f"_fwd_rate_matrix_{_vl_ccy}")
+
+    def _vl_fwd(exp_y, ten_y):
+        # First try matrix lookup
+        if _fwd_mat is not None and hasattr(_fwd_mat, "values"):
+            try:
+                _fval = get_matrix_value(_fwd_mat, f"{int(round(exp_y*12))}m" if exp_y < 1 else f"{int(round(exp_y))}y",
+                                          float(ten_y))
+                if _fval is not None:
+                    return float(_fval)
+            except Exception:
+                pass
+        # Fall back: compute from curve directly
+        try:
+            _curve = get_ccy_curve(_vl_ccy)
+            if _curve is None or len(_curve) == 0:
+                return None
+            _cx = np.array(sorted(_curve.keys()))
+            _cy = np.array([_curve[_k] for _k in _cx])
+            _r = fast_forward_rate(_cx, _cy, float(exp_y), float(ten_y), _vl_ccy)
+            return float(_r) if _r is not None else None
+        except Exception:
+            return None
+
+    # Straddle premium bp (Bachelier ATM, 2-sided): σ × √T × √(2/π)
+    _SQRT_2_OVER_PI = (2.0 / np.pi) ** 0.5  # ≈ 0.7979
+
+    def _vl_straddle_bp(vol_bp, exp_y):
+        if vol_bp is None or exp_y is None or exp_y <= 0:
+            return None
+        return float(vol_bp) * (float(exp_y) ** 0.5) * _SQRT_2_OVER_PI
+
+    # Build output rows
+    _vl_rows = []
+    for _en, _tn in _vl_pairs:
+        _exp_y = _vl_expiry_years(_en)
+        _ten_y = _vl_tenor_years(_tn)
+        if _exp_y is None or _ten_y is None:
+            _vl_rows.append({
+                "Request": f"{_en}{_tn}",
+                "Fwd %": "—",
+                "Vol bp": "—",
+                "Stradd bp": "—",
+                "Stradd $": "—",
+                "7d Avg": "—",
+                "Δ T-1": "—",
+            })
+            continue
+        # Current vol from live surface
+        _vol_now = get_matrix_value(_atm_surf, _en, _ten_y)
+        _fwd = _vl_fwd(_exp_y, _ten_y)
+        _stradd_bp = _vl_straddle_bp(_vol_now, _exp_y) if _vol_now else None
+        _stradd_dollar = (_stradd_bp * _vl_notional * 100.0) if _stradd_bp else None
+        # 7-day avg (exclude today if it's in the history too)
+        _7d_vals = []
+        for _sd, _vals in _history_surfaces[:7]:
+            _v = _vl_lookup_in_values(_vals, _en, _tn)
+            if _v is not None:
+                _7d_vals.append(_v)
+        _7d_avg = float(np.mean(_7d_vals)) if _7d_vals else None
+        # T-1 change
+        _vol_t1 = _vl_lookup_in_values(_t1_surface, _en, _tn) if _t1_surface else None
+        _delta_t1 = (_vol_now - _vol_t1) if (_vol_now is not None and _vol_t1 is not None) else None
+
+        _vl_rows.append({
+            "Request":   f"{_en}{_tn}",
+            "Fwd %":     f"{_fwd:.3f}" if _fwd is not None else "—",
+            "Vol bp":    f"{_vol_now:.2f}" if _vol_now is not None else "—",
+            "Stradd bp": f"{_stradd_bp:.1f}" if _stradd_bp is not None else "—",
+            "Stradd $":  f"{_stradd_dollar:,.0f}" if _stradd_dollar is not None else "—",
+            "7d Avg":    f"{_7d_avg:.2f}" if _7d_avg is not None else "—",
+            "Δ T-1":     f"{_delta_t1:+.2f}" if _delta_t1 is not None else "—",
+        })
+
+    import pandas as _pd_vl
+    _df_vl = _pd_vl.DataFrame(_vl_rows)
+    st.dataframe(_df_vl, use_container_width=True, hide_index=True)
+
+    # Copy-friendly plain-text output block
+    with st.expander("📋 Copy-friendly plain text", expanded=False):
+        _lines = []
+        for _r in _vl_rows:
+            _lines.append(
+                f"{_r['Request']:<8}  Fwd={_r['Fwd %']:>6}%  "
+                f"Vol={_r['Vol bp']:>6}bp  Stradd={_r['Stradd bp']:>6}bp  "
+                f"(7dAvg={_r['7d Avg']:>6}  Δ={_r['Δ T-1']:>6})"
+            )
+        st.code("\n".join(_lines), language=None)
 
 
 @st.fragment
