@@ -24147,8 +24147,15 @@ def vol_lookup_tab():
 
     # Load current ATM surface for the selected ccy
     _atm_surf = get_working_atm_surface(_vl_ccy)
-    if _atm_surf is None or _atm_surf.empty:
-        st.error(f"No ATM vol surface loaded for {_vl_ccy}. Load a snapshot first.")
+    _surface_ok = False
+    try:
+        if _atm_surf is not None and hasattr(_atm_surf, "empty") and not _atm_surf.empty:
+            _surface_ok = True
+    except Exception:
+        _surface_ok = False
+    if not _surface_ok:
+        st.warning(f"No ATM vol surface loaded for {_vl_ccy}. "
+                   "Click 🔄 Refresh above, or load a snapshot in IRS/Vol Upload first.")
         return
 
     # Load 7-day history — query vol_history for last 7 snapshots
@@ -24239,44 +24246,59 @@ def vol_lookup_tab():
     # Build output rows
     _vl_rows = []
     for _en, _tn in _vl_pairs:
-        _exp_y = _vl_expiry_years(_en)
-        _ten_y = _vl_tenor_years(_tn)
-        if _exp_y is None or _ten_y is None:
+        try:
+            _exp_y = _vl_expiry_years(_en)
+            _ten_y = _vl_tenor_years(_tn)
+            if _exp_y is None or _ten_y is None:
+                _vl_rows.append({
+                    "Request": f"{_en}{_tn}",
+                    "Fwd %": "—", "Vol bp": "—", "Stradd bp": "—",
+                    "Stradd $": "—", "7d Avg": "—", "Δ T-1": "—",
+                })
+                continue
+            # Current vol from live surface
+            try:
+                _vol_now = get_matrix_value(_atm_surf, _en, _ten_y)
+            except Exception:
+                _vol_now = None
+            try:
+                _fwd = _vl_fwd(_exp_y, _ten_y)
+            except Exception:
+                _fwd = None
+            _stradd_bp = _vl_straddle_bp(_vol_now, _exp_y) if _vol_now else None
+            _stradd_dollar = (_stradd_bp * _vl_notional * 100.0) if _stradd_bp else None
+            # 7-day avg (exclude today if it's in the history too)
+            _7d_vals = []
+            for _sd, _vals in _history_surfaces[:7]:
+                try:
+                    _v = _vl_lookup_in_values(_vals, _en, _tn)
+                    if _v is not None:
+                        _7d_vals.append(_v)
+                except Exception:
+                    pass
+            _7d_avg = float(np.mean(_7d_vals)) if _7d_vals else None
+            # T-1 change
+            try:
+                _vol_t1 = _vl_lookup_in_values(_t1_surface, _en, _tn) if _t1_surface else None
+            except Exception:
+                _vol_t1 = None
+            _delta_t1 = (_vol_now - _vol_t1) if (_vol_now is not None and _vol_t1 is not None) else None
+
+            _vl_rows.append({
+                "Request":   f"{_en}{_tn}",
+                "Fwd %":     f"{_fwd:.3f}" if _fwd is not None else "—",
+                "Vol bp":    f"{_vol_now:.2f}" if _vol_now is not None else "—",
+                "Stradd bp": f"{_stradd_bp:.1f}" if _stradd_bp is not None else "—",
+                "Stradd $":  f"{_stradd_dollar:,.0f}" if _stradd_dollar is not None else "—",
+                "7d Avg":    f"{_7d_avg:.2f}" if _7d_avg is not None else "—",
+                "Δ T-1":     f"{_delta_t1:+.2f}" if _delta_t1 is not None else "—",
+            })
+        except Exception as _row_err:
             _vl_rows.append({
                 "Request": f"{_en}{_tn}",
-                "Fwd %": "—",
-                "Vol bp": "—",
-                "Stradd bp": "—",
-                "Stradd $": "—",
-                "7d Avg": "—",
-                "Δ T-1": "—",
+                "Fwd %": "ERR", "Vol bp": "ERR", "Stradd bp": "ERR",
+                "Stradd $": "ERR", "7d Avg": "ERR", "Δ T-1": f"ERR ({type(_row_err).__name__})",
             })
-            continue
-        # Current vol from live surface
-        _vol_now = get_matrix_value(_atm_surf, _en, _ten_y)
-        _fwd = _vl_fwd(_exp_y, _ten_y)
-        _stradd_bp = _vl_straddle_bp(_vol_now, _exp_y) if _vol_now else None
-        _stradd_dollar = (_stradd_bp * _vl_notional * 100.0) if _stradd_bp else None
-        # 7-day avg (exclude today if it's in the history too)
-        _7d_vals = []
-        for _sd, _vals in _history_surfaces[:7]:
-            _v = _vl_lookup_in_values(_vals, _en, _tn)
-            if _v is not None:
-                _7d_vals.append(_v)
-        _7d_avg = float(np.mean(_7d_vals)) if _7d_vals else None
-        # T-1 change
-        _vol_t1 = _vl_lookup_in_values(_t1_surface, _en, _tn) if _t1_surface else None
-        _delta_t1 = (_vol_now - _vol_t1) if (_vol_now is not None and _vol_t1 is not None) else None
-
-        _vl_rows.append({
-            "Request":   f"{_en}{_tn}",
-            "Fwd %":     f"{_fwd:.3f}" if _fwd is not None else "—",
-            "Vol bp":    f"{_vol_now:.2f}" if _vol_now is not None else "—",
-            "Stradd bp": f"{_stradd_bp:.1f}" if _stradd_bp is not None else "—",
-            "Stradd $":  f"{_stradd_dollar:,.0f}" if _stradd_dollar is not None else "—",
-            "7d Avg":    f"{_7d_avg:.2f}" if _7d_avg is not None else "—",
-            "Δ T-1":     f"{_delta_t1:+.2f}" if _delta_t1 is not None else "—",
-        })
 
     import pandas as _pd_vl
     _df_vl = _pd_vl.DataFrame(_vl_rows)
