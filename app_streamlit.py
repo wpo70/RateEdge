@@ -24300,55 +24300,73 @@ def vol_lookup_tab():
     # columns = tenors in years as floats).
     _fwd_mat = st.session_state.get("fwd_matrix", {}).get(_vl_ccy)
 
-    def _vl_fwd(exp_y, ten_y, exp_str):
-        """Look up fwd rate (%) from the pre-built fwd_matrix. Matches rows
-        by expiry string FIRST (e.g. '1m','6m','18m','2y'), falls back to
-        years-based nearest-row if label not found. Returns percent."""
-        if _fwd_mat is None or not hasattr(_fwd_mat, "index"):
+    # Build curve arrays once per render. For AUD, we keep TWO projection
+    # curves and pick based on swap tenor per AUD convention:
+    #   tenor ≤ 3Y  →  QQ-full curve (quarterly, extended smooth to 30Y)
+    #   tenor > 3Y  →  SS curve (semi-annual, seeded at QQ junction)
+    # For USD/NZD, a single curve is used.
+    def _vl_curve_arrays_single():
+        _c = get_ccy_curve(_vl_ccy)
+        if _c is None or (hasattr(_c, "empty") and _c.empty):
+            return None, None
+        if "MaturityY" not in _c.columns or "ZeroRatePct" not in _c.columns:
+            return None, None
+        _x = _c["MaturityY"].to_numpy(dtype=float)
+        _y = _c["ZeroRatePct"].to_numpy(dtype=float) / 100.0
+        _o = np.argsort(_x)
+        return _x[_o], _y[_o]
+
+    def _zc_dict_to_arrays(d):
+        if not d or len(d) < 5:
+            return None, None
+        _x = np.array(sorted(d.keys()), dtype=float)
+        _y = np.array([d[k] for k in _x], dtype=float) / 100.0  # pct → decimal
+        return _x, _y
+
+    # Preload AUD dual curves (dicts of maturity→zero%)
+    _aud_qq_x, _aud_qq_y = (None, None)
+    _aud_ss_x, _aud_ss_y = (None, None)
+    if _vl_ccy == "AUD":
+        _aud_qq_x, _aud_qq_y = _zc_dict_to_arrays(st.session_state.get("_aud_zc_qq_full"))
+        _aud_ss_x, _aud_ss_y = _zc_dict_to_arrays(st.session_state.get("_aud_zc_ss"))
+
+    _cx, _cy = _vl_curve_arrays_single()
+
+    def _pick_curve(ten_y):
+        """For AUD return (qq, ss) arrays based on tenor bucket. For other ccys
+        return the single curve."""
+        if _vl_ccy == "AUD":
+            if ten_y <= 3.0 and _aud_qq_x is not None:
+                return _aud_qq_x, _aud_qq_y
+            if ten_y > 3.0 and _aud_ss_x is not None:
+                return _aud_ss_x, _aud_ss_y
+            # Fallback: either missing → use single
+            if _aud_qq_x is not None:
+                return _aud_qq_x, _aud_qq_y
+        return _cx, _cy
+
+    def _zero_at(T, xs, ys):
+        if xs is None or ys is None or T <= 0:
             return None
+        return float(np.interp(T, xs, ys))
 
-        def _scalarize(v):
-            """Coerce pandas Series/scalar/np to a plain float."""
-            try:
-                if hasattr(v, "iloc"):
-                    v = v.iloc[0]
-                if hasattr(v, "item"):
-                    v = v.item()
-                return float(v)
-            except Exception:
-                return None
-
+    def _vl_fwd(exp_y, ten_y, exp_str):
+        """Forward par-swap rate (%):
+            fwd(T_exp, T_tenor) = (par(T_exp+T_tenor)*(T_exp+T_tenor) - par(T_exp)*T_exp) / T_tenor
+        For AUD, chooses QQ-full vs SS projection curve per tenor bucket
+        (≤3Y → QQ, >3Y → SS). par(T) proxied by zero rate at T."""
         try:
-            # 1) Try direct label match on the row index
-            _idx_lower = {str(_i).lower().strip(): _i for _i in _fwd_mat.index}
-            _row_key = _idx_lower.get(exp_str.lower().strip())
-            if _row_key is None:
-                # 2) Fallback: find index row whose numeric-years-equivalent
-                #    is closest to exp_y
-                _best = None; _bd = 1e9
-                for _i in _fwd_mat.index:
-                    _iy = _vl_expiry_years(str(_i).lower())
-                    if _iy is not None:
-                        _d = abs(_iy - exp_y)
-                        if _d < _bd:
-                            _bd = _d; _best = _i
-                _row_key = _best
-            if _row_key is None:
+            if exp_y is None or ten_y is None:
                 return None
-            _row = _fwd_mat.loc[_row_key]
-            # If multiple rows matched (duplicate index), take the first
-            if hasattr(_row, "ndim") and _row.ndim > 1:
-                _row = _row.iloc[0]
-            # Column match: exact on float tenor, then int, then nearest numeric
-            if float(ten_y) in _row.index:
-                return _scalarize(_row[float(ten_y)])
-            if int(ten_y) in _row.index:
-                return _scalarize(_row[int(ten_y)])
-            _cols = [c for c in _row.index if isinstance(c, (int, float))]
-            if not _cols:
+            xs, ys = _pick_curve(ten_y)
+            if xs is None:
                 return None
-            _cn = min(_cols, key=lambda c: abs(float(c) - float(ten_y)))
-            return _scalarize(_row[_cn])
+            _p1 = _zero_at(exp_y, xs, ys)
+            _p2 = _zero_at(exp_y + ten_y, xs, ys)
+            if _p1 is None or _p2 is None:
+                return None
+            fwd_dec = (_p2 * (exp_y + ten_y) - _p1 * exp_y) / ten_y
+            return float(fwd_dec) * 100.0
         except Exception:
             return None
 
