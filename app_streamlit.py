@@ -24011,7 +24011,7 @@ def vol_lookup_tab():
         "Expiries: w/m/y. Tenors: y only."
     )
 
-    _vlc1, _vlc2, _vlc3 = st.columns([1, 2, 1])
+    _vlc1, _vlc2 = st.columns([1, 4])
     with _vlc1:
         _vl_ccy = st.radio("Currency", ["USD", "AUD", "NZD"], horizontal=True, key="vl_ccy")
     with _vlc2:
@@ -24019,80 +24019,6 @@ def vol_lookup_tab():
             "Notional (MM)", value=100.0, step=50.0, min_value=1.0,
             key="vl_notional", help="Used for $ premium column",
         )
-    with _vlc3:
-        st.markdown("")  # spacing
-        st.markdown("")
-        if st.button("🔄 Refresh", key="vl_refresh", use_container_width=True,
-                     help="Reload latest ATM vol surface from vol_history DB"):
-            # 1) Bust all relevant caches
-            try:
-                load_user_config.clear()
-            except Exception:
-                pass
-            try:
-                list_vol_snapshots.clear()
-            except Exception:
-                pass
-            for _k in list(st.session_state.keys()):
-                if _k.startswith("_latest_vol_snaps") or _k.startswith("_snap_list"):
-                    del st.session_state[_k]
-
-            # 2) Query latest snapshot ID per ccy from vol_history DB
-            _ccy_sel = st.session_state.get("vl_ccy", "USD")
-            _refresh_err = None
-            _refresh_ok  = None
-            if HAS_POSTGRES:
-                try:
-                    _rc = get_db_connection()
-                    if _rc:
-                        _rcur = _rc.cursor()
-                        _rcur.execute("""
-                            SELECT id, label FROM vol_history
-                            WHERE currency = %s
-                            ORDER BY snapshot_date DESC, created_at DESC
-                            LIMIT 1
-                        """, (_ccy_sel,))
-                        _row = _rcur.fetchone()
-                        _rcur.close()
-                        _rc.close()
-                        if _row:
-                            _snap_id, _snap_lbl = _row
-                            _snap_data = load_vol_snapshot(int(_snap_id))
-                            if _snap_data and _snap_data.get("atm") is not None:
-                                # Write into vol_data for this ccy
-                                if "vol_data" not in st.session_state:
-                                    st.session_state["vol_data"] = {}
-                                if _ccy_sel not in st.session_state["vol_data"]:
-                                    st.session_state["vol_data"][_ccy_sel] = {}
-                                st.session_state["vol_data"][_ccy_sel]["atm"] = _snap_data["atm"]
-                                # SABR params too if present
-                                for _k_sabr in ("alpha", "beta", "rho", "nu"):
-                                    if _snap_data.get(_k_sabr) is not None:
-                                        st.session_state["vol_data"][_ccy_sel][_k_sabr] = _snap_data[_k_sabr]
-                                _refresh_ok = _snap_lbl
-                            else:
-                                _refresh_err = f"Snapshot {_snap_lbl} loaded but ATM was empty"
-                        else:
-                            _refresh_err = f"No {_ccy_sel} snapshots found in vol_history"
-                except Exception as _re_e:
-                    _refresh_err = f"DB error: {_re_e}"
-            else:
-                _refresh_err = "Database not connected"
-
-            # 3) Stash status for next render, then force full rerun
-            if _refresh_ok:
-                st.session_state["_vl_refresh_msg"] = ("ok", f"✓ Reloaded: {_refresh_ok}")
-            else:
-                st.session_state["_vl_refresh_msg"] = ("err", f"⚠ {_refresh_err}")
-            st.rerun(scope="app")
-
-    # Display refresh status message (set by button handler above on prior run)
-    _vl_msg = st.session_state.pop("_vl_refresh_msg", None)
-    if _vl_msg:
-        if _vl_msg[0] == "ok":
-            st.success(_vl_msg[1])
-        else:
-            st.warning(_vl_msg[1])
 
     _vl_text = st.text_area(
         "Paste text here",
@@ -24147,15 +24073,8 @@ def vol_lookup_tab():
 
     # Load current ATM surface for the selected ccy
     _atm_surf = get_working_atm_surface(_vl_ccy)
-    _surface_ok = False
-    try:
-        if _atm_surf is not None and hasattr(_atm_surf, "empty") and not _atm_surf.empty:
-            _surface_ok = True
-    except Exception:
-        _surface_ok = False
-    if not _surface_ok:
-        st.warning(f"No ATM vol surface loaded for {_vl_ccy}. "
-                   "Click 🔄 Refresh above, or load a snapshot in IRS/Vol Upload first.")
+    if _atm_surf is None or _atm_surf.empty:
+        st.error(f"No ATM vol surface loaded for {_vl_ccy}. Load a snapshot first.")
         return
 
     # Load 7-day history — query vol_history for last 7 snapshots
@@ -24213,25 +24132,15 @@ def vol_lookup_tab():
                     return float(_fval)
             except Exception:
                 pass
-        # Fall back: compute from zero curve directly via fast_forward_rate.
-        # get_ccy_curve returns a DataFrame with MaturityY (years) and
-        # ZeroRatePct (%) columns.
+        # Fall back: compute from curve directly
         try:
             _curve = get_ccy_curve(_vl_ccy)
-            if _curve is None or (hasattr(_curve, "empty") and _curve.empty):
+            if _curve is None or len(_curve) == 0:
                 return None
-            if "MaturityY" not in _curve.columns or "ZeroRatePct" not in _curve.columns:
-                return None
-            _cx = _curve["MaturityY"].to_numpy(dtype=float)
-            _cy = _curve["ZeroRatePct"].to_numpy(dtype=float) / 100.0  # fast_forward_rate wants decimal
-            # Sort by maturity
-            _order = np.argsort(_cx)
-            _cx = _cx[_order]; _cy = _cy[_order]
+            _cx = np.array(sorted(_curve.keys()))
+            _cy = np.array([_curve[_k] for _k in _cx])
             _r = fast_forward_rate(_cx, _cy, float(exp_y), float(ten_y), _vl_ccy)
-            if _r is None:
-                return None
-            # Convert decimal → percent for display
-            return float(_r) * 100.0
+            return float(_r) if _r is not None else None
         except Exception:
             return None
 
@@ -24246,316 +24155,59 @@ def vol_lookup_tab():
     # Build output rows
     _vl_rows = []
     for _en, _tn in _vl_pairs:
-        try:
-            _exp_y = _vl_expiry_years(_en)
-            _ten_y = _vl_tenor_years(_tn)
-            if _exp_y is None or _ten_y is None:
-                _vl_rows.append({
-                    "Request": f"{_en}{_tn}",
-                    "Fwd %": "—", "Vol bp": "—", "Stradd bp": "—",
-                    "Stradd $": "—", "7d Avg": "—", "Δ T-1": "—",
-                })
-                continue
-            # Current vol from live surface
-            try:
-                _vol_now = get_matrix_value(_atm_surf, _en, _ten_y)
-            except Exception:
-                _vol_now = None
-            try:
-                _fwd = _vl_fwd(_exp_y, _ten_y)
-            except Exception:
-                _fwd = None
-            _stradd_bp = _vl_straddle_bp(_vol_now, _exp_y) if _vol_now else None
-            _stradd_dollar = (_stradd_bp * _vl_notional * 100.0) if _stradd_bp else None
-            # 7-day avg (exclude today if it's in the history too)
-            _7d_vals = []
-            for _sd, _vals in _history_surfaces[:7]:
-                try:
-                    _v = _vl_lookup_in_values(_vals, _en, _tn)
-                    if _v is not None:
-                        _7d_vals.append(_v)
-                except Exception:
-                    pass
-            _7d_avg = float(np.mean(_7d_vals)) if _7d_vals else None
-            # T-1 change
-            try:
-                _vol_t1 = _vl_lookup_in_values(_t1_surface, _en, _tn) if _t1_surface else None
-            except Exception:
-                _vol_t1 = None
-            _delta_t1 = (_vol_now - _vol_t1) if (_vol_now is not None and _vol_t1 is not None) else None
-
-            _vl_rows.append({
-                "Request":   f"{_en}{_tn}",
-                "Fwd %":     f"{_fwd:.3f}" if _fwd is not None else "—",
-                "Vol bp":    f"{_vol_now:.2f}" if _vol_now is not None else "—",
-                "Stradd bp": f"{_stradd_bp:.1f}" if _stradd_bp is not None else "—",
-                "Stradd $":  f"{_stradd_dollar:,.0f}" if _stradd_dollar is not None else "—",
-                "7d Avg":    f"{_7d_avg:.2f}" if _7d_avg is not None else "—",
-                "Δ T-1":     f"{_delta_t1:+.2f}" if _delta_t1 is not None else "—",
-            })
-        except Exception as _row_err:
+        _exp_y = _vl_expiry_years(_en)
+        _ten_y = _vl_tenor_years(_tn)
+        if _exp_y is None or _ten_y is None:
             _vl_rows.append({
                 "Request": f"{_en}{_tn}",
-                "Fwd %": "ERR", "Vol bp": "ERR", "Stradd bp": "ERR",
-                "Stradd $": "ERR", "7d Avg": "ERR", "Δ T-1": f"ERR ({type(_row_err).__name__})",
+                "Fwd %": "—",
+                "Vol bp": "—",
+                "Stradd bp": "—",
+                "Stradd $": "—",
+                "7d Avg": "—",
+                "Δ T-1": "—",
             })
+            continue
+        # Current vol from live surface
+        _vol_now = get_matrix_value(_atm_surf, _en, _ten_y)
+        _fwd = _vl_fwd(_exp_y, _ten_y)
+        _stradd_bp = _vl_straddle_bp(_vol_now, _exp_y) if _vol_now else None
+        _stradd_dollar = (_stradd_bp * _vl_notional * 100.0) if _stradd_bp else None
+        # 7-day avg (exclude today if it's in the history too)
+        _7d_vals = []
+        for _sd, _vals in _history_surfaces[:7]:
+            _v = _vl_lookup_in_values(_vals, _en, _tn)
+            if _v is not None:
+                _7d_vals.append(_v)
+        _7d_avg = float(np.mean(_7d_vals)) if _7d_vals else None
+        # T-1 change
+        _vol_t1 = _vl_lookup_in_values(_t1_surface, _en, _tn) if _t1_surface else None
+        _delta_t1 = (_vol_now - _vol_t1) if (_vol_now is not None and _vol_t1 is not None) else None
+
+        _vl_rows.append({
+            "Request":   f"{_en}{_tn}",
+            "Fwd %":     f"{_fwd:.3f}" if _fwd is not None else "—",
+            "Vol bp":    f"{_vol_now:.2f}" if _vol_now is not None else "—",
+            "Stradd bp": f"{_stradd_bp:.1f}" if _stradd_bp is not None else "—",
+            "Stradd $":  f"{_stradd_dollar:,.0f}" if _stradd_dollar is not None else "—",
+            "7d Avg":    f"{_7d_avg:.2f}" if _7d_avg is not None else "—",
+            "Δ T-1":     f"{_delta_t1:+.2f}" if _delta_t1 is not None else "—",
+        })
 
     import pandas as _pd_vl
     _df_vl = _pd_vl.DataFrame(_vl_rows)
     st.dataframe(_df_vl, use_container_width=True, hide_index=True)
 
     # Copy-friendly plain-text output block
-    _lines = []
-    for _r in _vl_rows:
-        _lines.append(
-            f"{_r['Request']:<8}  Fwd={_r['Fwd %']:>6}%  "
-            f"Vol={_r['Vol bp']:>6}bp  Stradd={_r['Stradd bp']:>6}bp  "
-            f"(7dAvg={_r['7d Avg']:>6}  Δ={_r['Δ T-1']:>6})"
-        )
-    _copy_text = "\n".join(_lines)
-
-    with st.expander("📋 Copy-friendly plain text", expanded=True):
-        # st.code shows a native hover-copy button (top-right) — always works.
-        st.code(_copy_text, language=None)
-        # Explicit always-visible copy button via JS clipboard API.
-        # Use %-formatting instead of f-string to avoid brace-escaping issues.
-        import streamlit.components.v1 as _components_vl
-        import json as _json_vl
-        _js_text = _json_vl.dumps(_copy_text)
-        _html_copy = """
-            <div style="margin-top:4px;">
-              <button id="vl_copy_btn" style="
-                background:#ef4444;color:#fff;border:none;padding:8px 18px;
-                border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;">
-                &#x1F4CB; Copy to Clipboard
-              </button>
-              <span id="vl_copy_msg" style="margin-left:10px;color:#22c55e;
-                font-size:13px;font-weight:600;"></span>
-            </div>
-            <script>
-              (function() {
-                var b = document.getElementById('vl_copy_btn');
-                var m = document.getElementById('vl_copy_msg');
-                var txt = %(txt)s;
-                b.onclick = function() {
-                  navigator.clipboard.writeText(txt).then(function() {
-                    m.textContent = '\u2713 Copied!';
-                    setTimeout(function() { m.textContent = ''; }, 2000);
-                  }).catch(function(e) {
-                    m.style.color = '#ef4444';
-                    m.textContent = 'Copy failed';
-                  });
-                };
-              })();
-            </script>
-        """ % {"txt": _js_text}
-        _components_vl.html(_html_copy, height=55)
-
-    # ═════════════════════════════════════════════════════════════════
-    # Beta Analyzer — 7 days of daily vol changes, regression β of
-    # one pair's Δvol vs another's. Requires ≥ 2 pairs parsed above.
-    # ═════════════════════════════════════════════════════════════════
-    if len(_vl_pairs) < 2:
-        return  # need at least 2 pairs for beta
-
-    st.markdown("---")
-    st.markdown("### 📐 Beta Analyzer (7-day)")
-    st.caption(
-        "β of one pair's daily vol changes vs another's. "
-        "β > 1 = move amplified, β < 1 = dampened, β < 0 = anti-correlated. "
-        "R² tells you if β is meaningful (>0.5 generally solid, <0.2 noisy)."
-    )
-
-    # Build per-pair daily vol series from _history_surfaces (already loaded above)
-    # _history_surfaces = list of (snapshot_date, values) newest first, up to 10.
-    # Take first 8 so we get 7 daily changes.
-    _hist_window = _history_surfaces[:8]
-    if len(_hist_window) < 3:
-        st.info("Not enough history in DB for beta (need at least 3 daily snapshots).")
-        return
-
-    # Build matrix: rows = pairs, cols = vol on each historical date (oldest→newest)
-    _hist_window_rev = list(reversed(_hist_window))  # oldest first for chronological Δ
-    _pair_series = {}
-    for _en, _tn in _vl_pairs:
-        _series = []
-        for _sd, _vals in _hist_window_rev:
-            _v = _vl_lookup_in_values(_vals, _en, _tn)
-            _series.append(_v)
-        _pair_series[f"{_en}{_tn}"] = _series
-
-    # Daily changes per pair (ΔV = V_t − V_{t-1}). NaN-preserving.
-    def _daily_deltas(series):
-        out = []
-        for _i in range(1, len(series)):
-            _a, _b = series[_i-1], series[_i]
-            if _a is None or _b is None:
-                out.append(None)
-            else:
-                out.append(_b - _a)
-        return out
-
-    _pair_deltas = {_k: _daily_deltas(_v) for _k, _v in _pair_series.items()}
-
-    def _beta_regression(dx, dy):
-        """OLS β and R² for dy = β·dx + α + ε. Returns (beta, r2, n) or (None,None,0)."""
-        pts = [(x, y) for x, y in zip(dx, dy) if x is not None and y is not None]
-        if len(pts) < 3:
-            return None, None, len(pts)
-        import numpy as _np_beta
-        x_arr = _np_beta.array([p[0] for p in pts], dtype=float)
-        y_arr = _np_beta.array([p[1] for p in pts], dtype=float)
-        x_mean = x_arr.mean(); y_mean = y_arr.mean()
-        x_var = _np_beta.sum((x_arr - x_mean) ** 2)
-        if x_var < 1e-12:
-            return None, None, len(pts)
-        cov_xy = _np_beta.sum((x_arr - x_mean) * (y_arr - y_mean))
-        beta = cov_xy / x_var
-        y_pred = beta * (x_arr - x_mean) + y_mean
-        ss_res = _np_beta.sum((y_arr - y_pred) ** 2)
-        ss_tot = _np_beta.sum((y_arr - y_mean) ** 2)
-        r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 1e-12 else None
-        return float(beta), (float(r2) if r2 is not None else None), len(pts)
-
-    # ── Shared copy helpers for beta section ──
-    def _df_to_tsv(df, fmt="{:.3f}"):
-        """Build tab-separated plaintext — pastes cleanly as a table in
-        Slack/Teams/Bloomberg chat/email."""
-        _headers = [""] + [str(c) for c in df.columns]
-        _lines = ["\t".join(_headers)]
-        for _idx, _row in df.iterrows():
-            _cells = [str(_idx)]
-            for _v in _row:
-                try:
-                    _fv = float(_v)
-                    if _fv != _fv:  # NaN check
-                        _cells.append("-")
-                    else:
-                        _cells.append(fmt.format(_fv))
-                except Exception:
-                    _cells.append("-")
-            _lines.append("\t".join(_cells))
-        return "\n".join(_lines)
-
-    def _render_copy_button(text, key_suffix, label="Copy Table"):
-        """Always-visible Copy button using JS clipboard API. Text is
-        JSON-encoded for safe injection into the HTML/JS payload."""
-        import streamlit.components.v1 as _c
-        import json as _j
-        # Fully JSON-encode the text — handles newlines, tabs, unicode, quotes
-        _js_text = _j.dumps(text)
-        _js_label = _j.dumps(label)
-        # Build the HTML as a plain string with %-formatting to avoid f-string
-        # issues around literal curly braces and embedded JSON
-        _html = """
-            <div style="margin-top:4px;">
-              <button id="btn_%(sfx)s" style="
-                background:#ef4444;color:#fff;border:none;padding:6px 14px;
-                border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">
-                &#x1F4CB; %(lbl_display)s
-              </button>
-              <span id="msg_%(sfx)s" style="margin-left:10px;color:#22c55e;
-                font-size:13px;font-weight:600;"></span>
-            </div>
-            <script>
-              (function() {
-                var b = document.getElementById('btn_%(sfx)s');
-                var m = document.getElementById('msg_%(sfx)s');
-                var txt = %(txt)s;
-                b.onclick = function() {
-                  navigator.clipboard.writeText(txt).then(function() {
-                    m.textContent = '\u2713 Copied!';
-                    setTimeout(function() { m.textContent = ''; }, 2000);
-                  }).catch(function(e) {
-                    m.style.color = '#ef4444';
-                    m.textContent = 'Copy failed';
-                  });
-                };
-              })();
-            </script>
-        """ % {"sfx": key_suffix, "lbl_display": label.replace("📋 ", ""), "txt": _js_text}
-        _c.html(_html, height=50)
-
-    # ── Section A: pick two pairs, show β + R² + daily pairs ──
-    st.markdown("**Pick any two — detailed view**")
-    _bcol1, _bcol2, _bcol3 = st.columns([2, 2, 3])
-    _pair_labels = [f"{_en}{_tn}" for _en, _tn in _vl_pairs]
-    with _bcol1:
-        _pair_x = st.selectbox("X (independent)", _pair_labels, index=0, key="vl_beta_x")
-    with _bcol2:
-        _default_y_idx = 1 if len(_pair_labels) > 1 else 0
-        _pair_y = st.selectbox("Y (dependent)", _pair_labels,
-                               index=_default_y_idx, key="vl_beta_y")
-
-    if _pair_x != _pair_y:
-        _dx_sel = _pair_deltas.get(_pair_x, [])
-        _dy_sel = _pair_deltas.get(_pair_y, [])
-        _beta, _r2, _n = _beta_regression(_dx_sel, _dy_sel)
-        _bcol1_m, _bcol2_m, _bcol3_m = st.columns([1, 1, 1])
-        with _bcol1_m:
-            st.metric(f"β ({_pair_y} / {_pair_x})", f"{_beta:.3f}" if _beta is not None else "—")
-        with _bcol2_m:
-            st.metric("R²", f"{_r2:.3f}" if _r2 is not None else "—")
-        with _bcol3_m:
-            st.metric("Obs (days)", str(_n))
-
-        # Daily pair table
-        with st.expander("📋 Daily Δvol pairs used in regression", expanded=False):
-            import pandas as _pd_beta
-            _date_labels = [_sd.strftime("%d-%b") if hasattr(_sd, "strftime") else str(_sd)[:10]
-                            for _sd, _ in _hist_window_rev[1:]]
-            _pair_tbl = _pd_beta.DataFrame({
-                "Date": _date_labels,
-                f"Δ {_pair_x}": [f"{v:+.2f}" if v is not None else "—" for v in _dx_sel],
-                f"Δ {_pair_y}": [f"{v:+.2f}" if v is not None else "—" for v in _dy_sel],
-            })
-            st.dataframe(_pair_tbl, use_container_width=True, hide_index=True)
-            # TSV-style copy for the pair table (strings already formatted, so skip _df_to_tsv fmt)
-            _pair_tsv_lines = ["\t".join(_pair_tbl.columns.tolist())]
-            for _, _r_tbl in _pair_tbl.iterrows():
-                _pair_tsv_lines.append("\t".join(str(x) for x in _r_tbl.tolist()))
-            _render_copy_button("\n".join(_pair_tsv_lines), "pair_tbl",
-                                label="📋 Copy Regression Table")
-    else:
-        st.caption("Select two different pairs for beta analysis.")
-
-    # ── Section B: auto N×N beta matrix ──
-    st.markdown("**Beta matrix (all parsed pairs)**")
-    st.caption("Entry [row=Y, col=X] = β such that ΔY ≈ β·ΔX. Diagonal always 1.000.")
-    import pandas as _pd_bm
-    _beta_matrix = []
-    _r2_matrix = []
-    for _y_lbl in _pair_labels:
-        _row_b = []
-        _row_r = []
-        for _x_lbl in _pair_labels:
-            if _x_lbl == _y_lbl:
-                _row_b.append(1.0)
-                _row_r.append(1.0)
-            else:
-                _b, _r, _ = _beta_regression(_pair_deltas[_x_lbl], _pair_deltas[_y_lbl])
-                _row_b.append(_b if _b is not None else float("nan"))
-                _row_r.append(_r if _r is not None else float("nan"))
-        _beta_matrix.append(_row_b)
-        _r2_matrix.append(_row_r)
-
-    _df_beta = _pd_bm.DataFrame(_beta_matrix, index=_pair_labels, columns=_pair_labels)
-    _df_r2   = _pd_bm.DataFrame(_r2_matrix,   index=_pair_labels, columns=_pair_labels)
-
-    _bmt_c1, _bmt_c2 = st.tabs(["β matrix", "R² matrix"])
-
-    with _bmt_c1:
-        st.dataframe(
-            _df_beta.style.format("{:.3f}").background_gradient(cmap="RdYlGn", axis=None, vmin=-1, vmax=2),
-            use_container_width=True,
-        )
-        _render_copy_button(_df_to_tsv(_df_beta), "beta_mat")
-    with _bmt_c2:
-        st.dataframe(
-            _df_r2.style.format("{:.3f}").background_gradient(cmap="Greens", axis=None, vmin=0, vmax=1),
-            use_container_width=True,
-        )
-        _render_copy_button(_df_to_tsv(_df_r2), "r2_mat")
+    with st.expander("📋 Copy-friendly plain text", expanded=False):
+        _lines = []
+        for _r in _vl_rows:
+            _lines.append(
+                f"{_r['Request']:<8}  Fwd={_r['Fwd %']:>6}%  "
+                f"Vol={_r['Vol bp']:>6}bp  Stradd={_r['Stradd bp']:>6}bp  "
+                f"(7dAvg={_r['7d Avg']:>6}  Δ={_r['Δ T-1']:>6})"
+            )
+        st.code("\n".join(_lines), language=None)
 
 
 @st.fragment
