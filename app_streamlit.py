@@ -24306,6 +24306,18 @@ def vol_lookup_tab():
         years-based nearest-row if label not found. Returns percent."""
         if _fwd_mat is None or not hasattr(_fwd_mat, "index"):
             return None
+
+        def _scalarize(v):
+            """Coerce pandas Series/scalar/np to a plain float."""
+            try:
+                if hasattr(v, "iloc"):
+                    v = v.iloc[0]
+                if hasattr(v, "item"):
+                    v = v.item()
+                return float(v)
+            except Exception:
+                return None
+
         try:
             # 1) Try direct label match on the row index
             _idx_lower = {str(_i).lower().strip(): _i for _i in _fwd_mat.index}
@@ -24324,18 +24336,19 @@ def vol_lookup_tab():
             if _row_key is None:
                 return None
             _row = _fwd_mat.loc[_row_key]
-            # Column match: exact on float tenor, then nearest
+            # If multiple rows matched (duplicate index), take the first
+            if hasattr(_row, "ndim") and _row.ndim > 1:
+                _row = _row.iloc[0]
+            # Column match: exact on float tenor, then int, then nearest numeric
             if float(ten_y) in _row.index:
-                return float(_row[float(ten_y)])
-            # Try int equivalent
+                return _scalarize(_row[float(ten_y)])
             if int(ten_y) in _row.index:
-                return float(_row[int(ten_y)])
-            # Nearest numeric column
+                return _scalarize(_row[int(ten_y)])
             _cols = [c for c in _row.index if isinstance(c, (int, float))]
             if not _cols:
                 return None
             _cn = min(_cols, key=lambda c: abs(float(c) - float(ten_y)))
-            return float(_row[_cn])
+            return _scalarize(_row[_cn])
         except Exception:
             return None
 
@@ -24429,14 +24442,22 @@ def vol_lookup_tab():
                 _vol_t1 = None
             _delta_t1 = (_vol_now - _vol_t1) if (_vol_now is not None and _vol_t1 is not None) else None
 
+            def _fmt(val, spec):
+                if val is None:
+                    return "—"
+                try:
+                    return format(float(val), spec)
+                except Exception:
+                    return "—"
+
             _vl_rows.append({
                 "Request":   f"{_en}{_tn}",
-                "Fwd %":     f"{_fwd:.3f}" if _fwd is not None else "—",
-                "Vol bp":    f"{_vol_now:.2f}" if _vol_now is not None else "—",
-                "Stradd bp": f"{_stradd_bp:.1f}" if _stradd_bp is not None else "—",
-                "Stradd $":  f"{_stradd_dollar:,.0f}" if _stradd_dollar is not None else "—",
-                "7d Avg":    f"{_7d_avg:.2f}" if _7d_avg is not None else "—",
-                "Δ T-1":     f"{_delta_t1:+.2f}" if _delta_t1 is not None else "—",
+                "Fwd %":     _fmt(_fwd, ".3f"),
+                "Vol bp":    _fmt(_vol_now, ".2f"),
+                "Stradd bp": _fmt(_stradd_bp, ".1f"),
+                "Stradd $":  _fmt(_stradd_dollar, ",.0f"),
+                "7d Avg":    _fmt(_7d_avg, ".2f"),
+                "Δ T-1":     _fmt(_delta_t1, "+.2f"),
             })
         except Exception as _row_err:
             _vl_rows.append({
