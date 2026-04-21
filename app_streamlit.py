@@ -26089,11 +26089,6 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     _sod_story.append(Paragraph(f"{_ts} {_tz_lbl_pdf}", _sTsLine))
                     _sod_story.append(HRFlowable(width="100%", thickness=0.5,
                                                   color=colors.HexColor("#cbd5e1"), spaceAfter=4))
-                    _sMeta = ParagraphStyle("sMeta", parent=_ss["Normal"], fontSize=7,
-                                            textColor=colors.HexColor("#64748b"), spaceAfter=8)
-                    _sod_story.append(Paragraph(
-                        f"USD T-1: {_usd_t1_sel[:60]}   |   "
-                        f"USD T-2: {_usd_t2_sel[:50]}   |   AUD: {_aud_sel[:40]}", _sMeta))
                     _sod_story.append(HRFlowable(width="100%", thickness=0.5,
                                                   color=colors.HexColor("#e2e8f0"), spaceAfter=8))
 
