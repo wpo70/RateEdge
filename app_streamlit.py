@@ -5270,8 +5270,9 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                 if _aud_zc is not None and len(_aud_zc) > 0:
                     # Store in curves (for display / NZD-USD style access) without calling
                     # _set_aud_dual_proj_curves — bootstrap already set _aud_zc_qq/ss/qq_full
-                    import datetime as _dt_aud
-                    _aud_zc["_source_date"] = str(_dt_aud.date.today())
+                    from zoneinfo import ZoneInfo as _ZI_src
+                    from datetime import datetime as _dt_src_now
+                    _aud_zc["_source_date"] = _dt_src_now.now(_ZI_src("Australia/Sydney")).strftime("%Y-%m-%d")
                     st.session_state.setdefault("curves", {})["AUD"] = _aud_zc
                     _cids = st.session_state.setdefault("_curve_commit_ids", {})
                     _cids["AUD"] = _cids.get("AUD", 0) + 1
@@ -5289,8 +5290,9 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                         except Exception:
                             curve_df = load_curve(raw_curve, curve_name)
                     if curve_df is not None and len(curve_df) > 0:
-                        import datetime as _dt_aud2
-                        curve_df["_source_date"] = str(_dt_aud2.date.today())
+                        from zoneinfo import ZoneInfo as _ZI_src2
+                        from datetime import datetime as _dt_src_now2
+                        curve_df["_source_date"] = _dt_src_now2.now(_ZI_src2("Australia/Sydney")).strftime("%Y-%m-%d")
                         set_ccy_curve(ccy, curve_df)
                         st.session_state.setdefault("config_curves", {})[ccy] = curve_df
                         set_timestamp("curves", ccy)
@@ -5300,8 +5302,9 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                 if ccy == "USD":
                     curve_df = load_usd_sofr_from_config(xl)
                     if curve_df is not None and len(curve_df) > 0:
-                        import datetime as _dt2
-                        curve_df["_source_date"] = str(_dt2.date.today())
+                        from zoneinfo import ZoneInfo as _ZI_src3
+                        from datetime import datetime as _dt_src_now3
+                        curve_df["_source_date"] = _dt_src_now3.now(_ZI_src3("Australia/Sydney")).strftime("%Y-%m-%d")
                 else:
                     curve_name = f"Curves_{ccy}"
                     if curve_name in xl.sheet_names:
@@ -5312,8 +5315,9 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                             curve_df = load_curve(raw_curve, curve_name)
                         # v2104h: stamp NZD (and any other non-USD/AUD) with today too
                         if curve_df is not None and len(curve_df) > 0:
-                            import datetime as _dt_nzd
-                            curve_df["_source_date"] = str(_dt_nzd.date.today())
+                            from zoneinfo import ZoneInfo as _ZI_src4
+                            from datetime import datetime as _dt_src_now4
+                            curve_df["_source_date"] = _dt_src_now4.now(_ZI_src4("Australia/Sydney")).strftime("%Y-%m-%d")
 
                 if curve_df is not None and len(curve_df) > 0:
                     set_ccy_curve(ccy, curve_df)
