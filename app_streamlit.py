@@ -24457,7 +24457,7 @@ def vol_lookup_tab():
                 _fwd = _vl_scalar(_vl_fwd(_exp_y, _ten_y, _en))
             except Exception:
                 _fwd = None
-            _stradd_bp = _vl_straddle_bp(_vol_now, _exp_y) if _vol_now is not None else None
+            _stradd_bp = _vl_straddle_bp(_vol_now, _exp_y, _ten_y) if _vol_now is not None else None
             _stradd_dollar = (_stradd_bp * _vl_notional * 100.0) if _stradd_bp is not None else None
             # 7-day avg (exclude today if it's in the history too)
             _7d_vals = []
