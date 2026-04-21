@@ -24323,7 +24323,7 @@ def vol_lookup_tab():
     _vlc1, _vlc2 = st.columns([3, 1])
     with _vlc1:
         _vl_notional = st.number_input(
-            f"Notional (MM) — Currency: **{_vl_ccy}** (set via sidebar)",
+            f"Notional (MM) — Currency: **{_vl_ccy}**",
             value=100.0, step=50.0, min_value=1.0,
             key="vl_notional", help="Used for $ premium column. Change currency in the sidebar.",
         )
