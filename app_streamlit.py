@@ -24119,77 +24119,16 @@ def vol_lookup_tab():
     with _vlc3:
         st.markdown("")  # spacing
         st.markdown("")
-        if st.button("🔄 Refresh", key="vl_refresh", use_container_width=True,
-                     help="Reload latest ATM vol surface from vol_history DB"):
-            # 1) Bust all relevant caches
-            try:
-                load_user_config.clear()
-            except Exception:
-                pass
-            try:
-                list_vol_snapshots.clear()
-            except Exception:
-                pass
+        if st.button("🧹 Clear", key="vl_clear", use_container_width=True,
+                     help="Clear paste box and results — ready for next request"):
+            # Reset the text area by deleting its widget key. Streamlit will
+            # re-render with the empty placeholder.
+            st.session_state.pop("vl_input", None)
+            # Also clear any cached beta selector state so the next paste is clean
             for _k in list(st.session_state.keys()):
-                if _k.startswith("_latest_vol_snaps") or _k.startswith("_snap_list"):
+                if _k.startswith("vl_beta_"):
                     del st.session_state[_k]
-
-            # 2) Query latest snapshot ID per ccy from vol_history DB
-            _ccy_sel = st.session_state.get("vl_ccy", "USD")
-            _refresh_err = None
-            _refresh_ok  = None
-            if HAS_POSTGRES:
-                try:
-                    _rc = get_db_connection()
-                    if _rc:
-                        _rcur = _rc.cursor()
-                        _rcur.execute("""
-                            SELECT id, label FROM vol_history
-                            WHERE currency = %s
-                            ORDER BY snapshot_date DESC, created_at DESC
-                            LIMIT 1
-                        """, (_ccy_sel,))
-                        _row = _rcur.fetchone()
-                        _rcur.close()
-                        _rc.close()
-                        if _row:
-                            _snap_id, _snap_lbl = _row
-                            _snap_data = load_vol_snapshot(int(_snap_id))
-                            if _snap_data and _snap_data.get("atm") is not None:
-                                # Write into vol_data for this ccy
-                                if "vol_data" not in st.session_state:
-                                    st.session_state["vol_data"] = {}
-                                if _ccy_sel not in st.session_state["vol_data"]:
-                                    st.session_state["vol_data"][_ccy_sel] = {}
-                                st.session_state["vol_data"][_ccy_sel]["atm"] = _snap_data["atm"]
-                                # SABR params too if present
-                                for _k_sabr in ("alpha", "beta", "rho", "nu"):
-                                    if _snap_data.get(_k_sabr) is not None:
-                                        st.session_state["vol_data"][_ccy_sel][_k_sabr] = _snap_data[_k_sabr]
-                                _refresh_ok = _snap_lbl
-                            else:
-                                _refresh_err = f"Snapshot {_snap_lbl} loaded but ATM was empty"
-                        else:
-                            _refresh_err = f"No {_ccy_sel} snapshots found in vol_history"
-                except Exception as _re_e:
-                    _refresh_err = f"DB error: {_re_e}"
-            else:
-                _refresh_err = "Database not connected"
-
-            # 3) Stash status for next render, then force full rerun
-            if _refresh_ok:
-                st.session_state["_vl_refresh_msg"] = ("ok", f"✓ Reloaded: {_refresh_ok}")
-            else:
-                st.session_state["_vl_refresh_msg"] = ("err", f"⚠ {_refresh_err}")
-            st.rerun(scope="app")
-
-    # Display refresh status message (set by button handler above on prior run)
-    _vl_msg = st.session_state.pop("_vl_refresh_msg", None)
-    if _vl_msg:
-        if _vl_msg[0] == "ok":
-            st.success(_vl_msg[1])
-        else:
-            st.warning(_vl_msg[1])
+            st.rerun(scope="fragment")
 
     _vl_text = st.text_area(
         "Paste text here",
@@ -24255,7 +24194,10 @@ def vol_lookup_tab():
                    "Click 🔄 Refresh above, or load a snapshot in IRS/Vol Upload first.")
         return
 
-    # Load 7-day history — query vol_history for last 7 snapshots
+    # Load 7-day history — query vol_history for the last 7 EOD snapshots.
+    # User's convention: EOD label format contains "EOD" (AUD: "EOD DD-Mon-YYYY",
+    # USD: "USD EOD DD-Mon-YYYY", NZD: "EOD DD-Mon-YYYY"). Filter to those only
+    # so intraday/ad-hoc snapshots don't pollute the daily-change series.
     _history_surfaces = []
     _t1_surface = None
     if HAS_POSTGRES:
@@ -24264,11 +24206,16 @@ def vol_lookup_tab():
             if _conn_vl:
                 _cur_vl = _conn_vl.cursor()
                 _cur_vl.execute("""
-                    SELECT snapshot_date, atm_vols
-                    FROM vol_history
-                    WHERE currency = %s
+                    SELECT snapshot_date, atm_vols FROM (
+                      SELECT DISTINCT ON (snapshot_date::date)
+                             snapshot_date, atm_vols, created_at, label
+                      FROM vol_history
+                      WHERE currency = %s
+                        AND label ILIKE '%%EOD%%'
+                      ORDER BY snapshot_date::date DESC, created_at DESC
+                    ) s
                     ORDER BY snapshot_date DESC
-                    LIMIT 10
+                    LIMIT 8
                 """, (_vl_ccy,))
                 _rows_vl = _cur_vl.fetchall()
                 _cur_vl.close()
@@ -24277,7 +24224,7 @@ def vol_lookup_tab():
                     if not _av or "values" not in _av:
                         continue
                     _history_surfaces.append((_sd, _av["values"]))
-                    if _i_vl == 1:  # second-most-recent = T-1
+                    if _i_vl == 1:  # second-most-recent EOD = T-1
                         _t1_surface = _av["values"]
         except Exception as _e_vl:
             st.caption(f"⚠ Couldn't load vol history: {_e_vl}")
