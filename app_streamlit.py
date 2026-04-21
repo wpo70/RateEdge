@@ -24023,16 +24023,76 @@ def vol_lookup_tab():
         st.markdown("")  # spacing
         st.markdown("")
         if st.button("🔄 Refresh", key="vl_refresh", use_container_width=True,
-                     help="Force re-read of ATM surface and vol_history from DB"):
-            # Invalidate the load_user_config + vol history caches so next
-            # call re-queries the DB
+                     help="Reload latest ATM vol surface from vol_history DB"):
+            # 1) Bust all relevant caches
             try:
                 load_user_config.clear()
             except Exception:
                 pass
-            st.session_state.pop("_latest_vol_snaps_cache", None)
-            st.session_state.pop("_latest_vol_snaps_ts", None)
-            st.rerun()
+            try:
+                list_vol_snapshots.clear()
+            except Exception:
+                pass
+            for _k in list(st.session_state.keys()):
+                if _k.startswith("_latest_vol_snaps") or _k.startswith("_snap_list"):
+                    del st.session_state[_k]
+
+            # 2) Query latest snapshot ID per ccy from vol_history DB
+            _ccy_sel = st.session_state.get("vl_ccy", "USD")
+            _refresh_err = None
+            _refresh_ok  = None
+            if HAS_POSTGRES:
+                try:
+                    _rc = get_db_connection()
+                    if _rc:
+                        _rcur = _rc.cursor()
+                        _rcur.execute("""
+                            SELECT id, label FROM vol_history
+                            WHERE currency = %s
+                            ORDER BY snapshot_date DESC, created_at DESC
+                            LIMIT 1
+                        """, (_ccy_sel,))
+                        _row = _rcur.fetchone()
+                        _rcur.close()
+                        _rc.close()
+                        if _row:
+                            _snap_id, _snap_lbl = _row
+                            _snap_data = load_vol_snapshot(int(_snap_id))
+                            if _snap_data and _snap_data.get("atm") is not None:
+                                # Write into vol_data for this ccy
+                                if "vol_data" not in st.session_state:
+                                    st.session_state["vol_data"] = {}
+                                if _ccy_sel not in st.session_state["vol_data"]:
+                                    st.session_state["vol_data"][_ccy_sel] = {}
+                                st.session_state["vol_data"][_ccy_sel]["atm"] = _snap_data["atm"]
+                                # SABR params too if present
+                                for _k_sabr in ("alpha", "beta", "rho", "nu"):
+                                    if _snap_data.get(_k_sabr) is not None:
+                                        st.session_state["vol_data"][_ccy_sel][_k_sabr] = _snap_data[_k_sabr]
+                                _refresh_ok = _snap_lbl
+                            else:
+                                _refresh_err = f"Snapshot {_snap_lbl} loaded but ATM was empty"
+                        else:
+                            _refresh_err = f"No {_ccy_sel} snapshots found in vol_history"
+                except Exception as _re_e:
+                    _refresh_err = f"DB error: {_re_e}"
+            else:
+                _refresh_err = "Database not connected"
+
+            # 3) Stash status for next render, then force full rerun
+            if _refresh_ok:
+                st.session_state["_vl_refresh_msg"] = ("ok", f"✓ Reloaded: {_refresh_ok}")
+            else:
+                st.session_state["_vl_refresh_msg"] = ("err", f"⚠ {_refresh_err}")
+            st.rerun(scope="app")
+
+    # Display refresh status message (set by button handler above on prior run)
+    _vl_msg = st.session_state.pop("_vl_refresh_msg", None)
+    if _vl_msg:
+        if _vl_msg[0] == "ok":
+            st.success(_vl_msg[1])
+        else:
+            st.warning(_vl_msg[1])
 
     _vl_text = st.text_area(
         "Paste text here",
