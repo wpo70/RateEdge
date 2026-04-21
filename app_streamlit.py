@@ -11041,7 +11041,6 @@ def caps_floors_tab(vol_mode: str):
             ("_preserve_cfs_sr3_cutoff",      "cfs_sr3_cutoff"),
             ("_preserve_cfs_overlay_choices", "cfs_overlay_choices"),
             ("_preserve_cfs_pack_radio",      "_cfs_pack_radio"),
-            ("_preserve_cfs_le_expanded",     "_cfs_le_expanded"),
         ]:
             if _preserve_key in st.session_state and _widget_key not in st.session_state:
                 st.session_state[_widget_key] = st.session_state.pop(_preserve_key)
@@ -11746,7 +11745,6 @@ def caps_floors_tab(vol_mode: str):
                     ("cfs_sr3_cutoff",      "_preserve_cfs_sr3_cutoff"),
                     ("cfs_overlay_choices", "_preserve_cfs_overlay_choices"),
                     ("_cfs_pack_radio",     "_preserve_cfs_pack_radio"),
-                    ("_cfs_le_expanded",    "_preserve_cfs_le_expanded"),
                 ]:
                     if _widget_key in st.session_state:
                         st.session_state[_preserve_key] = st.session_state[_widget_key]
@@ -12486,6 +12484,68 @@ def caps_floors_tab(vol_mode: str):
             # v2004x: Stash all 4 pre-built curves for the overlay table + chart.
             # No separate chart-overlay-build path needed; _listed_curve_built is
             # already a complete 0->30Y curve.
+            # v2204d: Extend all 4 USD overlay curves to 20Y and 30Y using the
+            # same 15v20 / 20v30 spreads AUD uses, so the chart + overlay table
+            # show the full 30Y extension (not just 15Y).
+            def _extend_usd_curve_to_30y(src_curve):
+                """Extend a 0-15Y caplet curve to 0-30Y using 15v20 + 20v30
+                spreads. Returns a new dict; safe on None/empty input."""
+                if not src_curve:
+                    return src_curve
+                try:
+                    _out = dict(src_curve)
+                    _keys_sorted = sorted(_out.keys())
+                    if not _keys_sorted:
+                        return _out
+                    _max_t = _keys_sorted[-1]
+                    # If already extended (≥20Y), skip
+                    if _max_t >= 19.9:
+                        # Still need to add 30Y branch if it stops at 20
+                        if _max_t <= 20.01:
+                            _vol_20 = _out[_max_t]
+                            _spd_20v30 = float(st.session_state.get("cf_spr_20v30", -5.0))
+                            _vol_30 = max(_vol_20 + _spd_20v30, 1.0)
+                            _t_ext = round(_max_t + 0.25, 2)
+                            while _t_ext <= 30.01:
+                                _frac = (_t_ext - 20.0) / 10.0
+                                _out[round(_t_ext, 2)] = max(
+                                    _vol_20 + _frac * (_vol_30 - _vol_20), 1.0)
+                                _t_ext += 0.25
+                        return _out
+                    # Find the 15Y anchor (or nearest)
+                    _vol_15 = _out.get(15.0)
+                    if _vol_15 is None:
+                        # use nearest to 15
+                        _nearest_15 = min(_keys_sorted, key=lambda k: abs(k - 15.0))
+                        _vol_15 = _out[_nearest_15]
+                    _spd_15v20 = float(st.session_state.get("cf_spr_15v20", -5.0))
+                    _spd_20v30 = float(st.session_state.get("cf_spr_20v30", -5.0))
+                    _vol_20 = max(_vol_15 + _spd_15v20, 1.0)
+                    _vol_30 = max(_vol_20 + _spd_20v30, 1.0)
+                    # 15Y→20Y linear interpolation on 0.25 grid
+                    _t_ext = 15.25
+                    while _t_ext <= 20.01:
+                        _frac = (_t_ext - 15.0) / 5.0
+                        _out[round(_t_ext, 2)] = max(
+                            _vol_15 + _frac * (_vol_20 - _vol_15), 1.0)
+                        _t_ext += 0.25
+                    # 20Y→30Y linear interpolation
+                    _t_ext = 20.25
+                    while _t_ext <= 30.01:
+                        _frac = (_t_ext - 20.0) / 10.0
+                        _out[round(_t_ext, 2)] = max(
+                            _vol_20 + _frac * (_vol_30 - _vol_20), 1.0)
+                        _t_ext += 0.25
+                    return _out
+                except Exception:
+                    return src_curve
+
+            if ccy == "USD":
+                otc_caplet_curve     = _extend_usd_curve_to_30y(otc_caplet_curve)
+                _listed_curve_built  = _extend_usd_curve_to_30y(_listed_curve_built)
+                sr3_hybrid_curve     = _extend_usd_curve_to_30y(sr3_hybrid_curve)
+                sr3_full_curve       = _extend_usd_curve_to_30y(sr3_full_curve)
+
             st.session_state["_cfs_otc_curve"]        = otc_caplet_curve
             st.session_state["_cfs_listed_bootstrap"] = _listed_curve_built
             st.session_state["_cfs_sr3_hybrid"]       = sr3_hybrid_curve
@@ -12525,11 +12585,8 @@ def caps_floors_tab(vol_mode: str):
                 if _use_listed != _prev_use_listed:
                     if _use_listed:
                         st.session_state["cfs_active_vol_src"] = "Listed bootstrap"
-                        # v2004ae: opening editor by default when toggle flips ON
-                        st.session_state["_cfs_le_expanded"] = True
                     else:
                         st.session_state["cfs_active_vol_src"] = "OTC only"
-                        st.session_state["_cfs_le_expanded"] = False
                     st.rerun(scope="app")
 
                 # ── Curve sources explainer ───────────────────────────
@@ -12583,20 +12640,11 @@ def caps_floors_tab(vol_mode: str):
                         )
 
             if _use_listed:
-              # v2004ae: expander state controlled by _cfs_le_expanded flag so
-              # user's collapse decision persists across Calculate reruns. A
-              # small toggle button flips the flag; the expander's native
-              # chevron does not persist (by Streamlit design).
-              _le_body_open = bool(st.session_state.get("_cfs_le_expanded", False))
-              _le_btn_lbl = "▼ Hide Listed Front editor" if _le_body_open else "▶ Show Listed Front editor"
-              if st.button(_le_btn_lbl, key="_cfs_le_toggle_btn"):
-                  _new_val = not _le_body_open
-                  st.session_state["_cfs_le_expanded"] = _new_val
-                  # Also preserve it so fragment cleanup on st.rerun(scope="app")
-                  # can't wipe it before the restore at top of tab runs.
-                  st.session_state["_preserve_cfs_le_expanded"] = _new_val
-                  st.rerun(scope="app")
-              _le_exp = st.expander("Listed Front editor - ratio/bp overrides", expanded=_le_body_open)
+              # Let Streamlit's native expander manage its own open/close state
+              # via the chevron. No forced `expanded=` override (which would
+              # reopen the editor after every Calculate CFS rerun). The
+              # editor starts collapsed by default; user clicks to open.
+              _le_exp = st.expander("Listed Front editor - ratio/bp overrides", expanded=False)
               with _le_exp:
                 try:
                   # Load current SR3 rows (with session edits already overlaid)
