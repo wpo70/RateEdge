@@ -24132,15 +24132,25 @@ def vol_lookup_tab():
                     return float(_fval)
             except Exception:
                 pass
-        # Fall back: compute from curve directly
+        # Fall back: compute from zero curve directly via fast_forward_rate.
+        # get_ccy_curve returns a DataFrame with MaturityY (years) and
+        # ZeroRatePct (%) columns.
         try:
             _curve = get_ccy_curve(_vl_ccy)
-            if _curve is None or len(_curve) == 0:
+            if _curve is None or (hasattr(_curve, "empty") and _curve.empty):
                 return None
-            _cx = np.array(sorted(_curve.keys()))
-            _cy = np.array([_curve[_k] for _k in _cx])
+            if "MaturityY" not in _curve.columns or "ZeroRatePct" not in _curve.columns:
+                return None
+            _cx = _curve["MaturityY"].to_numpy(dtype=float)
+            _cy = _curve["ZeroRatePct"].to_numpy(dtype=float) / 100.0  # fast_forward_rate wants decimal
+            # Sort by maturity
+            _order = np.argsort(_cx)
+            _cx = _cx[_order]; _cy = _cy[_order]
             _r = fast_forward_rate(_cx, _cy, float(exp_y), float(ten_y), _vl_ccy)
-            return float(_r) if _r is not None else None
+            if _r is None:
+                return None
+            # Convert decimal → percent for display
+            return float(_r) * 100.0
         except Exception:
             return None
 
