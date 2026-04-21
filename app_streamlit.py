@@ -24313,15 +24313,21 @@ def vol_lookup_tab():
         "Expiries: w/m/y. Tenors: y only."
     )
 
-    _vlc1, _vlc2, _vlc3 = st.columns([1, 2, 1])
+    # Currency comes from the sidebar's global selector (sidebar_ccy).
+    # Supported for vol lookup: USD / AUD / NZD. Fall back to AUD if sidebar
+    # value is something else.
+    _vl_ccy = st.session_state.get("sidebar_ccy", "AUD")
+    if _vl_ccy not in ("USD", "AUD", "NZD"):
+        _vl_ccy = "AUD"
+
+    _vlc1, _vlc2 = st.columns([3, 1])
     with _vlc1:
-        _vl_ccy = st.radio("Currency", ["USD", "AUD", "NZD"], horizontal=True, key="vl_ccy")
-    with _vlc2:
         _vl_notional = st.number_input(
-            "Notional (MM)", value=100.0, step=50.0, min_value=1.0,
-            key="vl_notional", help="Used for $ premium column",
+            f"Notional (MM) — Currency: **{_vl_ccy}** (set via sidebar)",
+            value=100.0, step=50.0, min_value=1.0,
+            key="vl_notional", help="Used for $ premium column. Change currency in the sidebar.",
         )
-    with _vlc3:
+    with _vlc2:
         st.markdown("")  # spacing
         st.markdown("")
         if st.button("🧹 Clear", key="vl_clear", use_container_width=True,
