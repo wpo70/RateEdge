@@ -12815,7 +12815,10 @@ def caps_floors_tab(vol_mode: str):
                               f"Editing {len(_editor_rows)} contracts. "
                               f"OTC wedges start at <b style='color:#22c55e'>{_otc_first_wedge}</b>. "
                               f"3m1y{' and 1y1y' if _pack_mode == 'both' else ''} wedge"
-                              f"{'s are' if _pack_mode == 'both' else ' is'} skipped.</div>",
+                              f"{'s are' if _pack_mode == 'both' else ' is'} skipped. "
+                              f"<b style='color:#22c55e'>✓</b> = contract drives a caplet in the strip "
+                              f"(edit has effect). "
+                              f"<b style='color:#94a3b8'>✗</b> = not sampled (edit has no effect).</div>",
                               unsafe_allow_html=True,
                           )
 
@@ -12842,6 +12845,88 @@ def caps_floors_tab(vol_mode: str):
                           # DB baseline read ONCE before the loop (was called per row
                           # = 4-8× per rerun, causing recalc storm).
                           _db_rows_baseline = _load_sr3_latest_usd() or {}
+
+                          # v2204o: Pre-compute which contracts actually get SAMPLED
+                          # by the 1Y (and 2Y if pack=both) strip. Each caplet
+                          # fixing date picks the closest-expiry contract; this
+                          # set tells the user which contracts drive the curve
+                          # and which are selected-but-unused.
+                          _sampled_codes_1y = set()
+                          _sampled_codes_2y = set()
+                          try:
+                              from datetime import date as _d_s, timedelta as _td_s
+                              _today_s = _d_s.today()
+                              _whites_sel_s = set(st.session_state.get("_cfs_white_selected", []) or [])
+                              _all_rows_for_match = _sr3_rows_le  # same dict the editor reads from
+
+                              # Build (code, expiry_date, atm) tuples for whites (1Y strip)
+                              def _mk_exp_tuples(code_set):
+                                  out = []
+                                  for _c in code_set:
+                                      _r = _all_rows_for_match.get(_c)
+                                      if not _r:
+                                          continue
+                                      _ed = _r.get("expiry_date")
+                                      if _ed is None:
+                                          continue
+                                      try:
+                                          _ed_d = (_ed if hasattr(_ed, "toordinal")
+                                                   else _d_s.fromisoformat(str(_ed)[:10]))
+                                      except Exception:
+                                          continue
+                                      out.append((_c, _ed_d))
+                                  return out
+
+                              def _sample_for_strip(contracts_available, tenor_y):
+                                  """Mirror of _build_listed_caplet_curve_by_date match
+                                  logic — returns set of codes actually sampled."""
+                                  tuples = _mk_exp_tuples(contracts_available)
+                                  if not tuples:
+                                      return set()
+                                  _cap_start = 0.25  # strip starts 3m fwd (same as pre-calc)
+                                  _cap_end = _cap_start + tenor_y
+                                  _pairs = []
+                                  _t = _cap_start
+                                  while _t < _cap_end - 1e-8:
+                                      _t_next = min(_t + 0.25, _cap_end)
+                                      _pairs.append((_t, round(_t_next, 4)))
+                                      _t = _t_next
+                                  # Skip first fixing (same as real builder)
+                                  _pairs = _pairs[1:] if len(_pairs) > 1 else _pairs
+                                  _used = set()
+                                  for _t_start, _t_fix in _pairs:
+                                      _match_date = _today_s + _td_s(days=int(round(_t_start * 365.25)))
+                                      _best = min(tuples, key=lambda w: abs((w[1] - _match_date).days))
+                                      _used.add(_best[0])
+                                  return _used
+
+                              if _whites_sel_s:
+                                  _sampled_codes_1y = _sample_for_strip(_whites_sel_s, 1.0)
+
+                              if _pack_mode == "both":
+                                  # Collect reds in the ~1-2.2Y expiry band (same logic as pre-calc)
+                                  _reds_avail_s = set()
+                                  for _rc, _rr in _all_rows_for_match.items():
+                                      if "MC" in (_rr.get("contract_type") or ""):
+                                          continue
+                                      _red = _rr.get("expiry_date")
+                                      if _red is None:
+                                          continue
+                                      try:
+                                          _red_d = (_red if hasattr(_red, "toordinal")
+                                                    else _d_s.fromisoformat(str(_red)[:10]))
+                                          _t_exp = (_red_d - _today_s).days / 365.25
+                                          if 1.0 <= _t_exp <= 2.2:
+                                              _reds_avail_s.add(_rc)
+                                      except Exception:
+                                          continue
+                                  _contracts_for_2y_s = _whites_sel_s | _reds_avail_s
+                                  _sampled_codes_2y = _sample_for_strip(_contracts_for_2y_s, 2.0)
+                          except Exception:
+                              _sampled_codes_1y = set()
+                              _sampled_codes_2y = set()
+
+                          _all_sampled = _sampled_codes_1y | _sampled_codes_2y
 
                           for code, row in _editor_rows:
                               pidx = _sr3_pack_index(row.get("underlying", ""))
@@ -12884,8 +12969,29 @@ def caps_floors_tab(vol_mode: str):
                               )
 
                               _lr = st.columns(_LE_CW)
+                              # v2204o: indicate whether THIS contract actually
+                              # feeds the caplet curve. If it's in _sampled_codes,
+                              # it drives at least one caplet fixing — highlight
+                              # green. If selected but not sampled, flag with ✗.
+                              _is_sampled = code in _all_sampled
+                              if _is_sampled:
+                                  _code_style = "color:#22c55e;font-weight:700"
+                                  _code_marker = " ✓"
+                                  _code_title = (
+                                      "USED: this contract drives at least one caplet "
+                                      "in the 1Y/2Y strip"
+                                  )
+                              else:
+                                  # Faded/struck-through to signal unused
+                                  _code_style = f"color:{_pack_col};opacity:0.55;font-weight:500"
+                                  _code_marker = " ✗"
+                                  _code_title = (
+                                      "NOT sampled: nearer contracts win every caplet. "
+                                      "Editing this has no effect on the curve."
+                                  )
                               _lr[0].markdown(
-                                  f"<div style='font-size:12px;padding-top:8px;font-weight:700;color:{_pack_col};'>{code}</div>",
+                                  f"<div title='{_code_title}' style='font-size:12px;padding-top:8px;{_code_style};'>"
+                                  f"{code}<span style='font-size:10px;margin-left:4px;'>{_code_marker}</span></div>",
                                   unsafe_allow_html=True,
                               )
                               _lr[1].markdown(
@@ -13154,6 +13260,7 @@ def caps_floors_tab(vol_mode: str):
             if _cfs_cached and st.session_state.get("_atm_cfs_rows_cache"):
                 st.dataframe(pd.DataFrame(st.session_state["_atm_cfs_rows_cache"]),
                              use_container_width=True, hide_index=True)
+                _atm_rendered = True
             elif _cfs_tdata and _curve_local is not None:
                 st.session_state["_atm_cfs_cache_key"] = _cfs_id
                 from datetime import date
@@ -13376,24 +13483,40 @@ def caps_floors_tab(vol_mode: str):
                 st.session_state["_atm_cfs_rows_cache"] = _atm_cfs_rows
                 if _atm_cfs_rows:
                     st.dataframe(pd.DataFrame(_atm_cfs_rows), use_container_width=True, hide_index=True)
-                    # v2204m USD-only diagnostic — shows whether commit is actually
-                    # propagating through to the cached listed straddle. If this
-                    # number changes after you click ✓ Commit, the pipeline is
-                    # working. If it doesn't, the bug is upstream of this point.
-                    if ccy == "USD":
-                        _lfc_dbg = st.session_state.get("_cfs_listed_curve_cache") or {}
-                        _committed_dbg = st.session_state.get("_cfs_listed_committed_edits", {}) or {}
-                        _s1y = _lfc_dbg.get("stradd_1y")
-                        _s2y = _lfc_dbg.get("stradd_2y")
-                        _active_dbg = st.session_state.get("cfs_active_vol_src", "OTC only")
-                        st.caption(
-                            f"🔬 DIAG: active={_active_dbg}  "
-                            f"committed_edits={len(_committed_dbg)}  "
-                            f"listed_1y_stradd={_s1y if _s1y is None else f'{_s1y:.4f}'}  "
-                            f"listed_2y_stradd={_s2y if _s2y is None else f'{_s2y:.4f}'}"
-                        )
+                    _atm_rendered = True
             else:
                 st.info("Generate swaption premiums first to compute ATM CFS straddles.")
+
+            # v2204n: DIAG caption lives OUTSIDE the cache-hit/miss branches so
+            # the widget tree shape is identical on every render. Previously the
+            # caption only appeared on cache MISS, which flipped the tree
+            # structure on every commit (cache bust) → Streamlit delta protocol
+            # desync → Bad-delta-path white screen on 2nd+ commits.
+            if ccy == "USD" and st.session_state.get("atm_cfs_expanded"):
+                _lfc_dbg = st.session_state.get("_cfs_listed_curve_cache") or {}
+                _committed_dbg = st.session_state.get("_cfs_listed_committed_edits", {}) or {}
+                _working_dbg = st.session_state.get("_cfs_listed_session_edits", {}) or {}
+                _s1y = _lfc_dbg.get("stradd_1y")
+                _s2y = _lfc_dbg.get("stradd_2y")
+                _active_dbg = st.session_state.get("cfs_active_vol_src", "OTC only")
+                # Also show per-contract delivered vols as seen by the pricer
+                _comm_display = []
+                for _c, _e in sorted(_committed_dbg.items()):
+                    _r = _e.get("listed_adj_ratio") if _e else None
+                    _b = _e.get("listed_adj_bp") if _e else None
+                    _m = _e.get("listed_adj_mode") if _e else "ratio"
+                    if _m == "bp" and _b is not None:
+                        _comm_display.append(f"{_c}(+{_b:.1f}bp)")
+                    elif _r is not None:
+                        _comm_display.append(f"{_c}(×{_r:.4f})")
+                _comm_str = ", ".join(_comm_display) if _comm_display else "none"
+                st.caption(
+                    f"🔬 DIAG: active={_active_dbg}  "
+                    f"working={len(_working_dbg)}  committed={len(_committed_dbg)}  "
+                    f"1y_stradd={_s1y if _s1y is None else f'{_s1y:.4f}'}  "
+                    f"2y_stradd={_s2y if _s2y is None else f'{_s2y:.4f}'}  "
+                    f"| committed_edits: {_comm_str}"
+                )
 
         # caplet curve already built above — use it directly
         
