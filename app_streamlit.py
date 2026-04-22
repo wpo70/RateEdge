@@ -25335,6 +25335,15 @@ def sod_report_tab():
             ),
             key="sod_ai_raw_news",
         )
+            _desk_colour = st.text_area(
+                "Desk colour / flow (optional)",
+                height=80,
+                placeholder=(
+                    "e.g. lots of 10yr gamma activity, sellers in 1yr receivers, "
+                    "5y5y straddle enquiry from real money, short-dated caps bid..."
+                ),
+                key="sod_ai_desk_colour",
+            )
         if not _is_manual:
           _c1, _c2, _c3 = st.columns([1, 1, 2])
           with _c1:
@@ -25353,7 +25362,7 @@ def sod_report_tab():
             )
 
           if _clear_btn:
-            for _k in ("sod_ai_raw_news", "sod_ai_output"):
+            for _k in ("sod_ai_raw_news", "sod_ai_output", "sod_ai_desk_colour"):
                 if _k in st.session_state:
                     del st.session_state[_k]
             st.rerun()
@@ -25527,6 +25536,12 @@ def sod_report_tab():
                         "• No geopolitical commentary beyond the MACRO CONTEXT bullets.\n"
                         "• No opinions on rate direction.\n\n"
                         "STRUCTURE — follow exactly:\n\n"
+                        "AT A GLANCE (2-3 lines MAX at the very top, before everything else)\n"
+                        "   A quick snapshot someone can absorb in 5 seconds without scrolling.\n"
+                        "   Summarise the key vol move, direction, and whether repricing is needed.\n"
+                        "   Example: 'AT A GLANCE: AUD vol mixed — front gamma bid (+2bp 1m1y), "
+                        "   belly offered (3m10y −4bp to 74.6bp), long-end flat. USD o/n −0.5bp avg. "
+                        "   No urgent repricing at the open.'\n\n"
                         "1. MACRO CONTEXT (2-3 bullet points MAX, factual, no analysis)\n"
                         "   Example: • UST 10Y closed 4.29% (+1bp). • Fed Waller speaks 14:00 NYC.\n\n"
                         "2. HEADLINE (one sentence — the single biggest technical vol move)\n\n"
@@ -25537,8 +25552,11 @@ def sod_report_tab():
                         "   5Y belly held. Lower-right (10y+ × 15Y+) continues to compress.'\n\n"
                         "4. TERM STRUCTURE (1-2 sentences on front/back vol spread)\n"
                         "   Example: 'AUD 1m-1y spread compressed 2bp to 5.5bp at 1Y tenor.'\n\n"
-                        "5. FLOW (1-2 sentences on notable prints from flow data if provided)\n"
-                        "   Reference size, direction, location on surface. No platform names.\n\n"
+                        "5. FLOW (1-2 sentences on notable activity)\n"
+                        "   Use BOTH the trade data from the database AND any desk colour provided.\n"
+                        "   Reference size, direction, location on surface. No platform names.\n"
+                        "   If desk colour mentions specific activity (e.g. 'sellers in 1yr', "
+                        "   '10yr gamma active'), weave it in naturally.\n\n"
                         "6. WATCH (1 sentence — technically interesting observation)\n"
                         "   Example: 'gamma looks offered into payrolls' or '5y5y at 6-month lows'\n\n"
                         f"TODAY IS {_today_dayname}. Start with "
@@ -25560,6 +25578,10 @@ def sod_report_tab():
                     if _sdr_block:
                         _data_sections.append("\n=== AUD OPTIONS FLOW (from database) ===")
                         _data_sections.append(_sdr_block)
+                    _desk_col_val = st.session_state.get("sod_ai_desk_colour", "").strip()
+                    if _desk_col_val:
+                        _data_sections.append("\n=== DESK COLOUR / BROKER FLOW ===")
+                        _data_sections.append(_desk_col_val)
                     _data_sections.append("\n=== END ===")
 
                     _user_prompt = (
@@ -25818,15 +25840,17 @@ def sod_report_tab():
         with _ch_c1:
             st.markdown("**AUD**")
             _sod_ch_aud_hm   = st.checkbox("AUD Vol Change Heatmap (T vs T-1)", value=True, key="sod_ch_aud_hm")
-            _sod_ch_aud_ts   = st.checkbox("AUD Term Structure (T / T-1 / T-5)", value=True, key="sod_ch_aud_ts")
+            _sod_ch_aud_lvl  = st.checkbox("AUD Vol Surface Heatmap (levels)", value=False, key="sod_ch_aud_ts")
+            _sod_ch_aud_ts   = st.checkbox("AUD Term Structure (line)", value=False, key="sod_ch_aud_ts_line")
             _sod_ch_aud_tnr  = st.checkbox("AUD Tenor Spread (1Y vs 10Y)", value=False, key="sod_ch_aud_tnr")
         with _ch_c2:
             st.markdown("**USD**")
             _sod_ch_usd_hm   = st.checkbox("USD Vol Change Heatmap (T vs T-1)", value=True, key="sod_ch_usd_hm")
-            _sod_ch_usd_ts   = st.checkbox("USD Term Structure (T / T-1 / T-5)", value=False, key="sod_ch_usd_ts")
+            _sod_ch_usd_lvl  = st.checkbox("USD Vol Surface Heatmap (levels)", value=False, key="sod_ch_usd_ts")
+            _sod_ch_usd_ts   = st.checkbox("USD Term Structure (line)", value=False, key="sod_ch_usd_ts_line")
         with _ch_c3:
             st.markdown("**Cross-CCY**")
-            _sod_ch_xccy     = st.checkbox("AUD − USD RV Spread (T / T-1 / T-5)", value=False, key="sod_ch_xccy")
+            _sod_ch_xccy     = st.checkbox("AUD − USD Vol Spread Heatmap", value=False, key="sod_ch_xccy")
         _sod_ts_tenor = st.radio("Term structure tenor axis", ["1Y", "5Y", "10Y"],
                                   horizontal=True, index=0, key="sod_ts_tenor_axis")
 
@@ -26535,22 +26559,37 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             # ══════════════════════════════════════════════════════════
             _sod_chart_figs = []  # list of (title, fig) for PDF embedding
 
-            def _build_heatmap(chg_df, title, colorscale="RdYlGn"):
-                """Build a plotly heatmap from a change DataFrame."""
+            def _build_heatmap(chg_df, title, colorscale="RdYlGn", is_change=True):
+                """Build a plotly heatmap from a DataFrame.
+                is_change=True: centered on 0, +/- format (for vol changes).
+                is_change=False: absolute levels, plain format (for vol surfaces)."""
                 import plotly.graph_objects as _hm_go
                 _z = chg_df.apply(pd.to_numeric, errors="coerce").values
-                _fig = _hm_go.Figure(data=_hm_go.Heatmap(
+                if is_change:
+                    _text = [[f"{v:+.1f}" if not pd.isna(v) else "" for v in row] for row in _z]
+                    _hover = "Expiry: %{y}<br>Tenor: %{x}<br>Change: %{z:+.2f}bp<extra></extra>"
+                    _cbar_title = "bp chg"
+                    _zmid = 0
+                else:
+                    _text = [[f"{v:.1f}" if not pd.isna(v) else "" for v in row] for row in _z]
+                    _hover = "Expiry: %{y}<br>Tenor: %{x}<br>Vol: %{z:.1f}bp<extra></extra>"
+                    _cbar_title = "bp"
+                    _zmid = None
+                    colorscale = "YlOrRd"
+                _hm_kwargs = dict(
                     z=_z,
                     x=list(chg_df.columns),
                     y=list(chg_df.index),
                     colorscale=colorscale,
-                    zmid=0,
-                    text=[[f"{v:+.1f}" if not pd.isna(v) else "" for v in row] for row in _z],
+                    text=_text,
                     texttemplate="%{text}",
                     textfont=dict(size=9),
-                    hovertemplate="Expiry: %{y}<br>Tenor: %{x}<br>Change: %{z:+.2f}bp<extra></extra>",
-                    colorbar=dict(title="bp chg", thickness=12),
-                ))
+                    hovertemplate=_hover,
+                    colorbar=dict(title=_cbar_title, thickness=12),
+                )
+                if _zmid is not None:
+                    _hm_kwargs["zmid"] = _zmid
+                _fig = _hm_go.Figure(data=_hm_go.Heatmap(**_hm_kwargs))
                 _fig.update_layout(
                     title=dict(text=title, font=dict(size=14)),
                     xaxis=dict(title="Tenor", side="top"),
@@ -26627,29 +26666,44 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 )
                 return _fig
 
-            _ts_tenor = st.session_state.get("sod_ts_tenor_axis", "1Y")
-
             # ── Render selected charts ──────────────────────────────
             _any_chart = any(st.session_state.get(f"sod_ch_{k}", False) for k in
-                            ["aud_hm","aud_ts","aud_tnr","usd_hm","usd_ts","xccy"])
+                            ["aud_hm","aud_ts","aud_ts_line","aud_tnr","usd_hm","usd_ts","usd_ts_line","xccy"])
             if _any_chart:
                 st.markdown("---")
                 st.markdown("### 📊 SOD Charts")
 
-            # USD heatmap
+            _ts_tenor = st.session_state.get("sod_ts_tenor_axis", "1Y")
+
+            # USD vol change heatmap
             if st.session_state.get("sod_ch_usd_hm"):
                 _fig_usd_hm = _build_heatmap(_usd_chg, "USD Vol Change — T-1 vs T-2 (bp)")
                 st.plotly_chart(_fig_usd_hm, use_container_width=True)
-                _sod_chart_figs.append(("USD Vol Change Heatmap", _fig_usd_hm))
+                _sod_chart_figs.append(("USD Vol Change", _fig_usd_hm))
 
             # AUD implied change heatmap
             if st.session_state.get("sod_ch_aud_hm"):
                 _fig_aud_hm = _build_heatmap(_implied_chg, "AUD Implied Vol Change — from USD Overnight (bp)")
                 st.plotly_chart(_fig_aud_hm, use_container_width=True)
-                _sod_chart_figs.append(("AUD Implied Vol Change Heatmap", _fig_aud_hm))
+                _sod_chart_figs.append(("AUD Implied Vol Change", _fig_aud_hm))
 
-            # USD term structure
+            # USD vol surface levels heatmap
             if st.session_state.get("sod_ch_usd_ts"):
+                _usd_levels = _atm1.loc[_common_exp, _common_ten].apply(pd.to_numeric, errors="coerce")
+                _fig_usd_lvl = _build_heatmap(_usd_levels, "USD ATM Vol Surface — T-1 Levels (bp)", is_change=False)
+                st.plotly_chart(_fig_usd_lvl, use_container_width=True)
+                _sod_chart_figs.append(("USD Vol Surface", _fig_usd_lvl))
+
+            # AUD vol surface levels heatmap
+            if st.session_state.get("sod_ch_aud_ts"):
+                _aud_levels = _aud_atm.apply(pd.to_numeric, errors="coerce") if _aud_atm is not None else None
+                if _aud_levels is not None:
+                    _fig_aud_lvl = _build_heatmap(_aud_levels, "AUD ATM Vol Surface — Latest Levels (bp)", is_change=False)
+                    st.plotly_chart(_fig_aud_lvl, use_container_width=True)
+                    _sod_chart_figs.append(("AUD Vol Surface", _fig_aud_lvl))
+
+            # USD term structure (line)
+            if st.session_state.get("sod_ch_usd_ts_line"):
                 _fig_usd_ts = _build_term_structure(
                     [_atm1, _atm2], ["T-1 (latest)", "T-2"],
                     ["#2563eb", "#94a3b8"], _ts_tenor,
@@ -26658,8 +26712,8 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 st.plotly_chart(_fig_usd_ts, use_container_width=True)
                 _sod_chart_figs.append(("USD Term Structure", _fig_usd_ts))
 
-            # AUD term structure
-            if st.session_state.get("sod_ch_aud_ts") and _aud_atm is not None:
+            # AUD term structure (line)
+            if st.session_state.get("sod_ch_aud_ts_line") and _aud_atm is not None:
                 _fig_aud_ts = _build_term_structure(
                     [_aud_atm], ["AUD Latest"],
                     ["#16a34a"], _ts_tenor,
@@ -26668,7 +26722,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 st.plotly_chart(_fig_aud_ts, use_container_width=True)
                 _sod_chart_figs.append(("AUD Term Structure", _fig_aud_ts))
 
-            # AUD tenor spread
+            # AUD tenor spread (line)
             if st.session_state.get("sod_ch_aud_tnr") and _aud_atm is not None:
                 _fig_aud_tnr = _build_tenor_spread(
                     [_aud_atm], ["AUD Latest"],
@@ -26678,7 +26732,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 st.plotly_chart(_fig_aud_tnr, use_container_width=True)
                 _sod_chart_figs.append(("AUD Tenor Spread", _fig_aud_tnr))
 
-            # Cross-CCY RV spread
+            # Cross-CCY RV spread heatmap
             if st.session_state.get("sod_ch_xccy") and _aud_atm is not None:
                 _xccy_exp = [e for e in _aud_atm.index if e in _atm1.index]
                 _xccy_ten = [c for c in _aud_atm.columns if c in _atm1.columns]
