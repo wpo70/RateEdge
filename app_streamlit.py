@@ -12423,7 +12423,7 @@ def caps_floors_tab(vol_mode: str):
                     (c, e.get("listed_adj_mode"),
                      round(float(e.get("listed_adj_ratio") or 1.0), 6),
                      round(float(e.get("listed_adj_bp") or 0.0), 4))
-                    for c, e in (st.session_state.get("_cfs_listed_session_edits", {}) or {}).items()
+                    for c, e in (st.session_state.get("_cfs_listed_committed_edits", {}) or {}).items()
                 )),
                 st.session_state.get("sr3_current_label"),
                 _otc_vols_hash,
@@ -13126,15 +13126,19 @@ def caps_floors_tab(vol_mode: str):
 
             # Stable cache key: use committed spread values + caplet curve length.
             # Include Listed Front state (USD only) so listed edits trigger recalc.
+            # v2204k: watch COMMITTED edits, not working edits — pricing only
+            # reflects edits after user clicks ✓ Commit Listed Vols.
             _lf_sig = None
             if ccy == "USD":
-                _lf_edits = st.session_state.get("_cfs_listed_session_edits", {}) or {}
+                _lf_edits = st.session_state.get("_cfs_listed_committed_edits", {}) or {}
                 _lf_sig = (
                     st.session_state.get("_cfs_use_listed", False),
                     st.session_state.get("_cfs_listed_pack", "whites"),
                     tuple(sorted(st.session_state.get("_cfs_white_selected", []) or [])),
                     tuple(sorted(
-                        (c, e.get("listed_adj_mode"), e.get("listed_adj_ratio"), e.get("listed_adj_bp"))
+                        (c, e.get("listed_adj_mode"),
+                         round(float(e.get("listed_adj_ratio") or 1.0), 6),
+                         round(float(e.get("listed_adj_bp") or 0.0), 4))
                         for c, e in _lf_edits.items()
                     )),
                 )
@@ -13144,7 +13148,7 @@ def caps_floors_tab(vol_mode: str):
                 len(_cfs_tdata),
                 len(_caplet_vc) if _caplet_vc else 0,
                 _lf_sig,
-                "v2004ad",  # version tag — bumps cache on deploy
+                "v2204k",  # version tag — bumps cache on deploy
             )
             _cfs_cached = st.session_state.get("_atm_cfs_cache_key") == _cfs_id
             if _cfs_cached and st.session_state.get("_atm_cfs_rows_cache"):
@@ -13372,6 +13376,22 @@ def caps_floors_tab(vol_mode: str):
                 st.session_state["_atm_cfs_rows_cache"] = _atm_cfs_rows
                 if _atm_cfs_rows:
                     st.dataframe(pd.DataFrame(_atm_cfs_rows), use_container_width=True, hide_index=True)
+                    # v2204m USD-only diagnostic — shows whether commit is actually
+                    # propagating through to the cached listed straddle. If this
+                    # number changes after you click ✓ Commit, the pipeline is
+                    # working. If it doesn't, the bug is upstream of this point.
+                    if ccy == "USD":
+                        _lfc_dbg = st.session_state.get("_cfs_listed_curve_cache") or {}
+                        _committed_dbg = st.session_state.get("_cfs_listed_committed_edits", {}) or {}
+                        _s1y = _lfc_dbg.get("stradd_1y")
+                        _s2y = _lfc_dbg.get("stradd_2y")
+                        _active_dbg = st.session_state.get("cfs_active_vol_src", "OTC only")
+                        st.caption(
+                            f"🔬 DIAG: active={_active_dbg}  "
+                            f"committed_edits={len(_committed_dbg)}  "
+                            f"listed_1y_stradd={_s1y if _s1y is None else f'{_s1y:.4f}'}  "
+                            f"listed_2y_stradd={_s2y if _s2y is None else f'{_s2y:.4f}'}"
+                        )
             else:
                 st.info("Generate swaption premiums first to compute ATM CFS straddles.")
 
