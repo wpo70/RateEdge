@@ -12375,7 +12375,20 @@ def caps_floors_tab(vol_mode: str):
                 )
 
             # v2004x: Build SR3 hybrid + full via new closure helpers.
-            # Cache per (cutoff, session edits, snapshot, otc length).
+            # Cache per (cutoff, session edits, snapshot, otc VOLS, final_y).
+            # v2204g USD-only bug fix: sig previously used len(otc_caplet_curve)
+            # which never changes (curve grid is fixed), causing SR3 cache hits
+            # with STALE vols after any wedge edit. Now hash the actual OTC
+            # vol values so SR3 rebuilds when OTC does.
+            _otc_vols_hash = None
+            if otc_caplet_curve:
+                try:
+                    _otc_vols_hash = hash(tuple(
+                        (round(float(k), 3), round(float(v), 4))
+                        for k, v in sorted(otc_caplet_curve.items())
+                    ))
+                except Exception:
+                    _otc_vols_hash = id(otc_caplet_curve)  # fallback: identity
             _sr3_sig = (
                 _sr3_cutoff_y,
                 tuple(sorted(
@@ -12385,7 +12398,7 @@ def caps_floors_tab(vol_mode: str):
                     for c, e in (st.session_state.get("_cfs_listed_session_edits", {}) or {}).items()
                 )),
                 st.session_state.get("sr3_current_label"),
-                len(otc_caplet_curve) if otc_caplet_curve else 0,
+                _otc_vols_hash,
                 round(max(tenor_y + 0.5, 10.0), 2),
             )
             _sr3_cache = st.session_state.get("_cfs_sr3_curves_cache")
