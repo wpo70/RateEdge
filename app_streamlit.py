@@ -25464,45 +25464,56 @@ def sod_report_tab():
                     try:
                         if HAS_POSTGRES:
                             # Previous AUD session by execution_timestamp
-                            # (trade_date may be NULL in some rows)
+                            # DTCC reports both sides of each trade — deduplicate
+                            # by grouping on key fields
                             _sdr_q = """
+                                WITH unique_trades AS (
+                                    SELECT DISTINCT ON (execution_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1)
+                                           opt_tenor, swp_tenor, strike_pct, notional_leg1, embedded_option_type
+                                    FROM dtcc_sdr
+                                    WHERE notional_ccy = 'AUD'
+                                      AND action_type = 'NEWT'
+                                      AND asset_class = 'IR'
+                                      AND execution_timestamp::date = (
+                                          SELECT MAX(execution_timestamp::date) FROM dtcc_sdr
+                                          WHERE notional_ccy = 'AUD'
+                                            AND action_type = 'NEWT'
+                                      )
+                                    ORDER BY execution_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1
+                                )
                                 SELECT COUNT(*) AS n_trades,
-                                       COALESCE(SUM(notional_leg1), 0) AS total_notional,
-                                       COUNT(CASE WHEN action_type = 'NEWT' THEN 1 END) AS n_newt
-                                FROM dtcc_sdr
-                                WHERE notional_ccy = 'AUD'
-                                  AND action_type = 'NEWT'
-                                  AND asset_class = 'IR'
-                                  AND execution_timestamp::date = (
-                                      SELECT MAX(execution_timestamp::date) FROM dtcc_sdr
-                                      WHERE notional_ccy = 'AUD'
-                                        AND action_type = 'NEWT'
-                                  )
+                                       COALESCE(SUM(notional_leg1), 0) AS total_notional
+                                FROM unique_trades
                             """
                             _sdr_df = pd.read_sql(_sdr_q, get_db_connection())
                             if not _sdr_df.empty:
                                 _sdr_row = _sdr_df.iloc[0]
                                 _n_tr = int(_sdr_row["n_trades"])
                                 _tot_n = float(_sdr_row["total_notional"])
-                                _n_newt = int(_sdr_row["n_newt"])
                                 if _n_tr > 0:
                                     _sdr_block = (
-                                        f"AUD Options Flow (previous session): {_n_tr} new swaption trades, "
+                                        f"AUD Options Flow (previous session): {_n_tr} trades, "
                                         f"total notional AUD {_tot_n/1e6:.0f}M"
                                     )
-                                    # Top 5 by notional
+                                    # Top 5 unique trades by notional
                                     _top_q = """
+                                        WITH unique_trades AS (
+                                            SELECT DISTINCT ON (execution_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1)
+                                                   opt_tenor, swp_tenor, strike_pct, notional_leg1, embedded_option_type
+                                            FROM dtcc_sdr
+                                            WHERE notional_ccy = 'AUD'
+                                              AND execution_timestamp::date = (
+                                                  SELECT MAX(execution_timestamp::date) FROM dtcc_sdr
+                                                  WHERE notional_ccy = 'AUD'
+                                                    AND action_type = 'NEWT'
+                                              )
+                                              AND action_type = 'NEWT'
+                                              AND asset_class = 'IR'
+                                            ORDER BY execution_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1
+                                        )
                                         SELECT opt_tenor, swp_tenor, strike_pct,
                                                notional_leg1, embedded_option_type
-                                        FROM dtcc_sdr
-                                        WHERE notional_ccy = 'AUD'
-                                          AND execution_timestamp::date = (
-                                              SELECT MAX(execution_timestamp::date) FROM dtcc_sdr
-                                              WHERE notional_ccy = 'AUD'
-                                                AND action_type = 'NEWT'
-                                          )
-                                          AND action_type = 'NEWT'
-                                          AND asset_class = 'IR'
+                                        FROM unique_trades
                                         ORDER BY notional_leg1 DESC NULLS LAST
                                         LIMIT 5
                                     """
