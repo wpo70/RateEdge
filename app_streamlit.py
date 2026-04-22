@@ -2766,12 +2766,42 @@ def _load_sr3_latest_usd_with_session_edits() -> dict:
     Session edits are stored in st.session_state['_cfs_listed_session_edits']
     as {contract_code: {mode, ratio, bp}}. Non-destructive — DB values unchanged
     until the user clicks "Save to snapshot" on the CFS tab.
+
+    v2204k: This is the EDITOR-DISPLAY variant — uses working (uncommitted) edits
+    so the editor shows the user's current typing. For PRICING, use
+    _load_sr3_latest_usd_with_committed_edits() instead which uses the snapshot
+    the user has explicitly committed via the "✓ Commit Listed Vols" button.
     """
     rows = _load_sr3_latest_usd()
     if not rows:
         return rows
     session_edits = st.session_state.get("_cfs_listed_session_edits", {}) or {}
     for code, edits in session_edits.items():
+        if code not in rows:
+            continue
+        if "listed_adj_mode" in edits:
+            rows[code]["listed_adj_mode"] = edits["listed_adj_mode"]
+        if "listed_adj_ratio" in edits:
+            rows[code]["listed_adj_ratio"] = edits["listed_adj_ratio"]
+        if "listed_adj_bp" in edits:
+            rows[code]["listed_adj_bp"] = edits["listed_adj_bp"]
+    return rows
+
+
+def _load_sr3_latest_usd_with_committed_edits() -> dict:
+    """
+    Load latest USD SR3 snapshot and overlay ONLY COMMITTED edits on top.
+    Committed edits are stored in st.session_state['_cfs_listed_committed_edits']
+    as {contract_code: {mode, ratio, bp}} — populated when the user clicks
+    "✓ Commit Listed Vols" on the CFS tab. This is what the pricer / caplet
+    builder reads so that casual ratio typing in the editor does NOT trigger
+    a recompute storm on every keystroke.
+    """
+    rows = _load_sr3_latest_usd()
+    if not rows:
+        return rows
+    committed = st.session_state.get("_cfs_listed_committed_edits", {}) or {}
+    for code, edits in committed.items():
         if code not in rows:
             continue
         if "listed_adj_mode" in edits:
@@ -2961,7 +2991,7 @@ def build_caplet_vol_curve_sr3(
     if ccy != "USD":
         return otc_fallback_curve
     
-    sr3_rows = _load_sr3_latest_usd_with_session_edits()
+    sr3_rows = _load_sr3_latest_usd_with_committed_edits()
     if not sr3_rows:
         return otc_fallback_curve
     
@@ -3046,7 +3076,7 @@ def build_caplet_vol_curve_sr3_full(
     """
     if ccy != "USD":
         return otc_fallback_curve
-    sr3_rows = _load_sr3_latest_usd_with_session_edits()
+    sr3_rows = _load_sr3_latest_usd_with_committed_edits()
     if not sr3_rows:
         return otc_fallback_curve
     anchors = _sr3_anchor_points(sr3_rows, apply_adjustment=apply_adjustment)
@@ -11991,7 +12021,13 @@ def caps_floors_tab(vol_mode: str):
         if ccy == "USD":
             try:
                 _lf_cutoff = 1.0 if _lf_pack_now == "whites" else 2.0
-                _lf_edits = st.session_state.get("_cfs_listed_session_edits", {}) or {}
+                # v2204k: use COMMITTED edits as source of truth for pricing.
+                # Working edits (_cfs_listed_session_edits) are display-only and
+                # DO NOT trigger recompute — user must click "✓ Commit Listed
+                # Vols" to push them through. This prevents constant
+                # recomputation on every keystroke, and gives the user a clear
+                # checkpoint between edit and calculate.
+                _lf_edits = st.session_state.get("_cfs_listed_committed_edits", {}) or {}
                 _lf_cache_sig = (
                     _lf_pack_now,
                     _lf_cutoff,
@@ -12017,7 +12053,10 @@ def caps_floors_tab(vol_mode: str):
                     # producing vols too high at T=1Y (SFRH7 landing at T=1.0).
                     # Each caplet gets the vol of the CLOSEST selected contract
                     # by expiry date.
-                    _sr3_rows = _load_sr3_latest_usd_with_session_edits() or {}
+                    # v2204k: use COMMITTED edits (not working edits) so casual
+                    # ratio typing doesn't cause constant recomputation. User
+                    # must click "✓ Commit Listed Vols" to push edits through.
+                    _sr3_rows = _load_sr3_latest_usd_with_committed_edits() or {}
                     _whites_sel = set(st.session_state.get("_cfs_white_selected", []) or [])
                     if _lf_pack_now == "both":
                         # For pack=both, also include the 4 reds (SFRM7/U7/Z7/H8)
@@ -12640,17 +12679,27 @@ def caps_floors_tab(vol_mode: str):
                     _pack_mode = "whites"
             with _le_col3:
                 if _use_listed:
-                    _n_edits = len(st.session_state.get("_cfs_listed_session_edits", {}) or {})
-                    if _n_edits > 0:
+                    _working = st.session_state.get("_cfs_listed_session_edits", {}) or {}
+                    _committed = st.session_state.get("_cfs_listed_committed_edits", {}) or {}
+                    _n_working = len(_working)
+                    _n_committed = len(_committed)
+                    _has_uncommitted = _working != _committed
+                    if _has_uncommitted:
                         st.markdown(
                             f"<div style='font-size:12px;color:#f59e0b;padding-top:8px;'>"
-                            f"⚠ {_n_edits} unsaved edit(s)</div>",
+                            f"⚠ {_n_working} edit(s) — NOT committed</div>",
+                            unsafe_allow_html=True,
+                        )
+                    elif _n_committed > 0:
+                        st.markdown(
+                            f"<div style='font-size:12px;color:#22c55e;padding-top:8px;'>"
+                            f"✓ {_n_committed} edit(s) committed (click Calculate CFS)</div>",
                             unsafe_allow_html=True,
                         )
                     else:
                         st.markdown(
                             "<div style='font-size:12px;color:#64748b;padding-top:8px;'>"
-                            "No session edits</div>",
+                            "No edits</div>",
                             unsafe_allow_html=True,
                         )
 
@@ -12921,9 +12970,44 @@ def caps_floors_tab(vol_mode: str):
 
                           st.session_state["_cfs_listed_session_edits"] = _session_edits
 
-                          # ── Save / Discard controls ──
+                          # ── v2204k: Commit / Save / Discard controls ──
+                          # Commit  = push WORKING edits → COMMITTED (triggers
+                          #           recompute of listed term curve, listed
+                          #           bootstrap, SR3 hybrid/full on next render
+                          #           via cache busting)
+                          # Save    = commit the SNAPSHOT edits to DB (persists
+                          #           through restart)
+                          # Discard = drop working edits, revert widgets
                           st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-                          _save_col, _discard_col, _info_col = st.columns([1, 1, 2.5])
+                          _committed_edits = st.session_state.get(
+                              "_cfs_listed_committed_edits", {}) or {}
+                          _has_working_uncommitted = _session_edits != _committed_edits
+                          _commit_col, _save_col, _discard_col, _info_col = st.columns([1.2, 1, 1, 2])
+                          with _commit_col:
+                              if st.button(
+                                  "✓ Commit Listed Vols",
+                                  key="_cfs_le_commit",
+                                  use_container_width=True,
+                                  type="primary" if _has_working_uncommitted else "secondary",
+                                  disabled=(not _has_working_uncommitted),
+                                  help=("Push ratio/bp edits through to delivered vols. "
+                                        "Click Calculate CFS afterwards to rebuild curves.")
+                              ):
+                                  # Copy working edits → committed edits
+                                  st.session_state["_cfs_listed_committed_edits"] = dict(_session_edits)
+                                  # Bust all downstream caches so they rebuild
+                                  # with the new delivered vols.
+                                  for _ck in (
+                                      "_cfs_listed_curve_cache",
+                                      "_cfs_listed_build_cache",
+                                      "_cfs_sr3_curves_cache",
+                                      "_cfs_otc_build_cache",   # OTC reads _listed_1y_stradd indirectly
+                                      "_atm_cfs_cache_key",
+                                      "_atm_cfs_rows_cache",
+                                      "_caplet_curve_key",
+                                  ):
+                                      st.session_state.pop(_ck, None)
+                                  st.rerun(scope="app")
                           with _save_col:
                               if st.button("💾 Save to snapshot", key="_cfs_le_save",
                                            use_container_width=True,
@@ -12965,6 +13049,16 @@ def caps_floors_tab(vol_mode: str):
                                               if _n_saved > 0:
                                                   st.success(f"✅ Saved {_n_saved} row(s) to snapshot {_lbl}")
                                                   st.session_state["_cfs_listed_session_edits"] = {}
+                                                  # v2204k: committed edits also
+                                                  # cleared — DB is now source of truth
+                                                  st.session_state["_cfs_listed_committed_edits"] = {}
+                                                  for _ck in ("_cfs_listed_curve_cache",
+                                                              "_cfs_listed_build_cache",
+                                                              "_cfs_sr3_curves_cache",
+                                                              "_cfs_otc_build_cache",
+                                                              "_atm_cfs_cache_key",
+                                                              "_atm_cfs_rows_cache"):
+                                                      st.session_state.pop(_ck, None)
                                                   list_sr3_snapshots.clear()
                                                   st.rerun()
                                               else:
@@ -12974,18 +13068,31 @@ def caps_floors_tab(vol_mode: str):
                                            use_container_width=True,
                                            disabled=(len(_session_edits) == 0)):
                                   st.session_state["_cfs_listed_session_edits"] = {}
+                                  # v2204k: also drop committed edits so the
+                                  # pricer reverts to raw DB state on next render
+                                  st.session_state["_cfs_listed_committed_edits"] = {}
                                   # Also clear the widget keys for editor rows
                                   for code, _r in _editor_rows:
                                       for suffix in ("mode", "ratio", "bp"):
                                           _k = f"_cfs_le_{code}_{suffix}"
                                           if _k in st.session_state:
                                               del st.session_state[_k]
+                                  # Bust pricing caches so they rebuild fresh
+                                  for _ck in ("_cfs_listed_curve_cache",
+                                              "_cfs_listed_build_cache",
+                                              "_cfs_sr3_curves_cache",
+                                              "_cfs_otc_build_cache",
+                                              "_atm_cfs_cache_key",
+                                              "_atm_cfs_rows_cache"):
+                                      st.session_state.pop(_ck, None)
                                   st.rerun()
                           with _info_col:
                               st.caption(
-                                  f"Active pricer feed uses delivered vol = listed × ratio "
-                                  f"(or listed + bp). Changes here update the caplet chart "
-                                  f"above immediately. Save commits to DB snapshot."
+                                  "Delivered = listed × ratio (or listed + bp). "
+                                  "Editing ratios shows a **preview** — the pricer does "
+                                  "not recalculate until you click **✓ Commit Listed Vols**. "
+                                  "Then click **Calculate CFS** to rebuild caplet curve + wedges. "
+                                  "**Save to snapshot** persists to DB."
                               )
                 except Exception as _le_err:
                   import traceback as _tb
