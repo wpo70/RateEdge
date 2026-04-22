@@ -25454,13 +25454,21 @@ def sod_report_tab():
                     _sdr_block = ""
                     try:
                         if HAS_POSTGRES:
+                            # Previous AUD session by execution_timestamp
+                            # (trade_date may be NULL in some rows)
                             _sdr_q = """
                                 SELECT COUNT(*) AS n_trades,
                                        COALESCE(SUM(notional_leg1), 0) AS total_notional,
                                        COUNT(CASE WHEN action_type = 'NEWT' THEN 1 END) AS n_newt
                                 FROM dtcc_sdr
                                 WHERE notional_ccy = 'AUD'
-                                  AND execution_timestamp >= NOW() - INTERVAL '24 hours'
+                                  AND action_type = 'NEWT'
+                                  AND asset_class = 'InterestRate'
+                                  AND execution_timestamp::date = (
+                                      SELECT MAX(execution_timestamp::date) FROM dtcc_sdr
+                                      WHERE notional_ccy = 'AUD'
+                                        AND action_type = 'NEWT'
+                                  )
                             """
                             _sdr_df = pd.read_sql(_sdr_q, _pg_engine())
                             if not _sdr_df.empty:
@@ -25470,18 +25478,22 @@ def sod_report_tab():
                                 _n_newt = int(_sdr_row["n_newt"])
                                 if _n_tr > 0:
                                     _sdr_block = (
-                                        f"AUD SDR Activity (last 24h): {_n_tr} total trades, "
-                                        f"{_n_newt} new (NEWT), total notional AUD {_tot_n/1e6:.0f}M"
+                                        f"AUD Options Flow (previous session): {_n_tr} new swaption trades, "
+                                        f"total notional AUD {_tot_n/1e6:.0f}M"
                                     )
                                     # Top 5 by notional
                                     _top_q = """
                                         SELECT opt_tenor, swp_tenor, strike_pct,
-                                               notional_leg1, embedded_option_type,
-                                               platform_identifier
+                                               notional_leg1, embedded_option_type
                                         FROM dtcc_sdr
                                         WHERE notional_ccy = 'AUD'
-                                          AND execution_timestamp >= NOW() - INTERVAL '24 hours'
+                                          AND execution_timestamp::date = (
+                                              SELECT MAX(execution_timestamp::date) FROM dtcc_sdr
+                                              WHERE notional_ccy = 'AUD'
+                                                AND action_type = 'NEWT'
+                                          )
                                           AND action_type = 'NEWT'
+                                          AND asset_class = 'InterestRate'
                                         ORDER BY notional_leg1 DESC NULLS LAST
                                         LIMIT 5
                                     """
@@ -25525,7 +25537,7 @@ def sod_report_tab():
                         "   5Y belly held. Lower-right (10y+ × 15Y+) continues to compress.'\n\n"
                         "4. TERM STRUCTURE (1-2 sentences on front/back vol spread)\n"
                         "   Example: 'AUD 1m-1y spread compressed 2bp to 5.5bp at 1Y tenor.'\n\n"
-                        "5. FLOW (1-2 sentences on notable prints from SDR data if provided)\n"
+                        "5. FLOW (1-2 sentences on notable prints from flow data if provided)\n"
                         "   Reference size, direction, location on surface. No platform names.\n\n"
                         "6. WATCH (1 sentence — technically interesting observation)\n"
                         "   Example: 'gamma looks offered into payrolls' or '5y5y at 6-month lows'\n\n"
@@ -25546,14 +25558,14 @@ def sod_report_tab():
                         _data_sections.append("\n=== USD VOL CHANGE DATA (from database) ===")
                         _data_sections.append(_usd_vol_data_block)
                     if _sdr_block:
-                        _data_sections.append("\n=== AUD SDR FLOW (from database) ===")
+                        _data_sections.append("\n=== AUD OPTIONS FLOW (from database) ===")
                         _data_sections.append(_sdr_block)
                     _data_sections.append("\n=== END ===")
 
                     _user_prompt = (
                         "Synthesise the following into a polished AUD SOD commentary "
                         "following the structure in your instructions. The vol surface "
-                        "data and SDR flow are from the live database — use these REAL "
+                        "data and options flow are from the live database — use these REAL "
                         "numbers in your commentary. The raw news/macro inputs are for "
                         "the MACRO CONTEXT bullets only.\n\n"
                         + "\n".join(_data_sections)
