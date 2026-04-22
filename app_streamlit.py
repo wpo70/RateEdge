@@ -25661,6 +25661,24 @@ def sod_report_tab():
                               horizontal=True, key="sod_disp_mode")
     _show_bp = "Normal" in _disp_mode
 
+    # ── SOD Chart Selection ───────────────────────────────────────
+    with st.expander("📊 SOD Charts — select which to include in report", expanded=False):
+        _ch_c1, _ch_c2, _ch_c3 = st.columns(3)
+        with _ch_c1:
+            st.markdown("**AUD**")
+            _sod_ch_aud_hm   = st.checkbox("AUD Vol Change Heatmap (T vs T-1)", value=True, key="sod_ch_aud_hm")
+            _sod_ch_aud_ts   = st.checkbox("AUD Term Structure (T / T-1 / T-5)", value=True, key="sod_ch_aud_ts")
+            _sod_ch_aud_tnr  = st.checkbox("AUD Tenor Spread (1Y vs 10Y)", value=False, key="sod_ch_aud_tnr")
+        with _ch_c2:
+            st.markdown("**USD**")
+            _sod_ch_usd_hm   = st.checkbox("USD Vol Change Heatmap (T vs T-1)", value=True, key="sod_ch_usd_hm")
+            _sod_ch_usd_ts   = st.checkbox("USD Term Structure (T / T-1 / T-5)", value=False, key="sod_ch_usd_ts")
+        with _ch_c3:
+            st.markdown("**Cross-CCY**")
+            _sod_ch_xccy     = st.checkbox("AUD − USD RV Spread (T / T-1 / T-5)", value=False, key="sod_ch_xccy")
+        _sod_ts_tenor = st.radio("Term structure tenor axis", ["1Y", "5Y", "10Y"],
+                                  horizontal=True, index=0, key="sod_ts_tenor_axis")
+
     st.markdown("---")
 
     # ── Generate gate — all heavy computation behind button ───────
@@ -26361,6 +26379,170 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 "generated_at": pd.Timestamp.now().isoformat(),
             }
 
+            # ══════════════════════════════════════════════════════════
+            # v2204r: SOD Charts — selected via checkboxes above
+            # ══════════════════════════════════════════════════════════
+            _sod_chart_figs = []  # list of (title, fig) for PDF embedding
+
+            def _build_heatmap(chg_df, title, colorscale="RdYlGn"):
+                """Build a plotly heatmap from a change DataFrame."""
+                import plotly.graph_objects as _hm_go
+                _z = chg_df.apply(pd.to_numeric, errors="coerce").values
+                _fig = _hm_go.Figure(data=_hm_go.Heatmap(
+                    z=_z,
+                    x=list(chg_df.columns),
+                    y=list(chg_df.index),
+                    colorscale=colorscale,
+                    zmid=0,
+                    text=[[f"{v:+.1f}" if not pd.isna(v) else "" for v in row] for row in _z],
+                    texttemplate="%{text}",
+                    textfont=dict(size=9),
+                    hovertemplate="Expiry: %{y}<br>Tenor: %{x}<br>Change: %{z:+.2f}bp<extra></extra>",
+                    colorbar=dict(title="bp chg", thickness=12),
+                ))
+                _fig.update_layout(
+                    title=dict(text=title, font=dict(size=14)),
+                    xaxis=dict(title="Tenor", side="top"),
+                    yaxis=dict(title="Expiry", autorange="reversed"),
+                    height=500, margin=dict(l=60, r=30, t=60, b=30),
+                    plot_bgcolor="white",
+                )
+                return _fig
+
+            def _build_term_structure(surfaces, labels, colors, tenor_col, title):
+                """Term structure: vol at a FIXED tenor across expiries.
+                surfaces = list of DataFrames, labels = list of strings,
+                colors = list of color strings, tenor_col = e.g. '1Y'."""
+                import plotly.graph_objects as _ts_go
+                _fig = _ts_go.Figure()
+                _dashes = ["solid", "dash", "dot", "dashdot"]
+                for _i, (_surf, _lbl, _col) in enumerate(zip(surfaces, labels, colors)):
+                    if _surf is None or tenor_col not in _surf.columns:
+                        continue
+                    _vals = pd.to_numeric(_surf[tenor_col], errors="coerce")
+                    _valid = _vals.dropna()
+                    if _valid.empty:
+                        continue
+                    _exp_yrs = [label_to_years(str(e)) for e in _valid.index]
+                    _fig.add_trace(_ts_go.Scatter(
+                        x=_exp_yrs, y=_valid.values,
+                        mode="lines+markers",
+                        name=_lbl,
+                        line=dict(color=_col, width=2, dash=_dashes[_i % len(_dashes)]),
+                        marker=dict(size=4),
+                        hovertemplate=f"<b>{_lbl}</b><br>Expiry: %{{x:.2f}}Y<br>Vol: %{{y:.1f}}bp<extra></extra>",
+                    ))
+                _fig.update_layout(
+                    title=dict(text=f"{title} — {tenor_col} tenor", font=dict(size=14)),
+                    xaxis=dict(title="Expiry (Years)"),
+                    yaxis=dict(title="ATM Vol (bp)"),
+                    height=380, margin=dict(l=50, r=20, t=50, b=40),
+                    plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    hovermode="closest",
+                )
+                return _fig
+
+            def _build_tenor_spread(surfaces, labels, colors, short_tenor, long_tenor, title):
+                """Tenor spread: vol(short_tenor) - vol(long_tenor) across expiries."""
+                import plotly.graph_objects as _sp_go
+                _fig = _sp_go.Figure()
+                _dashes = ["solid", "dash", "dot"]
+                for _i, (_surf, _lbl, _col) in enumerate(zip(surfaces, labels, colors)):
+                    if _surf is None or short_tenor not in _surf.columns or long_tenor not in _surf.columns:
+                        continue
+                    _short = pd.to_numeric(_surf[short_tenor], errors="coerce")
+                    _long  = pd.to_numeric(_surf[long_tenor], errors="coerce")
+                    _spread = (_short - _long).dropna()
+                    if _spread.empty:
+                        continue
+                    _exp_yrs = [label_to_years(str(e)) for e in _spread.index]
+                    _fig.add_trace(_sp_go.Scatter(
+                        x=_exp_yrs, y=_spread.values,
+                        mode="lines+markers",
+                        name=_lbl,
+                        line=dict(color=_col, width=2, dash=_dashes[_i % len(_dashes)]),
+                        marker=dict(size=4),
+                        hovertemplate=f"<b>{_lbl}</b><br>Expiry: %{{x:.2f}}Y<br>{short_tenor}−{long_tenor}: %{{y:+.1f}}bp<extra></extra>",
+                    ))
+                _fig.update_layout(
+                    title=dict(text=f"{title} — {short_tenor} minus {long_tenor}", font=dict(size=14)),
+                    xaxis=dict(title="Expiry (Years)"),
+                    yaxis=dict(title=f"Spread (bp)"),
+                    height=350, margin=dict(l=50, r=20, t=50, b=40),
+                    plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    hovermode="closest",
+                )
+                return _fig
+
+            _ts_tenor = st.session_state.get("sod_ts_tenor_axis", "1Y")
+
+            # ── Render selected charts ──────────────────────────────
+            _any_chart = any(st.session_state.get(f"sod_ch_{k}", False) for k in
+                            ["aud_hm","aud_ts","aud_tnr","usd_hm","usd_ts","xccy"])
+            if _any_chart:
+                st.markdown("---")
+                st.markdown("### 📊 SOD Charts")
+
+            # USD heatmap
+            if st.session_state.get("sod_ch_usd_hm"):
+                _fig_usd_hm = _build_heatmap(_usd_chg, "USD Vol Change — T-1 vs T-2 (bp)")
+                st.plotly_chart(_fig_usd_hm, use_container_width=True)
+                _sod_chart_figs.append(("USD Vol Change Heatmap", _fig_usd_hm))
+
+            # AUD implied change heatmap
+            if st.session_state.get("sod_ch_aud_hm"):
+                _fig_aud_hm = _build_heatmap(_implied_chg, "AUD Implied Vol Change — from USD Overnight (bp)")
+                st.plotly_chart(_fig_aud_hm, use_container_width=True)
+                _sod_chart_figs.append(("AUD Implied Vol Change Heatmap", _fig_aud_hm))
+
+            # USD term structure
+            if st.session_state.get("sod_ch_usd_ts"):
+                _fig_usd_ts = _build_term_structure(
+                    [_atm1, _atm2], ["T-1 (latest)", "T-2"],
+                    ["#2563eb", "#94a3b8"], _ts_tenor,
+                    "USD ATM Term Structure"
+                )
+                st.plotly_chart(_fig_usd_ts, use_container_width=True)
+                _sod_chart_figs.append(("USD Term Structure", _fig_usd_ts))
+
+            # AUD term structure
+            if st.session_state.get("sod_ch_aud_ts") and _aud_atm is not None:
+                _fig_aud_ts = _build_term_structure(
+                    [_aud_atm], ["AUD Latest"],
+                    ["#16a34a"], _ts_tenor,
+                    "AUD ATM Term Structure"
+                )
+                st.plotly_chart(_fig_aud_ts, use_container_width=True)
+                _sod_chart_figs.append(("AUD Term Structure", _fig_aud_ts))
+
+            # AUD tenor spread
+            if st.session_state.get("sod_ch_aud_tnr") and _aud_atm is not None:
+                _fig_aud_tnr = _build_tenor_spread(
+                    [_aud_atm], ["AUD Latest"],
+                    ["#16a34a"], "1Y", "10Y",
+                    "AUD Tenor Spread"
+                )
+                st.plotly_chart(_fig_aud_tnr, use_container_width=True)
+                _sod_chart_figs.append(("AUD Tenor Spread", _fig_aud_tnr))
+
+            # Cross-CCY RV spread
+            if st.session_state.get("sod_ch_xccy") and _aud_atm is not None:
+                _xccy_exp = [e for e in _aud_atm.index if e in _atm1.index]
+                _xccy_ten = [c for c in _aud_atm.columns if c in _atm1.columns]
+                if _xccy_exp and _xccy_ten:
+                    _xccy_spread = (
+                        _aud_atm.loc[_xccy_exp, _xccy_ten].apply(pd.to_numeric, errors="coerce") -
+                        _atm1.loc[_xccy_exp, _xccy_ten].apply(pd.to_numeric, errors="coerce")
+                    )
+                    _fig_xccy = _build_heatmap(_xccy_spread, "AUD − USD Vol Spread (bp) — positive = AUD rich")
+                    st.plotly_chart(_fig_xccy, use_container_width=True)
+                    _sod_chart_figs.append(("AUD-USD Cross-CCY Spread", _fig_xccy))
+
+            # Stash chart figs for PDF embedding
+            st.session_state["_sod_chart_figs"] = _sod_chart_figs
+
             st.markdown("---")
             _btn_col1, _btn_col2, _btn_col3 = st.columns(3)
             with _btn_col1:
@@ -26639,6 +26821,35 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                         f"ABN 95 601 693 766  |  {_ts} {_tz_lbl_pdf}  |  "
                         "CONFIDENTIAL — For internal use only. Not for distribution.</font>",
                         _sCap))
+
+                    # ── v2204r: Embed selected SOD charts into PDF ──
+                    _chart_figs_pdf = st.session_state.get("_sod_chart_figs", [])
+                    if _chart_figs_pdf:
+                        try:
+                            import io as _io_ch
+                            from reportlab.lib.utils import ImageReader as _ImgReader
+                            from reportlab.platypus import Image as _RLImage
+                            _sod_story.append(PageBreak())
+                            _sod_story.append(Paragraph("Charts", _sCommHd))
+                            _sod_story.append(Spacer(1, 6))
+                            for _ch_title, _ch_fig in _chart_figs_pdf:
+                                try:
+                                    _ch_bytes = _ch_fig.to_image(
+                                        format="png", width=720, height=420,
+                                        scale=2, engine="kaleido")
+                                    _ch_buf = _io_ch.BytesIO(_ch_bytes)
+                                    # A4 width ~540pt with margins, scale to fit
+                                    _ch_img = _RLImage(_ch_buf, width=500, height=290)
+                                    _sod_story.append(Paragraph(_ch_title, _sCommSubHdr))
+                                    _sod_story.append(_ch_img)
+                                    _sod_story.append(Spacer(1, 10))
+                                except Exception:
+                                    _sod_story.append(Paragraph(
+                                        f"[Chart: {_ch_title} — export failed, "
+                                        "install kaleido for chart images in PDF]",
+                                        _sCap))
+                        except Exception:
+                            pass  # reportlab Image import failed — skip charts
 
                     _sod_doc.build(_sod_story)
                     _sod_pdf_bytes = _sod_buf.getvalue()
