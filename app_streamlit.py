@@ -25470,7 +25470,7 @@ def sod_report_tab():
                                         AND action_type = 'NEWT'
                                   )
                             """
-                            _sdr_df = pd.read_sql(_sdr_q, _pg_engine())
+                            _sdr_df = pd.read_sql(_sdr_q, get_db_connection())
                             if not _sdr_df.empty:
                                 _sdr_row = _sdr_df.iloc[0]
                                 _n_tr = int(_sdr_row["n_trades"])
@@ -25497,7 +25497,7 @@ def sod_report_tab():
                                         ORDER BY notional_leg1 DESC NULLS LAST
                                         LIMIT 5
                                     """
-                                    _top_df = pd.read_sql(_top_q, _pg_engine())
+                                    _top_df = pd.read_sql(_top_q, get_db_connection())
                                     if not _top_df.empty:
                                         _sdr_block += "\nTop trades by notional:"
                                         for _, _tr in _top_df.iterrows():
