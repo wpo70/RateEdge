@@ -25378,46 +25378,185 @@ def sod_report_tab():
                     from zoneinfo import ZoneInfo as _ZI_sod
                     from datetime import datetime as _dt_sod
                     _today_dayname = _dt_sod.now(_ZI_sod("Australia/Sydney")).strftime("%A")
+
+                    # ── v2204s: Auto-feed vol surface data + SDR flow ──
+                    # Pull T and T-1 AUD vol snapshots from DB, compute diff
+                    _vol_data_block = ""
+                    _usd_vol_data_block = ""
+                    try:
+                        _aud_snaps = list_vol_snapshots("shared", "AUD")
+                        if len(_aud_snaps) >= 2:
+                            _aud_t  = load_vol_snapshot(_aud_snaps[0]["id"])
+                            _aud_t1 = load_vol_snapshot(_aud_snaps[1]["id"])
+                            if _aud_t and _aud_t1:
+                                _at = _aud_t.get("atm")
+                                _at1 = _aud_t1.get("atm")
+                                if _at is not None and _at1 is not None:
+                                    _at = _at.copy(); _at1 = _at1.copy()
+                                    for _df in [_at, _at1]:
+                                        for _ec in ["Expiry","expiry"]:
+                                            if _ec in _df.columns:
+                                                _df.set_index(_ec, inplace=True); break
+                                        _df.index = _df.index.astype(str).str.lower().str.strip()
+                                        _df.columns = [str(c).upper() for c in _df.columns]
+                                    _ce = [e for e in _at.index if e in _at1.index]
+                                    _ct = [c for c in _at.columns if c in _at1.columns]
+                                    if _ce and _ct:
+                                        _diff = (_at.loc[_ce,_ct].apply(pd.to_numeric, errors="coerce") -
+                                                 _at1.loc[_ce,_ct].apply(pd.to_numeric, errors="coerce"))
+                                        # Build compact text table for the prompt
+                                        _vol_lines = ["AUD ATM Vol Surface (T levels, bp):"]
+                                        _vol_lines.append("Expiry," + ",".join(_ct))
+                                        for _e in _ce:
+                                            _vals = [f"{float(_at.loc[_e,c]):.1f}" if pd.notna(_at.loc[_e,c]) else "" for c in _ct]
+                                            _vol_lines.append(f"{_e}," + ",".join(_vals))
+                                        _vol_lines.append("")
+                                        _vol_lines.append("AUD Vol Change T vs T-1 (bp):")
+                                        _vol_lines.append("Expiry," + ",".join(_ct))
+                                        for _e in _ce:
+                                            _vals = [f"{float(_diff.loc[_e,c]):+.1f}" if pd.notna(_diff.loc[_e,c]) else "" for c in _ct]
+                                            _vol_lines.append(f"{_e}," + ",".join(_vals))
+                                        _vol_data_block = "\n".join(_vol_lines)
+                                        _vol_data_block += (
+                                            f"\n\nAUD T label: {_aud_snaps[0].get('label','')}"
+                                            f"\nAUD T-1 label: {_aud_snaps[1].get('label','')}"
+                                        )
+                        # Also pull USD T and T-1
+                        _usd_snaps = list_vol_snapshots("shared", "USD")
+                        if len(_usd_snaps) >= 2:
+                            _ut  = load_vol_snapshot(_usd_snaps[0]["id"])
+                            _ut1 = load_vol_snapshot(_usd_snaps[1]["id"])
+                            if _ut and _ut1:
+                                _uat = _ut.get("atm"); _uat1 = _ut1.get("atm")
+                                if _uat is not None and _uat1 is not None:
+                                    _uat = _uat.copy(); _uat1 = _uat1.copy()
+                                    for _df in [_uat, _uat1]:
+                                        for _ec in ["Expiry","expiry"]:
+                                            if _ec in _df.columns:
+                                                _df.set_index(_ec, inplace=True); break
+                                        _df.index = _df.index.astype(str).str.lower().str.strip()
+                                        _df.columns = [str(c).upper() for c in _df.columns]
+                                    _uce = [e for e in _uat.index if e in _uat1.index]
+                                    _uct = [c for c in _uat.columns if c in _uat1.columns]
+                                    if _uce and _uct:
+                                        _udiff = (_uat.loc[_uce,_uct].apply(pd.to_numeric, errors="coerce") -
+                                                  _uat1.loc[_uce,_uct].apply(pd.to_numeric, errors="coerce"))
+                                        _usd_lines = ["USD Vol Change T vs T-1 (bp):"]
+                                        _usd_lines.append("Expiry," + ",".join(_uct))
+                                        for _e in _uce:
+                                            _vals = [f"{float(_udiff.loc[_e,c]):+.1f}" if pd.notna(_udiff.loc[_e,c]) else "" for c in _uct]
+                                            _usd_lines.append(f"{_e}," + ",".join(_vals))
+                                        _usd_vol_data_block = "\n".join(_usd_lines)
+                    except Exception:
+                        pass
+
+                    # Pull SDR flow summary
+                    _sdr_block = ""
+                    try:
+                        if HAS_POSTGRES:
+                            _sdr_q = """
+                                SELECT COUNT(*) AS n_trades,
+                                       COALESCE(SUM(notional_leg1), 0) AS total_notional,
+                                       COUNT(CASE WHEN action_type = 'NEWT' THEN 1 END) AS n_newt
+                                FROM dtcc_sdr
+                                WHERE notional_ccy = 'AUD'
+                                  AND execution_timestamp >= NOW() - INTERVAL '24 hours'
+                            """
+                            _sdr_df = pd.read_sql(_sdr_q, _pg_engine())
+                            if not _sdr_df.empty:
+                                _sdr_row = _sdr_df.iloc[0]
+                                _n_tr = int(_sdr_row["n_trades"])
+                                _tot_n = float(_sdr_row["total_notional"])
+                                _n_newt = int(_sdr_row["n_newt"])
+                                if _n_tr > 0:
+                                    _sdr_block = (
+                                        f"AUD SDR Activity (last 24h): {_n_tr} total trades, "
+                                        f"{_n_newt} new (NEWT), total notional AUD {_tot_n/1e6:.0f}M"
+                                    )
+                                    # Top 5 by notional
+                                    _top_q = """
+                                        SELECT opt_tenor, swp_tenor, strike_pct,
+                                               notional_leg1, embedded_option_type,
+                                               platform_identifier
+                                        FROM dtcc_sdr
+                                        WHERE notional_ccy = 'AUD'
+                                          AND execution_timestamp >= NOW() - INTERVAL '24 hours'
+                                          AND action_type = 'NEWT'
+                                        ORDER BY notional_leg1 DESC NULLS LAST
+                                        LIMIT 5
+                                    """
+                                    _top_df = pd.read_sql(_top_q, _pg_engine())
+                                    if not _top_df.empty:
+                                        _sdr_block += "\nTop trades by notional:"
+                                        for _, _tr in _top_df.iterrows():
+                                            _ot = _tr.get("opt_tenor","")
+                                            _st = _tr.get("swp_tenor","")
+                                            _sk = _tr.get("strike_pct","")
+                                            _nl = _tr.get("notional_leg1",0)
+                                            _tp = _tr.get("embedded_option_type","")
+                                            _sdr_block += f"\n  {_ot}x{_st} {_tp} K={_sk}% {float(_nl)/1e6:.0f}M"
+                    except Exception:
+                        pass
+
                     _system_prompt = (
-                        f"You are writing the {_today_dayname}-AM Start-of-Day commentary for an "
-                        "Australian interest-rate options desk. The audience is senior rates "
-                        "traders and portfolio managers.\n\n"
-                        "STYLE RULES — follow exactly:\n"
-                        "• Concise, professional rates-desk voice. No fluff, no cliché openers "
-                        "(no 'In today's market...', no 'As we start the week...').\n"
-                        "• Lead with the narrative hook, not a data dump.\n"
-                        "• Short factual clauses. Use em-dashes (—) for parenthetical detail.\n"
-                        "• Always cite specific numbers when provided (e.g. '10Y UST at 4.24%, "
-                        "from 4.32% w/w'; '3m10y ATM at 66.9bp').\n"
-                        "• Use market shorthand: bp, bps, w/w, y/y, ATM, OIS, UST, SOH, ACGB, "
-                        "2s10s, gamma, vega, vol, front-end, long-end.\n"
-                        "• Australian English spelling (favour, sympathise, behaviour).\n"
-                        "• Always close with a clearly labelled 'Stance into AUD open:' "
-                        "paragraph giving directional view (duration, curve, vol, AUD).\n"
-                        "• Flag asymmetric risks explicitly ('one tanker headline resets the "
-                        "narrative', 'gamma reacts first', etc.).\n"
-                        "• DO NOT make up numbers. If a figure isn't in the input, don't cite it.\n"
-                        "• DO NOT use bullet points. Flowing paragraphs only.\n"
-                        f"• TODAY IS {_today_dayname}. Start the response with "
-                        f"'{_today_dayname} AM — AUD SOD' as a header on its own line. "
-                        "Do NOT write any other day name regardless of templates or examples.\n\n"
-                        "STRUCTURE (roughly):\n"
-                        "1. Narrative hook + macro setup\n"
-                        "2. Oil / inflation / second-round effects (if relevant)\n"
-                        "3. What was/wasn't in Friday's price — UST, vol, OIS\n"
-                        "4. US vol dynamics + AUD sympathy move\n"
-                        "5. Economic data + equity tape sidebar (brief)\n"
-                        "6. Stance into AUD open\n\n"
-                        f"LENGTH: {st.session_state.get('sod_ai_length', 'Standard (6 paras)')}"
+                        f"You are a senior rates vol market commentator writing the "
+                        f"{_today_dayname}-AM Start-of-Day technical briefing for an "
+                        "Australian interest-rate options desk. The audience is "
+                        "institutional rates traders and portfolio managers.\n\n"
+                        "CRITICAL RULES:\n"
+                        "• 3-minute read MAX. Focus on OBSERVABLE TECHNICAL vol moves.\n"
+                        "• Macro context is MINIMAL — bullet points only, no editorial.\n"
+                        "• Reference specific expiry×tenor cells with bp levels "
+                        "(e.g. '3m10y +2.1bp to 73.5bp').\n"
+                        "• Use bp units throughout for vol. Use market shorthand.\n"
+                        "• DO NOT make up numbers. Only cite what's in the data provided.\n"
+                        "• Australian English spelling.\n"
+                        "• DO NOT use bullet points EXCEPT in MACRO CONTEXT section.\n"
+                        "• No geopolitical commentary beyond the MACRO CONTEXT bullets.\n"
+                        "• No opinions on rate direction.\n\n"
+                        "STRUCTURE — follow exactly:\n\n"
+                        "1. MACRO CONTEXT (2-3 bullet points MAX, factual, no analysis)\n"
+                        "   Example: • UST 10Y closed 4.29% (+1bp). • Fed Waller speaks 14:00 NYC.\n\n"
+                        "2. HEADLINE (one sentence — the single biggest technical vol move)\n\n"
+                        "3. SURFACE (2-3 sentences on shape changes)\n"
+                        "   Describe: upper-left vs lower-right, belly vs wings, any axis "
+                        "   that moved uniformly. Reference the vol change grid provided.\n"
+                        "   Example: 'AUD front-end (1m-3m × 1Y-3Y) offered 1bp, while the "
+                        "   5Y belly held. Lower-right (10y+ × 15Y+) continues to compress.'\n\n"
+                        "4. TERM STRUCTURE (1-2 sentences on front/back vol spread)\n"
+                        "   Example: 'AUD 1m-1y spread compressed 2bp to 5.5bp at 1Y tenor.'\n\n"
+                        "5. FLOW (1-2 sentences on notable prints from SDR data if provided)\n"
+                        "   Reference size, direction, location on surface. No platform names.\n\n"
+                        "6. WATCH (1 sentence — technically interesting observation)\n"
+                        "   Example: 'gamma looks offered into payrolls' or '5y5y at 6-month lows'\n\n"
+                        f"TODAY IS {_today_dayname}. Start with "
+                        f"'{_today_dayname} AM — AUD SOD' as header.\n\n"
+                        "Keep UNDER 300 words total.\n\n"
+                        f"LENGTH PREFERENCE: {st.session_state.get('sod_ai_length', 'Standard (6 paras)')}"
                     )
+
+                    # Build the user prompt with real data
+                    _data_sections = []
+                    _data_sections.append("=== RAW NEWS / MACRO INPUTS ===")
+                    _data_sections.append(_raw_news.strip())
+                    if _vol_data_block:
+                        _data_sections.append("\n=== AUD VOL SURFACE DATA (from database) ===")
+                        _data_sections.append(_vol_data_block)
+                    if _usd_vol_data_block:
+                        _data_sections.append("\n=== USD VOL CHANGE DATA (from database) ===")
+                        _data_sections.append(_usd_vol_data_block)
+                    if _sdr_block:
+                        _data_sections.append("\n=== AUD SDR FLOW (from database) ===")
+                        _data_sections.append(_sdr_block)
+                    _data_sections.append("\n=== END ===")
+
                     _user_prompt = (
-                        "Here are the raw inputs for today's AUD SOD commentary. "
-                        "Synthesise into a single polished piece following the house style. "
-                        "Merge duplicate items, resolve contradictions by noting both, and "
-                        "prioritise the most market-moving headlines for the lede.\n\n"
-                        "=== RAW INPUTS ===\n"
-                        f"{_raw_news.strip()}\n"
-                        "=== END ==="
+                        "Synthesise the following into a polished AUD SOD commentary "
+                        "following the structure in your instructions. The vol surface "
+                        "data and SDR flow are from the live database — use these REAL "
+                        "numbers in your commentary. The raw news/macro inputs are for "
+                        "the MACRO CONTEXT bullets only.\n\n"
+                        + "\n".join(_data_sections)
                     )
 
                     # Call Anthropic API directly via urllib (no extra deps)
