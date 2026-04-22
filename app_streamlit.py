@@ -12883,7 +12883,10 @@ def caps_floors_tab(vol_mode: str):
                                   tuples = _mk_exp_tuples(contracts_available)
                                   if not tuples:
                                       return set()
-                                  _cap_start = 0.25  # strip starts 3m fwd (same as pre-calc)
+                                  # Must match real builder: cap_start = 1/252 when
+                                  # strip_expiry_y=0 (same as L2952 in
+                                  # _build_listed_caplet_curve_by_date)
+                                  _cap_start = 1.0 / 252.0
                                   _cap_end = _cap_start + tenor_y
                                   _pairs = []
                                   _t = _cap_start
