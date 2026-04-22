@@ -7,10 +7,7 @@ psycopg2-binary
 matplotlib
 streamlit-plotly-events
 streamlit-js-eval
-
 scipy>=1.11.0
 supabase
 reportlab
-
-kaleido
-kaleido
+kaleido==0.2.1
