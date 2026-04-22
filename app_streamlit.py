@@ -12919,28 +12919,7 @@ def caps_floors_tab(vol_mode: str):
                                   # User reverted to DB state — clear edit
                                   _session_edits.pop(code, None)
 
-                          # v2204i USD-only: if the edit dict actually changed
-                          # vs what was in session_state at the top of this
-                          # render, force a rerun so the Listed term cache, CFS
-                          # table straddles and Flat Vol solver pick up the new
-                          # ratio/bp values on this same click rather than
-                          # requiring the user to trigger a second action.
-                          # Compare stable representations (sorted tuples).
-                          def _edits_sig(d):
-                              return tuple(sorted(
-                                  (c, (e or {}).get("listed_adj_mode"),
-                                   round(float((e or {}).get("listed_adj_ratio") or 1.0), 6),
-                                   round(float((e or {}).get("listed_adj_bp") or 0.0), 4))
-                                  for c, e in (d or {}).items()
-                              ))
-                          _prior_sig = _edits_sig(
-                              st.session_state.get("_cfs_listed_session_edits_sig_prior", {})
-                          )
-                          _now_sig = _edits_sig(_session_edits)
                           st.session_state["_cfs_listed_session_edits"] = _session_edits
-                          if _now_sig != _prior_sig:
-                              st.session_state["_cfs_listed_session_edits_sig_prior"] = dict(_session_edits)
-                              st.rerun(scope="app")
 
                           # ── Save / Discard controls ──
                           st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
