@@ -11753,18 +11753,7 @@ def caps_floors_tab(vol_mode: str):
                 st.session_state.pop("_cfs_otc_build_cache", None)
                 st.session_state.pop("_cfs_listed_build_cache", None)
                 st.session_state.pop("_cfs_sr3_curves_cache", None)
-                # v2204e: USD-only — use fragment scope to prevent the
-                # Bad-delta-path white-screen crash. USD has 9 structural
-                # if-branches inside caps_floors_tab (Listed editor, SR3 hybrid,
-                # overlay multiselect, etc.); an app-scope rerun destroys the
-                # fragment and its frontend delta tracking desyncs, producing
-                # the white page seen on Calculate CFS. AUD has no such
-                # structural gates on the USD path, so its behaviour is
-                # unchanged (AUD keeps scope="app").
-                if ccy == "USD":
-                    st.rerun(scope="fragment")
-                else:
-                    st.rerun(scope="app")
+                st.rerun(scope="app")
             if br.button("🔄 Refresh Swaptions", key="gen_swpt_prem", type="primary"):
                 # Mark this render so the Listed bootstrap pre-calc block
                 # doesn't immediately overwrite the refreshed swaption values.
