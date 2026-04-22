@@ -11594,7 +11594,13 @@ def caps_floors_tab(vol_mode: str):
                                 _ten_for_row = {"3m1y":1.0,"1y1y":1.0,"2y1y":1.0,"3y1y":1.0,
                                                 "4y1y":1.0,"5y2y":2.0,"7y3y":3.0,"10y2y":2.0,"12y3y":3.0}.get(tbl_lbl)
                                 if _exp_for_row and _ten_for_row:
-                                    _fv = get_matrix_value(_prem_df_row, _exp_for_row, _ten_for_row)
+                                    # v2204q: direct .loc on the indexed DataFrame
+                                    _ten_col_w = f"{int(_ten_for_row)}Y" if _ten_for_row == int(_ten_for_row) else f"{_ten_for_row}Y"
+                                    try:
+                                        _fv = float(_prem_df_row.loc[_exp_for_row, _ten_col_w])
+                                        if pd.isna(_fv): _fv = None
+                                    except (KeyError, TypeError, ValueError):
+                                        _fv = get_matrix_value(_prem_df_row, _exp_for_row, _ten_for_row)
                                     if _fv is not None:
                                         fwd_swpt_str = f"{float(_fv):.4f}"
                                     else:
@@ -11818,7 +11824,16 @@ def caps_floors_tab(vol_mode: str):
                         ("12y3y","12y",3.0,"15Y CFS"),
                     ]:
                         try:
-                            v = get_matrix_value(_prem_df, exp, tenor)
+                            # v2204q: direct .loc access — get_matrix_value's
+                            # normalisation/interpolation silently drops the 12y
+                            # row. All 9 wedge lookups hit exact cells, no interp
+                            # needed. Tenor float → column name: 3.0 → "3Y".
+                            _ten_col = f"{int(tenor)}Y" if tenor == int(tenor) else f"{tenor}Y"
+                            try:
+                                v = float(_prem_df.loc[exp, _ten_col])
+                                if pd.isna(v): v = None
+                            except (KeyError, TypeError, ValueError):
+                                v = get_matrix_value(_prem_df, exp, tenor)
                             if v is None: continue
                             # atm_prem_matrix stores FORWARD premiums — convert to SPOT
                             # spot = fwd × df(expiry)
@@ -13255,9 +13270,14 @@ def caps_floors_tab(vol_mode: str):
                 ccy,
                 st.session_state.get("_caplet_curve_key", 0),
                 len(_cfs_tdata),
-                len(_caplet_vc) if _caplet_vc else 0,
+                # v2204q: hash actual vol values, not just len (which never
+                # changes). Same fix pattern as v2204g SR3 cache.
+                hash(tuple(
+                    (round(float(k), 3), round(float(v), 4))
+                    for k, v in sorted((_caplet_vc or {}).items())
+                )) if _caplet_vc else 0,
                 _lf_sig,
-                "v2204k",  # version tag — bumps cache on deploy
+                "v2204q",
             )
             _cfs_cached = st.session_state.get("_atm_cfs_cache_key") == _cfs_id
             if _cfs_cached and st.session_state.get("_atm_cfs_rows_cache"):
