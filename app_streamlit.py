@@ -25463,7 +25463,7 @@ def sod_report_tab():
                                 FROM dtcc_sdr
                                 WHERE notional_ccy = 'AUD'
                                   AND action_type = 'NEWT'
-                                  AND asset_class = 'InterestRate'
+                                  AND asset_class = 'IR'
                                   AND execution_timestamp::date = (
                                       SELECT MAX(execution_timestamp::date) FROM dtcc_sdr
                                       WHERE notional_ccy = 'AUD'
@@ -25493,7 +25493,7 @@ def sod_report_tab():
                                                 AND action_type = 'NEWT'
                                           )
                                           AND action_type = 'NEWT'
-                                          AND asset_class = 'InterestRate'
+                                          AND asset_class = 'IR'
                                         ORDER BY notional_leg1 DESC NULLS LAST
                                         LIMIT 5
                                     """
