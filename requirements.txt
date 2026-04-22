@@ -13,3 +13,4 @@ supabase
 reportlab
 
 kaleido
+kaleido
