@@ -25473,7 +25473,6 @@ def sod_report_tab():
                                     FROM dtcc_sdr
                                     WHERE notional_ccy = 'AUD'
                                       AND action_type = 'NEWT'
-                                      AND asset_class = 'IR'
                                       AND event_timestamp::date = (
                                           SELECT MAX(event_timestamp::date) FROM dtcc_sdr
                                           WHERE notional_ccy = 'AUD'
@@ -25495,7 +25494,7 @@ def sod_report_tab():
                                         f"AUD Options Flow (previous session): {_n_tr} trades, "
                                         f"total notional AUD {_tot_n/1e6:.0f}M"
                                     )
-                                    # Top 5 unique trades by notional
+                                    # Top 8 unique trades by notional
                                     _top_q = """
                                         WITH unique_trades AS (
                                             SELECT DISTINCT ON (event_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1)
@@ -25505,6 +25504,7 @@ def sod_report_tab():
                                                        WHEN 'PUT'  THEN 'Receiver'
                                                        WHEN 'STR'  THEN 'Straddle'
                                                        WHEN 'EC'   THEN 'Straddle'
+                                                       WHEN 'MDET' THEN 'MDET'
                                                        ELSE option_type_decoded
                                                    END AS trade_type
                                             FROM dtcc_sdr
@@ -25515,7 +25515,6 @@ def sod_report_tab():
                                                     AND action_type = 'NEWT'
                                               )
                                               AND action_type = 'NEWT'
-                                              AND asset_class = 'IR'
                                             ORDER BY event_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1
                                         )
                                         SELECT opt_tenor, swp_tenor, strike_pct,
@@ -25576,7 +25575,10 @@ def sod_report_tab():
                         "   Use BOTH the trade data from the database AND any desk colour provided.\n"
                         "   Reference size, direction, location on surface. No platform names.\n"
                         "   If desk colour mentions specific activity (e.g. 'sellers in 1yr', "
-                        "   '10yr gamma active'), weave it in naturally.\n\n"
+                        "   '10yr gamma active'), weave it in naturally.\n"
+                        "   CRITICAL: ONLY reference flow data that is explicitly provided below.\n"
+                        "   If no SDR data or desk colour is provided, state that flow was not available.\n"
+                        "   NEVER invent trade details, notional amounts, or structure descriptions.\n\n"
                         "6. WATCH (1 sentence — technically interesting observation)\n"
                         "   Example: 'gamma looks offered into payrolls' or '5y5y at 6-month lows'\n\n"
                         f"TODAY IS {_today_dayname}. Start with "
@@ -25598,6 +25600,9 @@ def sod_report_tab():
                     if _sdr_block:
                         _data_sections.append("\n=== AUD OPTIONS FLOW (from database) ===")
                         _data_sections.append(_sdr_block)
+                    else:
+                        _data_sections.append("\n=== AUD OPTIONS FLOW (from database) ===")
+                        _data_sections.append("NO SDR FLOW DATA AVAILABLE for this session. Do NOT invent or fabricate any flow information. State that flow data is unavailable.")
                     _desk_col_val = st.session_state.get("sod_ai_desk_colour", "").strip()
                     if _desk_col_val:
                         _data_sections.append("\n=== DESK COLOUR / BROKER FLOW ===")
@@ -25862,7 +25867,7 @@ def sod_report_tab():
             _sod_ch_aud_hm   = st.checkbox("AUD Vol Change Heatmap (T vs T-1)", value=True, key="sod_ch_aud_hm")
             _sod_ch_aud_lvl  = st.checkbox("AUD Vol Surface Heatmap (levels)", value=False, key="sod_ch_aud_ts")
             _sod_ch_aud_ts   = st.checkbox("AUD Term Structure (line)", value=False, key="sod_ch_aud_ts_line")
-            _sod_ch_aud_tnr  = st.checkbox("AUD Tenor Spread (1Y vs 10Y)", value=False, key="sod_ch_aud_tnr")
+            _sod_ch_aud_tnr  = st.checkbox("AUD Tenor Spread (3Y vs 10Y)", value=False, key="sod_ch_aud_tnr")
         with _ch_c2:
             st.markdown("**USD**")
             _sod_ch_usd_hm   = st.checkbox("USD Vol Change Heatmap (T vs T-1)", value=True, key="sod_ch_usd_hm")
@@ -26750,7 +26755,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             if st.session_state.get("sod_ch_aud_tnr") and _aud_atm is not None:
                 _fig_aud_tnr = _build_tenor_spread(
                     [_aud_atm], ["AUD Latest"],
-                    ["#16a34a"], "1Y", "10Y",
+                    ["#16a34a"], "3Y", "10Y",
                     "AUD Tenor Spread"
                 )
                 st.plotly_chart(_fig_aud_tnr, use_container_width=True)
@@ -27091,7 +27096,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                         "CONFIDENTIAL — For internal use only. Not for distribution.</font>",
                         _sCap))
 
-                    # ── v2204r: Embed selected SOD charts into PDF ──
+                    # ── v2304j: Embed selected SOD charts into PDF ──
                     _chart_figs_pdf = st.session_state.get("_sod_chart_figs", [])
                     if _chart_figs_pdf:
                         try:
@@ -27099,19 +27104,32 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                             from reportlab.lib.utils import ImageReader as _ImgReader
                             from reportlab.platypus import Image as _RLImage
                             _sod_story.append(PageBreak())
-                            _sod_story.append(Paragraph("Charts", _sCommHd))
-                            _sod_story.append(Spacer(1, 6))
+                            _sChartHd = ParagraphStyle(
+                                "sChartHd", parent=_ss["Normal"], fontSize=10,
+                                fontName="Helvetica-Bold",
+                                textColor=colors.HexColor("#1e3a5f"),
+                                spaceBefore=0, spaceAfter=6,
+                            )
+                            _sChartSub = ParagraphStyle(
+                                "sChartSub", parent=_ss["Normal"], fontSize=8.5,
+                                fontName="Helvetica-Bold",
+                                textColor=colors.HexColor("#334155"),
+                                spaceBefore=2, spaceAfter=2,
+                            )
+                            _sod_story.append(Paragraph("Charts", _sChartHd))
                             for _ch_title, _ch_fig in _chart_figs_pdf:
                                 try:
                                     _ch_bytes = _ch_fig.to_image(
-                                        format="png", width=720, height=500,
+                                        format="png", width=900, height=440,
                                         scale=2, engine="kaleido")
                                     _ch_buf = _io_ch.BytesIO(_ch_bytes)
-                                    # A4 width ~540pt with margins, scale to fit
-                                    _ch_img = _RLImage(_ch_buf, width=500, height=345)
-                                    _sod_story.append(Paragraph(_ch_title, _sCommSubHdr))
-                                    _sod_story.append(_ch_img)
-                                    _sod_story.append(Spacer(1, 10))
+                                    _ch_img = _RLImage(_ch_buf, width=16.5*cm, height=8.1*cm)
+                                    # KeepTogether prevents title orphaning from chart
+                                    _sod_story.append(KeepTogether([
+                                        Paragraph(_ch_title, _sChartSub),
+                                        _ch_img,
+                                        Spacer(1, 6),
+                                    ]))
                                 except Exception:
                                     _sod_story.append(Paragraph(
                                         f"[Chart: {_ch_title} — export failed, "
