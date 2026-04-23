@@ -27138,15 +27138,10 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                         t.setStyle(TableStyle(_styles))
                         return t
 
-                    # USD Vol Changes table - KeepTogether prevents mid-table page break
-                    _usd_chg_r = _usd_chg.reset_index()
-                    _usd_tbl_data = [["Expiry"] + list(_usd_chg_r.columns[1:])]
-                    for _, _row in _usd_chg_r.iterrows():
-                        _usd_tbl_data.append([str(_row.iloc[0])] + [f"{float(v):+.2f}" if v==v else "—" for v in _row.iloc[1:]])
-                    _sod_story.append(KeepTogether([
-                        Paragraph("USD Vol Changes (bp)", _sH2),
-                        _mk_tbl(_usd_tbl_data, "#1e293b"),
-                    ]))
+                    # USD Vol Changes — shown by USD Vol Change heatmap chart
+                    # Implied AUD Vol Change — shown by AUD Implied Vol Change heatmap chart
+                    # Implied AUD Vol Open Level — shown by AUD Vol Surface heatmap chart
+                    # (All three removed — chart images are the primary visual)
 
                     if not _usd_prem_chg.empty:
                         _usd_p_r = _usd_prem_chg.reset_index()
@@ -27157,24 +27152,6 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                             Paragraph("USD Fwd Premium Changes (bp)", _sH2),
                             _mk_tbl(_usd_p_data, "#1e293b"),
                         ]))
-                    _aud_chg_r = _implied_chg.astype(float).reset_index()
-                    _aud_tbl_data = [["Expiry"] + list(_aud_chg_r.columns[1:])]
-                    for _, _row in _aud_chg_r.iterrows():
-                        _aud_tbl_data.append([str(_row.iloc[0])] + [f"{float(v):+.2f}" if v==v else "—" for v in _row.iloc[1:]])
-                    _sod_story.append(KeepTogether([
-                        Paragraph("Implied AUD Vol Change at Open (bp)", _sH2),
-                        _mk_tbl(_aud_tbl_data, "#1e3a5f"),
-                    ]))
-
-                    _aud_op_r = _implied_open.astype(float).reset_index()
-                    _aud_op_data = [["Expiry"] + list(_aud_op_r.columns[1:])]
-                    for _, _row in _aud_op_r.iterrows():
-                        _aud_op_data.append([str(_row.iloc[0])] + [f"{float(v):.2f}" if v==v else "—" for v in _row.iloc[1:]])
-                    _sod_story.append(KeepTogether([
-                        Paragraph("Implied AUD Vol Open Level (bp)", _sH2),
-                        _mk_tbl(_aud_op_data, "#1e3a5f", is_change=False),
-                    ]))
-
                     if not _aud_prem_chg.empty:
                         _aud_pc_r = _aud_prem_chg.reset_index()
                         _aud_pc_data = [["Expiry"] + list(_aud_pc_r.columns[1:])]
