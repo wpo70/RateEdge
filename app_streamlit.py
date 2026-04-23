@@ -25551,6 +25551,7 @@ def sod_report_tab():
                                     WHERE notional_ccy = 'AUD'
                                       AND action_type = 'NEWT'
                                       AND opt_tenor IS NOT NULL
+                                      AND option_type_decoded IN ('CALL','PUT','STR','EC','SWN','BCALL','MDET','NSTD')
                                     ORDER BY event_timestamp DESC
                                     LIMIT 200
                                 """, _sdr_conn)
