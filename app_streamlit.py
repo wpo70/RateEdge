@@ -26605,8 +26605,9 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     title=dict(text=title, font=dict(size=14)),
                     xaxis=dict(title="Tenor", side="top"),
                     yaxis=dict(title="Expiry", autorange="reversed"),
-                    height=500, margin=dict(l=60, r=30, t=60, b=30),
-                    plot_bgcolor="white",
+                    height=500, margin=dict(l=60, r=30, t=60, b=40),
+                    plot_bgcolor="white", paper_bgcolor="white",
+                    font=dict(family="Helvetica, Arial, sans-serif"),
                 )
                 return _fig
 
@@ -26635,10 +26636,11 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     ))
                 _fig.update_layout(
                     title=dict(text=f"{title} — {tenor_col} tenor", font=dict(size=14)),
-                    xaxis=dict(title="Expiry (Years)"),
-                    yaxis=dict(title="ATM Vol (bp)"),
-                    height=380, margin=dict(l=50, r=20, t=50, b=40),
-                    plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                    xaxis=dict(title="Expiry (Years)", gridcolor="#e2e8f0", gridwidth=0.5),
+                    yaxis=dict(title="ATM Vol (bp)", gridcolor="#e2e8f0", gridwidth=0.5),
+                    height=500, margin=dict(l=60, r=30, t=60, b=40),
+                    plot_bgcolor="white", paper_bgcolor="white",
+                    font=dict(family="Helvetica, Arial, sans-serif"),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     hovermode="closest",
                 )
@@ -26668,10 +26670,12 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     ))
                 _fig.update_layout(
                     title=dict(text=f"{title} — {short_tenor} minus {long_tenor}", font=dict(size=14)),
-                    xaxis=dict(title="Expiry (Years)"),
-                    yaxis=dict(title=f"Spread (bp)"),
-                    height=350, margin=dict(l=50, r=20, t=50, b=40),
-                    plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                    xaxis=dict(title="Expiry (Years)", gridcolor="#e2e8f0", gridwidth=0.5),
+                    yaxis=dict(title=f"Spread (bp)", zeroline=True, zerolinecolor="#94a3b8",
+                               zerolinewidth=1, gridcolor="#e2e8f0", gridwidth=0.5),
+                    height=500, margin=dict(l=60, r=30, t=60, b=40),
+                    plot_bgcolor="white", paper_bgcolor="white",
+                    font=dict(family="Helvetica, Arial, sans-serif"),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     hovermode="closest",
                 )
@@ -26866,6 +26870,19 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                                     textColor=colors.HexColor("#334155"),
                                     spaceBefore=4, spaceAfter=2,
                                 )
+                                # AT A GLANCE — distinctive highlighted box style
+                                _sGlanceHd = ParagraphStyle(
+                                    "sGlanceHd", parent=_ss["Normal"], fontSize=9.5,
+                                    fontName="Helvetica-Bold",
+                                    textColor=colors.HexColor("#1e3a5f"),
+                                    spaceBefore=0, spaceAfter=1,
+                                )
+                                _sGlanceBd = ParagraphStyle(
+                                    "sGlanceBd", parent=_ss["Normal"], fontSize=8.5,
+                                    fontName="Helvetica",
+                                    textColor=colors.HexColor("#1e293b"), leading=12,
+                                    spaceAfter=0,
+                                )
                                 import re as _re_hdr_sod
                                 _DAY_PAT_SOD = _re_hdr_sod.compile(
                                     r'^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+(AM|PM)\b',
@@ -26890,6 +26907,33 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                                     _clines = _cpara.split("\n")
                                     _cfirst = _clines[0].strip()
                                     _crest  = "\n".join(_clines[1:]).strip()
+                                    # ── AT A GLANCE — highlighted box at the top ──
+                                    _is_glance = _cfirst.upper().startswith("AT A GLANCE")
+                                    if _is_glance:
+                                        # Extract body: may be after "AT A GLANCE:" on same line or on subsequent lines
+                                        _glance_body = ""
+                                        _colon_pos = _cfirst.find(":")
+                                        if _colon_pos > 0 and _colon_pos < len(_cfirst) - 1:
+                                            _glance_body = _cfirst[_colon_pos+1:].strip()
+                                        if _crest:
+                                            _glance_body = (_glance_body + " " + _crest).strip() if _glance_body else _crest
+                                        # Wrap in a light-blue background table for visual distinction
+                                        _glance_data = [[Paragraph("AT A GLANCE", _sGlanceHd)]]
+                                        if _glance_body:
+                                            _glance_data.append([Paragraph(_glance_body.replace("\n", "<br/>"), _sGlanceBd)])
+                                        _glance_tbl = Table(_glance_data, colWidths=[16.5*cm])
+                                        _glance_tbl.setStyle(TableStyle([
+                                            ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#eff6ff")),
+                                            ("LEFTPADDING",   (0,0), (-1,-1), 8),
+                                            ("RIGHTPADDING",  (0,0), (-1,-1), 8),
+                                            ("TOPPADDING",    (0,0), (-1,-1), 6),
+                                            ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+                                            ("BOX", (0,0), (-1,-1), 0.5, colors.HexColor("#bfdbfe")),
+                                            ("LINEBELOW", (0,0), (-1,0), 0, colors.HexColor("#eff6ff")),
+                                        ]))
+                                        _sod_story.append(_glance_tbl)
+                                        _sod_story.append(Spacer(1, 6))
+                                        continue
                                     # Inline "Stance into ...:" — split at colon
                                     _stance_m_sod = _re_hdr_sod.match(
                                         r'^(Stance\s+into\s+[^:]{0,40}:)\s*(.*)$',
@@ -27051,11 +27095,11 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                             for _ch_title, _ch_fig in _chart_figs_pdf:
                                 try:
                                     _ch_bytes = _ch_fig.to_image(
-                                        format="png", width=720, height=420,
+                                        format="png", width=720, height=500,
                                         scale=2, engine="kaleido")
                                     _ch_buf = _io_ch.BytesIO(_ch_bytes)
                                     # A4 width ~540pt with margins, scale to fit
-                                    _ch_img = _RLImage(_ch_buf, width=500, height=290)
+                                    _ch_img = _RLImage(_ch_buf, width=500, height=345)
                                     _sod_story.append(Paragraph(_ch_title, _sCommSubHdr))
                                     _sod_story.append(_ch_img)
                                     _sod_story.append(Spacer(1, 10))
