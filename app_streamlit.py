@@ -11106,6 +11106,12 @@ def caps_floors_tab(vol_mode: str):
                         st.session_state["_cfs_listed_session_edits"] = dict(_db_le)
             except Exception:
                 pass
+        # Restore ratio/bp/mode widget keys preserved through rerun
+        _preserved_le = st.session_state.pop("_preserve_le_widget_keys", None)
+        if _preserved_le:
+            for _pk, _pv in _preserved_le.items():
+                if _pk not in st.session_state:
+                    st.session_state[_pk] = _pv
 
     # ═══════════════════════════════════════════════════════════════════
     # Per-ccy wedge spread isolation (20-Apr-2026 bugfix).
@@ -13168,6 +13174,20 @@ def caps_floors_tab(vol_mode: str):
                                       "_caplet_curve_key",
                                   ):
                                       st.session_state.pop(_ck, None)
+                                  # CRITICAL: preserve widget state through rerun
+                                  for _widget_key, _preserve_key in [
+                                      ("cfs_active_vol_src",  "_preserve_cfs_active_vol_src"),
+                                      ("_cfs_use_listed",     "_preserve_cfs_use_listed"),
+                                      ("cfs_sr3_cutoff",      "_preserve_cfs_sr3_cutoff"),
+                                      ("cfs_overlay_choices", "_preserve_cfs_overlay_choices"),
+                                      ("_cfs_pack_radio",     "_preserve_cfs_pack_radio"),
+                                  ]:
+                                      if _widget_key in st.session_state:
+                                          st.session_state[_preserve_key] = st.session_state[_widget_key]
+                                  # Also preserve ALL ratio widget keys so they survive rerun
+                                  _le_keys_to_preserve = {k: v for k, v in st.session_state.items()
+                                                          if k.startswith("_cfs_le_") and ("_ratio" in k or "_bp" in k or "_mode" in k)}
+                                  st.session_state["_preserve_le_widget_keys"] = _le_keys_to_preserve
                                   st.rerun()
                           with _save_col:
                               if st.button("💾 Save to snapshot", key="_cfs_le_save",
