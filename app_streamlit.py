@@ -25468,18 +25468,18 @@ def sod_report_tab():
                             # by grouping on key fields
                             _sdr_q = """
                                 WITH unique_trades AS (
-                                    SELECT DISTINCT ON (execution_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1)
-                                           opt_tenor, swp_tenor, strike_pct, notional_leg1, embedded_option_type
+                                    SELECT DISTINCT ON (event_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1)
+                                           opt_tenor, swp_tenor, strike_pct, notional_leg1, option_type_decoded
                                     FROM dtcc_sdr
                                     WHERE notional_ccy = 'AUD'
                                       AND action_type = 'NEWT'
                                       AND asset_class = 'IR'
-                                      AND execution_timestamp::date = (
-                                          SELECT MAX(execution_timestamp::date) FROM dtcc_sdr
+                                      AND event_timestamp::date = (
+                                          SELECT MAX(event_timestamp::date) FROM dtcc_sdr
                                           WHERE notional_ccy = 'AUD'
                                             AND action_type = 'NEWT'
                                       )
-                                    ORDER BY execution_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1
+                                    ORDER BY event_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1
                                 )
                                 SELECT COUNT(*) AS n_trades,
                                        COALESCE(SUM(notional_leg1), 0) AS total_notional
@@ -25498,24 +25498,31 @@ def sod_report_tab():
                                     # Top 5 unique trades by notional
                                     _top_q = """
                                         WITH unique_trades AS (
-                                            SELECT DISTINCT ON (execution_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1)
-                                                   opt_tenor, swp_tenor, strike_pct, notional_leg1, embedded_option_type
+                                            SELECT DISTINCT ON (event_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1)
+                                                   opt_tenor, swp_tenor, strike_pct, notional_leg1,
+                                                   CASE option_type_decoded
+                                                       WHEN 'CALL' THEN 'Payer'
+                                                       WHEN 'PUT'  THEN 'Receiver'
+                                                       WHEN 'STR'  THEN 'Straddle'
+                                                       WHEN 'EC'   THEN 'Straddle'
+                                                       ELSE option_type_decoded
+                                                   END AS trade_type
                                             FROM dtcc_sdr
                                             WHERE notional_ccy = 'AUD'
-                                              AND execution_timestamp::date = (
-                                                  SELECT MAX(execution_timestamp::date) FROM dtcc_sdr
+                                              AND event_timestamp::date = (
+                                                  SELECT MAX(event_timestamp::date) FROM dtcc_sdr
                                                   WHERE notional_ccy = 'AUD'
                                                     AND action_type = 'NEWT'
                                               )
                                               AND action_type = 'NEWT'
                                               AND asset_class = 'IR'
-                                            ORDER BY execution_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1
+                                            ORDER BY event_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1
                                         )
                                         SELECT opt_tenor, swp_tenor, strike_pct,
-                                               notional_leg1, embedded_option_type
+                                               notional_leg1, trade_type
                                         FROM unique_trades
                                         ORDER BY notional_leg1 DESC NULLS LAST
-                                        LIMIT 5
+                                        LIMIT 8
                                     """
                                     _top_df = pd.read_sql(_top_q, get_db_connection())
                                     if not _top_df.empty:
@@ -25525,10 +25532,12 @@ def sod_report_tab():
                                             _st = _tr.get("swp_tenor","")
                                             _sk = _tr.get("strike_pct","")
                                             _nl = _tr.get("notional_leg1",0)
-                                            _tp = _tr.get("embedded_option_type","")
-                                            _sdr_block += f"\n  {_ot}x{_st} {_tp} K={_sk}% {float(_nl)/1e6:.0f}M"
-                    except Exception:
-                        pass
+                                            _tp = _tr.get("trade_type","")
+                                            _nl_fmt = f"{float(_nl)/1e6:.0f}M" if pd.notna(_nl) and float(_nl) > 0 else "—"
+                                            _sk_fmt = f"K={float(_sk):.2f}%" if pd.notna(_sk) else ""
+                                            _sdr_block += f"\n  {_ot}x{_st} {_tp} {_sk_fmt} {_nl_fmt}"
+                    except Exception as _sdr_err:
+                        _sdr_block = f"[SDR query failed: {_sdr_err}]"
 
                     _system_prompt = (
                         f"You are a senior rates vol market commentator writing the "
