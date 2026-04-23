@@ -25936,17 +25936,17 @@ def sod_report_tab():
         with _ch_c1:
             st.markdown("**AUD**")
             _sod_ch_aud_hm   = st.checkbox("AUD Vol Change Heatmap (T vs T-1)", value=True, key="sod_ch_aud_hm")
-            _sod_ch_aud_lvl  = st.checkbox("AUD Vol Surface Heatmap (levels)", value=False, key="sod_ch_aud_ts")
-            _sod_ch_aud_ts   = st.checkbox("AUD Term Structure (line)", value=False, key="sod_ch_aud_ts_line")
-            _sod_ch_aud_tnr  = st.checkbox("AUD Tenor Spread (3Y vs 10Y)", value=False, key="sod_ch_aud_tnr")
+            _sod_ch_aud_lvl  = st.checkbox("AUD Vol Surface Heatmap (levels)", value=True, key="sod_ch_aud_ts")
+            _sod_ch_aud_ts   = st.checkbox("AUD Term Structure (line)", value=True, key="sod_ch_aud_ts_line")
+            _sod_ch_aud_tnr  = st.checkbox("AUD Tenor Spread (3Y vs 10Y)", value=True, key="sod_ch_aud_tnr")
         with _ch_c2:
             st.markdown("**USD**")
             _sod_ch_usd_hm   = st.checkbox("USD Vol Change Heatmap (T vs T-1)", value=True, key="sod_ch_usd_hm")
-            _sod_ch_usd_lvl  = st.checkbox("USD Vol Surface Heatmap (levels)", value=False, key="sod_ch_usd_ts")
-            _sod_ch_usd_ts   = st.checkbox("USD Term Structure (line)", value=False, key="sod_ch_usd_ts_line")
+            _sod_ch_usd_lvl  = st.checkbox("USD Vol Surface Heatmap (levels)", value=True, key="sod_ch_usd_ts")
+            _sod_ch_usd_ts   = st.checkbox("USD Term Structure (line)", value=True, key="sod_ch_usd_ts_line")
         with _ch_c3:
             st.markdown("**Cross-CCY**")
-            _sod_ch_xccy     = st.checkbox("AUD − USD Vol Spread Heatmap", value=False, key="sod_ch_xccy")
+            _sod_ch_xccy     = st.checkbox("AUD − USD Vol Spread Heatmap", value=True, key="sod_ch_xccy")
         _sod_ts_tenor = st.radio("Term structure tenor axis", ["1Y", "5Y", "10Y"],
                                   horizontal=True, index=0, key="sod_ts_tenor_axis")
 
@@ -27196,6 +27196,14 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                             _sod_story.append(Paragraph("Charts", _sChartHd))
                             for _ch_title, _ch_fig in _chart_figs_pdf:
                                 try:
+                                    # Force consistent PDF styling on every chart
+                                    _ch_fig.update_layout(
+                                        template=None,
+                                        plot_bgcolor="white",
+                                        paper_bgcolor="white",
+                                        font=dict(family="Helvetica, Arial, sans-serif", size=11),
+                                        margin=dict(l=55, r=40, t=50, b=35),
+                                    )
                                     _ch_bytes = _ch_fig.to_image(
                                         format="png", width=900, height=440,
                                         scale=2, engine="kaleido")
@@ -27207,10 +27215,10 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                                         _ch_img,
                                         Spacer(1, 6),
                                     ]))
-                                except Exception:
+                                except Exception as _ch_err:
                                     _sod_story.append(Paragraph(
-                                        f"[Chart: {_ch_title} — export failed, "
-                                        "install kaleido for chart images in PDF]",
+                                        f"[Chart: {_ch_title} — export failed: {str(_ch_err)[:80]}. "
+                                        "Install kaleido 0.2.1 for chart images in PDF]",
                                         _sCap))
                         except Exception:
                             pass  # reportlab Image import failed — skip charts
