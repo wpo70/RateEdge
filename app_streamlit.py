@@ -2026,6 +2026,8 @@ def load_curve(df: pd.DataFrame, name: str) -> pd.DataFrame:
 
 
 def interpolate_zero(curve: pd.DataFrame, t: float) -> float:
+    if curve is None or curve.empty:
+        return 0.04  # 4% fallback
     xs = curve["MaturityY"].to_numpy().astype(float)
     ys = curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
     if t <= xs[0]:
@@ -2577,7 +2579,9 @@ def price_caplets_with_vol_curve(ccy, tenor_y, caplet_vol_dict, notional_mm=1.0,
         else:
             # Linear interpolation (same logic as get_caplet_vol_for_fixing)
             mats = sorted(caplet_vol_dict.keys())
-            if T_fix < mats[0]:
+            if not mats:
+                vol_bp = 50.0  # safe fallback
+            elif T_fix < mats[0]:
                 vol_bp = caplet_vol_dict[mats[0]]
             elif T_fix > mats[-1]:
                 vol_bp = caplet_vol_dict[mats[-1]]
@@ -3323,6 +3327,9 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         from scipy.interpolate import CubicSpline
         all_anchor_mats = np.array(sorted([m for m in temp_vols.keys() if m >= 1.0 and m == int(m)]))
         all_anchor_vols = np.array([temp_vols[m] for m in all_anchor_mats])
+        
+        if len(all_anchor_mats) < 2:
+            return np.array([0.0] * len(anchor_mats_to_solve))
         
         cs = CubicSpline(all_anchor_mats, all_anchor_vols)
         
@@ -13384,8 +13391,10 @@ def caps_floors_tab(vol_mode: str):
                                     )
                                 # Tight bracket around the direct-read seed
                                 _seed = None
-                                _mats = sorted(_caplet_vc.keys())
-                                if float(_t) in _caplet_vc:
+                                _mats = sorted(_caplet_vc.keys()) if _caplet_vc else []
+                                if not _mats:
+                                    _seed = 50.0
+                                elif float(_t) in _caplet_vc:
                                     _seed = _caplet_vc[float(_t)]
                                 elif _t <= _mats[0]:
                                     _seed = _caplet_vc[_mats[0]]
