@@ -25480,39 +25480,48 @@ def sod_report_tab():
                                 """, _sdr_conn)
                                 _sdr_conn.close()
                                 if not _sdr_raw.empty:
-                                    # Filter to latest session date
+                                    # Filter to PREVIOUS session (T-1), not today
                                     _sdr_raw["_dt"] = pd.to_datetime(_sdr_raw["event_timestamp"], errors="coerce")
-                                    _latest_date = _sdr_raw["_dt"].dt.date.max()
-                                    _session = _sdr_raw[_sdr_raw["_dt"].dt.date == _latest_date].copy()
-                                    # Dedup both-sides: drop_duplicates on key fields
-                                    _dedup_cols = ["opt_tenor", "swp_tenor", "strike_pct", "notional_leg1"]
-                                    _unique = _session.drop_duplicates(subset=_dedup_cols, keep="first")
-                                    _n_tr = len(_unique)
-                                    _tot_n = _unique["notional_leg1"].dropna().sum()
-                                    if _n_tr > 0:
-                                        # Map option types
-                                        _type_map = {"CALL":"Payer","PUT":"Receiver","STR":"Straddle",
-                                                     "EC":"Straddle","MDET":"MDET","BCALL":"Berm Payer",
-                                                     "NSTD":"Non-std","XCS":"XCCY","CANC":"Cancelable"}
-                                        _unique = _unique.copy()
-                                        _unique["trade_type"] = _unique["option_type_decoded"].map(
-                                            lambda x: _type_map.get(x, x or "—"))
-                                        _sdr_block = (
-                                            f"AUD Options Flow (previous session, {_latest_date}): "
-                                            f"{_n_tr} unique trades, total notional AUD {_tot_n/1e6:.0f}M"
-                                        )
-                                        # Top trades by notional
-                                        _top = _unique.sort_values("notional_leg1", ascending=False, na_position="last").head(8)
-                                        _sdr_block += "\nTop trades by notional:"
-                                        for _, _tr in _top.iterrows():
-                                            _ot = _tr.get("opt_tenor","")
-                                            _st = _tr.get("swp_tenor","")
-                                            _sk = _tr.get("strike_pct","")
-                                            _nl = _tr.get("notional_leg1",0)
-                                            _tp = _tr.get("trade_type","")
-                                            _nl_fmt = f"{float(_nl)/1e6:.0f}M" if pd.notna(_nl) and float(_nl) > 0 else "—"
-                                            _sk_fmt = f"K={float(_sk):.2f}%" if pd.notna(_sk) else ""
-                                            _sdr_block += f"\n  {_ot}x{_st} {_tp} {_sk_fmt} {_nl_fmt}"
+                                    from zoneinfo import ZoneInfo as _ZI_sdr
+                                    from datetime import datetime as _dt_sdr
+                                    _today_syd = _dt_sdr.now(_ZI_sdr("Australia/Sydney")).date()
+                                    # Get all unique dates, exclude today, take the most recent
+                                    _all_dates = sorted(_sdr_raw["_dt"].dt.date.dropna().unique(), reverse=True)
+                                    _prev_dates = [d for d in _all_dates if d < _today_syd]
+                                    _session_date = _prev_dates[0] if _prev_dates else (_all_dates[0] if _all_dates else None)
+                                    if _session_date is None:
+                                        _sdr_block = ""
+                                    else:
+                                        _session = _sdr_raw[_sdr_raw["_dt"].dt.date == _session_date].copy()
+                                        # Dedup both-sides: drop_duplicates on key fields
+                                        _dedup_cols = ["opt_tenor", "swp_tenor", "strike_pct", "notional_leg1"]
+                                        _unique = _session.drop_duplicates(subset=_dedup_cols, keep="first")
+                                        _n_tr = len(_unique)
+                                        _tot_n = _unique["notional_leg1"].dropna().sum()
+                                        if _n_tr > 0:
+                                            # Map option types
+                                            _type_map = {"CALL":"Payer","PUT":"Receiver","STR":"Straddle",
+                                                         "EC":"Straddle","MDET":"MDET","BCALL":"Berm Payer",
+                                                         "NSTD":"Non-std","XCS":"XCCY","CANC":"Cancelable"}
+                                            _unique = _unique.copy()
+                                            _unique["trade_type"] = _unique["option_type_decoded"].map(
+                                                lambda x: _type_map.get(x, x or "—"))
+                                            _sdr_block = (
+                                                f"AUD Options Flow (previous session, {_session_date}): "
+                                                f"{_n_tr} unique trades, total notional AUD {_tot_n/1e6:.0f}M"
+                                            )
+                                            # Top trades by notional
+                                            _top = _unique.sort_values("notional_leg1", ascending=False, na_position="last").head(8)
+                                            _sdr_block += "\nTop trades by notional:"
+                                            for _, _tr in _top.iterrows():
+                                                _ot = _tr.get("opt_tenor","")
+                                                _st = _tr.get("swp_tenor","")
+                                                _sk = _tr.get("strike_pct","")
+                                                _nl = _tr.get("notional_leg1",0)
+                                                _tp = _tr.get("trade_type","")
+                                                _nl_fmt = f"{float(_nl)/1e6:.0f}M" if pd.notna(_nl) and float(_nl) > 0 else "—"
+                                                _sk_fmt = f"K={float(_sk):.2f}%" if pd.notna(_sk) else ""
+                                                _sdr_block += f"\n  {_ot}x{_st} {_tp} {_sk_fmt} {_nl_fmt}"
                     except Exception as _sdr_err:
                         _sdr_block = ""
                         st.warning(f"⚠️ SDR query failed: {_sdr_err}")
