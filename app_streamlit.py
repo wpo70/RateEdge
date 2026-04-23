@@ -25550,6 +25550,7 @@ def sod_report_tab():
                                     FROM dtcc_sdr
                                     WHERE notional_ccy = 'AUD'
                                       AND action_type = 'NEWT'
+                                      AND opt_tenor IS NOT NULL
                                     ORDER BY event_timestamp DESC
                                     LIMIT 200
                                 """, _sdr_conn)
