@@ -25549,7 +25549,7 @@ def sod_report_tab():
                                            event_timestamp
                                     FROM dtcc_sdr
                                     WHERE notional_ccy = 'AUD'
-                                      AND action_type IN ('NEWT', 'MODI')
+                                      AND action_type = 'NEWT'
                                     ORDER BY event_timestamp DESC
                                     LIMIT 200
                                 """, _sdr_conn)
@@ -25582,9 +25582,9 @@ def sod_report_tab():
                                             _unique["trade_type"] = _unique["option_type_decoded"].map(
                                                 lambda x: _type_map.get(x, x or "—"))
                                             _sdr_block = (
-                                                f"AUD Options Flow (session {_session_date}): "
+                                                f"AUD Options Flow — NEW TRADES ONLY (session {_session_date}): "
                                                 f"{_n_tr} unique trades, total notional AUD {_tot_n/1e6:.0f}M. "
-                                                f"All trades below are new or modified. Do not describe any as cancellations or novations."
+                                                f"All trades below are NEW (action_type=NEWT). Do not describe any as cancellations or novations."
                                             )
                                             # Top trades by notional
                                             _top = _unique.sort_values("notional_leg1", ascending=False, na_position="last").head(8)
