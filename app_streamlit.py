@@ -27076,15 +27076,16 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     _sod_story.append(Spacer(1, 4))
 
                     # Table style helper
-                    def _mk_tbl(data, hdr_col="#1e293b", font_sz=6.5):
+                    def _mk_tbl(data, hdr_col="#1e293b", font_sz=6.5, is_change=True):
                         ncols = len(data[0])
+                        nrows = len(data)
                         # Col widths: first col wider (expiry), rest equal
                         _pw = 17*cm  # printable width
                         _c0 = 1.2*cm
                         _cn = (_pw - _c0) / max(ncols-1, 1)
                         _cws = [_c0] + [_cn]*(ncols-1)
                         t = Table(data, colWidths=_cws, repeatRows=1)
-                        t.setStyle(TableStyle([
+                        _styles = [
                             ("BACKGROUND",(0,0),(-1,0), colors.HexColor(hdr_col)),
                             ("TEXTCOLOR",(0,0),(-1,0), colors.white),
                             ("FONTSIZE",(0,0),(-1,-1), font_sz),
@@ -27092,11 +27093,49 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                             ("FONTNAME",(0,1),(-1,-1),"Helvetica"),
                             ("ALIGN",(1,0),(-1,-1),"RIGHT"),
                             ("ALIGN",(0,0),(0,-1),"LEFT"),
-                            ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),
                             ("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#e2e8f0")),
                             ("LEFTPADDING",(0,0),(-1,-1),2),("RIGHTPADDING",(0,0),(-1,-1),2),
                             ("TOPPADDING",(0,0),(-1,-1),1),("BOTTOMPADDING",(0,0),(-1,-1),1),
-                        ]))
+                        ]
+                        # Conditional cell colouring for change tables
+                        if is_change and nrows > 1:
+                            # Find max absolute value for scaling
+                            _vals = []
+                            for _ri in range(1, nrows):
+                                for _ci in range(1, ncols):
+                                    try:
+                                        _vals.append(abs(float(data[_ri][_ci])))
+                                    except (ValueError, TypeError):
+                                        pass
+                            _vmax = max(_vals) if _vals else 1.0
+                            if _vmax < 0.01: _vmax = 1.0
+                            for _ri in range(1, nrows):
+                                for _ci in range(1, ncols):
+                                    try:
+                                        _v = float(data[_ri][_ci])
+                                    except (ValueError, TypeError):
+                                        continue
+                                    _intensity = min(abs(_v) / _vmax, 1.0)
+                                    _alpha = int(_intensity * 80)  # 0-80 range for subtlety
+                                    if _v > 0.005:
+                                        _bg = colors.Color(0.13, 0.64, 0.25, _alpha / 255.0)
+                                        _styles.append(("BACKGROUND", (_ci, _ri), (_ci, _ri),
+                                                        colors.HexColor(f"#{max(240 - _alpha, 200):02x}ff{max(240 - _alpha, 200):02x}")))
+                                    elif _v < -0.005:
+                                        _styles.append(("BACKGROUND", (_ci, _ri), (_ci, _ri),
+                                                        colors.HexColor(f"#ff{max(240 - _alpha, 200):02x}{max(240 - _alpha, 200):02x}")))
+                                    else:
+                                        _styles.append(("BACKGROUND", (_ci, _ri), (_ci, _ri),
+                                                        colors.HexColor("#f8fafc")))
+                        else:
+                            # Non-change tables: alternating rows
+                            _styles.append(("ROWBACKGROUNDS",(0,1),(-1,-1),
+                                           [colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]))
+                        # Expiry column always neutral background
+                        for _ri in range(1, nrows):
+                            _styles.append(("BACKGROUND", (0, _ri), (0, _ri),
+                                           colors.HexColor("#f1f5f9") if _ri % 2 == 0 else colors.HexColor("#f8fafc")))
+                        t.setStyle(TableStyle(_styles))
                         return t
 
                     # USD Vol Changes table - KeepTogether prevents mid-table page break
@@ -27133,7 +27172,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                         _aud_op_data.append([str(_row.iloc[0])] + [f"{float(v):.2f}" if v==v else "—" for v in _row.iloc[1:]])
                     _sod_story.append(KeepTogether([
                         Paragraph("Implied AUD Vol Open Level (bp)", _sH2),
-                        _mk_tbl(_aud_op_data, "#1e3a5f"),
+                        _mk_tbl(_aud_op_data, "#1e3a5f", is_change=False),
                     ]))
 
                     if not _aud_prem_chg.empty:
