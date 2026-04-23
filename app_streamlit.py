@@ -4399,7 +4399,7 @@ def set_ccy_vol_data(ccy: str, atm, a, b, r, n):
         st.session_state[f"_atm_hash_{ccy}"] = _h + 1
         # Clear ALL ATM-derived caches
         st.session_state.get("atm_prem_matrix", {}).pop(ccy, None)
-        st.session_state.pop("caplet_vol_curve_aud", None)
+        st.session_state.pop(f"caplet_vol_curve_{ccy}", None)
         st.session_state.pop("_caplet_curve_key", None)
         st.session_state.pop(f"_surf_caplet_key_{ccy}", None)
         st.session_state.pop(f"_surf_caplet_curve_{ccy}", None)
@@ -6469,7 +6469,7 @@ def vol_config_tab():
                     st.session_state.get("atm_prem_matrix", {}).pop(_ccy, None)
                     st.session_state.pop(f"_surf_caplet_key_{_ccy}", None)
                     st.session_state.pop(f"_surf_caplet_curve_{_ccy}", None)
-                st.session_state.pop("caplet_vol_curve_aud", None)
+                    st.session_state.pop(f"caplet_vol_curve_{_ccy}", None)
                 st.session_state.pop("_caplet_curve_key", None)
                 st.session_state.pop("_atm_cfs_cache_key", None)
                 st.session_state.pop("_atm_cfs_rows_cache", None)
@@ -12370,14 +12370,14 @@ def caps_floors_tab(vol_mode: str):
             except Exception:
                 pass
 
-        # v2004x AUD FIX: write caplet_vol_curve_aud FOR ALL ccy here, before
+        # v2304t: write caplet_vol_curve_{ccy} per-currency here, before
         # any USD-specific code. AUD/NZD need this for downstream ATM CFS
         # Straddle table (Flat Vol bp column) and pricer consumers. Previously
         # this was only written inside the USD-only Active-swap block, which
         # broke AUD. Also write _caplet_curve_key with a stable hash so the
         # ATM CFS table cache invalidates correctly.
         if caplet_vol_curve:
-            st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
+            st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
             # Cache key for ATM CFS table (matches v2004s shape for AUD)
             st.session_state["_caplet_curve_key"] = (
                 ccy, _spreads_tuple, _atm_hash,
@@ -12496,7 +12496,7 @@ def caps_floors_tab(vol_mode: str):
                 "SR3 full":         sr3_full_curve or otc_caplet_curve,
             }
             caplet_vol_curve = dict(_curves_by_src.get(_active_src, otc_caplet_curve))
-            st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
+            st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
             # v2004x: write _caplet_curve_key so downstream ATM CFS Straddle
             # table cache invalidates when USD curves change. The key shape is
             # (active_src, spreads, atm_hash, listed state) so it changes on
@@ -12569,7 +12569,7 @@ def caps_floors_tab(vol_mode: str):
                                     _spliced[_tr] = _val
                                     _t += 0.25
                                 caplet_vol_curve = _spliced
-                                st.session_state["caplet_vol_curve_aud"] = caplet_vol_curve
+                                st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
                                 st.success(
                                     f"CFS Curve calculated - front end from "
                                     f"{_active_src} (0->{_front_end_y:.1f}Y), long end from "
@@ -13279,7 +13279,7 @@ def caps_floors_tab(vol_mode: str):
             if ccy in ("AUD", "USD"):
                 _CFS_MAP.append((30, "ext_20v30"))
             _cfs_tdata = st.session_state.get("cfs_table_data", {})
-            _caplet_vc = st.session_state.get("caplet_vol_curve_aud")
+            _caplet_vc = st.session_state.get(f"caplet_vol_curve_{ccy}")
             _curve_local = get_ccy_curve(ccy)
             _ois_tmp_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
             _ois_tmp = _ois_tmp_cb if _ois_tmp_cb is not None else get_basis_curve(ccy, "ois")
