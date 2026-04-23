@@ -885,6 +885,11 @@ def init_database():
                 UNIQUE(ccy, key)
             );
             CREATE INDEX IF NOT EXISTS idx_blotter_mids_ccy ON blotter_mids(ccy, key);
+
+            -- SR3 vol history: ensure listed adjustment columns exist (USD CFS)
+            ALTER TABLE sr3_vol_history ADD COLUMN IF NOT EXISTS listed_adj_ratio NUMERIC DEFAULT 1.0;
+            ALTER TABLE sr3_vol_history ADD COLUMN IF NOT EXISTS listed_adj_bp NUMERIC DEFAULT 0.0;
+            ALTER TABLE sr3_vol_history ADD COLUMN IF NOT EXISTS listed_adj_mode VARCHAR(10) DEFAULT 'ratio';
         """)
         conn.commit()
         cur.close()
@@ -11083,6 +11088,18 @@ def caps_floors_tab(vol_mode: str):
                 st.session_state[_widget_key] = st.session_state.pop(_preserve_key)
             elif _preserve_key in st.session_state:
                 st.session_state.pop(_preserve_key, None)
+        # Load committed edits from DB on fresh session
+        if "_cfs_listed_committed_edits" not in st.session_state and HAS_POSTGRES:
+            try:
+                _uid_le_load = st.session_state.get("username", "wpo@rateedge.au")
+                _db_le = load_user_config(_uid_le_load, "cfs_listed_committed_edits", "USD")
+                if _db_le and isinstance(_db_le, dict):
+                    st.session_state["_cfs_listed_committed_edits"] = _db_le
+                    # Also seed session edits so editor shows them
+                    if "_cfs_listed_session_edits" not in st.session_state:
+                        st.session_state["_cfs_listed_session_edits"] = dict(_db_le)
+            except Exception:
+                pass
 
     # ═══════════════════════════════════════════════════════════════════
     # Per-ccy wedge spread isolation (20-Apr-2026 bugfix).
@@ -13126,6 +13143,13 @@ def caps_floors_tab(vol_mode: str):
                               ):
                                   # Copy working edits → committed edits
                                   st.session_state["_cfs_listed_committed_edits"] = dict(_session_edits)
+                                  # Persist to DB so ratios survive restart
+                                  if HAS_POSTGRES and _session_edits:
+                                      try:
+                                          _uid_le = st.session_state.get("username", "wpo@rateedge.au")
+                                          save_user_config(_uid_le, "cfs_listed_committed_edits", "USD", _session_edits)
+                                      except Exception:
+                                          pass
                                   # Bust all downstream caches so they rebuild
                                   # with the new delivered vols.
                                   for _ck in (
