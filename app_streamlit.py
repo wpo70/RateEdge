@@ -5636,7 +5636,7 @@ def sdr_live_tab():
         # Always force these defaults — never restore stale saved values
         st.session_state["sdr_date_to"]          = datetime.now(SYDNEY_TZ).date()
         st.session_state["sdr_date_from"]        = datetime.now(SYDNEY_TZ).date().replace(day=1)
-        st.session_state["sdr_action"]           = "NEWT"
+        st.session_state["sdr_action"]           = ["NEWT", "MODI"]
         st.session_state["sdr_refresh_interval"] = "30s"
         st.session_state.pop("sdr_alert_ccy", None)
         st.session_state.pop("sdr_ccy", None)  # force AUD default on next render
@@ -5757,8 +5757,8 @@ def sdr_live_tab():
                 default=_platform_display, key="sdr_platform",
                 label_visibility="collapsed", on_change=_save_sdr_filters)
             sel_platform = [_platform_map[l] for l in sel_platform_labels]
-            action_opts = ["All", "NEWT", "MODI", "CORR", "CANC"]
-            sel_action = st.selectbox("Action", action_opts, index=1, key="sdr_action", label_visibility="collapsed", on_change=_save_sdr_filters)
+            action_opts = ["NEWT", "MODI", "CORR", "CANC"]
+            sel_action = st.multiselect("Action", action_opts, default=["NEWT", "MODI"], key="sdr_action", label_visibility="collapsed", on_change=_save_sdr_filters)
 
         st.markdown("---")
         al1, al2, al3, al4, al5 = st.columns(5)
@@ -5870,9 +5870,10 @@ def sdr_live_tab():
         placeholders = ",".join(["%s"] * len(sel_platform))
         filters.append(f"platform_identifier IN ({placeholders})")
         params.extend(sel_platform)
-    if sel_action != "All":
-        filters.append("action_type = %s")
-        params.append(sel_action)
+    if sel_action and len(sel_action) < 4:  # less than all 4 = filtered
+        placeholders = ",".join(["%s"] * len(sel_action))
+        filters.append(f"action_type IN ({placeholders})")
+        params.extend(sel_action)
     if min_notional_m > 0:
         filters.append("notional_leg1 >= %s")
         params.append(min_notional_m * 1_000_000)
