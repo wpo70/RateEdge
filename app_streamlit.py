@@ -12422,9 +12422,9 @@ def caps_floors_tab(vol_mode: str):
             with _mc2:
                 _pricer_opts = ["OTC only", "Listed bootstrap", "SR3 hybrid", "SR3 full"]
                 _lf_on_now = st.session_state.get("_cfs_use_listed", False)
-                _default_src = "Listed bootstrap" if _lf_on_now else st.session_state.get("cfs_active_vol_src", "OTC only")
+                _default_src = "Listed bootstrap" if _lf_on_now else st.session_state.get("cfs_active_vol_src", "Listed bootstrap")
                 if _default_src not in _pricer_opts:
-                    _default_src = "OTC only"
+                    _default_src = "Listed bootstrap"
                 if "cfs_active_vol_src" not in st.session_state:
                     st.session_state["cfs_active_vol_src"] = _default_src
                 elif st.session_state["cfs_active_vol_src"] not in _pricer_opts:
@@ -12443,8 +12443,7 @@ def caps_floors_tab(vol_mode: str):
                 # Seed once, then rely on key=
                 if "cfs_overlay_choices" not in st.session_state:
                     st.session_state["cfs_overlay_choices"] = (
-                        ["OTC only", "Listed bootstrap"] if _lf_on_now
-                        else ["OTC only", "SR3 hybrid"]
+                        ["OTC only", "Listed bootstrap", "SR3 hybrid", "SR3 full"]
                     )
                 _overlay_choices = st.multiselect(
                     "Overlay on chart",
