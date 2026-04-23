@@ -12315,42 +12315,33 @@ def caps_floors_tab(vol_mode: str):
         }
         _spreads_tuple = tuple(_spreads_dict[k] for k in sorted(_spreads_dict.keys()))
 
-        # Cache and build OTC curve. Note: no st.spinner here — spinners ARE
-        # widgets and appear/disappear between cache hit and miss, creating a
-        # structural tree mismatch that corrupts Streamlit's delta protocol on
-        # rapid wedge edits (v2204f fix for USD white-screen).
-        _otc_cache_sig = (_spreads_tuple, _atm_hash,
-                          round(_otc_1y_stradd, 4) if _otc_1y_stradd else None,
-                          round(_otc_1y1y_gap, 4) if _otc_1y1y_gap else None)
+        # v2304y: Curve builds ONLY run when:
+        #   (a) Calculate CFS button was pressed (_cfs_calc_requested), OR
+        #   (b) No cached curve exists yet (first load)
+        # This prevents the solver running on every keystroke in wedge spreads,
+        # which was causing white-screen crashes from half-edited data.
+        _calc_requested = st.session_state.pop("_cfs_calc_requested", False)
         _otc_cached = st.session_state.get("_cfs_otc_build_cache")
-        if _otc_cached and _otc_cached.get("sig") == _otc_cache_sig:
-            _otc_curve_built = _otc_cached.get("curve")
-        else:
+        _listed_cached = st.session_state.get("_cfs_listed_build_cache")
+        _need_build = _calc_requested or (_otc_cached is None)
+
+        if _need_build:
             _otc_curve_built = _call_build_otc(_spreads_dict)
             st.session_state["_cfs_otc_build_cache"] = {
-                "sig": _otc_cache_sig,
+                "sig": (_spreads_tuple, _atm_hash),
                 "curve": _otc_curve_built,
             }
-
-        # Cache and build Listed bootstrap curve (USD only). No spinner — same
-        # reason as OTC above.
-        _listed_cache_sig = (_spreads_tuple, _atm_hash,
-                             round(_listed_1y_stradd, 4) if _listed_1y_stradd else None,
-                             round(_listed_2y_stradd, 4) if _listed_2y_stradd else None,
-                             _lf_pack_now if ccy == "USD" else None,
-                             _lf_cache_sig)
-        _listed_cached = st.session_state.get("_cfs_listed_build_cache")
-        if _listed_cached and _listed_cached.get("sig") == _listed_cache_sig:
-            _listed_curve_built = _listed_cached.get("curve")
-        else:
             if ccy == "USD":
                 _listed_curve_built = _call_build_listed(_spreads_dict)
             else:
                 _listed_curve_built = None
             st.session_state["_cfs_listed_build_cache"] = {
-                "sig": _listed_cache_sig,
+                "sig": (_spreads_tuple, _atm_hash),
                 "curve": _listed_curve_built,
             }
+        else:
+            _otc_curve_built = _otc_cached.get("curve") if _otc_cached else None
+            _listed_curve_built = _listed_cached.get("curve") if _listed_cached else None
 
         # Default active to OTC until widgets render and we pick
         caplet_vol_curve = _otc_curve_built or {t: 35.0 for t in [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0]}
@@ -12480,18 +12471,17 @@ def caps_floors_tab(vol_mode: str):
                 round(max(tenor_y + 0.5, 10.0), 2),
             )
             _sr3_cache = st.session_state.get("_cfs_sr3_curves_cache")
-            if _sr3_cache and _sr3_cache.get("sig") == _sr3_sig:
-                sr3_hybrid_curve = _sr3_cache.get("hybrid")
-                sr3_full_curve   = _sr3_cache.get("full")
-            else:
+            if _need_build or not _sr3_cache:
                 _final_y = max(tenor_y + 0.5, 10.0)
                 sr3_hybrid_curve = _call_build_sr3_hybrid(_sr3_cutoff_y, otc_caplet_curve, _final_y)
                 sr3_full_curve   = _call_build_sr3_full(otc_caplet_curve, _final_y)
                 st.session_state["_cfs_sr3_curves_cache"] = {
-                    "sig": _sr3_sig,
                     "hybrid": sr3_hybrid_curve,
                     "full":   sr3_full_curve,
                 }
+            else:
+                sr3_hybrid_curve = _sr3_cache.get("hybrid")
+                sr3_full_curve   = _sr3_cache.get("full")
 
             # v2004x: Active selection via dict lookup (no more per-branch mutation).
             _curves_by_src = {
@@ -12528,7 +12518,7 @@ def caps_floors_tab(vol_mode: str):
             # v2004x: Splice block - PCHIP join of active front with OTC tail.
             # When Calculate is pressed, take the active source's "natural front"
             # and splice OTC wedge tail onto it, smoothed at the join.
-            if st.session_state.pop("_cfs_calc_requested", False):
+            if _calc_requested:
                 try:
                     from scipy.interpolate import PchipInterpolator as _Pchip
                     import numpy as _np_cfs
@@ -13174,6 +13164,8 @@ def caps_floors_tab(vol_mode: str):
                               ):
                                   # Copy working edits → committed edits
                                   st.session_state["_cfs_listed_committed_edits"] = dict(_session_edits)
+                                  # Trigger curve rebuild on next render
+                                  st.session_state["_cfs_calc_requested"] = True
                                   # Persist to DB so ratios survive restart
                                   if HAS_POSTGRES and _session_edits:
                                       try:
