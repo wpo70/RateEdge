@@ -25502,13 +25502,14 @@ def sod_report_tab():
                                             # Map option types
                                             _type_map = {"CALL":"Payer","PUT":"Receiver","STR":"Straddle",
                                                          "EC":"Straddle","MDET":"MDET","BCALL":"Berm Payer",
-                                                         "NSTD":"Non-std","XCS":"XCCY","CANC":"Cancelable"}
+                                                         "NSTD":"Non-std","XCS":"XCCY Swn","CANC":"Canc Swn"}
                                             _unique = _unique.copy()
                                             _unique["trade_type"] = _unique["option_type_decoded"].map(
                                                 lambda x: _type_map.get(x, x or "—"))
                                             _sdr_block = (
-                                                f"AUD Options Flow (previous session, {_session_date}): "
-                                                f"{_n_tr} unique trades, total notional AUD {_tot_n/1e6:.0f}M"
+                                                f"AUD Options Flow — NEW TRADES ONLY (session {_session_date}): "
+                                                f"{_n_tr} unique trades, total notional AUD {_tot_n/1e6:.0f}M. "
+                                                f"All trades below are NEW (action_type=NEWT). Do not describe any as cancellations or novations."
                                             )
                                             # Top trades by notional
                                             _top = _unique.sort_values("notional_leg1", ascending=False, na_position="last").head(8)
@@ -26578,9 +26579,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             _sod_chart_figs = []  # list of (title, fig) for PDF embedding
 
             def _build_heatmap(chg_df, title, colorscale="RdYlGn", is_change=True):
-                """Build a plotly heatmap from a DataFrame.
-                is_change=True: centered on 0, +/- format (for vol changes).
-                is_change=False: absolute levels, plain format (for vol surfaces)."""
+                """Build a plotly heatmap from a DataFrame."""
                 import plotly.graph_objects as _hm_go
                 _z = chg_df.apply(pd.to_numeric, errors="coerce").values
                 if is_change:
@@ -26601,7 +26600,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     colorscale=colorscale,
                     text=_text,
                     texttemplate="%{text}",
-                    textfont=dict(size=9),
+                    textfont=dict(size=10),
                     hovertemplate=_hover,
                     colorbar=dict(title=_cbar_title, thickness=12),
                 )
@@ -26609,19 +26608,25 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     _hm_kwargs["zmid"] = _zmid
                 _fig = _hm_go.Figure(data=_hm_go.Heatmap(**_hm_kwargs))
                 _fig.update_layout(
-                    title=dict(text=title, font=dict(size=14)),
-                    xaxis=dict(title="Tenor", side="top"),
-                    yaxis=dict(title="Expiry", autorange="reversed"),
-                    height=500, margin=dict(l=60, r=30, t=60, b=40),
+                    template=None,
+                    title=dict(text=title, font=dict(size=13, family="Helvetica")),
+                    xaxis=dict(title="Tenor", side="top", tickfont=dict(size=10)),
+                    yaxis=dict(title="Expiry", autorange="reversed", tickfont=dict(size=10)),
+                    height=500, margin=dict(l=50, r=40, t=55, b=30),
                     plot_bgcolor="white", paper_bgcolor="white",
-                    font=dict(family="Helvetica, Arial, sans-serif"),
+                    font=dict(family="Helvetica, Arial, sans-serif", size=10),
                 )
                 return _fig
 
+            # ── Shared axis style for line charts ──
+            _LINE_AXIS = dict(
+                gridcolor="#b0b8c4", gridwidth=1, showgrid=True,
+                showline=True, linecolor="#64748b", linewidth=1.5, mirror=True,
+                tickfont=dict(size=10),
+            )
+
             def _build_term_structure(surfaces, labels, colors, tenor_col, title):
-                """Term structure: vol at a FIXED tenor across expiries.
-                surfaces = list of DataFrames, labels = list of strings,
-                colors = list of color strings, tenor_col = e.g. '1Y'."""
+                """Term structure: vol at a FIXED tenor across expiries."""
                 import plotly.graph_objects as _ts_go
                 _fig = _ts_go.Figure()
                 _dashes = ["solid", "dash", "dot", "dashdot"]
@@ -26637,17 +26642,18 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                         x=_exp_yrs, y=_valid.values,
                         mode="lines+markers",
                         name=_lbl,
-                        line=dict(color=_col, width=2, dash=_dashes[_i % len(_dashes)]),
-                        marker=dict(size=4),
+                        line=dict(color=_col, width=2.5, dash=_dashes[_i % len(_dashes)]),
+                        marker=dict(size=5),
                         hovertemplate=f"<b>{_lbl}</b><br>Expiry: %{{x:.2f}}Y<br>Vol: %{{y:.1f}}bp<extra></extra>",
                     ))
                 _fig.update_layout(
-                    title=dict(text=f"{title} — {tenor_col} tenor", font=dict(size=14)),
-                    xaxis=dict(title="Expiry (Years)", gridcolor="#e2e8f0", gridwidth=0.5),
-                    yaxis=dict(title="ATM Vol (bp)", gridcolor="#e2e8f0", gridwidth=0.5),
-                    height=500, margin=dict(l=60, r=30, t=60, b=40),
+                    template=None,
+                    title=dict(text=f"{title} — {tenor_col} tenor", font=dict(size=13, family="Helvetica")),
+                    xaxis=dict(title="Expiry (Years)", **_LINE_AXIS),
+                    yaxis=dict(title="ATM Vol (bp)", **_LINE_AXIS),
+                    height=500, margin=dict(l=50, r=40, t=55, b=30),
                     plot_bgcolor="white", paper_bgcolor="white",
-                    font=dict(family="Helvetica, Arial, sans-serif"),
+                    font=dict(family="Helvetica, Arial, sans-serif", size=10),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     hovermode="closest",
                 )
@@ -26671,18 +26677,19 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                         x=_exp_yrs, y=_spread.values,
                         mode="lines+markers",
                         name=_lbl,
-                        line=dict(color=_col, width=2, dash=_dashes[_i % len(_dashes)]),
-                        marker=dict(size=4),
+                        line=dict(color=_col, width=2.5, dash=_dashes[_i % len(_dashes)]),
+                        marker=dict(size=5),
                         hovertemplate=f"<b>{_lbl}</b><br>Expiry: %{{x:.2f}}Y<br>{short_tenor}−{long_tenor}: %{{y:+.1f}}bp<extra></extra>",
                     ))
                 _fig.update_layout(
-                    title=dict(text=f"{title} — {short_tenor} minus {long_tenor}", font=dict(size=14)),
-                    xaxis=dict(title="Expiry (Years)", gridcolor="#e2e8f0", gridwidth=0.5),
-                    yaxis=dict(title=f"Spread (bp)", zeroline=True, zerolinecolor="#94a3b8",
-                               zerolinewidth=1, gridcolor="#e2e8f0", gridwidth=0.5),
-                    height=500, margin=dict(l=60, r=30, t=60, b=40),
+                    template=None,
+                    title=dict(text=f"{title} — {short_tenor} minus {long_tenor}", font=dict(size=13, family="Helvetica")),
+                    xaxis=dict(title="Expiry (Years)", **_LINE_AXIS),
+                    yaxis=dict(title=f"Spread (bp)", zeroline=True, zerolinecolor="#334155",
+                               zerolinewidth=2, **_LINE_AXIS),
+                    height=500, margin=dict(l=50, r=40, t=55, b=30),
                     plot_bgcolor="white", paper_bgcolor="white",
-                    font=dict(family="Helvetica, Arial, sans-serif"),
+                    font=dict(family="Helvetica, Arial, sans-serif", size=10),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     hovermode="closest",
                 )
