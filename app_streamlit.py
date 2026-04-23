@@ -19269,10 +19269,12 @@ def rv_tab():
                             st.session_state[_bias_key] = _db_bias["value"]
                     _bias = st.selectbox("Next meeting bias", _bias_opts, key=_bias_key,
                                          help="Changes vol premium estimate for next meeting")
-                    # Persist bias to DB whenever it changes
-                    if HAS_POSTGRES:
+                    # Persist bias to DB only when user actually changes it
+                    _prev_bias_val = st.session_state.get(f"_cb_bias_prev_{ccy}")
+                    if _prev_bias_val is not None and _bias != _prev_bias_val and HAS_POSTGRES:
                         _uid_cb = st.session_state.get("username", "wpo@rateedge.au")
                         save_user_config(_uid_cb, _bias_key, ccy, {"value": _bias})
+                    st.session_state[f"_cb_bias_prev_{ccy}"] = _bias
                     _prem_override = {"Hold": 3.0, "Cut 25bp": 4.0, "Cut 50bp": 6.0,
                                       "Hike 25bp": 4.0, "Hike 50bp": 6.0}
                     _adj_prem = _prem_override.get(_bias, 3.0)
@@ -25459,74 +25461,50 @@ def sod_report_tab():
                     except Exception:
                         pass
 
-                    # Pull SDR flow summary
+                    # Pull SDR flow summary — simple query matching SDR tab, dedup in Python
                     _sdr_block = ""
                     try:
                         if HAS_POSTGRES:
-                            # Previous AUD session by execution_timestamp
-                            # DTCC reports both sides of each trade — deduplicate
-                            # by grouping on key fields
-                            _sdr_q = """
-                                WITH unique_trades AS (
-                                    SELECT DISTINCT ON (event_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1)
-                                           opt_tenor, swp_tenor, strike_pct, notional_leg1, option_type_decoded
+                            _sdr_conn = get_db_connection()
+                            if _sdr_conn:
+                                # Same columns/table as the working SDR tab
+                                _sdr_raw = pd.read_sql("""
+                                    SELECT opt_tenor, swp_tenor, strike_pct,
+                                           notional_leg1, option_type_decoded,
+                                           event_timestamp
                                     FROM dtcc_sdr
                                     WHERE notional_ccy = 'AUD'
                                       AND action_type = 'NEWT'
-                                      AND event_timestamp::date = (
-                                          SELECT MAX(event_timestamp::date) FROM dtcc_sdr
-                                          WHERE notional_ccy = 'AUD'
-                                            AND action_type = 'NEWT'
-                                      )
-                                    ORDER BY event_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1
-                                )
-                                SELECT COUNT(*) AS n_trades,
-                                       COALESCE(SUM(notional_leg1), 0) AS total_notional
-                                FROM unique_trades
-                            """
-                            _sdr_df = pd.read_sql(_sdr_q, get_db_connection())
-                            if not _sdr_df.empty:
-                                _sdr_row = _sdr_df.iloc[0]
-                                _n_tr = int(_sdr_row["n_trades"])
-                                _tot_n = float(_sdr_row["total_notional"])
-                                if _n_tr > 0:
-                                    _sdr_block = (
-                                        f"AUD Options Flow (previous session): {_n_tr} trades, "
-                                        f"total notional AUD {_tot_n/1e6:.0f}M"
-                                    )
-                                    # Top 8 unique trades by notional
-                                    _top_q = """
-                                        WITH unique_trades AS (
-                                            SELECT DISTINCT ON (event_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1)
-                                                   opt_tenor, swp_tenor, strike_pct, notional_leg1,
-                                                   CASE option_type_decoded
-                                                       WHEN 'CALL' THEN 'Payer'
-                                                       WHEN 'PUT'  THEN 'Receiver'
-                                                       WHEN 'STR'  THEN 'Straddle'
-                                                       WHEN 'EC'   THEN 'Straddle'
-                                                       WHEN 'MDET' THEN 'MDET'
-                                                       ELSE option_type_decoded
-                                                   END AS trade_type
-                                            FROM dtcc_sdr
-                                            WHERE notional_ccy = 'AUD'
-                                              AND event_timestamp::date = (
-                                                  SELECT MAX(event_timestamp::date) FROM dtcc_sdr
-                                                  WHERE notional_ccy = 'AUD'
-                                                    AND action_type = 'NEWT'
-                                              )
-                                              AND action_type = 'NEWT'
-                                            ORDER BY event_timestamp, opt_tenor, swp_tenor, strike_pct, notional_leg1
+                                    ORDER BY event_timestamp DESC
+                                    LIMIT 200
+                                """, _sdr_conn)
+                                _sdr_conn.close()
+                                if not _sdr_raw.empty:
+                                    # Filter to latest session date
+                                    _sdr_raw["_dt"] = pd.to_datetime(_sdr_raw["event_timestamp"], errors="coerce")
+                                    _latest_date = _sdr_raw["_dt"].dt.date.max()
+                                    _session = _sdr_raw[_sdr_raw["_dt"].dt.date == _latest_date].copy()
+                                    # Dedup both-sides: drop_duplicates on key fields
+                                    _dedup_cols = ["opt_tenor", "swp_tenor", "strike_pct", "notional_leg1"]
+                                    _unique = _session.drop_duplicates(subset=_dedup_cols, keep="first")
+                                    _n_tr = len(_unique)
+                                    _tot_n = _unique["notional_leg1"].dropna().sum()
+                                    if _n_tr > 0:
+                                        # Map option types
+                                        _type_map = {"CALL":"Payer","PUT":"Receiver","STR":"Straddle",
+                                                     "EC":"Straddle","MDET":"MDET","BCALL":"Berm Payer",
+                                                     "NSTD":"Non-std","XCS":"XCCY","CANC":"Cancelable"}
+                                        _unique = _unique.copy()
+                                        _unique["trade_type"] = _unique["option_type_decoded"].map(
+                                            lambda x: _type_map.get(x, x or "—"))
+                                        _sdr_block = (
+                                            f"AUD Options Flow (previous session, {_latest_date}): "
+                                            f"{_n_tr} unique trades, total notional AUD {_tot_n/1e6:.0f}M"
                                         )
-                                        SELECT opt_tenor, swp_tenor, strike_pct,
-                                               notional_leg1, trade_type
-                                        FROM unique_trades
-                                        ORDER BY notional_leg1 DESC NULLS LAST
-                                        LIMIT 8
-                                    """
-                                    _top_df = pd.read_sql(_top_q, get_db_connection())
-                                    if not _top_df.empty:
+                                        # Top trades by notional
+                                        _top = _unique.sort_values("notional_leg1", ascending=False, na_position="last").head(8)
                                         _sdr_block += "\nTop trades by notional:"
-                                        for _, _tr in _top_df.iterrows():
+                                        for _, _tr in _top.iterrows():
                                             _ot = _tr.get("opt_tenor","")
                                             _st = _tr.get("swp_tenor","")
                                             _sk = _tr.get("strike_pct","")
@@ -25536,7 +25514,8 @@ def sod_report_tab():
                                             _sk_fmt = f"K={float(_sk):.2f}%" if pd.notna(_sk) else ""
                                             _sdr_block += f"\n  {_ot}x{_st} {_tp} {_sk_fmt} {_nl_fmt}"
                     except Exception as _sdr_err:
-                        _sdr_block = f"[SDR query failed: {_sdr_err}]"
+                        _sdr_block = ""
+                        st.warning(f"⚠️ SDR query failed: {_sdr_err}")
 
                     _system_prompt = (
                         f"You are a senior rates vol market commentator writing the "
@@ -25603,6 +25582,11 @@ def sod_report_tab():
                     else:
                         _data_sections.append("\n=== AUD OPTIONS FLOW (from database) ===")
                         _data_sections.append("NO SDR FLOW DATA AVAILABLE for this session. Do NOT invent or fabricate any flow information. State that flow data is unavailable.")
+                    # ── DEBUG: show what SDR data the AI will receive ──
+                    if _sdr_block:
+                        st.caption(f"📡 SDR → AI: {_sdr_block[:250]}")
+                    else:
+                        st.warning("⚠️ No SDR data reached the AI — FLOW section will note unavailable")
                     _desk_col_val = st.session_state.get("sod_ai_desk_colour", "").strip()
                     if _desk_col_val:
                         _data_sections.append("\n=== DESK COLOUR / BROKER FLOW ===")
