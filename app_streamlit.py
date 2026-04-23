@@ -2206,6 +2206,12 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
     except Exception:
         _ck = None; _fc = {}
 
+    # Guard: if curve is None or empty, return safe fallback
+    if curve is None or (hasattr(curve, 'empty') and curve.empty):
+        _fallback_fwd = 0.04  # 4% fallback
+        _fallback_ann = tenor * math.exp(-0.04 * (expiry + tenor / 2))
+        return _fallback_fwd, _fallback_ann, []
+
     if freq_override is not None:
         # T+2 BD for NZD/USD, T+1 BD for AUD (AFMA calendar   —   year frac approx here)
         spot_lag = 2.0 / 252.0 if ccy in ["NZD", "USD"] else 1.0 / 252.0
@@ -11813,7 +11819,7 @@ def caps_floors_tab(vol_mode: str):
                 st.session_state.pop("_cfs_otc_build_cache", None)
                 st.session_state.pop("_cfs_listed_build_cache", None)
                 st.session_state.pop("_cfs_sr3_curves_cache", None)
-                st.rerun(scope="app")
+                st.rerun()
             if br.button("🔄 Refresh Swaptions", key="gen_swpt_prem", type="primary"):
                 # Mark this render so the Listed bootstrap pre-calc block
                 # doesn't immediately overwrite the refreshed swaption values.
@@ -12680,7 +12686,7 @@ def caps_floors_tab(vol_mode: str):
                         st.session_state["cfs_active_vol_src"] = "Listed bootstrap"
                     else:
                         st.session_state["cfs_active_vol_src"] = "OTC only"
-                    st.rerun(scope="app")
+                    st.rerun()
 
                 # ── Curve sources explainer ───────────────────────────
                 with st.expander("ℹ️ What do the curve sources mean?", expanded=False):
@@ -12712,7 +12718,7 @@ def caps_floors_tab(vol_mode: str):
                     _pack_mode = "whites" if _pack_sel.startswith("Whites only") else "both"
                     if _pack_mode != _prev_pack:
                         st.session_state["_cfs_listed_pack"] = _pack_mode
-                        st.rerun(scope="app")
+                        st.rerun()
                     st.session_state["_cfs_listed_pack"] = _pack_mode
                 else:
                     _pack_mode = "whites"
@@ -13162,7 +13168,7 @@ def caps_floors_tab(vol_mode: str):
                                       "_caplet_curve_key",
                                   ):
                                       st.session_state.pop(_ck, None)
-                                  st.rerun(scope="app")
+                                  st.rerun()
                           with _save_col:
                               if st.button("💾 Save to snapshot", key="_cfs_le_save",
                                            use_container_width=True,
@@ -13948,7 +13954,7 @@ def caps_floors_tab(vol_mode: str):
                                             st.session_state.pop(f"{_sk}_new", None)
                                     st.session_state.pop("_smooth_proposed_wedges", None)
                                     st.success("Wedges updated — rerunning pricer")
-                                    st.rerun(scope="app")
+                                    st.rerun()
 
         
     else:  # Surface (Auto)
