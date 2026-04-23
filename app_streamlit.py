@@ -12323,7 +12323,11 @@ def caps_floors_tab(vol_mode: str):
         _calc_requested = st.session_state.pop("_cfs_calc_requested", False)
         _otc_cached = st.session_state.get("_cfs_otc_build_cache")
         _listed_cached = st.session_state.get("_cfs_listed_build_cache")
-        _need_build = _calc_requested or (_otc_cached is None)
+        # Build when: (a) Calculate/Commit pressed, (b) no cache at all,
+        # (c) Listed curve is None but we might need it now (SR3 data loaded since)
+        _listed_curve_stale = (_listed_cached is not None and _listed_cached.get("curve") is None
+                               and ccy == "USD" and _listed_1y_stradd is not None and _listed_1y_stradd > 0)
+        _need_build = _calc_requested or (_otc_cached is None) or _listed_curve_stale
 
         if _need_build:
             _otc_curve_built = _call_build_otc(_spreads_dict)
