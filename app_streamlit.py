@@ -11821,26 +11821,10 @@ def caps_floors_tab(vol_mode: str):
                 # the render pipeline to splice the Active source's front end
                 # with the wedge-chain long end and PCHIP-spline the join.
                 st.session_state["_cfs_calc_requested"] = True
-                # ── CRITICAL: preserve widget session_state through rerun ──
-                # Streamlit can clean up widget-bound session_state keys during
-                # a fragment rerun if the widget hasn't re-rendered yet. Read
-                # them now and stash under parallel non-widget keys; the widget
-                # seed logic below will restore them on next render.
-                for _widget_key, _preserve_key in [
-                    ("cfs_active_vol_src",  "_preserve_cfs_active_vol_src"),
-                    ("_cfs_use_listed",     "_preserve_cfs_use_listed"),
-                    ("cfs_sr3_cutoff",      "_preserve_cfs_sr3_cutoff"),
-                    ("cfs_overlay_choices", "_preserve_cfs_overlay_choices"),
-                    ("_cfs_pack_radio",     "_preserve_cfs_pack_radio"),
-                ]:
-                    if _widget_key in st.session_state:
-                        st.session_state[_preserve_key] = st.session_state[_widget_key]
-                # Invalidate build caches so curves rebuild with new spreads
-                st.session_state.pop("_caplet_curve_key", None)  # legacy
-                st.session_state.pop("_cfs_otc_build_cache", None)
-                st.session_state.pop("_cfs_listed_build_cache", None)
-                st.session_state.pop("_cfs_sr3_curves_cache", None)
-                st.rerun()
+                # v2404p: NO cache pops, NO preserve blocks, NO st.rerun().
+                # Cache sigs auto-invalidate when spreads change.
+                # _calc_requested flag triggers rebuild in the pipeline.
+                # Streamlit reruns naturally after button click.
             if br.button("🔄 Refresh Swaptions", key="gen_swpt_prem", type="primary"):
                 # Mark this render so the Listed bootstrap pre-calc block
                 # doesn't immediately overwrite the refreshed swaption values.
@@ -13172,33 +13156,10 @@ def caps_floors_tab(vol_mode: str):
                                           save_user_config(_uid_le, "cfs_listed_committed_edits", "USD", _session_edits)
                                       except Exception:
                                           pass
-                                  # Bust all downstream caches so they rebuild
-                                  # with the new delivered vols.
-                                  for _ck in (
-                                      "_cfs_listed_curve_cache",
-                                      "_cfs_listed_build_cache",
-                                      "_cfs_sr3_curves_cache",
-                                      "_cfs_otc_build_cache",   # OTC reads _listed_1y_stradd indirectly
-                                      "_atm_cfs_cache_key",
-                                      "_atm_cfs_rows_cache",
-                                      "_caplet_curve_key",
-                                  ):
-                                      st.session_state.pop(_ck, None)
-                                  # CRITICAL: preserve widget state through rerun
-                                  for _widget_key, _preserve_key in [
-                                      ("cfs_active_vol_src",  "_preserve_cfs_active_vol_src"),
-                                      ("_cfs_use_listed",     "_preserve_cfs_use_listed"),
-                                      ("cfs_sr3_cutoff",      "_preserve_cfs_sr3_cutoff"),
-                                      ("cfs_overlay_choices", "_preserve_cfs_overlay_choices"),
-                                      ("_cfs_pack_radio",     "_preserve_cfs_pack_radio"),
-                                  ]:
-                                      if _widget_key in st.session_state:
-                                          st.session_state[_preserve_key] = st.session_state[_widget_key]
-                                  # Also preserve ALL ratio widget keys so they survive rerun
-                                  _le_keys_to_preserve = {k: v for k, v in st.session_state.items()
-                                                          if k.startswith("_cfs_le_") and ("_ratio" in k or "_bp" in k or "_mode" in k)}
-                                  st.session_state["_preserve_le_widget_keys"] = _le_keys_to_preserve
-                                  st.rerun()
+                                  # v2404p: NO cache pops, NO preserve blocks, NO st.rerun().
+                                  # Listed cache sig includes committed edits — auto-invalidates.
+                                  # _calc_requested flag triggers OTC/SR3 rebuild.
+                                  # Streamlit reruns naturally after button click.
                           with _save_col:
                               if st.button("💾 Save to snapshot", key="_cfs_le_save",
                                            use_container_width=True,
