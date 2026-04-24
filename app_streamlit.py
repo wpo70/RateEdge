@@ -27136,25 +27136,14 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     # v2404h: All data tables removed — rendered as plotly chart images
                     # via _sod_chart_figs pipeline for consistent formatting.
 
-                    _sod_story.append(Spacer(1, 16))
-                    _sod_story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#e2e8f0")))
-                    _sod_story.append(Spacer(1, 12))
-                    _sod_story.append(HRFlowable(width="100%", thickness=0.5,
-                                                  color=colors.HexColor("#e2e8f0"), spaceAfter=4))
-                    _sod_story.append(Paragraph(
-                        f"<font color='#94a3b8'>RateEdge Options Platform (Aust.)  |  "
-                        f"ABN 95 601 693 766  |  {_ts} {_tz_lbl_pdf}  |  "
-                        "CONFIDENTIAL — For internal use only. Not for distribution.</font>",
-                        _sCap))
-
-                    # ── v2304j: Embed selected SOD charts into PDF ──
+                    # ── Embed selected SOD charts into PDF (flow directly after commentary) ──
                     _chart_figs_pdf = st.session_state.get("_sod_chart_figs", [])
                     if _chart_figs_pdf:
                         try:
                             import io as _io_ch
                             from reportlab.lib.utils import ImageReader as _ImgReader
                             from reportlab.platypus import Image as _RLImage
-                            _sod_story.append(PageBreak())
+                            _sod_story.append(Spacer(1, 8))
                             _sChartHd = ParagraphStyle(
                                 "sChartHd", parent=_ss["Normal"], fontSize=10,
                                 fontName="Helvetica-Bold",
@@ -27196,6 +27185,16 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                                         _sCap))
                         except Exception:
                             pass  # reportlab Image import failed — skip charts
+
+                    # Footer — always last element
+                    _sod_story.append(Spacer(1, 12))
+                    _sod_story.append(HRFlowable(width="100%", thickness=0.5,
+                                                  color=colors.HexColor("#e2e8f0"), spaceAfter=4))
+                    _sod_story.append(Paragraph(
+                        f"<font color='#94a3b8'>RateEdge Options Platform (Aust.)  |  "
+                        f"ABN 95 601 693 766  |  {_ts} {_tz_lbl_pdf}  |  "
+                        "CONFIDENTIAL — For internal use only. Not for distribution.</font>",
+                        _sCap))
 
                     _sod_doc.build(_sod_story)
                     _sod_pdf_bytes = _sod_buf.getvalue()
