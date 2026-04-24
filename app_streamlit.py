@@ -25939,18 +25939,17 @@ def sod_report_tab():
             _sod_ch_aud_lvl  = st.checkbox("AUD Vol Surface Heatmap (levels)", value=True, key="sod_ch_aud_ts")
             _sod_ch_aud_ts   = st.checkbox("AUD Term Structure (line)", value=True, key="sod_ch_aud_ts_line")
             _sod_ch_aud_tnr  = st.checkbox("AUD Tenor Spread (3Y vs 10Y)", value=True, key="sod_ch_aud_tnr")
+            _sod_ch_aud_prem = st.checkbox("AUD Fwd Premium Change", value=True, key="sod_ch_aud_prem")
+            _sod_ch_cfs      = st.checkbox("AUD CFS Open Levels", value=True, key="sod_ch_cfs")
         with _ch_c2:
             st.markdown("**USD**")
             _sod_ch_usd_hm   = st.checkbox("USD Vol Change Heatmap (T vs T-1)", value=True, key="sod_ch_usd_hm")
             _sod_ch_usd_lvl  = st.checkbox("USD Vol Surface Heatmap (levels)", value=True, key="sod_ch_usd_ts")
             _sod_ch_usd_ts   = st.checkbox("USD Term Structure (line)", value=True, key="sod_ch_usd_ts_line")
+            _sod_ch_usd_prem = st.checkbox("USD Fwd Premium Changes", value=True, key="sod_ch_usd_prem")
         with _ch_c3:
             st.markdown("**Cross-CCY**")
             _sod_ch_xccy     = st.checkbox("AUD − USD Vol Spread Heatmap", value=True, key="sod_ch_xccy")
-            st.markdown("**Tables**")
-            _sod_ch_usd_prem = st.checkbox("USD Fwd Premium Changes", value=True, key="sod_ch_usd_prem")
-            _sod_ch_aud_prem = st.checkbox("AUD Fwd Premium Change", value=True, key="sod_ch_aud_prem")
-            _sod_ch_cfs      = st.checkbox("AUD CFS Open Levels", value=True, key="sod_ch_cfs")
         _sod_ts_tenor = st.radio("Term structure tenor axis", ["1Y", "5Y", "10Y"],
                                   horizontal=True, index=0, key="sod_ts_tenor_axis")
 
@@ -26778,12 +26777,14 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
 
             # ── Render selected charts ──────────────────────────────
             _any_chart = any(st.session_state.get(f"sod_ch_{k}", False) for k in
-                            ["aud_hm","aud_ts","aud_ts_line","aud_tnr","usd_hm","usd_ts","usd_ts_line","xccy"])
+                            ["aud_hm","aud_ts","aud_ts_line","aud_tnr","usd_hm","usd_ts","usd_ts_line","xccy",
+                             "usd_prem","aud_prem","cfs"])
             if _any_chart:
-                st.markdown("---")
-                st.markdown("### 📊 SOD Charts")
+                st.markdown("### Charts")
 
             _ts_tenor = st.session_state.get("sod_ts_tenor_axis", "1Y")
+
+            # ── HEATMAPS / GRIDS (grouped) ──
 
             # USD vol change heatmap
             if st.session_state.get("sod_ch_usd_hm"):
@@ -26811,6 +26812,69 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     _fig_aud_lvl = _build_heatmap(_aud_levels, "AUD ATM Vol Surface — Latest Levels (bp)", is_change=False)
                     st.plotly_chart(_fig_aud_lvl, use_container_width=True)
                     _sod_chart_figs.append(("AUD Vol Surface", _fig_aud_lvl))
+
+            # Cross-CCY RV spread heatmap
+            if st.session_state.get("sod_ch_xccy") and _aud_atm is not None:
+                _xccy_exp = [e for e in _aud_atm.index if e in _atm1.index]
+                _xccy_ten = [c for c in _aud_atm.columns if c in _atm1.columns]
+                if _xccy_exp and _xccy_ten:
+                    _xccy_spread = (
+                        _aud_atm.loc[_xccy_exp, _xccy_ten].apply(pd.to_numeric, errors="coerce") -
+                        _atm1.loc[_xccy_exp, _xccy_ten].apply(pd.to_numeric, errors="coerce")
+                    )
+                    _fig_xccy = _build_heatmap(_xccy_spread, "AUD − USD Vol Spread (bp) — positive = AUD rich")
+                    st.plotly_chart(_fig_xccy, use_container_width=True)
+                    _sod_chart_figs.append(("AUD-USD Cross-CCY Spread", _fig_xccy))
+
+            # USD fwd premium changes heatmap
+            if _sod_ch_usd_prem and not _usd_prem_chg.empty:
+                _fig_usd_prem = _build_heatmap(
+                    _usd_prem_chg.apply(pd.to_numeric, errors="coerce"),
+                    "USD Fwd Premium Changes (bp)", is_change=True)
+                st.plotly_chart(_fig_usd_prem, use_container_width=True)
+                _sod_chart_figs.append(("USD Fwd Premium Changes", _fig_usd_prem))
+
+            # AUD fwd premium changes heatmap
+            if _sod_ch_aud_prem and not _aud_prem_chg.empty:
+                _fig_aud_prem = _build_heatmap(
+                    _aud_prem_chg.apply(pd.to_numeric, errors="coerce"),
+                    "Implied AUD Fwd Premium Change (bp)", is_change=True)
+                st.plotly_chart(_fig_aud_prem, use_container_width=True)
+                _sod_chart_figs.append(("Implied AUD Fwd Premium Change", _fig_aud_prem))
+
+            # ── TABLE CHARTS ──
+
+            # AUD CFS open levels
+            if _sod_ch_cfs and _cfs_rows:
+                import plotly.graph_objects as _cfs_go
+                _cfs_pdf_df = pd.DataFrame(_cfs_rows)[["CFS Tenor","CFS Total (prev)","CFS Total (open)","> CFS"]]
+                _fig_cfs = _cfs_go.Figure(data=[_cfs_go.Table(
+                    header=dict(
+                        values=list(_cfs_pdf_df.columns),
+                        fill_color="#1e293b",
+                        font=dict(color="white", size=11, family="Helvetica"),
+                        align=["left","right","right","right"],
+                        height=28,
+                    ),
+                    cells=dict(
+                        values=[_cfs_pdf_df[c].tolist() for c in _cfs_pdf_df.columns],
+                        fill_color=[["#f8fafc","#f1f5f9"] * (len(_cfs_pdf_df)//2 + 1)][:len(_cfs_pdf_df)],
+                        font=dict(size=10, family="Helvetica"),
+                        align=["left","right","right","right"],
+                        height=24,
+                    )
+                )])
+                _fig_cfs.update_layout(
+                    template=None,
+                    title=dict(text="Implied AUD CFS Open Levels (bp fwd prem)", font=dict(size=13, family="Helvetica")),
+                    height=max(200, 28 + 24 * len(_cfs_pdf_df) + 60),
+                    margin=dict(l=10, r=10, t=50, b=10),
+                    paper_bgcolor="white",
+                )
+                st.plotly_chart(_fig_cfs, use_container_width=True)
+                _sod_chart_figs.append(("Implied AUD CFS Open Levels", _fig_cfs))
+
+            # ── LINE CHARTS (at bottom) ──
 
             # USD term structure (line)
             if st.session_state.get("sod_ch_usd_ts_line"):
@@ -26841,63 +26905,6 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                 )
                 st.plotly_chart(_fig_aud_tnr, use_container_width=True)
                 _sod_chart_figs.append(("AUD Tenor Spread", _fig_aud_tnr))
-
-            # Cross-CCY RV spread heatmap
-            if st.session_state.get("sod_ch_xccy") and _aud_atm is not None:
-                _xccy_exp = [e for e in _aud_atm.index if e in _atm1.index]
-                _xccy_ten = [c for c in _aud_atm.columns if c in _atm1.columns]
-                if _xccy_exp and _xccy_ten:
-                    _xccy_spread = (
-                        _aud_atm.loc[_xccy_exp, _xccy_ten].apply(pd.to_numeric, errors="coerce") -
-                        _atm1.loc[_xccy_exp, _xccy_ten].apply(pd.to_numeric, errors="coerce")
-                    )
-                    _fig_xccy = _build_heatmap(_xccy_spread, "AUD − USD Vol Spread (bp) — positive = AUD rich")
-                    st.plotly_chart(_fig_xccy, use_container_width=True)
-                    _sod_chart_figs.append(("AUD-USD Cross-CCY Spread", _fig_xccy))
-
-            # ── Table charts: rendered as plotly figures for consistent PDF styling ──
-            if _sod_ch_usd_prem and not _usd_prem_chg.empty:
-                _fig_usd_prem = _build_heatmap(
-                    _usd_prem_chg.apply(pd.to_numeric, errors="coerce"),
-                    "USD Fwd Premium Changes (bp)", is_change=True)
-                st.plotly_chart(_fig_usd_prem, use_container_width=True)
-                _sod_chart_figs.append(("USD Fwd Premium Changes", _fig_usd_prem))
-
-            if _sod_ch_aud_prem and not _aud_prem_chg.empty:
-                _fig_aud_prem = _build_heatmap(
-                    _aud_prem_chg.apply(pd.to_numeric, errors="coerce"),
-                    "Implied AUD Fwd Premium Change (bp)", is_change=True)
-                st.plotly_chart(_fig_aud_prem, use_container_width=True)
-                _sod_chart_figs.append(("Implied AUD Fwd Premium Change", _fig_aud_prem))
-
-            if _sod_ch_cfs and _cfs_rows:
-                import plotly.graph_objects as _cfs_go
-                _cfs_pdf_df = pd.DataFrame(_cfs_rows)[["CFS Tenor","CFS Total (prev)","CFS Total (open)","> CFS"]]
-                _fig_cfs = _cfs_go.Figure(data=[_cfs_go.Table(
-                    header=dict(
-                        values=list(_cfs_pdf_df.columns),
-                        fill_color="#1e293b",
-                        font=dict(color="white", size=11, family="Helvetica"),
-                        align=["left","right","right","right"],
-                        height=28,
-                    ),
-                    cells=dict(
-                        values=[_cfs_pdf_df[c].tolist() for c in _cfs_pdf_df.columns],
-                        fill_color=[["#f8fafc","#f1f5f9"] * (len(_cfs_pdf_df)//2 + 1)][:len(_cfs_pdf_df)],
-                        font=dict(size=10, family="Helvetica"),
-                        align=["left","right","right","right"],
-                        height=24,
-                    )
-                )])
-                _fig_cfs.update_layout(
-                    template=None,
-                    title=dict(text="Implied AUD CFS Open Levels (bp fwd prem)", font=dict(size=13, family="Helvetica")),
-                    height=max(200, 28 + 24 * len(_cfs_pdf_df) + 60),
-                    margin=dict(l=10, r=10, t=50, b=10),
-                    paper_bgcolor="white",
-                )
-                st.plotly_chart(_fig_cfs, use_container_width=True)
-                _sod_chart_figs.append(("Implied AUD CFS Open Levels", _fig_cfs))
 
             # Stash chart figs for PDF embedding
             st.session_state["_sod_chart_figs"] = _sod_chart_figs
