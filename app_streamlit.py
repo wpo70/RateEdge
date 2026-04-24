@@ -11053,7 +11053,11 @@ def swaptions_tab(vol_mode: str):
 
 
 
-@st.fragment
+# v2404r: @st.fragment REMOVED. The CFS tab has too many conditional
+# widget branches (Listed toggle, wedges expand, ATM table, pack mode)
+# that change the widget tree structure — every one causes a Streamlit
+# delta protocol crash inside a fragment. Full-page reruns are slightly
+# slower but never crash.
 def caps_floors_tab(vol_mode: str):
     st.subheader("Caps & Floors")
     
@@ -11522,7 +11526,9 @@ def caps_floors_tab(vol_mode: str):
             st.session_state["wedges_expanded"] = not st.session_state["wedges_expanded"]
             st.rerun()
 
-        if st.session_state["wedges_expanded"]:
+        _wedges_box = st.container()
+        with _wedges_box:
+          if st.session_state["wedges_expanded"]:
             if "cfs_table_data" not in st.session_state:
                 st.session_state["cfs_table_data"] = {}
 
@@ -12746,12 +12752,13 @@ def caps_floors_tab(vol_mode: str):
                             unsafe_allow_html=True,
                         )
 
+            _listed_editor_box = st.container()
             if _use_listed:
               # Let Streamlit's native expander manage its own open/close state
               # via the chevron. No forced `expanded=` override (which would
               # reopen the editor after every Calculate CFS rerun). The
               # editor starts collapsed by default; user clicks to open.
-              _le_exp = st.expander("Listed Front editor - ratio/bp overrides", expanded=False)
+              _le_exp = _listed_editor_box.expander("Listed Front editor - ratio/bp overrides", expanded=False)
               with _le_exp:
                 try:
                   # Load current SR3 rows (with session edits already overlaid)
@@ -13161,17 +13168,19 @@ def caps_floors_tab(vol_mode: str):
                                   # _calc_requested flag triggers OTC/SR3 rebuild.
                                   # Streamlit reruns naturally after button click.
                           with _save_col:
+                              _committed_for_save = st.session_state.get("_cfs_listed_committed_edits", {}) or {}
                               if st.button("💾 Save to snapshot", key="_cfs_le_save",
                                            use_container_width=True,
-                                           disabled=(len(_session_edits) == 0)):
+                                           disabled=(len(_committed_for_save) == 0 and len(_session_edits) == 0)):
                                   # Write the edits to DB for the current snapshot
                                   _db_rows_for_save = _load_sr3_latest_usd()
                                   if not _db_rows_for_save:
                                       st.error("No current snapshot to save to.")
                                   else:
-                                      # Build save rows — pull full row state + overlay session edits
+                                      # Build save rows — pull full row state + overlay committed edits
+                                      _edits_to_save = _committed_for_save or _session_edits
                                       _rows_out = []
-                                      for c, edits in _session_edits.items():
+                                      for c, edits in _edits_to_save.items():
                                           base = dict(_db_rows_for_save.get(c, {}))
                                           if not base:
                                               continue
@@ -13261,7 +13270,9 @@ def caps_floors_tab(vol_mode: str):
             st.session_state["atm_cfs_expanded"] = not st.session_state["atm_cfs_expanded"]
             st.rerun()
 
-        if st.session_state["atm_cfs_expanded"]:
+        _atm_cfs_box = st.container()
+        with _atm_cfs_box:
+          if st.session_state["atm_cfs_expanded"]:
             _CFS_MAP = [
                 (1, "3m1y"), (2, "1y1y"), (3, "2y1y"), (4, "3y1y"), (5, "4y1y"),
                 (7, "5y2y"), (10, "7y3y"), (12, "10y2y"), (15, "12y3y"),
@@ -13794,7 +13805,7 @@ def caps_floors_tab(vol_mode: str):
                                     for w, T in _SMOOTH_ANCHORS
                                 }
                                 st.session_state.pop("_smooth_proposed_wedges", None)
-                                st.rerun(scope="fragment")
+                                st.rerun()
 
                         # Editable table of vol targets
                         import pandas as _pd_sm
