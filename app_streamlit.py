@@ -11113,6 +11113,20 @@ def caps_floors_tab(vol_mode: str):
             for _pk, _pv in _preserved_le.items():
                 if _pk not in st.session_state:
                     st.session_state[_pk] = _pv
+        # Auto-load latest SR3 snapshot if not already in session
+        if "sr3_grid_data" not in st.session_state and HAS_POSTGRES:
+            try:
+                _sr3_auto = load_sr3_snapshot(currency="USD")
+                if _sr3_auto:
+                    st.session_state["sr3_grid_data"] = _sr3_auto
+                    # Load saved label from user_configs, or derive from latest
+                    _saved_sr3_lbl = load_user_config(
+                        st.session_state.get("username", "wpo@rateedge.au"),
+                        "sr3_current_label", "USD")
+                    if _saved_sr3_lbl and isinstance(_saved_sr3_lbl, dict):
+                        st.session_state["sr3_current_label"] = _saved_sr3_lbl.get("value")
+            except Exception:
+                pass
 
     # ═══════════════════════════════════════════════════════════════════
     # Per-ccy wedge spread isolation (20-Apr-2026 bugfix).
@@ -24019,6 +24033,17 @@ def sr3_vol_tab():
     # ── Top bar: snapshot loader ─────────────────────────────────────
     snaps = list_sr3_snapshots("USD", limit=50)
     cur_key = st.session_state.get("sr3_current_label")
+    # Restore persisted label from DB if not in session
+    if cur_key is None and HAS_POSTGRES:
+        try:
+            _saved_lbl = load_user_config(
+                st.session_state.get("username", "wpo@rateedge.au"),
+                "sr3_current_label", "USD")
+            if _saved_lbl and isinstance(_saved_lbl, dict):
+                cur_key = _saved_lbl.get("value")
+                st.session_state["sr3_current_label"] = cur_key
+        except Exception:
+            pass
 
     def _sync_grid_to_widgets():
         """
@@ -24065,6 +24090,13 @@ def sr3_vol_tab():
         if snaps:
             st.session_state["sr3_current_label"] = _db_latest_key
             cur_key = _db_latest_key
+            # Persist for next session
+            if HAS_POSTGRES:
+                try:
+                    save_user_config(st.session_state.get("username","wpo@rateedge.au"),
+                                    "sr3_current_label", "USD", {"value": _db_latest_key})
+                except Exception:
+                    pass
         _sync_grid_to_widgets()
 
     _tl, _tm, _tr = st.columns([3, 2, 2])
@@ -24082,6 +24114,14 @@ def sr3_vol_tab():
                 st.session_state["sr3_current_label"] = (
                     f"{snaps[0]['snapshot_date']} | {snaps[0]['label']}" if snaps else None
                 )
+                # Persist for next session
+                if HAS_POSTGRES and st.session_state.get("sr3_current_label"):
+                    try:
+                        save_user_config(st.session_state.get("username","wpo@rateedge.au"),
+                                        "sr3_current_label", "USD",
+                                        {"value": st.session_state["sr3_current_label"]})
+                    except Exception:
+                        pass
             else:
                 sd, lbl = picked.split(" | ", 1)
                 # Parse 'YYYY-MM-DD HH:MM:SS' or 'YYYY-MM-DD' back to date
@@ -24092,6 +24132,13 @@ def sr3_vol_tab():
                 grid = load_sr3_snapshot(snapshot_date=sd_parsed, label=lbl, currency="USD")
                 st.session_state["sr3_grid_data"] = grid
                 st.session_state["sr3_current_label"] = picked
+                # Persist selection for next session
+                if HAS_POSTGRES:
+                    try:
+                        save_user_config(st.session_state.get("username","wpo@rateedge.au"),
+                                        "sr3_current_label", "USD", {"value": picked})
+                    except Exception:
+                        pass
             list_sr3_snapshots.clear()
             _sync_grid_to_widgets()
             st.rerun()
@@ -24352,6 +24399,14 @@ def sr3_vol_tab():
             if n:
                 list_sr3_snapshots.clear()
                 st.session_state["sr3_current_label"] = f"{_snap_dt.date()} | {_label}"
+                # Persist for next session
+                if HAS_POSTGRES:
+                    try:
+                        save_user_config(st.session_state.get("username","wpo@rateedge.au"),
+                                        "sr3_current_label", "USD",
+                                        {"value": st.session_state["sr3_current_label"]})
+                    except Exception:
+                        pass
                 st.success(f"✅ Saved **{_label}** — {n} rows to sr3_vol_history")
                 # Compute-on-save: CAs for this snapshot
                 try:
