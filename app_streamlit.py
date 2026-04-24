@@ -25947,6 +25947,10 @@ def sod_report_tab():
         with _ch_c3:
             st.markdown("**Cross-CCY**")
             _sod_ch_xccy     = st.checkbox("AUD − USD Vol Spread Heatmap", value=True, key="sod_ch_xccy")
+            st.markdown("**Tables**")
+            _sod_ch_usd_prem = st.checkbox("USD Fwd Premium Changes", value=True, key="sod_ch_usd_prem")
+            _sod_ch_aud_prem = st.checkbox("AUD Fwd Premium Change", value=True, key="sod_ch_aud_prem")
+            _sod_ch_cfs      = st.checkbox("AUD CFS Open Levels", value=True, key="sod_ch_cfs")
         _sod_ts_tenor = st.radio("Term structure tenor axis", ["1Y", "5Y", "10Y"],
                                   horizontal=True, index=0, key="sod_ts_tenor_axis")
 
@@ -26851,6 +26855,50 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     st.plotly_chart(_fig_xccy, use_container_width=True)
                     _sod_chart_figs.append(("AUD-USD Cross-CCY Spread", _fig_xccy))
 
+            # ── Table charts: rendered as plotly figures for consistent PDF styling ──
+            if _sod_ch_usd_prem and not _usd_prem_chg.empty:
+                _fig_usd_prem = _build_heatmap(
+                    _usd_prem_chg.apply(pd.to_numeric, errors="coerce"),
+                    "USD Fwd Premium Changes (bp)", is_change=True)
+                st.plotly_chart(_fig_usd_prem, use_container_width=True)
+                _sod_chart_figs.append(("USD Fwd Premium Changes", _fig_usd_prem))
+
+            if _sod_ch_aud_prem and not _aud_prem_chg.empty:
+                _fig_aud_prem = _build_heatmap(
+                    _aud_prem_chg.apply(pd.to_numeric, errors="coerce"),
+                    "Implied AUD Fwd Premium Change (bp)", is_change=True)
+                st.plotly_chart(_fig_aud_prem, use_container_width=True)
+                _sod_chart_figs.append(("Implied AUD Fwd Premium Change", _fig_aud_prem))
+
+            if _sod_ch_cfs and _cfs_rows:
+                import plotly.graph_objects as _cfs_go
+                _cfs_pdf_df = pd.DataFrame(_cfs_rows)[["CFS Tenor","CFS Total (prev)","CFS Total (open)","> CFS"]]
+                _fig_cfs = _cfs_go.Figure(data=[_cfs_go.Table(
+                    header=dict(
+                        values=list(_cfs_pdf_df.columns),
+                        fill_color="#1e293b",
+                        font=dict(color="white", size=11, family="Helvetica"),
+                        align=["left","right","right","right"],
+                        height=28,
+                    ),
+                    cells=dict(
+                        values=[_cfs_pdf_df[c].tolist() for c in _cfs_pdf_df.columns],
+                        fill_color=[["#f8fafc","#f1f5f9"] * (len(_cfs_pdf_df)//2 + 1)][:len(_cfs_pdf_df)],
+                        font=dict(size=10, family="Helvetica"),
+                        align=["left","right","right","right"],
+                        height=24,
+                    )
+                )])
+                _fig_cfs.update_layout(
+                    template=None,
+                    title=dict(text="Implied AUD CFS Open Levels (bp fwd prem)", font=dict(size=13, family="Helvetica")),
+                    height=max(200, 28 + 24 * len(_cfs_pdf_df) + 60),
+                    margin=dict(l=10, r=10, t=50, b=10),
+                    paper_bgcolor="white",
+                )
+                st.plotly_chart(_fig_cfs, use_container_width=True)
+                _sod_chart_figs.append(("Implied AUD CFS Open Levels", _fig_cfs))
+
             # Stash chart figs for PDF embedding
             st.session_state["_sod_chart_figs"] = _sod_chart_figs
 
@@ -27076,107 +27124,10 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
                     _sod_story.append(Spacer(1, 4))
 
                     # Table style helper
-                    def _mk_tbl(data, hdr_col="#1e293b", font_sz=6.5, is_change=True):
-                        ncols = len(data[0])
-                        nrows = len(data)
-                        # Col widths: first col wider (expiry), rest equal
-                        _pw = 17*cm  # printable width
-                        _c0 = 1.2*cm
-                        _cn = (_pw - _c0) / max(ncols-1, 1)
-                        _cws = [_c0] + [_cn]*(ncols-1)
-                        t = Table(data, colWidths=_cws, repeatRows=1)
-                        _styles = [
-                            ("BACKGROUND",(0,0),(-1,0), colors.HexColor(hdr_col)),
-                            ("TEXTCOLOR",(0,0),(-1,0), colors.white),
-                            ("FONTSIZE",(0,0),(-1,-1), font_sz),
-                            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
-                            ("FONTNAME",(0,1),(-1,-1),"Helvetica"),
-                            ("ALIGN",(1,0),(-1,-1),"RIGHT"),
-                            ("ALIGN",(0,0),(0,-1),"LEFT"),
-                            ("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#e2e8f0")),
-                            ("LEFTPADDING",(0,0),(-1,-1),2),("RIGHTPADDING",(0,0),(-1,-1),2),
-                            ("TOPPADDING",(0,0),(-1,-1),1),("BOTTOMPADDING",(0,0),(-1,-1),1),
-                        ]
-                        # Conditional cell colouring for change tables
-                        if is_change and nrows > 1:
-                            # Find max absolute value for scaling
-                            _vals = []
-                            for _ri in range(1, nrows):
-                                for _ci in range(1, ncols):
-                                    try:
-                                        _vals.append(abs(float(data[_ri][_ci])))
-                                    except (ValueError, TypeError):
-                                        pass
-                            _vmax = max(_vals) if _vals else 1.0
-                            if _vmax < 0.01: _vmax = 1.0
-                            for _ri in range(1, nrows):
-                                for _ci in range(1, ncols):
-                                    try:
-                                        _v = float(data[_ri][_ci])
-                                    except (ValueError, TypeError):
-                                        continue
-                                    _intensity = min(abs(_v) / _vmax, 1.0)
-                                    _alpha = int(_intensity * 80)  # 0-80 range for subtlety
-                                    if _v > 0.005:
-                                        _bg = colors.Color(0.13, 0.64, 0.25, _alpha / 255.0)
-                                        _styles.append(("BACKGROUND", (_ci, _ri), (_ci, _ri),
-                                                        colors.HexColor(f"#{max(240 - _alpha, 200):02x}ff{max(240 - _alpha, 200):02x}")))
-                                    elif _v < -0.005:
-                                        _styles.append(("BACKGROUND", (_ci, _ri), (_ci, _ri),
-                                                        colors.HexColor(f"#ff{max(240 - _alpha, 200):02x}{max(240 - _alpha, 200):02x}")))
-                                    else:
-                                        _styles.append(("BACKGROUND", (_ci, _ri), (_ci, _ri),
-                                                        colors.HexColor("#f8fafc")))
-                        else:
-                            # Non-change tables: alternating rows
-                            _styles.append(("ROWBACKGROUNDS",(0,1),(-1,-1),
-                                           [colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]))
-                        # Expiry column always neutral background
-                        for _ri in range(1, nrows):
-                            _styles.append(("BACKGROUND", (0, _ri), (0, _ri),
-                                           colors.HexColor("#f1f5f9") if _ri % 2 == 0 else colors.HexColor("#f8fafc")))
-                        t.setStyle(TableStyle(_styles))
-                        return t
+                    # v2404h: _mk_tbl removed — all tables rendered via plotly charts
 
-                    # USD Vol Changes — shown by USD Vol Change heatmap chart
-                    # Implied AUD Vol Change — shown by AUD Implied Vol Change heatmap chart
-                    # Implied AUD Vol Open Level — shown by AUD Vol Surface heatmap chart
-                    # (All three removed — chart images are the primary visual)
-
-                    if not _usd_prem_chg.empty:
-                        _usd_p_r = _usd_prem_chg.reset_index()
-                        _usd_p_data = [["Expiry"] + list(_usd_p_r.columns[1:])]
-                        for _, _row in _usd_p_r.iterrows():
-                            _usd_p_data.append([str(_row.iloc[0])] + [f"{float(v):+.2f}" if v==v else "—" for v in _row.iloc[1:]])
-                        _sod_story.append(KeepTogether([
-                            Paragraph("USD Fwd Premium Changes (bp)", _sH2),
-                            _mk_tbl(_usd_p_data, "#1e293b"),
-                        ]))
-                    if not _aud_prem_chg.empty:
-                        _aud_pc_r = _aud_prem_chg.reset_index()
-                        _aud_pc_data = [["Expiry"] + list(_aud_pc_r.columns[1:])]
-                        for _, _row in _aud_pc_r.iterrows():
-                            _aud_pc_data.append([str(_row.iloc[0])] + [f"{float(v):+.2f}" if v==v else "—" for v in _row.iloc[1:]])
-                        _sod_story.append(KeepTogether([
-                            Paragraph("Implied AUD Fwd Premium Change (bp)", _sH2),
-                            _mk_tbl(_aud_pc_data, "#1e3a5f"),
-                        ]))
-                    if _cfs_rows:
-                        _sod_story.append(Paragraph("Implied AUD CFS Open Levels (bp fwd prem)", _sH2))
-                        _cfs_pdf_df = pd.DataFrame(_cfs_rows)[["CFS Tenor","CFS Total (prev)","CFS Total (open)","> CFS"]]
-                        _cfs_tbl_data = [list(_cfs_pdf_df.columns)] + [list(r) for _,r in _cfs_pdf_df.iterrows()]
-                        _cfs_t = Table(_cfs_tbl_data)
-                        _cfs_t.setStyle(TableStyle([
-                            ("BACKGROUND",(0,0),(-1,0), colors.HexColor("#1e293b")),
-                            ("TEXTCOLOR",(0,0),(-1,0), colors.white),
-                            ("FONTSIZE",(0,0),(-1,-1), 7),
-                            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
-                            ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.HexColor("#f8fafc"),colors.HexColor("#f1f5f9")]),
-                            ("GRID",(0,0),(-1,-1),0.3,colors.HexColor("#e2e8f0")),
-                            ("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),
-                            ("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2),
-                        ]))
-                        _sod_story.append(_cfs_t)
+                    # v2404h: All data tables removed — rendered as plotly chart images
+                    # via _sod_chart_figs pipeline for consistent formatting.
 
                     _sod_story.append(Spacer(1, 16))
                     _sod_story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#e2e8f0")))
