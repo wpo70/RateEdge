@@ -12700,17 +12700,7 @@ def caps_floors_tab(vol_mode: str):
                         st.session_state["cfs_active_vol_src"] = "Listed bootstrap"
                     else:
                         st.session_state["cfs_active_vol_src"] = "OTC only"
-                    # Structural change — need scope="app" to avoid delta protocol error
-                    for _wk, _pk in [
-                        ("cfs_active_vol_src",  "_preserve_cfs_active_vol_src"),
-                        ("_cfs_use_listed",     "_preserve_cfs_use_listed"),
-                        ("cfs_sr3_cutoff",      "_preserve_cfs_sr3_cutoff"),
-                        ("cfs_overlay_choices", "_preserve_cfs_overlay_choices"),
-                        ("_cfs_pack_radio",     "_preserve_cfs_pack_radio"),
-                    ]:
-                        if _wk in st.session_state:
-                            st.session_state[_pk] = st.session_state[_wk]
-                    st.rerun(scope="app")
+                    st.rerun()
 
                 # ── Curve sources explainer ───────────────────────────
                 with st.expander("ℹ️ What do the curve sources mean?", expanded=False):
@@ -12742,17 +12732,7 @@ def caps_floors_tab(vol_mode: str):
                     _pack_mode = "whites" if _pack_sel.startswith("Whites only") else "both"
                     if _pack_mode != _prev_pack:
                         st.session_state["_cfs_listed_pack"] = _pack_mode
-                        # Structural change — preserve widget state
-                        for _wk, _pk in [
-                            ("cfs_active_vol_src",  "_preserve_cfs_active_vol_src"),
-                            ("_cfs_use_listed",     "_preserve_cfs_use_listed"),
-                            ("cfs_sr3_cutoff",      "_preserve_cfs_sr3_cutoff"),
-                            ("cfs_overlay_choices", "_preserve_cfs_overlay_choices"),
-                            ("_cfs_pack_radio",     "_preserve_cfs_pack_radio"),
-                        ]:
-                            if _wk in st.session_state:
-                                st.session_state[_pk] = st.session_state[_wk]
-                        st.rerun(scope="app")
+                        st.rerun()
                     st.session_state["_cfs_listed_pack"] = _pack_mode
                 else:
                     _pack_mode = "whites"
