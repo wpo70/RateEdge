@@ -12840,12 +12840,14 @@ def caps_floors_tab(vol_mode: str):
             # Content inside is gated on _use_listed.
             _le_exp = _listed_editor_box.expander("Listed Front editor - ratio/bp overrides", expanded=False)
             with _le_exp:
-              if not st.session_state.get("_cfs_use_listed", False):
+              _le_use = st.session_state.get("_cfs_use_listed", False)
+              if not _le_use:
                   st.caption("Enable **Use Listed Front editor** checkbox above to edit SR3 ratios.")
               else:
                 try:
                   # Load current SR3 rows (with session edits already overlaid)
                   _sr3_rows_le = _load_sr3_latest_usd_with_session_edits()
+                  st.caption(f"📡 SR3 load: {len(_sr3_rows_le) if _sr3_rows_le else 0} contracts | _cfs_use_listed={_le_use}")
                   if not _sr3_rows_le:
                       st.info("No SR3 snapshot loaded. Save a snapshot from the SR3 tab first.")
                   else:
