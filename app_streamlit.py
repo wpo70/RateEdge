@@ -22534,6 +22534,16 @@ def main():
     )
     init_session()
     
+    # Ensure all DB tables/columns exist on startup (not just on save)
+    if HAS_POSTGRES and get_db_url() and not st.session_state.get("_db_init_done", False):
+        try:
+            init_database()
+            st.session_state["_db_init_done"] = True
+            # Clear cached SR3 queries so they pick up new columns
+            list_sr3_snapshots.clear()
+        except Exception:
+            pass
+    
     # Auto-load curves + vols from DB on first load after login
     if HAS_POSTGRES and get_db_url() and not st.session_state.get("db_auto_loaded", False):
         user_id = st.session_state.get("username", "default")
@@ -23409,9 +23419,54 @@ def load_sr3_snapshot(snapshot_date=None, label=None, currency: str = "USD") -> 
                 "listed_adj_mode":  r[22] if r[22] in ("ratio", "bp") else "ratio",
             }
         return out
-    except Exception as e:
-        st.error(f"SR3 load failed: {e}")
-        return {}
+    except Exception:
+        # Fallback: try without listed_adj columns (may not exist in DB yet)
+        try:
+            cur2 = conn.cursor()
+            _q_base = """
+                SELECT contract_code, contract_type, expiry_date, underlying, maturity_date,
+                       futures_price, vol_type,
+                       vol_10dp, vol_15dp, vol_25dp, vol_35dp, atm_vol,
+                       vol_35dc, vol_25dc, vol_15dc, vol_10dc,
+                       manual_override, notes, snapshot_date, label
+                FROM sr3_vol_history
+            """
+            if snapshot_date is None and label is None:
+                cur2.execute(_q_base + """
+                    WHERE currency = %s
+                      AND (snapshot_date, label) = (
+                          SELECT snapshot_date, label FROM sr3_vol_history
+                          WHERE currency = %s ORDER BY created_at DESC LIMIT 1)
+                """, (currency, currency))
+            else:
+                cur2.execute(_q_base + """
+                    WHERE currency = %s AND snapshot_date = %s AND label = %s
+                """, (currency, snapshot_date, label))
+            rows2 = cur2.fetchall()
+            cur2.close()
+            out2 = {}
+            for r in rows2:
+                out2[r[0]] = {
+                    "contract_code": r[0], "contract_type": r[1],
+                    "expiry_date": r[2], "underlying": r[3], "maturity_date": r[4],
+                    "futures_price": float(r[5]) if r[5] is not None else None,
+                    "vol_type": r[6],
+                    "vol_10dp": float(r[7]) if r[7] is not None else None,
+                    "vol_15dp": float(r[8]) if r[8] is not None else None,
+                    "vol_25dp": float(r[9]) if r[9] is not None else None,
+                    "vol_35dp": float(r[10]) if r[10] is not None else None,
+                    "atm_vol": float(r[11]) if r[11] is not None else None,
+                    "vol_35dc": float(r[12]) if r[12] is not None else None,
+                    "vol_25dc": float(r[13]) if r[13] is not None else None,
+                    "vol_15dc": float(r[14]) if r[14] is not None else None,
+                    "vol_10dc": float(r[15]) if r[15] is not None else None,
+                    "manual_override": bool(r[16]), "notes": r[17],
+                    "_snapshot_date": r[18], "_label": r[19],
+                    "listed_adj_ratio": 1.0, "listed_adj_bp": 0.0, "listed_adj_mode": "ratio",
+                }
+            return out2
+        except Exception:
+            return {}
     finally:
         try: conn.close()
         except Exception: pass
