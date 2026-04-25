@@ -6404,9 +6404,6 @@ def vol_config_tab():
             _today = _dt_date.today()
             _latest_db = _avail_dates[0] if _avail_dates else _today
             _default_date = _today if _today >= _latest_db else _latest_db
-            # Force widget to today if it's still showing an older date
-            if st.session_state.get("db_load_date") and st.session_state["db_load_date"] < _default_date:
-                st.session_state["db_load_date"] = _default_date
             _load_date = st.date_input(
                 "Curve/Vol date to load",
                 value=_default_date,
