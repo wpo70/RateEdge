@@ -6426,6 +6426,39 @@ def vol_config_tab():
                 st.session_state["_db_load_date"] = str(_load_date)
                 loaded_count = load_all_session_data(user_id, load_date=str(_load_date))
                 _load_dbg = st.session_state.pop("_load_debug", [])
+
+                # Load curves from swap_rates for any currency not yet loaded
+                _cc_after = st.session_state.get("config_curves", {})
+                _aud_curve_warnings = []
+
+                # ── AUD: must come from saved aud_par_rates (QQ/SS with 6v3 basis) ──
+                # Already loaded by load_all_session_data → aud_par_rates config
+                # If still missing, user needs to commit from Excel first
+                if "AUD" not in _cc_after or _cc_after.get("AUD") is None:
+                    _aud_curve_warnings.append("⚠️ AUD dual-curve (QQ/SS with 6v3 basis) not in DB — load Excel config and Save to Database first")
+
+                # ── USD / NZD: single curve fallback from swap_rates ──
+                _single_curve_map = [
+                    ("USD", "SOFR"),
+                    ("NZD", "3M BKBM"),
+                ]
+                for _db_ccy, _db_fr in _single_curve_map:
+                    if _db_ccy not in _cc_after or _cc_after.get(_db_ccy) is None:
+                        try:
+                            _db_curve = _load_curve_from_db_latest(_db_fr, _db_ccy, load_date=str(_load_date))
+                            if _db_curve is not None and len(_db_curve) > 0:
+                                st.session_state.setdefault("curves", {})[_db_ccy] = _db_curve
+                                st.session_state.setdefault("config_curves", {})[_db_ccy] = _db_curve
+                                set_timestamp("curves", _db_ccy)
+                                loaded_count += 1
+                            else:
+                                st.warning(f"⚠️ {_db_ccy} {_db_fr}: no rates found in swap_rates for {_load_date}")
+                        except Exception as _sc_err:
+                            st.warning(f"⚠️ {_db_ccy} {_db_fr} load failed: {_sc_err}")
+                # Show AUD dual-curve warnings if any
+                for _acw in _aud_curve_warnings:
+                    st.warning(_acw)
+
                 if loaded_count > 0:
                     for _msg in _load_dbg:
                         st.toast(f"📊 {_msg}", icon="✅")
