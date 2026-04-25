@@ -886,6 +886,9 @@ def init_database():
             );
             CREATE INDEX IF NOT EXISTS idx_blotter_mids_ccy ON blotter_mids(ccy, key);
 
+            -- swap_rates: track when each save happened
+            ALTER TABLE swap_rates ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
             -- SR3 vol history: ensure listed adjustment columns exist (USD CFS)
             ALTER TABLE sr3_vol_history ADD COLUMN IF NOT EXISTS listed_adj_ratio NUMERIC DEFAULT 1.0;
             ALTER TABLE sr3_vol_history ADD COLUMN IF NOT EXISTS listed_adj_bp NUMERIC DEFAULT 0.0;
@@ -13602,158 +13605,189 @@ def caps_floors_tab(vol_mode: str):
                     caplet_vol_curve[round(_t30, 2)] = max(_vol_15 + _frac * (_vol_20 - _vol_15), 1.0)
                     _t30 += 0.25
 
-            with st.expander("📊 Resulting Caplet Vol Curve", expanded=True):
+            # Only render charts when curves have been built (after Calculate)
+            _has_any_curve = bool(
+                st.session_state.get("_cfs_otc_curve") or
+                st.session_state.get("_cfs_listed_bootstrap") or
+                st.session_state.get("_cfs_sr3_hybrid") or
+                st.session_state.get("_cfs_sr3_full") or
+                caplet_vol_curve
+            )
+            if _has_any_curve:
+              with st.expander("📊 Resulting Caplet Vol Curve", expanded=True):
                 from scipy.interpolate import CubicSpline
                 import plotly.graph_objects as _pgo
 
-                # ── Table: show ALL selected overlays side-by-side ──
-                if ccy == "USD":
-                    _sel_for_table = st.session_state.get("_cfs_overlay_sel", []) or []
-                    _src_curves_t = {
-                        "OTC only":         st.session_state.get("_cfs_otc_curve") or {},
-                        "Listed bootstrap": st.session_state.get("_cfs_listed_bootstrap") or {},
-                        "SR3 hybrid":       st.session_state.get("_cfs_sr3_hybrid") or {},
-                        "SR3 full":         st.session_state.get("_cfs_sr3_full") or {},
-                    }
-                    # Collect all unique T values across selected curves
-                    _all_t_vals = set()
-                    for _nm in _sel_for_table:
-                        _all_t_vals.update((_src_curves_t.get(_nm) or {}).keys())
-                    if _all_t_vals and _sel_for_table:
-                        _active_label = {
-                            "OTC only":         "OTC only",
-                            "Listed bootstrap": "Listed bootstrap",
-                            "SR3 hybrid":       "SR3 hybrid",
-                            "SR3 full":         "SR3 full",
-                        }.get(_active_src, "—")
-                        curve_data = []
-                        for t in sorted(_all_t_vals):
-                            row = {"Maturity (Y)": f"{t:.2f}"}
-                            for _nm in _sel_for_table:
-                                c = _src_curves_t.get(_nm) or {}
-                                if t in c:
-                                    lbl = f"{_nm} (bp)"
-                                    if _nm == _active_src:
-                                        lbl = f"▶ {_nm} (bp)"   # mark active
-                                    row[lbl] = f"{c[t]:.2f}"
-                            curve_data.append(row)
-                        st.dataframe(pd.DataFrame(curve_data),
-                                     use_container_width=True, hide_index=True)
-                        st.caption(
-                            "▶ marks the active pricer feed. Toggle above to change. "
-                            "Note: **SR3 hybrid** uses listed SR3 vols to the cutoff "
-                            "(e.g. 2Y), OTC beyond. **SR3 full** uses all available SR3 "
-                            "anchors (typically out to Gold pack ~4Y), OTC beyond. So at "
-                            "long maturities both SR3 curves match OTC (they've fallen "
-                            "back). **Listed bootstrap** runs the AUD-style wedge chain "
-                            "anchored on the listed straddle (1Y whites, or 1Y+2Y if "
-                            "whites+reds ticked). **OTC only** is the baseline wedge path."
-                        )
-                    else:
-                        # No overlays selected — fall back to active curve
-                        curve_data = [{"Maturity (Y)": f"{t:.2f}", "Vol (bp)": f"{caplet_vol_curve[t]:.2f}"}
-                                      for t in sorted(caplet_vol_curve.keys())]
-                        st.dataframe(pd.DataFrame(curve_data),
-                                     use_container_width=True, hide_index=True)
-                else:
-                    # AUD / NZD / EUR — unchanged single-curve table
-                    curve_data = [{"Maturity (Y)": f"{t:.2f}", "Vol (bp)": f"{caplet_vol_curve[t]:.2f}"}
-                                  for t in sorted(caplet_vol_curve.keys())]
-                    st.dataframe(pd.DataFrame(curve_data),
-                                 use_container_width=True, hide_index=True)
-
-                fig = _pgo.Figure()
-
-                # ── USD: overlay ticked curves (OTC / SR3 hybrid / SR3 full) ──
-                _usd_overlays = []
-                if ccy == "USD":
-                    _sel = st.session_state.get("_cfs_overlay_sel", []) or []
-                    _overlay_palette = {
-                        "OTC only":         ("#2563eb", "solid",  "OTC only"),
-                        "Listed bootstrap": ("#a855f7", "solid",  "Listed bootstrap"),
-                        "SR3 hybrid":       ("#16a34a", "solid",  "SR3 hybrid"),
-                        "SR3 full":         ("#ef4444", "dash",   "SR3 full"),
-                    }
-                    _src_curves = {
-                        "OTC only":         st.session_state.get("_cfs_otc_curve") or {},
-                        "Listed bootstrap": st.session_state.get("_cfs_listed_bootstrap") or {},
-                        "SR3 hybrid":       st.session_state.get("_cfs_sr3_hybrid") or {},
-                        "SR3 full":         st.session_state.get("_cfs_sr3_full") or {},
-                    }
-                    for _nm in _sel:
-                        _c = _src_curves.get(_nm) or {}
-                        if not _c:
-                            continue
-                        _col, _dash, _lbl = _overlay_palette[_nm]
-                        _mts = np.array(sorted(_c.keys()))
-                        _vls = np.array([_c[t] for t in _mts])
-                        if len(_mts) >= 4:
-                            _cs = CubicSpline(_mts, _vls)
-                            _fine = np.linspace(_mts[0], _mts[-1], 300)
-                            fig.add_trace(_pgo.Scatter(
-                                x=_fine, y=_cs(_fine), mode="lines",
-                                line=dict(color=_col, width=2, dash=_dash),
-                                name=_lbl, hovertemplate=f"<b>{_lbl}</b><br>T=%{{x:.2f}}Y<br>Vol=%{{y:.2f}} bp<extra></extra>",
-                            ))
-                        fig.add_trace(_pgo.Scatter(
-                            x=_mts, y=_vls, mode="markers",
-                            marker=dict(color=_col, size=5, line=dict(color="white", width=1)),
-                            name=f"{_lbl} pts", showlegend=False,
-                            hovertemplate=f"<b>{_lbl}</b><br>T=%{{x:.2f}}Y<br>Vol=%{{y:.2f}} bp<extra></extra>",
-                        ))
-                        _usd_overlays.append(_nm)
-
-                # Fallback: if no overlays (AUD/NZD, or USD with none ticked), plot active curve
-                if not _usd_overlays:
-                    maturities = np.array(sorted(caplet_vol_curve.keys()))
-                    vols       = np.array([caplet_vol_curve[t] for t in maturities])
-                    if len(maturities) >= 4:
-                        cs       = CubicSpline(maturities, vols)
-                        mat_fine = np.linspace(maturities[0], maturities[-1], 300)
-                        vol_fine = cs(mat_fine)
-                        fig.add_trace(_pgo.Scatter(
-                            x=mat_fine, y=vol_fine, mode="lines",
-                            line=dict(color="#2563eb", width=2),
-                            hoverinfo="skip", name="Spline"
-                        ))
-                    hover_text = [f"T = {t:.2f}Y<br>Vol = {v:.2f} bp" for t, v in zip(maturities, vols)]
-                    fig.add_trace(_pgo.Scatter(
-                        x=maturities, y=vols, mode="markers",
-                        marker=dict(color="#2563eb", size=5, line=dict(color="white", width=1)),
-                        text=hover_text, hovertemplate="%{text}<extra></extra>",
-                        name="Bootstrapped"
-                    ))
-                    max_yr = int(np.ceil(maturities[-1]))
-                else:
-                    _all_t = []
-                    for _nm in _usd_overlays:
-                        _c = st.session_state.get({
-                            "OTC only":         "_cfs_otc_curve",
-                            "Listed bootstrap": "_cfs_listed_bootstrap",
-                            "SR3 hybrid":       "_cfs_sr3_hybrid",
-                            "SR3 full":         "_cfs_sr3_full",
-                        }[_nm]) or {}
-                        _all_t.extend(_c.keys())
-                    max_yr = int(np.ceil(max(_all_t))) if _all_t else 10
-
-                fig.update_layout(
-                    xaxis=dict(
-                        title="Maturity (Years)",
-                        tickmode="array",
-                        tickvals=list(range(0, max_yr + 1)),
-                        ticktext=[str(y) for y in range(0, max_yr + 1)],
-                        gridcolor="#e2e8f0",
-                    ),
-                    yaxis=dict(title="Vol (bp)", gridcolor="#e2e8f0"),
-                    plot_bgcolor="#f8fafc", paper_bgcolor="white",
-                    margin=dict(l=50, r=20, t=30, b=40),
-                    height=360,
-                    showlegend=bool(_usd_overlays),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                    hovermode="closest",
+                # ── Chart cache: skip CubicSpline rebuild if curves haven't changed ──
+                _chart_sig = (
+                    hash(str(sorted((st.session_state.get("_cfs_otc_curve") or {}).items()))),
+                    hash(str(sorted((st.session_state.get("_cfs_listed_bootstrap") or {}).items()))),
+                    hash(str(sorted((st.session_state.get("_cfs_sr3_hybrid") or {}).items()))),
+                    hash(str(sorted((st.session_state.get("_cfs_sr3_full") or {}).items()))),
+                    tuple(st.session_state.get("_cfs_overlay_sel", [])),
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                _skip_chart_build = (
+                    st.session_state.get("_cfs_chart_sig") == _chart_sig
+                    and st.session_state.get("_cfs_chart_fig") is not None
+                )
+                if _skip_chart_build:
+                    _ctbl = st.session_state.get("_cfs_chart_tbl")
+                    if _ctbl is not None:
+                        st.dataframe(_ctbl, use_container_width=True, hide_index=True)
+                    st.plotly_chart(st.session_state["_cfs_chart_fig"], use_container_width=True)
 
+                if not _skip_chart_build:
+                    # ── Table: show ALL selected overlays side-by-side ──
+                  if ccy == "USD":
+                      _sel_for_table = st.session_state.get("_cfs_overlay_sel", []) or []
+                      _src_curves_t = {
+                          "OTC only":         st.session_state.get("_cfs_otc_curve") or {},
+                          "Listed bootstrap": st.session_state.get("_cfs_listed_bootstrap") or {},
+                          "SR3 hybrid":       st.session_state.get("_cfs_sr3_hybrid") or {},
+                          "SR3 full":         st.session_state.get("_cfs_sr3_full") or {},
+                      }
+                      # Collect all unique T values across selected curves
+                      _all_t_vals = set()
+                      for _nm in _sel_for_table:
+                          _all_t_vals.update((_src_curves_t.get(_nm) or {}).keys())
+                      if _all_t_vals and _sel_for_table:
+                          _active_label = {
+                              "OTC only":         "OTC only",
+                              "Listed bootstrap": "Listed bootstrap",
+                              "SR3 hybrid":       "SR3 hybrid",
+                              "SR3 full":         "SR3 full",
+                          }.get(_active_src, "—")
+                          curve_data = []
+                          for t in sorted(_all_t_vals):
+                              row = {"Maturity (Y)": f"{t:.2f}"}
+                              for _nm in _sel_for_table:
+                                  c = _src_curves_t.get(_nm) or {}
+                                  if t in c:
+                                      lbl = f"{_nm} (bp)"
+                                      if _nm == _active_src:
+                                          lbl = f"▶ {_nm} (bp)"   # mark active
+                                      row[lbl] = f"{c[t]:.2f}"
+                              curve_data.append(row)
+                          st.dataframe(pd.DataFrame(curve_data),
+                                       use_container_width=True, hide_index=True)
+                          st.caption(
+                              "▶ marks the active pricer feed. Toggle above to change. "
+                              "Note: **SR3 hybrid** uses listed SR3 vols to the cutoff "
+                              "(e.g. 2Y), OTC beyond. **SR3 full** uses all available SR3 "
+                              "anchors (typically out to Gold pack ~4Y), OTC beyond. So at "
+                              "long maturities both SR3 curves match OTC (they've fallen "
+                              "back). **Listed bootstrap** runs the AUD-style wedge chain "
+                              "anchored on the listed straddle (1Y whites, or 1Y+2Y if "
+                              "whites+reds ticked). **OTC only** is the baseline wedge path."
+                          )
+                      else:
+                          # No overlays selected — fall back to active curve
+                          curve_data = [{"Maturity (Y)": f"{t:.2f}", "Vol (bp)": f"{caplet_vol_curve[t]:.2f}"}
+                                        for t in sorted(caplet_vol_curve.keys())]
+                          st.dataframe(pd.DataFrame(curve_data),
+                                       use_container_width=True, hide_index=True)
+                  else:
+                      # AUD / NZD / EUR — unchanged single-curve table
+                      curve_data = [{"Maturity (Y)": f"{t:.2f}", "Vol (bp)": f"{caplet_vol_curve[t]:.2f}"}
+                                    for t in sorted(caplet_vol_curve.keys())]
+                      st.dataframe(pd.DataFrame(curve_data),
+                                   use_container_width=True, hide_index=True)
+  
+                  fig = _pgo.Figure()
+  
+                  # ── USD: overlay ticked curves (OTC / SR3 hybrid / SR3 full) ──
+                  _usd_overlays = []
+                  if ccy == "USD":
+                      _sel = st.session_state.get("_cfs_overlay_sel", []) or []
+                      _overlay_palette = {
+                          "OTC only":         ("#2563eb", "solid",  "OTC only"),
+                          "Listed bootstrap": ("#a855f7", "solid",  "Listed bootstrap"),
+                          "SR3 hybrid":       ("#16a34a", "solid",  "SR3 hybrid"),
+                          "SR3 full":         ("#ef4444", "dash",   "SR3 full"),
+                      }
+                      _src_curves = {
+                          "OTC only":         st.session_state.get("_cfs_otc_curve") or {},
+                          "Listed bootstrap": st.session_state.get("_cfs_listed_bootstrap") or {},
+                          "SR3 hybrid":       st.session_state.get("_cfs_sr3_hybrid") or {},
+                          "SR3 full":         st.session_state.get("_cfs_sr3_full") or {},
+                      }
+                      for _nm in _sel:
+                          _c = _src_curves.get(_nm) or {}
+                          if not _c:
+                              continue
+                          _col, _dash, _lbl = _overlay_palette[_nm]
+                          _mts = np.array(sorted(_c.keys()))
+                          _vls = np.array([_c[t] for t in _mts])
+                          if len(_mts) >= 4:
+                              _cs = CubicSpline(_mts, _vls)
+                              _fine = np.linspace(_mts[0], _mts[-1], 300)
+                              fig.add_trace(_pgo.Scatter(
+                                  x=_fine, y=_cs(_fine), mode="lines",
+                                  line=dict(color=_col, width=2, dash=_dash),
+                                  name=_lbl, hovertemplate=f"<b>{_lbl}</b><br>T=%{{x:.2f}}Y<br>Vol=%{{y:.2f}} bp<extra></extra>",
+                              ))
+                          fig.add_trace(_pgo.Scatter(
+                              x=_mts, y=_vls, mode="markers",
+                              marker=dict(color=_col, size=5, line=dict(color="white", width=1)),
+                              name=f"{_lbl} pts", showlegend=False,
+                              hovertemplate=f"<b>{_lbl}</b><br>T=%{{x:.2f}}Y<br>Vol=%{{y:.2f}} bp<extra></extra>",
+                          ))
+                          _usd_overlays.append(_nm)
+  
+                  # Fallback: if no overlays (AUD/NZD, or USD with none ticked), plot active curve
+                  if not _usd_overlays:
+                      maturities = np.array(sorted(caplet_vol_curve.keys()))
+                      vols       = np.array([caplet_vol_curve[t] for t in maturities])
+                      if len(maturities) >= 4:
+                          cs       = CubicSpline(maturities, vols)
+                          mat_fine = np.linspace(maturities[0], maturities[-1], 300)
+                          vol_fine = cs(mat_fine)
+                          fig.add_trace(_pgo.Scatter(
+                              x=mat_fine, y=vol_fine, mode="lines",
+                              line=dict(color="#2563eb", width=2),
+                              hoverinfo="skip", name="Spline"
+                          ))
+                      hover_text = [f"T = {t:.2f}Y<br>Vol = {v:.2f} bp" for t, v in zip(maturities, vols)]
+                      fig.add_trace(_pgo.Scatter(
+                          x=maturities, y=vols, mode="markers",
+                          marker=dict(color="#2563eb", size=5, line=dict(color="white", width=1)),
+                          text=hover_text, hovertemplate="%{text}<extra></extra>",
+                          name="Bootstrapped"
+                      ))
+                      max_yr = int(np.ceil(maturities[-1]))
+                  else:
+                      _all_t = []
+                      for _nm in _usd_overlays:
+                          _c = st.session_state.get({
+                              "OTC only":         "_cfs_otc_curve",
+                              "Listed bootstrap": "_cfs_listed_bootstrap",
+                              "SR3 hybrid":       "_cfs_sr3_hybrid",
+                              "SR3 full":         "_cfs_sr3_full",
+                          }[_nm]) or {}
+                          _all_t.extend(_c.keys())
+                      max_yr = int(np.ceil(max(_all_t))) if _all_t else 10
+  
+                  fig.update_layout(
+                      xaxis=dict(
+                          title="Maturity (Years)",
+                          tickmode="array",
+                          tickvals=list(range(0, max_yr + 1)),
+                          ticktext=[str(y) for y in range(0, max_yr + 1)],
+                          gridcolor="#e2e8f0",
+                      ),
+                      yaxis=dict(title="Vol (bp)", gridcolor="#e2e8f0"),
+                      plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                      margin=dict(l=50, r=20, t=30, b=40),
+                      height=360,
+                      showlegend=bool(_usd_overlays),
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                      hovermode="closest",
+                  )
+                  st.plotly_chart(fig, use_container_width=True)
+
+                  # Stash chart + table for cache
+                  st.session_state["_cfs_chart_sig"] = _chart_sig
+                  st.session_state["_cfs_chart_fig"] = fig
                 # ══════════════════════════════════════════════════════════
                 # AUD-only: 🎚️ Smooth Mode — edit caplet curve → reverse-
                 # engineer wedges to hit the smoothed targets.
