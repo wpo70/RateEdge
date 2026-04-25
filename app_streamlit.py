@@ -12445,9 +12445,7 @@ def caps_floors_tab(vol_mode: str):
             with _mc3:
                 # Seed once, then rely on key=
                 if "cfs_overlay_choices" not in st.session_state:
-                    st.session_state["cfs_overlay_choices"] = (
-                        ["OTC only", "Listed bootstrap", "SR3 hybrid", "SR3 full"]
-                    )
+                    st.session_state["cfs_overlay_choices"] = []
                 _overlay_choices = st.multiselect(
                     "Overlay on chart",
                     ["OTC only", "Listed bootstrap", "SR3 hybrid", "SR3 full"],
@@ -13605,31 +13603,29 @@ def caps_floors_tab(vol_mode: str):
                     caplet_vol_curve[round(_t30, 2)] = max(_vol_15 + _frac * (_vol_20 - _vol_15), 1.0)
                     _t30 += 0.25
 
-            # Only render charts when curves have been built (after Calculate)
-            _has_any_curve = bool(
-                st.session_state.get("_cfs_otc_curve") or
-                st.session_state.get("_cfs_listed_bootstrap") or
-                st.session_state.get("_cfs_sr3_hybrid") or
-                st.session_state.get("_cfs_sr3_full") or
-                caplet_vol_curve
-            )
-            if _has_any_curve:
-              with st.expander("📊 Resulting Caplet Vol Curve", expanded=True):
-                from scipy.interpolate import CubicSpline
-                import plotly.graph_objects as _pgo
+            with st.expander("📊 Resulting Caplet Vol Curve", expanded=False):
+                _overlay_sel_check = st.session_state.get("_cfs_overlay_sel", []) or []
+                _has_chart_data = bool(caplet_vol_curve and len(caplet_vol_curve) > 0)
+                if ccy == "USD" and not _overlay_sel_check:
+                    st.caption("Select overlay curves above, then click Calculate CFS.")
+                elif not _has_chart_data:
+                    st.caption("Click Calculate CFS to build curves.")
+                else:
+                  from scipy.interpolate import CubicSpline
+                  import plotly.graph_objects as _pgo
 
-                # ── Chart cache: skip CubicSpline rebuild if curves haven't changed ──
-                _chart_sig = (
+                  # ── Chart cache: skip CubicSpline rebuild if curves haven't changed ──
+                  _chart_sig = (
                     hash(str(sorted((st.session_state.get("_cfs_otc_curve") or {}).items()))),
                     hash(str(sorted((st.session_state.get("_cfs_listed_bootstrap") or {}).items()))),
                     hash(str(sorted((st.session_state.get("_cfs_sr3_hybrid") or {}).items()))),
                     hash(str(sorted((st.session_state.get("_cfs_sr3_full") or {}).items()))),
                     tuple(st.session_state.get("_cfs_overlay_sel", [])),
-                )
-                _skip_chart_build = (
+                  )
+                  _skip_chart_build = (
                     st.session_state.get("_cfs_chart_sig") == _chart_sig
                     and st.session_state.get("_cfs_chart_fig") is not None
-                )
+                  )
                 if _skip_chart_build:
                     _ctbl = st.session_state.get("_cfs_chart_tbl")
                     if _ctbl is not None:
