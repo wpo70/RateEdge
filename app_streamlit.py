@@ -6429,15 +6429,41 @@ def vol_config_tab():
 
                 # Load curves from swap_rates for any currency not yet loaded
                 _cc_after = st.session_state.get("config_curves", {})
-                _aud_curve_warnings = []
+                _curve_warnings = []
 
-                # ── AUD: must come from saved aud_par_rates (QQ/SS with 6v3 basis) ──
-                # Already loaded by load_all_session_data → aud_par_rates config
-                # If still missing, user needs to commit from Excel first
+                # ── AUD: load blended zero curve from swap_rates, split into QQ/SS ──
                 if "AUD" not in _cc_after or _cc_after.get("AUD") is None:
-                    _aud_curve_warnings.append("⚠️ AUD dual-curve (QQ/SS with 6v3 basis) not in DB — load Excel config and Save to Database first")
+                    try:
+                        _aud_blend = _load_curve_from_db_latest("6M BBSW", "AUD", load_date=str(_load_date))
+                        _aud_ois_db = _load_curve_from_db_latest("AONIA", "AUD", load_date=str(_load_date))
+                        if _aud_blend is not None and len(_aud_blend) > 0:
+                            st.session_state.setdefault("curves", {})["AUD"] = _aud_blend
+                            st.session_state.setdefault("config_curves", {})["AUD"] = _aud_blend
+                            st.session_state["_aud_proj_curve"] = _aud_blend
+                            # Split blended into QQ (<=3.25Y) and SS (>=3.5Y) for forward calcs
+                            _zc_qq_split = {float(r["MaturityY"]): float(r["ZeroRatePct"])
+                                            for _, r in _aud_blend.iterrows() if float(r["MaturityY"]) <= 3.25}
+                            _zc_ss_split = {float(r["MaturityY"]): float(r["ZeroRatePct"])
+                                            for _, r in _aud_blend.iterrows() if float(r["MaturityY"]) >= 0.25}
+                            _zc_qq_full_split = {float(r["MaturityY"]): float(r["ZeroRatePct"])
+                                                 for _, r in _aud_blend.iterrows()}
+                            st.session_state["_aud_zc_qq"] = _zc_qq_split
+                            st.session_state["_aud_zc_ss"] = _zc_ss_split
+                            st.session_state["_aud_zc_qq_full"] = _zc_qq_full_split
+                            st.session_state.get("_fwd_ann_cache", {}).clear()
+                            set_timestamp("curves", "AUD")
+                            loaded_count += 1
+                        else:
+                            _curve_warnings.append("⚠️ AUD 6M BBSW not found in swap_rates for selected date")
+                        if _aud_ois_db is not None and len(_aud_ois_db) > 0:
+                            st.session_state.setdefault("config_basis", {}).setdefault("AUD", {})["ois"] = _aud_ois_db
+                            st.session_state.setdefault("basis_curves", {}).setdefault("AUD", {})["ois"] = _aud_ois_db
+                        else:
+                            _curve_warnings.append("⚠️ AUD AONIA OIS not found for selected date")
+                    except Exception as _aud_ex:
+                        _curve_warnings.append(f"⚠️ AUD curve load error: {_aud_ex}")
 
-                # ── USD / NZD: single curve fallback from swap_rates ──
+                # ── USD / NZD: single curve from swap_rates ──
                 _single_curve_map = [
                     ("USD", "SOFR"),
                     ("NZD", "3M BKBM"),
@@ -6452,12 +6478,12 @@ def vol_config_tab():
                                 set_timestamp("curves", _db_ccy)
                                 loaded_count += 1
                             else:
-                                st.warning(f"⚠️ {_db_ccy} {_db_fr}: no rates found in swap_rates for {_load_date}")
+                                _curve_warnings.append(f"⚠️ {_db_ccy} {_db_fr}: no rates found in swap_rates for {_load_date}")
                         except Exception as _sc_err:
-                            st.warning(f"⚠️ {_db_ccy} {_db_fr} load failed: {_sc_err}")
-                # Show AUD dual-curve warnings if any
-                for _acw in _aud_curve_warnings:
-                    st.warning(_acw)
+                            _curve_warnings.append(f"⚠️ {_db_ccy} {_db_fr} load failed: {_sc_err}")
+                # Show curve load warnings
+                for _cw in _curve_warnings:
+                    st.warning(_cw)
 
                 if loaded_count > 0:
                     for _msg in _load_dbg:
@@ -22732,8 +22758,29 @@ def main():
                     pass
             st.session_state["db_auto_loaded"] = True
 
-            # ── Fallback: if USD/NZD curves still not loaded, try swap_rates table ──
+            # ── Fallback: if curves still not loaded, try swap_rates table ──
             _cc_loaded = st.session_state.get("config_curves", {})
+            if "AUD" not in _cc_loaded or _cc_loaded.get("AUD") is None:
+                try:
+                    _aud_blend_s = _load_curve_from_db_latest("6M BBSW", "AUD")
+                    if _aud_blend_s is not None and len(_aud_blend_s) > 0:
+                        st.session_state.setdefault("curves", {})["AUD"] = _aud_blend_s
+                        st.session_state.setdefault("config_curves", {})["AUD"] = _aud_blend_s
+                        st.session_state["_aud_proj_curve"] = _aud_blend_s
+                        _zc_qq_s = {float(r["MaturityY"]): float(r["ZeroRatePct"]) for _, r in _aud_blend_s.iterrows() if float(r["MaturityY"]) <= 3.25}
+                        _zc_ss_s = {float(r["MaturityY"]): float(r["ZeroRatePct"]) for _, r in _aud_blend_s.iterrows() if float(r["MaturityY"]) >= 0.25}
+                        _zc_qqf_s = {float(r["MaturityY"]): float(r["ZeroRatePct"]) for _, r in _aud_blend_s.iterrows()}
+                        st.session_state["_aud_zc_qq"] = _zc_qq_s
+                        st.session_state["_aud_zc_ss"] = _zc_ss_s
+                        st.session_state["_aud_zc_qq_full"] = _zc_qqf_s
+                        st.session_state.get("_fwd_ann_cache", {}).clear()
+                        set_timestamp("curves", "AUD")
+                    _aud_ois_s = _load_curve_from_db_latest("AONIA", "AUD")
+                    if _aud_ois_s is not None and len(_aud_ois_s) > 0:
+                        st.session_state.setdefault("config_basis", {}).setdefault("AUD", {})["ois"] = _aud_ois_s
+                        st.session_state.setdefault("basis_curves", {}).setdefault("AUD", {})["ois"] = _aud_ois_s
+                except Exception:
+                    pass
             if "USD" not in _cc_loaded or _cc_loaded.get("USD") is None:
                 try:
                     _usd_sofr = _load_curve_from_db_latest("SOFR", "USD")
