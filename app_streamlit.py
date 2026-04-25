@@ -13819,25 +13819,28 @@ def caps_floors_tab(vol_mode: str):
   
                   # Fallback: if no overlays (AUD/NZD, or USD with none ticked), plot active curve
                   if not _usd_overlays:
-                      maturities = np.array(sorted(caplet_vol_curve.keys()))
-                      vols       = np.array([caplet_vol_curve[t] for t in maturities])
-                      if len(maturities) >= 4:
-                          cs       = CubicSpline(maturities, vols)
-                          mat_fine = np.linspace(maturities[0], maturities[-1], 300)
-                          vol_fine = cs(mat_fine)
+                      maturities = np.array(sorted(caplet_vol_curve.keys())) if caplet_vol_curve else np.array([])
+                      if len(maturities) > 0:
+                          vols = np.array([caplet_vol_curve[t] for t in maturities])
+                          if len(maturities) >= 4:
+                              cs       = CubicSpline(maturities, vols)
+                              mat_fine = np.linspace(maturities[0], maturities[-1], 300)
+                              vol_fine = cs(mat_fine)
+                              fig.add_trace(_pgo.Scatter(
+                                  x=mat_fine, y=vol_fine, mode="lines",
+                                  line=dict(color="#2563eb", width=2),
+                                  hoverinfo="skip", name="Spline"
+                              ))
+                          hover_text = [f"T = {t:.2f}Y<br>Vol = {v:.2f} bp" for t, v in zip(maturities, vols)]
                           fig.add_trace(_pgo.Scatter(
-                              x=mat_fine, y=vol_fine, mode="lines",
-                              line=dict(color="#2563eb", width=2),
-                              hoverinfo="skip", name="Spline"
+                              x=maturities, y=vols, mode="markers",
+                              marker=dict(color="#2563eb", size=5, line=dict(color="white", width=1)),
+                              text=hover_text, hovertemplate="%{text}<extra></extra>",
+                              name="Bootstrapped"
                           ))
-                      hover_text = [f"T = {t:.2f}Y<br>Vol = {v:.2f} bp" for t, v in zip(maturities, vols)]
-                      fig.add_trace(_pgo.Scatter(
-                          x=maturities, y=vols, mode="markers",
-                          marker=dict(color="#2563eb", size=5, line=dict(color="white", width=1)),
-                          text=hover_text, hovertemplate="%{text}<extra></extra>",
-                          name="Bootstrapped"
-                      ))
-                      max_yr = int(np.ceil(maturities[-1]))
+                          max_yr = int(np.ceil(maturities[-1]))
+                      else:
+                          max_yr = 10  # safe default when no curve data
                   else:
                       _all_t = []
                       for _nm in _usd_overlays:
@@ -14115,7 +14118,7 @@ def caps_floors_tab(vol_mode: str):
                     text=hover_text2, hovertemplate="%{text}<extra></extra>",
                     name="Points"
                 ))
-                max_yr2 = int(np.ceil(maturities[-1]))
+                max_yr2 = int(np.ceil(maturities[-1])) if len(maturities) > 0 else 10
                 fig2.update_layout(
                     xaxis=dict(
                         title="Maturity (Years)",
