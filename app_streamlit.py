@@ -1103,6 +1103,19 @@ def save_all_session_data(user_id: str):
 
         # CFS spreads — save all 9 wedge spread values under whichever ccy
         # was last active in the caps_floors tab (defaults to AUD if unset).
+
+        # Save zero curves for all currencies so they load on cold restart
+        _config_curves = st.session_state.get("config_curves", {})
+        for _cc_save, _cc_df in _config_curves.items():
+            if _cc_df is not None and hasattr(_cc_df, 'to_dict') and len(_cc_df) > 0:
+                try:
+                    _cc_save_df = _cc_df.copy()
+                    if _cc_save_df.index.name is not None:
+                        _cc_save_df = _cc_save_df.reset_index()
+                    _save("zero_curve", _cc_save, {"values": _cc_save_df.to_dict(orient="records")})
+                except Exception:
+                    pass
+
         _cf_spread_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
                            "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y",
                            "cf_spr_12y3y","cf_spr_15v20","cf_spr_20v30"]
@@ -1177,9 +1190,23 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
         if ccy not in st.session_state["vol_data"]:
             st.session_state["vol_data"][ccy] = {}
         
-        # NOTE: Curves are NOT auto-loaded from DB on login.
-        # Curves must be committed from BBG_Feed via Vol/Upload tab.
-        # This ensures curves always reflect the live BBG rates, not stale DB zeros.
+        # NOTE: Zero curves ARE now loaded from DB on login when available.
+        # This ensures curves survive session restarts without re-committing Excel.
+        if "zero_curve" in configs and ccy in configs["zero_curve"]:
+            try:
+                _zc_data = configs["zero_curve"][ccy].get("data", {})
+                _zc_vals = _zc_data.get("values", [])
+                if _zc_vals:
+                    _zc_df = pd.DataFrame(_zc_vals)
+                    if "MaturityY" in _zc_df.columns and "ZeroRatePct" in _zc_df.columns:
+                        _zc_df["MaturityY"] = _zc_df["MaturityY"].astype(float)
+                        _zc_df["ZeroRatePct"] = _zc_df["ZeroRatePct"].astype(float)
+                        st.session_state.setdefault("curves", {})[ccy] = _zc_df
+                        st.session_state.setdefault("config_curves", {})[ccy] = _zc_df
+                        set_timestamp("curves", ccy)
+                        loaded += 1
+            except Exception:
+                pass
 
         # ATM vols are NOT loaded from user_configs — they come from vol_history only
         # (see auto-load block at login which pulls latest snapshot per currency)
@@ -1316,7 +1343,11 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                 _rows2  = [{"MaturityY": float(_m), "ZeroRatePct": float(_z)} for _m,_z in sorted(_zc_qq_db.items()) if _m<=3.25]
                 _rows2 += [{"MaturityY": float(_m), "ZeroRatePct": float(_z)} for _m,_z in sorted(_zc_ss_db.items()) if _m>=3.5]
                 if len(_rows2) >= 10:
-                    st.session_state["_aud_proj_curve"] = pd.DataFrame(_rows2)
+                    _aud_blended_df = pd.DataFrame(_rows2)
+                    st.session_state["_aud_proj_curve"] = _aud_blended_df
+                    st.session_state.setdefault("curves", {})["AUD"] = _aud_blended_df
+                    st.session_state.setdefault("config_curves", {})["AUD"] = _aud_blended_df
+                    set_timestamp("curves", "AUD")
                 st.session_state.get("_fwd_ann_cache", {}).clear()
                 loaded += 1
         except Exception as _pex:
@@ -22667,6 +22698,27 @@ def main():
                 except Exception:
                     pass
             st.session_state["db_auto_loaded"] = True
+
+            # ── Fallback: if USD/NZD curves still not loaded, try swap_rates table ──
+            _cc_loaded = st.session_state.get("config_curves", {})
+            if "USD" not in _cc_loaded or _cc_loaded.get("USD") is None:
+                try:
+                    _usd_sofr = _load_curve_from_db_latest("SOFR", "USD")
+                    if _usd_sofr is not None and len(_usd_sofr) > 0:
+                        st.session_state.setdefault("curves", {})["USD"] = _usd_sofr
+                        st.session_state.setdefault("config_curves", {})["USD"] = _usd_sofr
+                        set_timestamp("curves", "USD")
+                except Exception:
+                    pass
+            if "NZD" not in _cc_loaded or _cc_loaded.get("NZD") is None:
+                try:
+                    _nzd_bkbm = _load_curve_from_db_latest("3M BKBM", "NZD")
+                    if _nzd_bkbm is not None and len(_nzd_bkbm) > 0:
+                        st.session_state.setdefault("curves", {})["NZD"] = _nzd_bkbm
+                        st.session_state.setdefault("config_curves", {})["NZD"] = _nzd_bkbm
+                        set_timestamp("curves", "NZD")
+                except Exception:
+                    pass
 
     # Sidebar for settings
     with st.sidebar:
