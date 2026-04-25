@@ -11521,17 +11521,9 @@ def caps_floors_tab(vol_mode: str):
         spread_15v20 = st.session_state.get("cf_spr_15v20", -5.0)
         spread_20v30 = st.session_state.get("cf_spr_20v30", -5.0)
 
-        # Toggle
-        if "wedges_expanded" not in st.session_state:
-            st.session_state["wedges_expanded"] = True
-        icon = "▼ Hide Spreads & SABRs" if st.session_state["wedges_expanded"] else "▶ Show Spreads & SABRs"
-        if st.button(icon, key="wedges_toggle"):
-            st.session_state["wedges_expanded"] = not st.session_state["wedges_expanded"]
-            st.rerun()
-
-        _wedges_box = st.container()
-        with _wedges_box:
-          if st.session_state["wedges_expanded"]:
+        # Wedges section — use expander for widget tree stability
+        _wedges_exp = st.expander("Spreads & SABRs", expanded=st.session_state.get("wedges_expanded", True))
+        with _wedges_exp:
             if "cfs_table_data" not in st.session_state:
                 st.session_state["cfs_table_data"] = {}
 
@@ -12445,7 +12437,9 @@ def caps_floors_tab(vol_mode: str):
             with _mc3:
                 # Seed once, then rely on key=
                 if "cfs_overlay_choices" not in st.session_state:
-                    st.session_state["cfs_overlay_choices"] = []
+                    st.session_state["cfs_overlay_choices"] = (
+                        ["OTC only", "Listed bootstrap", "SR3 hybrid", "SR3 full"]
+                    )
                 _overlay_choices = st.multiselect(
                     "Overlay on chart",
                     ["OTC only", "Listed bootstrap", "SR3 hybrid", "SR3 full"],
@@ -12754,13 +12748,13 @@ def caps_floors_tab(vol_mode: str):
                         )
 
             _listed_editor_box = st.container()
-            if _use_listed:
-              # Let Streamlit's native expander manage its own open/close state
-              # via the chevron. No forced `expanded=` override (which would
-              # reopen the editor after every Calculate CFS rerun). The
-              # editor starts collapsed by default; user clicks to open.
-              _le_exp = _listed_editor_box.expander("Listed Front editor - ratio/bp overrides", expanded=False)
-              with _le_exp:
+            # v2504c: Always render expander (widget tree stability).
+            # Content inside is gated on _use_listed.
+            _le_exp = _listed_editor_box.expander("Listed Front editor - ratio/bp overrides", expanded=False)
+            with _le_exp:
+              if not _use_listed:
+                  st.caption("Enable **Use Listed Front editor** checkbox above to edit SR3 ratios.")
+              else:
                 try:
                   # Load current SR3 rows (with session edits already overlaid)
                   _sr3_rows_le = _load_sr3_latest_usd_with_session_edits()
@@ -13264,16 +13258,8 @@ def caps_floors_tab(vol_mode: str):
 
         # ── ATM CFS Straddle Table ──────────────────────────────────
         st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
-        if "atm_cfs_expanded" not in st.session_state:
-            st.session_state["atm_cfs_expanded"] = True
-        _atm_icon = "▼ Hide ATM CFS Straddles" if st.session_state["atm_cfs_expanded"] else "▶ Show ATM CFS Straddles"
-        if st.button(_atm_icon, key="atm_cfs_toggle"):
-            st.session_state["atm_cfs_expanded"] = not st.session_state["atm_cfs_expanded"]
-            st.rerun()
-
-        _atm_cfs_box = st.container()
-        with _atm_cfs_box:
-          if st.session_state["atm_cfs_expanded"]:
+        _atm_cfs_exp = st.expander("ATM CFS Straddles", expanded=st.session_state.get("atm_cfs_expanded", True))
+        with _atm_cfs_exp:
             _CFS_MAP = [
                 (1, "3m1y"), (2, "1y1y"), (3, "2y1y"), (4, "3y1y"), (5, "4y1y"),
                 (7, "5y2y"), (10, "7y3y"), (12, "10y2y"), (15, "12y3y"),
@@ -13603,39 +13589,31 @@ def caps_floors_tab(vol_mode: str):
                     caplet_vol_curve[round(_t30, 2)] = max(_vol_15 + _frac * (_vol_20 - _vol_15), 1.0)
                     _t30 += 0.25
 
-            with st.expander("📊 Resulting Caplet Vol Curve", expanded=False):
-                _overlay_sel_check = st.session_state.get("_cfs_overlay_sel", []) or []
-                _has_chart_data = bool(caplet_vol_curve and len(caplet_vol_curve) > 0)
-                _skip_chart_build = True  # default: skip unless else branch runs
-                _skip_chart_render = True  # skip cached render too when no overlays
-                if ccy == "USD" and not _overlay_sel_check:
-                    st.caption("Select overlay curves above, then click Calculate CFS.")
-                elif not _has_chart_data:
-                    st.caption("Click Calculate CFS to build curves.")
-                else:
-                  from scipy.interpolate import CubicSpline
-                  import plotly.graph_objects as _pgo
-                  _skip_chart_render = False
+            with st.expander("📊 Resulting Caplet Vol Curve", expanded=True):
+                from scipy.interpolate import CubicSpline
+                import plotly.graph_objects as _pgo
+                _skip_chart_build = False
+                _skip_chart_render = False
 
-                  # ── Chart cache: skip CubicSpline rebuild if curves haven't changed ──
-                  _chart_sig = (
+                # ── Chart cache: skip CubicSpline rebuild if curves haven't changed ──
+                _chart_sig = (
                     hash(str(sorted((st.session_state.get("_cfs_otc_curve") or {}).items()))),
                     hash(str(sorted((st.session_state.get("_cfs_listed_bootstrap") or {}).items()))),
                     hash(str(sorted((st.session_state.get("_cfs_sr3_hybrid") or {}).items()))),
                     hash(str(sorted((st.session_state.get("_cfs_sr3_full") or {}).items()))),
                     tuple(st.session_state.get("_cfs_overlay_sel", [])),
-                  )
-                  _skip_chart_build = (
+                )
+                _skip_chart_build = (
                     st.session_state.get("_cfs_chart_sig") == _chart_sig
                     and st.session_state.get("_cfs_chart_fig") is not None
-                  )
-                if not _skip_chart_render and _skip_chart_build and st.session_state.get("_cfs_chart_fig") is not None:
+                )
+                if _skip_chart_build and st.session_state.get("_cfs_chart_fig") is not None:
                     _ctbl = st.session_state.get("_cfs_chart_tbl")
                     if _ctbl is not None:
                         st.dataframe(_ctbl, use_container_width=True, hide_index=True)
                     st.plotly_chart(st.session_state["_cfs_chart_fig"], use_container_width=True)
 
-                if not _skip_chart_render and not _skip_chart_build:
+                if not _skip_chart_build:
                     # ── Table: show ALL selected overlays side-by-side ──
                   if ccy == "USD":
                       _sel_for_table = st.session_state.get("_cfs_overlay_sel", []) or []
