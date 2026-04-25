@@ -11912,6 +11912,19 @@ def caps_floors_tab(vol_mode: str):
                 # the render pipeline to splice the Active source's front end
                 # with the wedge-chain long end and PCHIP-spline the join.
                 st.session_state["_cfs_calc_requested"] = True
+                # v2504n: Auto-save wedge spreads to DB on Calculate
+                if HAS_POSTGRES:
+                    try:
+                        _cf_sp_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
+                                       "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y",
+                                       "cf_spr_12y3y","cf_spr_15v20","cf_spr_20v30"]
+                        _cf_sp_data = {k: float(st.session_state.get(k, 0)) for k in _cf_sp_keys
+                                       if k in st.session_state}
+                        if _cf_sp_data:
+                            save_user_config(st.session_state.get("username", "wpo@rateedge.au"),
+                                             "cf_spreads", ccy, _cf_sp_data)
+                    except Exception:
+                        pass
                 # v2404p: NO cache pops, NO preserve blocks, NO st.rerun().
                 # Cache sigs auto-invalidate when spreads change.
                 # _calc_requested flag triggers rebuild in the pipeline.
@@ -12525,14 +12538,17 @@ def caps_floors_tab(vol_mode: str):
                          "SR3 full = all listed anchors, OTC beyond.",
                 )
             with _mc3:
-                # Seed once, then rely on key=
-                if "cfs_overlay_choices" not in st.session_state:
-                    st.session_state["cfs_overlay_choices"] = []
+                # Ensure active feed is always in overlay — set BEFORE widget renders
+                _cur_overlay = st.session_state.get("cfs_overlay_choices", None)
+                if _cur_overlay is None:
+                    st.session_state["cfs_overlay_choices"] = [_active_src] if _active_src else []
+                elif _active_src and _active_src not in _cur_overlay:
+                    st.session_state["cfs_overlay_choices"] = [_active_src] + list(_cur_overlay)
                 _overlay_choices = st.multiselect(
                     "Overlay on chart",
                     ["OTC only", "Listed bootstrap", "SR3 hybrid", "SR3 full"],
                     key="cfs_overlay_choices",
-                    help="Multiple curves overlaid on Caplet Vol Curve chart below.",
+                    help="Active feed auto-included. Add others to compare.",
                 )
 
             # v2004x: Build SR3 hybrid + full via new closure helpers.
