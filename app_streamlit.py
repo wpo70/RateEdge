@@ -6427,63 +6427,113 @@ def vol_config_tab():
                 loaded_count = load_all_session_data(user_id, load_date=str(_load_date))
                 _load_dbg = st.session_state.pop("_load_debug", [])
 
-                # Load curves from swap_rates for any currency not yet loaded
-                _cc_after = st.session_state.get("config_curves", {})
+                # Load curves from swap_rates for selected date — ALWAYS overwrite
+                # (user_configs loads latest; swap_rates loads per date picker)
                 _curve_warnings = []
 
-                # ── AUD: load blended zero curve from swap_rates, split into QQ/SS ──
-                if "AUD" not in _cc_after or _cc_after.get("AUD") is None:
-                    try:
-                        _aud_blend = _load_curve_from_db_latest("6M BBSW", "AUD", load_date=str(_load_date))
-                        _aud_ois_db = _load_curve_from_db_latest("AONIA", "AUD", load_date=str(_load_date))
-                        if _aud_blend is not None and len(_aud_blend) > 0:
-                            st.session_state.setdefault("curves", {})["AUD"] = _aud_blend
-                            st.session_state.setdefault("config_curves", {})["AUD"] = _aud_blend
-                            st.session_state["_aud_proj_curve"] = _aud_blend
-                            # Split blended into QQ (<=3.25Y) and SS (>=3.5Y) for forward calcs
-                            _zc_qq_split = {float(r["MaturityY"]): float(r["ZeroRatePct"])
-                                            for _, r in _aud_blend.iterrows() if float(r["MaturityY"]) <= 3.25}
-                            _zc_ss_split = {float(r["MaturityY"]): float(r["ZeroRatePct"])
-                                            for _, r in _aud_blend.iterrows() if float(r["MaturityY"]) >= 0.25}
-                            _zc_qq_full_split = {float(r["MaturityY"]): float(r["ZeroRatePct"])
-                                                 for _, r in _aud_blend.iterrows()}
-                            st.session_state["_aud_zc_qq"] = _zc_qq_split
-                            st.session_state["_aud_zc_ss"] = _zc_ss_split
-                            st.session_state["_aud_zc_qq_full"] = _zc_qq_full_split
-                            st.session_state.get("_fwd_ann_cache", {}).clear()
-                            set_timestamp("curves", "AUD")
-                            loaded_count += 1
-                        else:
-                            _curve_warnings.append("⚠️ AUD 6M BBSW not found in swap_rates for selected date")
-                        if _aud_ois_db is not None and len(_aud_ois_db) > 0:
-                            st.session_state.setdefault("config_basis", {}).setdefault("AUD", {})["ois"] = _aud_ois_db
-                            st.session_state.setdefault("basis_curves", {}).setdefault("AUD", {})["ois"] = _aud_ois_db
-                        else:
-                            _curve_warnings.append("⚠️ AUD AONIA OIS not found for selected date")
-                    except Exception as _aud_ex:
-                        _curve_warnings.append(f"⚠️ AUD curve load error: {_aud_ex}")
+                # ── AUD: load from swap_rates per selected date ──
+                try:
+                    _aud_blend = _load_curve_from_db_latest("6M BBSW", "AUD", load_date=str(_load_date))
+                    _aud_ois_db = _load_curve_from_db_latest("AONIA", "AUD", load_date=str(_load_date))
+                    if _aud_blend is not None and len(_aud_blend) > 0:
+                        st.session_state.setdefault("curves", {})["AUD"] = _aud_blend
+                        st.session_state.setdefault("config_curves", {})["AUD"] = _aud_blend
+                        st.session_state["_aud_proj_curve"] = _aud_blend
+                        _zc_qq_split = {float(r["MaturityY"]): float(r["ZeroRatePct"])
+                                        for _, r in _aud_blend.iterrows() if float(r["MaturityY"]) <= 3.25}
+                        _zc_ss_split = {float(r["MaturityY"]): float(r["ZeroRatePct"])
+                                        for _, r in _aud_blend.iterrows() if float(r["MaturityY"]) >= 0.25}
+                        _zc_qq_full_split = {float(r["MaturityY"]): float(r["ZeroRatePct"])
+                                             for _, r in _aud_blend.iterrows()}
+                        st.session_state["_aud_zc_qq"] = _zc_qq_split
+                        st.session_state["_aud_zc_ss"] = _zc_ss_split
+                        st.session_state["_aud_zc_qq_full"] = _zc_qq_full_split
+                        st.session_state.get("_fwd_ann_cache", {}).clear()
+                        set_timestamp("curves", "AUD")
+                        loaded_count += 1
+                    else:
+                        _curve_warnings.append("⚠️ AUD 6M BBSW not found in swap_rates for selected date")
+                    if _aud_ois_db is not None and len(_aud_ois_db) > 0:
+                        st.session_state.setdefault("config_basis", {}).setdefault("AUD", {})["ois"] = _aud_ois_db
+                        st.session_state.setdefault("basis_curves", {}).setdefault("AUD", {})["ois"] = _aud_ois_db
+                    else:
+                        _curve_warnings.append("⚠️ AUD AONIA OIS not found for selected date")
+                except Exception as _aud_ex:
+                    _curve_warnings.append(f"⚠️ AUD curve load error: {_aud_ex}")
 
-                # ── USD / NZD: single curve from swap_rates ──
+                # ── USD / NZD: load from swap_rates per selected date ──
                 _single_curve_map = [
                     ("USD", "SOFR"),
                     ("NZD", "3M BKBM"),
                 ]
                 for _db_ccy, _db_fr in _single_curve_map:
-                    if _db_ccy not in _cc_after or _cc_after.get(_db_ccy) is None:
-                        try:
-                            _db_curve = _load_curve_from_db_latest(_db_fr, _db_ccy, load_date=str(_load_date))
-                            if _db_curve is not None and len(_db_curve) > 0:
-                                st.session_state.setdefault("curves", {})[_db_ccy] = _db_curve
-                                st.session_state.setdefault("config_curves", {})[_db_ccy] = _db_curve
-                                set_timestamp("curves", _db_ccy)
-                                loaded_count += 1
-                            else:
-                                _curve_warnings.append(f"⚠️ {_db_ccy} {_db_fr}: no rates found in swap_rates for {_load_date}")
-                        except Exception as _sc_err:
-                            _curve_warnings.append(f"⚠️ {_db_ccy} {_db_fr} load failed: {_sc_err}")
+                    try:
+                        _db_curve = _load_curve_from_db_latest(_db_fr, _db_ccy, load_date=str(_load_date))
+                        if _db_curve is not None and len(_db_curve) > 0:
+                            st.session_state.setdefault("curves", {})[_db_ccy] = _db_curve
+                            st.session_state.setdefault("config_curves", {})[_db_ccy] = _db_curve
+                            set_timestamp("curves", _db_ccy)
+                            loaded_count += 1
+                        else:
+                            _curve_warnings.append(f"⚠️ {_db_ccy} {_db_fr}: no rates found in swap_rates for {_load_date}")
+                    except Exception as _sc_err:
+                        _curve_warnings.append(f"⚠️ {_db_ccy} {_db_fr} load failed: {_sc_err}")
                 # Show curve load warnings
                 for _cw in _curve_warnings:
                     st.warning(_cw)
+
+                # ── Display-only curves (Curves tab) — don't affect CFS pricer ──
+                # USD FEDFUNDS OIS → fedfunds_ois only (NOT "ois" — that changes CFS discounting)
+                try:
+                    _ff_curve = _load_curve_from_db_latest("FEDFUNDS", "USD", load_date=str(_load_date))
+                    if _ff_curve is not None and len(_ff_curve) > 0:
+                        st.session_state.setdefault("config_basis", {}).setdefault("USD", {})["fedfunds_ois"] = _ff_curve
+                        loaded_count += 1
+                    else:
+                        st.warning("⚠️ USD FEDFUNDS OIS not found for selected date")
+                except Exception:
+                    pass
+
+                # NZD NZONIA OIS → display only
+                try:
+                    _nz_ois = _load_curve_from_db_latest("NZONIA", "NZD", load_date=str(_load_date))
+                    if _nz_ois is not None and len(_nz_ois) > 0:
+                        st.session_state.setdefault("config_basis", {}).setdefault("NZD", {})["nzonia_display"] = _nz_ois
+                        loaded_count += 1
+                except Exception:
+                    pass
+
+                # USD SOFR-FF Basis from benchmark_rates
+                try:
+                    _bconn = get_db_connection()
+                    if _bconn:
+                        _bcur = _bconn.cursor()
+                        _bcur.execute("""
+                            SELECT rate_type, rate FROM benchmark_rates
+                            WHERE currency='USD' AND rate_type LIKE 'SOFR_FF_BASIS_%%'
+                              AND date = (SELECT MAX(date) FROM benchmark_rates
+                                          WHERE currency='USD' AND rate_type LIKE 'SOFR_FF_BASIS_%%'
+                                            AND date <= %s)
+                        """, (str(_load_date),))
+                        _brows = _bcur.fetchall()
+                        _bcur.close(); _bconn.close()
+                        if _brows:
+                            import re as _re_b
+                            _basis_pts = {}
+                            for _rt, _rv in _brows:
+                                _lbl = _rt.replace("SOFR_FF_BASIS_", "")
+                                _mb = _re_b.match(r"(\d+)(Y|M)", _lbl)
+                                if _mb:
+                                    _mv = float(_mb.group(1))
+                                    _mat = _mv if _mb.group(2) == "Y" else _mv / 12
+                                    _basis_pts[_mat] = float(_rv)
+                            if _basis_pts:
+                                _bxs = sorted(_basis_pts)
+                                _basis_df = pd.DataFrame({"MaturityY": _bxs, "BasisBp": [_basis_pts[t] for t in _bxs]})
+                                st.session_state.setdefault("config_basis", {}).setdefault("USD", {})["sofr_ff_basis"] = _basis_df
+                                loaded_count += 1
+                except Exception:
+                    pass
 
                 if loaded_count > 0:
                     for _msg in _load_dbg:
@@ -11216,6 +11266,7 @@ def caps_floors_tab(vol_mode: str):
                 _sr3_auto = load_sr3_snapshot(currency="USD")
                 if _sr3_auto:
                     st.session_state["sr3_grid_data"] = _sr3_auto
+                    st.toast(f"📡 SR3 auto-load: {len(_sr3_auto)} contracts", icon="✅")
                     # Load saved label from user_configs, or derive from latest
                     _saved_sr3_lbl = load_user_config(
                         st.session_state.get("username", "wpo@rateedge.au"),
@@ -12600,6 +12651,13 @@ def caps_floors_tab(vol_mode: str):
             }
             caplet_vol_curve = dict(_curves_by_src.get(_active_src, otc_caplet_curve))
             st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
+            # v2604c debug: show which curve is active and why
+            _dbg_listed = _listed_curve_built is not None and len(_listed_curve_built or {}) > 0
+            _dbg_otc = otc_caplet_curve is not None and len(otc_caplet_curve or {}) > 0
+            st.caption(f"🔍 Active: {_active_src} | Listed built: {_dbg_listed} ({len(_listed_curve_built or {})} pts) | "
+                       f"OTC built: {_dbg_otc} ({len(otc_caplet_curve or {})} pts) | "
+                       f"_listed_term_curve: {_listed_term_curve is not None} | "
+                       f"_listed_1y_stradd: {_listed_1y_stradd}")
             # v2004x: write _caplet_curve_key so downstream ATM CFS Straddle
             # table cache invalidates when USD curves change. The key shape is
             # (active_src, spreads, atm_hash, listed state) so it changes on
@@ -22820,6 +22878,42 @@ def main():
                         set_timestamp("curves", "NZD")
                 except Exception:
                     pass
+
+            # ── Display-only curves (startup fallback) — don't affect CFS pricer ──
+            try:
+                _ff_s = _load_curve_from_db_latest("FEDFUNDS", "USD")
+                if _ff_s is not None and len(_ff_s) > 0:
+                    st.session_state.setdefault("config_basis", {}).setdefault("USD", {})["fedfunds_ois"] = _ff_s
+            except Exception:
+                pass
+            try:
+                _bconn_s = get_db_connection()
+                if _bconn_s:
+                    _bcur_s = _bconn_s.cursor()
+                    _bcur_s.execute("""
+                        SELECT rate_type, rate FROM benchmark_rates
+                        WHERE currency='USD' AND rate_type LIKE 'SOFR_FF_BASIS_%%'
+                          AND date = (SELECT MAX(date) FROM benchmark_rates
+                                      WHERE currency='USD' AND rate_type LIKE 'SOFR_FF_BASIS_%%')
+                    """)
+                    _brows_s = _bcur_s.fetchall()
+                    _bcur_s.close(); _bconn_s.close()
+                    if _brows_s:
+                        import re as _re_bs
+                        _basis_pts_s = {}
+                        for _rt, _rv in _brows_s:
+                            _lbl = _rt.replace("SOFR_FF_BASIS_", "")
+                            _mb = _re_bs.match(r"(\d+)(Y|M)", _lbl)
+                            if _mb:
+                                _mv = float(_mb.group(1))
+                                _mat = _mv if _mb.group(2) == "Y" else _mv / 12
+                                _basis_pts_s[_mat] = float(_rv)
+                        if _basis_pts_s:
+                            _bxs = sorted(_basis_pts_s)
+                            st.session_state.setdefault("config_basis", {}).setdefault("USD", {})["sofr_ff_basis"] = \
+                                pd.DataFrame({"MaturityY": _bxs, "BasisBp": [_basis_pts_s[t] for t in _bxs]})
+            except Exception:
+                pass
 
     # Sidebar for settings
     with st.sidebar:
