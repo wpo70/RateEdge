@@ -2747,8 +2747,6 @@ def build_caplet_vol_curve_from_surface(ccy: str, atm_surface):
         for i, m in enumerate(anchor_mats):
             temp_vols[m] = max(anchor_vols_array[i], 1.0)
         all_mats = np.array(sorted([m for m in temp_vols if m >= 1.0 and m == int(m)]))
-        if len(all_mats) < 2:
-            return temp_vols  # not enough anchors for CubicSpline
         all_vs   = np.array([temp_vols[m] for m in all_mats])
         cs = CubicSpline(all_mats, all_vs)
         interp = {}
@@ -6465,7 +6463,7 @@ def vol_config_tab():
                     except Exception as _aud_ex:
                         _curve_warnings.append(f"⚠️ AUD curve load error: {_aud_ex}")
 
-                # ── USD / NZD: projection curve from swap_rates ──
+                # ── USD / NZD: single curve from swap_rates ──
                 _single_curve_map = [
                     ("USD", "SOFR"),
                     ("NZD", "3M BKBM"),
@@ -6483,28 +6481,6 @@ def vol_config_tab():
                                 _curve_warnings.append(f"⚠️ {_db_ccy} {_db_fr}: no rates found in swap_rates for {_load_date}")
                         except Exception as _sc_err:
                             _curve_warnings.append(f"⚠️ {_db_ccy} {_db_fr} load failed: {_sc_err}")
-
-                # ── OIS / discounting curves for ALL currencies ──
-                _ois_curve_map = [
-                    ("NZD", "NZONIA",    "ois"),
-                    ("USD", "FEDFUNDS",  "ois"),
-                ]
-                for _ois_ccy, _ois_fr, _ois_key in _ois_curve_map:
-                    _existing_ois = st.session_state.get("config_basis", {}).get(_ois_ccy, {}).get(_ois_key)
-                    if _existing_ois is None or (hasattr(_existing_ois, '__len__') and len(_existing_ois) == 0):
-                        try:
-                            _ois_curve = _load_curve_from_db_latest(_ois_fr, _ois_ccy, load_date=str(_load_date))
-                            if _ois_curve is not None and len(_ois_curve) > 0:
-                                st.session_state.setdefault("config_basis", {}).setdefault(_ois_ccy, {})[_ois_key] = _ois_curve
-                                st.session_state.setdefault("basis_curves", {}).setdefault(_ois_ccy, {})[_ois_key] = _ois_curve
-                                # USD FEDFUNDS also stored as fedfunds_ois
-                                if _ois_fr == "FEDFUNDS":
-                                    st.session_state["config_basis"][_ois_ccy]["fedfunds_ois"] = _ois_curve
-                                loaded_count += 1
-                            else:
-                                _curve_warnings.append(f"⚠️ {_ois_ccy} {_ois_fr} OIS not found for {_load_date}")
-                        except Exception as _ois_err:
-                            _curve_warnings.append(f"⚠️ {_ois_ccy} {_ois_fr} OIS load failed: {_ois_err}")
                 # Show curve load warnings
                 for _cw in _curve_warnings:
                     st.warning(_cw)
@@ -22844,24 +22820,6 @@ def main():
                         set_timestamp("curves", "NZD")
                 except Exception:
                     pass
-
-            # ── OIS / discounting curves for ALL currencies (startup fallback) ──
-            _ois_startup_map = [
-                ("NZD", "NZONIA",   "ois"),
-                ("USD", "FEDFUNDS", "ois"),
-            ]
-            for _os_ccy, _os_fr, _os_key in _ois_startup_map:
-                _existing_ois_s = st.session_state.get("config_basis", {}).get(_os_ccy, {}).get(_os_key)
-                if _existing_ois_s is None or (hasattr(_existing_ois_s, '__len__') and len(_existing_ois_s) == 0):
-                    try:
-                        _os_curve = _load_curve_from_db_latest(_os_fr, _os_ccy)
-                        if _os_curve is not None and len(_os_curve) > 0:
-                            st.session_state.setdefault("config_basis", {}).setdefault(_os_ccy, {})[_os_key] = _os_curve
-                            st.session_state.setdefault("basis_curves", {}).setdefault(_os_ccy, {})[_os_key] = _os_curve
-                            if _os_fr == "FEDFUNDS":
-                                st.session_state["config_basis"][_os_ccy]["fedfunds_ois"] = _os_curve
-                    except Exception:
-                        pass
 
     # Sidebar for settings
     with st.sidebar:
