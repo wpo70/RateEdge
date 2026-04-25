@@ -12437,9 +12437,7 @@ def caps_floors_tab(vol_mode: str):
             with _mc3:
                 # Seed once, then rely on key=
                 if "cfs_overlay_choices" not in st.session_state:
-                    st.session_state["cfs_overlay_choices"] = (
-                        ["OTC only", "Listed bootstrap", "SR3 hybrid", "SR3 full"]
-                    )
+                    st.session_state["cfs_overlay_choices"] = []
                 _overlay_choices = st.multiselect(
                     "Overlay on chart",
                     ["OTC only", "Listed bootstrap", "SR3 hybrid", "SR3 full"],
@@ -12752,7 +12750,7 @@ def caps_floors_tab(vol_mode: str):
             # Content inside is gated on _use_listed.
             _le_exp = _listed_editor_box.expander("Listed Front editor - ratio/bp overrides", expanded=False)
             with _le_exp:
-              if not _use_listed:
+              if not st.session_state.get("_cfs_use_listed", False):
                   st.caption("Enable **Use Listed Front editor** checkbox above to edit SR3 ratios.")
               else:
                 try:
