@@ -13606,6 +13606,8 @@ def caps_floors_tab(vol_mode: str):
             with st.expander("📊 Resulting Caplet Vol Curve", expanded=False):
                 _overlay_sel_check = st.session_state.get("_cfs_overlay_sel", []) or []
                 _has_chart_data = bool(caplet_vol_curve and len(caplet_vol_curve) > 0)
+                _skip_chart_build = True  # default: skip unless else branch runs
+                _skip_chart_render = True  # skip cached render too when no overlays
                 if ccy == "USD" and not _overlay_sel_check:
                     st.caption("Select overlay curves above, then click Calculate CFS.")
                 elif not _has_chart_data:
@@ -13613,6 +13615,7 @@ def caps_floors_tab(vol_mode: str):
                 else:
                   from scipy.interpolate import CubicSpline
                   import plotly.graph_objects as _pgo
+                  _skip_chart_render = False
 
                   # ── Chart cache: skip CubicSpline rebuild if curves haven't changed ──
                   _chart_sig = (
@@ -13626,13 +13629,13 @@ def caps_floors_tab(vol_mode: str):
                     st.session_state.get("_cfs_chart_sig") == _chart_sig
                     and st.session_state.get("_cfs_chart_fig") is not None
                   )
-                if _skip_chart_build:
+                if not _skip_chart_render and _skip_chart_build and st.session_state.get("_cfs_chart_fig") is not None:
                     _ctbl = st.session_state.get("_cfs_chart_tbl")
                     if _ctbl is not None:
                         st.dataframe(_ctbl, use_container_width=True, hide_index=True)
                     st.plotly_chart(st.session_state["_cfs_chart_fig"], use_container_width=True)
 
-                if not _skip_chart_build:
+                if not _skip_chart_render and not _skip_chart_build:
                     # ── Table: show ALL selected overlays side-by-side ──
                   if ccy == "USD":
                       _sel_for_table = st.session_state.get("_cfs_overlay_sel", []) or []
