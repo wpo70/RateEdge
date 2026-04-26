@@ -22204,9 +22204,6 @@ def home_tab():
             f"""
             <div style="background:{card_bg};border:1px solid {border_color};border-radius:12px;padding:1.25rem;min-height:5.5rem;">
                 <div style="color:{accent_color};font-weight:600;margin-bottom:0.5rem;"> Multi-Currency</div>
-                <div style="color:{muted_color};font-size:0.85rem;">
-                    AUD, USD, NZD, EUR support with local market conventions
-                </div>
             </div>
             """,
             unsafe_allow_html=True,
