@@ -6422,6 +6422,9 @@ def vol_config_tab():
                 st.session_state.pop("_load_debug", None)
                 st.session_state["_db_load_date"] = str(_load_date)
                 loaded_count = load_all_session_data(user_id, load_date=str(_load_date))
+                # Force per-ccy wedge reload on next CFS tab render
+                st.session_state.pop("_cf_last_active_ccy", None)
+                st.session_state.pop("_cf_spread_stash", None)
                 _load_dbg = st.session_state.pop("_load_debug", [])
 
                 # Load curves from swap_rates for selected date — ALWAYS overwrite
@@ -11251,6 +11254,9 @@ def caps_floors_tab(vol_mode: str):
                         st.session_state["_cfs_listed_session_edits"] = dict(_db_le)
             except Exception:
                 pass
+        # USD defaults: Use Listed Front editor ON, active feed = Listed bootstrap
+        if ccy == "USD" and "_cfs_use_listed" not in st.session_state:
+            st.session_state["_cfs_use_listed"] = True
         # Restore ratio/bp/mode widget keys preserved through rerun
         _preserved_le = st.session_state.pop("_preserve_le_widget_keys", None)
         if _preserved_le:
@@ -12331,6 +12337,11 @@ def caps_floors_tab(vol_mode: str):
                             "USD", 1.0, _listed_term_curve, notional_mm=1.0
                         )
                         _listed_1y_stradd = float(_prem_1y_leg) * 2.0 if (_prem_1y_leg and _prem_1y_leg > 0) else None
+                        # Debug: show why straddle might be None
+                        _dbg_curve = st.session_state.get("config_curves", {}).get("USD")
+                        st.caption(f"📡 Listed 1Y prem: {_prem_1y_leg} | stradd: {_listed_1y_stradd} | "
+                                   f"SOFR curve: {'✅ ' + str(len(_dbg_curve)) + ' pts' if _dbg_curve is not None and hasattr(_dbg_curve, '__len__') else '❌ None'} | "
+                                   f"term_curve pts: {len(_listed_term_curve)}")
                         if _lf_pack_now == "both":
                             _prem_2y_leg = price_caplets_with_vol_curve(
                                 "USD", 2.0, _listed_term_curve, notional_mm=1.0
