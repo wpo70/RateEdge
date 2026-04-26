@@ -3897,7 +3897,7 @@ def show_header(ccy: str):
         f"""
         <div class="rateedge-header">
            RateEdge Options  {ccy}
-           <span class="rateedge-badge">Swaptions  Caps/Floors  Exotics  CVA  RV</span>
+           <span class="rateedge-badge">Swaptions  Caps/Floors  Exotics  RV Analysis</span>
         </div>
         <div class="rateedge-sub">
            Premium at expiry  swaps start T+1BD  SABR smiles  CVA / horizon / RV tools.
@@ -22233,9 +22233,6 @@ def home_tab():
             f"""
             <div style="background:{card_bg};border:1px solid {border_color};border-radius:12px;padding:1.25rem;">
                 <div style="color:{accent_color};font-weight:600;margin-bottom:0.5rem;"> Multi-Currency</div>
-                <div style="color:{muted_color};font-size:0.85rem;">
-                    AUD, NZD, USD with correct market conventions
-                </div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -22245,9 +22242,9 @@ def home_tab():
     st.markdown("---")
     st.markdown(f"###  Market Conventions by Currency")
     
-    conv_tabs = st.tabs([" AUD", " NZD", " USD", " EUR", " GBP", " JPY", " CAD"])
+    conv_tabs = st.tabs([" USD", " EUR", " AUD", " JPY", " GBP", " NZD", " CAD"])
     
-    with conv_tabs[0]:  # AUD
+    with conv_tabs[2]:  # AUD
         st.markdown("#### AUD Swaption Conventions *(AFMA IRD & IRO Conventions, June 2025)*")
         col1, col2 = st.columns(2)
         with col1:
@@ -22383,7 +22380,7 @@ def home_tab():
         )
         st.caption("Source: AFMA Interest Rate Options Conventions (June 2025) & AFMA Interest Rate Derivative Conventions (June 2025)")
     
-    with conv_tabs[1]:  # NZD
+    with conv_tabs[5]:  # NZD
         st.markdown("#### NZD Swaption Conventions")
         col1, col2 = st.columns(2)
         with col1:
@@ -22411,7 +22408,7 @@ def home_tab():
             | Calendar | Auckland/Wellington |
             """)
     
-    with conv_tabs[2]:  # USD
+    with conv_tabs[0]:  # USD
         st.markdown("#### USD Swaption Conventions")
         col1, col2 = st.columns(2)
         with col1:
@@ -22439,7 +22436,7 @@ def home_tab():
             | Calendar | NYC |
             """)
     
-    with conv_tabs[3]:  # EUR
+    with conv_tabs[1]:  # EUR
         st.markdown("#### EUR Swaption Conventions")
         col1, col2 = st.columns(2)
         with col1:
@@ -22495,7 +22492,7 @@ def home_tab():
             | Calendar | London |
             """)
     
-    with conv_tabs[5]:  # JPY
+    with conv_tabs[3]:  # JPY
         st.markdown("#### JPY Swaption Conventions")
         col1, col2 = st.columns(2)
         with col1:
@@ -22550,6 +22547,7 @@ def home_tab():
             | Roll | Modified Following |
             | Calendar | Toronto |
             """)
+
 
 
 def generate_basis_matrix(ccy: str, basis_6v3: pd.DataFrame) -> pd.DataFrame:
@@ -22969,11 +22967,12 @@ def main():
         )
         st.session_state["theme_name"] = theme_choice
         
-        # Currency
+        # Currency — default to USD
+        _ccy_idx = SUPPORTED_CURRENCIES.index(st.session_state.get("sidebar_ccy", "USD")) if st.session_state.get("sidebar_ccy", "USD") in SUPPORTED_CURRENCIES else SUPPORTED_CURRENCIES.index("USD")
         ccy = st.selectbox(
             " Currency",
             SUPPORTED_CURRENCIES,
-            index=0,
+            index=_ccy_idx,
             key="sidebar_ccy",
         )
         
