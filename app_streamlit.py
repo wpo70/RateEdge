@@ -3353,25 +3353,43 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         initial_vol_guess = max(gap_premium * 1.5, 50.0)
         caplet_vols[result_mat] = initial_vol_guess
     
-    # === STEP 3: SOLVE FLAT VOL AT EACH ANCHOR ===
-    # v2604x: Per-anchor flat vol solving.  Each anchor gets the single
-    # flat vol from 0→N that reproduces the cumulative leg premium.
-    # This matches the "Flat Vol bp" column in the CFS table exactly.
-    # Previous simultaneous CubicSpline solver was finding spot vols
-    # (node values in the spline), which diverge from flat vols when
-    # the 1Y vol is far from the tail (e.g. listed 1Y = 63 vs OTC ~80).
+    # === STEP 3: SOLVE FORWARD BUCKET VOLS (sequential) ===
+    # v2604ae: Each anchor gets the FORWARD vol for its year-bucket
+    # (prev_anchor→anchor) that reproduces the cumulative premium.
+    # Forward vols ≈ marginal/spot vols (same concept as SR3 per-quarter
+    # vols), so the SR3 overlay on the front transitions smoothly into
+    # the tail without the 10bp cliff that flat vols caused.
     anchor_mats_to_solve = sorted([m for m in cumulative_leg_prems.keys() if m > 1.0])
 
+    # Build solved quarter grid starting from the 1Y front
+    solved_quarters = {}
+    for t in [0.25, 0.5, 0.75, 1.0]:
+        solved_quarters[t] = caplet_vols.get(t, caplet_vols.get(1.0, 75.0))
+
+    prev_anchor = 1.0
     for mat in anchor_mats_to_solve:
         target = cumulative_leg_prems[mat]
+
+        def _fwd_err(trial_vol, _m=mat, _pa=prev_anchor):
+            temp_curve = dict(solved_quarters)
+            _t = round(_pa + 0.25, 2)
+            while _t <= _m + 1e-6:
+                temp_curve[round(_t, 2)] = max(trial_vol, 1.0)
+                _t += 0.25
+            return price_caplets_with_vol_curve(ccy, _m, temp_curve, notional_mm=1.0) - target
+
         try:
-            solved = opt.brentq(
-                lambda v, _m=mat: price_caplets_flat_vol(v, _m) - target,
-                1.0, 300.0, xtol=0.001,
-            )
-            caplet_vols[mat] = max(solved, 1.0)
-        except:
-            caplet_vols[mat] = max(target * 1.58, 1.0)
+            solved = opt.brentq(_fwd_err, 1.0, 300.0, xtol=0.01)
+        except Exception:
+            solved = caplet_vols.get(mat, 80.0)
+
+        caplet_vols[mat] = max(solved, 1.0)
+        # Lock in quarter vols for next iteration
+        _t = round(prev_anchor + 0.25, 2)
+        while _t <= mat + 1e-6:
+            solved_quarters[round(_t, 2)] = max(solved, 1.0)
+            _t += 0.25
+        prev_anchor = mat
     
     # Final cubic spline interpolation with solved anchors
     from scipy.interpolate import CubicSpline
@@ -13611,8 +13629,16 @@ def caps_floors_tab(vol_mode: str):
                         # For 20Y: extend using vol spread on 15Y flat vol
                         if _key == "ext_15v20":
                             _vol_spd_20 = st.session_state.get("cf_spr_15v20", -5.0)
-                            # Get 15Y flat vol from solved caplet curve
-                            _vol_15 = _caplet_vc.get(15.0) if _caplet_vc else None
+                            # Get 15Y vol from solved caplet curve (with fallback)
+                            _vol_15 = None
+                            if _caplet_vc:
+                                _vol_15 = _caplet_vc.get(15.0)
+                                if _vol_15 is None:
+                                    # Fallback: nearest key to 15.0
+                                    _vc_keys = sorted(_caplet_vc.keys())
+                                    _nearest = min(_vc_keys, key=lambda k: abs(k - 15.0))
+                                    if abs(_nearest - 15.0) < 0.5:
+                                        _vol_15 = _caplet_vc[_nearest]
                             if _vol_15 is not None:
                                 try:
                                     _vol_20 = max(_vol_15 + _vol_spd_20, 1.0)
@@ -14404,6 +14430,7 @@ def caps_floors_tab(vol_mode: str):
             st.session_state["portfolio"].append(
                 dict(
                     instrument_type="Cap/Floor",
+                    trade_id=f"CF{pd.Timestamp.now().strftime('%Y%m%d%H%M%S%f')}",
                     currency=ccy,
                     structure=cf_type,
                     expiry=first_fixing,
@@ -14600,8 +14627,19 @@ def caps_floors_tab(vol_mode: str):
                 except Exception as _cpe:
                     st.error(f"Print Tix error: {_cpe}")
             if _crc[13].button("🗑️", key=f"cf_del_{_cidx}", help="Remove"):
-                st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", [])
-                                                  if not (t.get("instrument_type")=="Cap/Floor" and t.get("label")==_cl)]
+                _del_tid = _crow.get("trade_id")
+                if _del_tid:
+                    # v2604ae: delete by unique trade_id
+                    st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", [])
+                                                      if t.get("trade_id") != _del_tid]
+                else:
+                    # Legacy trades without trade_id: remove first match only
+                    _port = st.session_state.get("portfolio", [])
+                    for _di, _dt in enumerate(_port):
+                        if _dt.get("instrument_type") == "Cap/Floor" and _dt.get("label") == _cl:
+                            _port.pop(_di)
+                            break
+                    st.session_state["portfolio"] = _port
                 _save_portfolio(); st.rerun()
 
 
