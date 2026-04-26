@@ -13544,7 +13544,7 @@ def caps_floors_tab(vol_mode: str):
                 _lf_sig,
                 "v2204q",
             )
-            _cfs_cached = st.session_state.get("_atm_cfs_cache_key") == _cfs_id
+            _cfs_cached = False  # v2604m: always recompute — cache was causing stale flat vols
             if _cfs_cached and st.session_state.get("_atm_cfs_rows_cache"):
                 st.dataframe(pd.DataFrame(st.session_state["_atm_cfs_rows_cache"]),
                              use_container_width=True, hide_index=True)
