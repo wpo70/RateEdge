@@ -22920,6 +22920,12 @@ def main():
             except Exception:
                 pass
             try:
+                _nz_ois_s = _load_curve_from_db_latest("NZONIA", "NZD")
+                if _nz_ois_s is not None and len(_nz_ois_s) > 0:
+                    st.session_state.setdefault("config_basis", {}).setdefault("NZD", {})["nzonia_display"] = _nz_ois_s
+            except Exception:
+                pass
+            try:
                 _bconn_s = get_db_connection()
                 if _bconn_s:
                     _bcur_s = _bconn_s.cursor()
