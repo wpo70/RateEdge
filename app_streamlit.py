@@ -12418,9 +12418,20 @@ def caps_floors_tab(vol_mode: str):
                         spread_10y2y=spreads_dict["10y2y"],
                         spread_12y3y=spreads_dict["12y3y"],
                     )
-                    # v2604r: Listed bootstrap = wedge chain anchored on listed
-                    # straddle. Flat vol anchors stay intact (no per-quarter
-                    # overlay). Chart matches table. Premiums add up.
+                    # v2604y: overlay SR3 listed per-quarter vols on
+                    # the front.  Whites only = 0→1Y, whites+reds =
+                    # 0→2Y.  Tail keeps flat vol anchors from wedge
+                    # chain.  The listed front IS the whole point of
+                    # "Listed bootstrap" — v2604s removed the overlay
+                    # too aggressively (it was the post-cutoff overlay
+                    # that was corrupting anchors, not the front).
+                    if _built and _listed_term_curve:
+                        _cutoff = 2.0 if (_lf_pack_now == "both"
+                                          and _listed_2y_stradd
+                                          and _listed_2y_stradd > 0) else 1.0
+                        for _lt in sorted(_listed_term_curve.keys()):
+                            if _lt <= _cutoff + 1e-6:
+                                _built[round(_lt, 2)] = _listed_term_curve[_lt]
                     return _built
                 finally:
                     if _save_3m1y:
