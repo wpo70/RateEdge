@@ -13674,7 +13674,7 @@ def caps_floors_tab(vol_mode: str):
                             "End":   _end_dt.strftime("%d %b %y"),
                             "ATM Fwd %": f"{_fwd_rate*100:.3f}" if _fwd_rate else "—",
                             "Straddle bp": f"{_straddle_prem:.4f}" if _straddle_prem else "—",
-                            "Flat Vol bp": f"{_flat_vol:.1f}" if _flat_vol else "—",
+                            "Flat Vol bp": f"{_flat_vol:.2f}" if _flat_vol else "—",
                         })
                         _atm_cfs_data[f"cf_straddle_{_t}y"] = {"value": _straddle_prem, "label": f"{_t}Y ATM CFS straddle"}
                         if _flat_vol: _atm_cfs_data[f"cf_vol_{_t}y"] = {"value": round(float(_flat_vol), 2), "label": f"{_t}Y ATM CFS flat vol"}
