@@ -3054,7 +3054,7 @@ def build_caplet_vol_curve_sr3(
         # Need at least 2 points for interpolation
         return otc_fallback_curve
     
-    from scipy.interpolate import PchipInterpolator, CubicSpline
+    from scipy.interpolate import PchipInterpolator
     anch_t = np.array([t for t, _ in anchors_below_cutoff])
     anch_v = np.array([v for _, v in anchors_below_cutoff])
     
@@ -3132,7 +3132,7 @@ def build_caplet_vol_curve_sr3_full(
     if len(anchors) < 2:
         return otc_fallback_curve
     
-    from scipy.interpolate import PchipInterpolator, CubicSpline
+    from scipy.interpolate import PchipInterpolator
     anch_t = np.array([t for t, _ in anchors])
     anch_v = np.array([v for _, v in anchors])
     
@@ -12120,7 +12120,7 @@ def caps_floors_tab(vol_mode: str):
         spread_20v30 = st.session_state.get("cf_spr_20v30", -5.0)
 
         # Wedges section — use expander for widget tree stability
-        _wedges_exp = st.expander("Spreads & SABRs", expanded=st.session_state.get("wedges_expanded", False))
+        _wedges_exp = st.expander("Spreads & SABRs", expanded=st.session_state.get("wedges_expanded", True))
         with _wedges_exp:
             if "cfs_table_data" not in st.session_state:
                 st.session_state["cfs_table_data"] = {}
@@ -13870,7 +13870,7 @@ def caps_floors_tab(vol_mode: str):
 
         # ── ATM CFS Straddle Table ──────────────────────────────────
         st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
-        _atm_cfs_exp = st.expander("ATM CFS Straddles", expanded=st.session_state.get("atm_cfs_expanded", False))
+        _atm_cfs_exp = st.expander("ATM CFS Straddles", expanded=st.session_state.get("atm_cfs_expanded", True))
         with _atm_cfs_exp:
             _CFS_MAP = [
                 (1, "3m1y"), (2, "1y1y"), (3, "2y1y"), (4, "3y1y"), (5, "4y1y"),
