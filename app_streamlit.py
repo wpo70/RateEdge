@@ -3353,68 +3353,25 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         initial_vol_guess = max(gap_premium * 1.5, 50.0)
         caplet_vols[result_mat] = initial_vol_guess
     
-    # === STEP 3: SOLVE FOR ALL ANCHOR VOLS SIMULTANEOUSLY ===
-    # Must solve all at once because cubic spline shape depends on ALL anchors
-    
-    def price_with_interp_curve(anchor_vols_array):
-        """
-        Given vols at anchor points, cubic spline interpolate and price all maturities.
-        Returns array of pricing errors vs targets.
-        """
-        # Build vol dict from array
-        temp_vols = dict(caplet_vols)  # Start with 1Y vols
-        anchor_mats_to_solve = sorted([m for m in cumulative_leg_prems.keys() if m > 1.0])
-        
-        for i, mat in enumerate(anchor_mats_to_solve):
-            temp_vols[mat] = max(anchor_vols_array[i], 1.0)
-        
-        # Cubic spline - only use integer anchors
-        from scipy.interpolate import CubicSpline
-        all_anchor_mats = np.array(sorted([m for m in temp_vols.keys() if m >= 1.0 and m == int(m)]))
-        all_anchor_vols = np.array([temp_vols[m] for m in all_anchor_mats])
-        
-        if len(all_anchor_mats) < 2:
-            return np.array([0.0] * len(anchor_mats_to_solve))
-        
-        cs = CubicSpline(all_anchor_mats, all_anchor_vols)
-        
-        # Build interpolated curve
-        interp_curve = {}
-        for t in [0.25, 0.5, 0.75, 1.0]:
-            interp_curve[t] = temp_vols.get(t, temp_vols.get(1.0, 75.0))
-        
-        t = 1.25
-        max_mat = all_anchor_mats[-1]
-        while t <= max_mat + 1e-6:
-            interp_curve[round(t, 2)] = max(float(cs(t)), 1.0)
-            t += 0.25
-        
-        # Price each maturity using SHARED pricing function
-        errors = []
-        for check_mat in anchor_mats_to_solve:
-            target_prem = cumulative_leg_prems[check_mat]
-            actual_prem = price_caplets_with_vol_curve(ccy, check_mat, interp_curve, notional_mm=1.0)
-            errors.append(actual_prem - target_prem)
-        
-        return np.array(errors)
-    
-    # Solve for all anchor vols simultaneously
+    # === STEP 3: SOLVE FLAT VOL AT EACH ANCHOR ===
+    # v2604x: Per-anchor flat vol solving.  Each anchor gets the single
+    # flat vol from 0→N that reproduces the cumulative leg premium.
+    # This matches the "Flat Vol bp" column in the CFS table exactly.
+    # Previous simultaneous CubicSpline solver was finding spot vols
+    # (node values in the spline), which diverge from flat vols when
+    # the 1Y vol is far from the tail (e.g. listed 1Y = 63 vs OTC ~80).
     anchor_mats_to_solve = sorted([m for m in cumulative_leg_prems.keys() if m > 1.0])
-    
-    if len(anchor_mats_to_solve) > 0:
-        initial_guess = np.array([caplet_vols[m] for m in anchor_mats_to_solve])
-        
-        from scipy.optimize import least_squares
+
+    for mat in anchor_mats_to_solve:
+        target = cumulative_leg_prems[mat]
         try:
-            result = least_squares(price_with_interp_curve, initial_guess,
-                                   ftol=1e-4, xtol=1e-4, gtol=1e-4,
-                                   max_nfev=200)
-            
-            if result.success:
-                for i, mat in enumerate(anchor_mats_to_solve):
-                    caplet_vols[mat] = max(result.x[i], 1.0)
+            solved = opt.brentq(
+                lambda v, _m=mat: price_caplets_flat_vol(v, _m) - target,
+                1.0, 300.0, xtol=0.001,
+            )
+            caplet_vols[mat] = max(solved, 1.0)
         except:
-            pass
+            caplet_vols[mat] = max(target * 1.58, 1.0)
     
     # Final cubic spline interpolation with solved anchors
     from scipy.interpolate import CubicSpline
