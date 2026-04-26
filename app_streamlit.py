@@ -22176,7 +22176,7 @@ def home_tab():
     with col1:
         st.markdown(
             f"""
-            <div style="background:{card_bg};border:1px solid {border_color};border-radius:12px;padding:1.25rem;">
+            <div style="background:{card_bg};border:1px solid {border_color};border-radius:12px;padding:1.25rem;min-height:5.5rem;">
                 <div style="color:{accent_color};font-weight:600;margin-bottom:0.5rem;"> Vol Surfaces</div>
                 <div style="color:{muted_color};font-size:0.85rem;">
                     ATM vol grids, SABR smile modeling, 3D surface editor
@@ -22189,7 +22189,7 @@ def home_tab():
     with col2:
         st.markdown(
             f"""
-            <div style="background:{card_bg};border:1px solid {border_color};border-radius:12px;padding:1.25rem;">
+            <div style="background:{card_bg};border:1px solid {border_color};border-radius:12px;padding:1.25rem;min-height:5.5rem;">
                 <div style="color:{accent_color};font-weight:600;margin-bottom:0.5rem;"> Curve Analytics</div>
                 <div style="color:{muted_color};font-size:0.85rem;">
                     Forward swap calculation, curve building, risk analytics
@@ -22202,8 +22202,11 @@ def home_tab():
     with col3:
         st.markdown(
             f"""
-            <div style="background:{card_bg};border:1px solid {border_color};border-radius:12px;padding:1.25rem;">
+            <div style="background:{card_bg};border:1px solid {border_color};border-radius:12px;padding:1.25rem;min-height:5.5rem;">
                 <div style="color:{accent_color};font-weight:600;margin-bottom:0.5rem;"> Multi-Currency</div>
+                <div style="color:{muted_color};font-size:0.85rem;">
+                    AUD, USD, NZD, EUR support with local market conventions
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
