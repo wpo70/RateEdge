@@ -22872,6 +22872,20 @@ def main():
             # ── Step 2: Load SABR/curves/spreads from user_configs ──
             try:
                 _auto_loaded = load_all_session_data(user_id)
+                # load_all_session_data hardcodes AUD spreads — reload correct ccy
+                try:
+                    _ccy_startup = st.session_state.get("sidebar_ccy", "USD")
+                    _uid_startup = user_id
+                    _db_sw_startup = load_user_config(_uid_startup, "cf_spreads", _ccy_startup)
+                    if not _db_sw_startup:
+                        _alt_startup = "wpo70@icloud.com" if _uid_startup != "wpo70@icloud.com" else "wpo@rateedge.au"
+                        _db_sw_startup = load_user_config(_alt_startup, "cf_spreads", _ccy_startup)
+                    if _db_sw_startup and isinstance(_db_sw_startup, dict):
+                        for _k, _v in _db_sw_startup.items():
+                            if _k.startswith("cf_spr_"):
+                                st.session_state[_k] = float(_v)
+                except Exception:
+                    pass
                 if _auto_loaded > 0:
                     st.session_state["_auto_load_msg"] = st.session_state.get("_auto_load_msg","") + f" | Configs: {_auto_loaded}"
             except Exception as _ale:
