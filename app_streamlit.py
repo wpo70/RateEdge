@@ -11257,6 +11257,20 @@ def caps_floors_tab(vol_mode: str):
         # USD defaults: Use Listed Front editor ON, active feed = Listed bootstrap
         if ccy == "USD" and "_cfs_use_listed" not in st.session_state:
             st.session_state["_cfs_use_listed"] = True
+        # Load saved contract selection + pack mode from DB
+        if ccy == "USD" and "_cfs_white_selected" not in st.session_state and HAS_POSTGRES:
+            try:
+                _uid_sel = st.session_state.get("username", "wpo@rateedge.au")
+                _db_sel = load_user_config(_uid_sel, "cfs_listed_selection", "USD")
+                if _db_sel and isinstance(_db_sel, dict):
+                    _ws = _db_sel.get("white_selected", [])
+                    if _ws:
+                        st.session_state["_cfs_white_selected"] = set(_ws)
+                    _pm = _db_sel.get("pack_mode")
+                    if _pm:
+                        st.session_state["_cfs_listed_pack"] = _pm
+            except Exception:
+                pass
         # Restore ratio/bp/mode widget keys preserved through rerun
         _preserved_le = st.session_state.pop("_preserve_le_widget_keys", None)
         if _preserved_le:
@@ -13328,6 +13342,13 @@ def caps_floors_tab(vol_mode: str):
                                       try:
                                           _uid_le = st.session_state.get("username", "wpo@rateedge.au")
                                           save_user_config(_uid_le, "cfs_listed_committed_edits", "USD", _session_edits)
+                                          # Also persist contract selection + pack mode
+                                          _white_sel = list(st.session_state.get("_cfs_white_selected", []) or [])
+                                          _pack_mode = st.session_state.get("_cfs_listed_pack", "whites")
+                                          save_user_config(_uid_le, "cfs_listed_selection", "USD", {
+                                              "white_selected": _white_sel,
+                                              "pack_mode": _pack_mode,
+                                          })
                                       except Exception:
                                           pass
                                   # v2404p: NO cache pops, NO preserve blocks, NO st.rerun().
