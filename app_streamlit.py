@@ -11588,6 +11588,11 @@ def caps_floors_tab(vol_mode: str):
             strike = fwd + (offset/10000.0 if cf_type == "Digital Cap" else -offset/10000.0)
             st.info(f"Strike: **{strike*100:.4f}%** ({strike_mode} {'OTM' if offset > 0 else 'ATM'})")
 
+    # v2704a: USD pricer + blotter renders here (after strikes, before vol source).
+    # Container is filled from the code below — st.container() acts as a portal.
+    if ccy == "USD":
+        _cf_pricer_container = st.container()
+
     vol_src = st.radio(
         "Vol source",
         ["WEDGES (Edit Spreads)", "Surface (Auto)", "Manual Flat", "Manual Term Structure"],
@@ -13747,12 +13752,6 @@ def caps_floors_tab(vol_mode: str):
                     f"2y_stradd={_s2y if _s2y is None else f'{_s2y:.4f}'}  "
                     f"| committed_edits: {_comm_str}"
                 )
-
-        # v2704a: USD pricer + blotter renders here (right after CFS table)
-        # instead of at the bottom. Container is filled from the original
-        # code position below — st.container() acts as a portal.
-        if ccy == "USD":
-            _cf_pricer_container = st.container()
 
         # caplet curve already built above — use it directly
         
