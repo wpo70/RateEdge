@@ -6422,9 +6422,22 @@ def vol_config_tab():
                 st.session_state.pop("_load_debug", None)
                 st.session_state["_db_load_date"] = str(_load_date)
                 loaded_count = load_all_session_data(user_id, load_date=str(_load_date))
-                # Force per-ccy wedge reload on next CFS tab render
-                st.session_state.pop("_cf_last_active_ccy", None)
-                st.session_state.pop("_cf_spread_stash", None)
+                # load_all_session_data hardcodes AUD spreads — reload correct ccy from DB
+                if HAS_POSTGRES:
+                    try:
+                        _ccy_now = st.session_state.get("sidebar_ccy", "USD")
+                        _uid_sw_fix = st.session_state.get("username", "wpo@rateedge.au")
+                        _db_sw_fix = load_user_config(_uid_sw_fix, "cf_spreads", _ccy_now)
+                        # Try alternate ID if primary returns nothing
+                        if not _db_sw_fix:
+                            _alt_uid = "wpo70@icloud.com" if _uid_sw_fix != "wpo70@icloud.com" else "wpo@rateedge.au"
+                            _db_sw_fix = load_user_config(_alt_uid, "cf_spreads", _ccy_now)
+                        if _db_sw_fix and isinstance(_db_sw_fix, dict):
+                            for _k, _v in _db_sw_fix.items():
+                                if _k.startswith("cf_spr_"):
+                                    st.session_state[_k] = float(_v)
+                    except Exception:
+                        pass
                 _load_dbg = st.session_state.pop("_load_debug", [])
 
                 # Load curves from swap_rates for selected date — ALWAYS overwrite
@@ -11249,9 +11262,11 @@ def caps_floors_tab(vol_mode: str):
             try:
                 _uid_le_load = st.session_state.get("username", "wpo@rateedge.au")
                 _db_le = load_user_config(_uid_le_load, "cfs_listed_committed_edits", "USD")
+                if not _db_le:
+                    _alt = "wpo70@icloud.com" if _uid_le_load != "wpo70@icloud.com" else "wpo@rateedge.au"
+                    _db_le = load_user_config(_alt, "cfs_listed_committed_edits", "USD")
                 if _db_le and isinstance(_db_le, dict):
                     st.session_state["_cfs_listed_committed_edits"] = _db_le
-                    # Also seed session edits so editor shows them
                     if "_cfs_listed_session_edits" not in st.session_state:
                         st.session_state["_cfs_listed_session_edits"] = dict(_db_le)
             except Exception:
@@ -11264,6 +11279,9 @@ def caps_floors_tab(vol_mode: str):
             try:
                 _uid_sel = st.session_state.get("username", "wpo@rateedge.au")
                 _db_sel = load_user_config(_uid_sel, "cfs_listed_selection", "USD")
+                if not _db_sel:
+                    _alt2 = "wpo70@icloud.com" if _uid_sel != "wpo70@icloud.com" else "wpo@rateedge.au"
+                    _db_sel = load_user_config(_alt2, "cfs_listed_selection", "USD")
                 if _db_sel and isinstance(_db_sel, dict):
                     _ws = _db_sel.get("white_selected", [])
                     if _ws:
@@ -11972,6 +11990,10 @@ def caps_floors_tab(vol_mode: str):
                     _uid_cf = st.session_state.get("username", "default")
                     if HAS_POSTGRES:
                         save_user_config(_uid_cf, "cf_spreads", ccy, _cf_data)
+                        # Save under both IDs so data persists regardless of login method
+                        for _alt_uid in ["wpo@rateedge.au", "wpo70@icloud.com"]:
+                            if _alt_uid != _uid_cf:
+                                save_user_config(_alt_uid, "cf_spreads", ccy, _cf_data)
                 except Exception:
                     pass
 
@@ -13343,14 +13365,16 @@ def caps_floors_tab(vol_mode: str):
                                   if HAS_POSTGRES and _session_edits:
                                       try:
                                           _uid_le = st.session_state.get("username", "wpo@rateedge.au")
-                                          save_user_config(_uid_le, "cfs_listed_committed_edits", "USD", _session_edits)
-                                          # Also persist contract selection + pack mode
+                                          _all_uids = {"wpo@rateedge.au", "wpo70@icloud.com", _uid_le}
+                                          for _save_uid in _all_uids:
+                                              save_user_config(_save_uid, "cfs_listed_committed_edits", "USD", _session_edits)
                                           _white_sel = list(st.session_state.get("_cfs_white_selected", []) or [])
                                           _pack_mode = st.session_state.get("_cfs_listed_pack", "whites")
-                                          save_user_config(_uid_le, "cfs_listed_selection", "USD", {
-                                              "white_selected": _white_sel,
-                                              "pack_mode": _pack_mode,
-                                          })
+                                          for _save_uid in _all_uids:
+                                              save_user_config(_save_uid, "cfs_listed_selection", "USD", {
+                                                  "white_selected": _white_sel,
+                                                  "pack_mode": _pack_mode,
+                                              })
                                       except Exception:
                                           pass
                                   # v2404p: NO cache pops, NO preserve blocks, NO st.rerun().
