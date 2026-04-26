@@ -12461,14 +12461,9 @@ def caps_floors_tab(vol_mode: str):
                         spread_10y2y=spreads_dict["10y2y"],
                         spread_12y3y=spreads_dict["12y3y"],
                     )
-                    if _built and _listed_term_curve:
-                        # Option A: overlay listed term structure on the front.
-                        # This gives per-quarter term structure (e.g. SFRM6 at
-                        # 0.25, SFRU6 at 0.5, ...) rather than one flat vol.
-                        _ovr_end = 2.0 if _lf_pack_now == "both" else 1.0
-                        for _t_pt in sorted(_listed_term_curve.keys()):
-                            if _t_pt <= _ovr_end + 1e-6:
-                                _built[_t_pt] = _listed_term_curve[_t_pt]
+                    # v2604r: Listed bootstrap = wedge chain anchored on listed
+                    # straddle. Flat vol anchors stay intact (no per-quarter
+                    # overlay). Chart matches table. Premiums add up.
                     return _built
                 finally:
                     if _save_3m1y:
@@ -12806,6 +12801,8 @@ def caps_floors_tab(vol_mode: str):
                 _listed_curve_built  = _extend_usd_curve_to_30y(_listed_curve_built)
                 sr3_hybrid_curve     = _extend_usd_curve_to_30y(sr3_hybrid_curve)
                 sr3_full_curve       = _extend_usd_curve_to_30y(sr3_full_curve)
+                caplet_vol_curve     = _extend_usd_curve_to_30y(caplet_vol_curve)
+                st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
 
             st.session_state["_cfs_otc_curve"]        = otc_caplet_curve
             st.session_state["_cfs_listed_bootstrap"] = _listed_curve_built
