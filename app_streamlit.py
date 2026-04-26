@@ -12871,6 +12871,12 @@ def caps_floors_tab(vol_mode: str):
 
             # Clear calc flag AFTER all builds complete — not before
             st.session_state.pop("_cfs_calc_requested", None)
+            # Force ATM CFS table to recompute with fresh curve data
+            st.session_state.pop("_atm_cfs_cache_key", None)
+            st.session_state.pop("_atm_cfs_rows_cache", None)
+            # Force chart to recompute
+            st.session_state.pop("_cfs_chart_sig", None)
+            st.session_state.pop("_cfs_chart_fig", None)
 
 
             # ═════════════════════════════════════════════════════════════
