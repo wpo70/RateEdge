@@ -11193,6 +11193,7 @@ def swaptions_tab(vol_mode: str):
 # slower but never crash.
 def caps_floors_tab(vol_mode: str):
     st.subheader("Caps & Floors")
+    _cf_pricer_container = None  # v2704a: set for USD after CFS table
     
     # Currency selector
     col_ccy, col_spacer = st.columns([1, 3])
@@ -13747,6 +13748,12 @@ def caps_floors_tab(vol_mode: str):
                     f"| committed_edits: {_comm_str}"
                 )
 
+        # v2704a: USD pricer + blotter renders here (right after CFS table)
+        # instead of at the bottom. Container is filled from the original
+        # code position below — st.container() acts as a portal.
+        if ccy == "USD":
+            _cf_pricer_container = st.container()
+
         # caplet curve already built above — use it directly
         
         # Show the curve
@@ -14208,6 +14215,12 @@ def caps_floors_tab(vol_mode: str):
                 )
                 st.plotly_chart(fig2, use_container_width=True)
 
+    # v2704a: for USD, redirect pricer + blotter into the container
+    # positioned above the caplet vol chart (after ATM CFS table).
+    # Non-USD renders in place (original position).
+    if _cf_pricer_container is not None:
+        _cf_pricer_container.__enter__()
+
     st.markdown("---")
     
     if st.button(" Price Cap/Floor", key="cf_price", type="primary", disabled=is_trainee()):
@@ -14531,116 +14544,120 @@ def caps_floors_tab(vol_mode: str):
     _cf_port = [t for t in st.session_state.get("portfolio", []) if t.get("instrument_type") == "Cap/Floor"]
     if _cf_port:
         st.markdown("---")
-        _ph1, _ph2 = st.columns([3, 1])
-        with _ph1:
-            st.markdown("### Cap/Floor Trade Blotter")
-        with _ph2:
-            if st.button("🗑️ Clear All", key="cf_clear_portfolio"):
-                st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", []) if t.get("instrument_type") != "Cap/Floor"]
-                st.rerun()
+        with st.expander(f"📋 Cap/Floor Trade Blotter  ({len(_cf_port)} trade{'s' if len(_cf_port) != 1 else ''})",
+                         expanded=st.session_state.get("cf_blotter_expanded", True)):
+            _ph2_col = st.columns([5, 1])
+            with _ph2_col[1]:
+                if st.button("🗑️ Clear All", key="cf_clear_portfolio"):
+                    st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", []) if t.get("instrument_type") != "Cap/Floor"]
+                    st.rerun()
 
-        _df = pd.DataFrame(_cf_port)
-        _df["_sort"] = _df["expiry"].apply(lambda e: label_to_years(str(e)))
-        _df = _df.sort_values("_sort").reset_index(drop=True)
-
-        _CF_STATUS_COLOURS = {
-            "TP Trade":     "rgba(220,255,220,0.95)",
-            "Away Trade":   "rgba(255,210,210,0.95)",
-            "Direct Trade": "rgba(255,235,195,0.95)",
-        }
-        _CF_STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade"]
-
-        st.markdown(
-            "<div style='display:grid;grid-template-columns:2.5% 15% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 12.5% 6.0% 6.0% 6.0%;"
-            "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
-            "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
-            "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
-            "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot Prem</span>"
-            "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Prnt</span><span>Del</span></div>",
-            unsafe_allow_html=True)
-
-        for _cidx, _crow in _df.iterrows():
-            _cl  = _crow.get("label", f"{_crow.get('expiry','')}x{_crow.get('tenor','')}")
-            _cex = _crow.get("expiry",""); _cten = str(_crow.get("tenor",""))
-            _cst = _crow.get("structure","")
-            _cf_sk = f"_cf_status_{_cl}_{_cex}_{_cten}"
-            _cf_cur = st.session_state.get(_cf_sk, "—")
-            _cf_bg  = _CF_STATUS_COLOURS.get(_cf_cur, "white")
-            _cf_fwd  = float(_crow.get('pv_bp_fwd', _crow.get('pv_bp', 0)))
-            _ois_cf = (lambda _x: _x if _x is not None else get_basis_curve(ccy, 'ois'))(st.session_state.get('config_basis', {}).get(ccy, {}).get('ois'))
-            def _df_cf(ey):
-                try:
-                    if _ois_cf is not None:
-                        _ox=_ois_cf[_ois_cf.columns[0]].to_numpy().astype(float); _oy=_ois_cf[_ois_cf.columns[1]].to_numpy().astype(float)/100.0
-                        return math.exp(-float(np.interp(ey,_ox,_oy))*ey)
-                    return math.exp(-0.035*ey)
-                except: return 1.0
-            _cf_spot = _cf_fwd * _df_cf(label_to_years(str(_crow.get('expiry','1y'))))
-            _crc = st.columns([0.25, 1.50, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.25, 0.60, 0.60, 0.65])
-            _cf_vals = [
-                f"{_cidx+1}", _cst, _cex, _cten,
-                f"{float(_crow.get('notional_mm',100)):.0f}mm",
-                f"{float(_crow.get('strike',0)):.4f}",
-                f"{float(_crow.get('forward',0)):.4f}",
-                f"{_cf_spot:.2f}",
-                f"{_cf_fwd:.2f}",
-                f"{float(_crow.get('pv',0))/1000:,.1f}",
-            ]
-            _cf_colours = {7: "#22c55e", 8: "#38bdf8"}
-            for _ci2, _val2 in enumerate(_cf_vals):
-                _cf_col = _cf_colours.get(_ci2, "#1e293b")
-                _cf_fw  = "700" if _ci2 in _cf_colours else "400"
-                _crc[_ci2].markdown(
-                    f"<div style='background:{_cf_bg};padding:5px 3px;font-size:12px;color:{_cf_col};"
-                    f"font-weight:{_cf_fw};border-bottom:1px solid #e2e8f0'>{_val2}</div>", unsafe_allow_html=True)
-            _cf_new = _crc[10].selectbox("", _CF_STATUS_OPTS,
-                index=_CF_STATUS_OPTS.index(_cf_cur) if _cf_cur in _CF_STATUS_OPTS else 0,
-                key=f"cf_status_{_cidx}", label_visibility="collapsed")
-            if _cf_new == "Clear Trade":
-                st.session_state[_cf_sk] = "—"
-                st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", [])
-                                                  if not (t.get("instrument_type")=="Cap/Floor" and t.get("label")==_cl)]
-                st.rerun()
-            elif _cf_new != _cf_cur:
-                st.session_state[_cf_sk] = _cf_new; st.rerun()
-            if can_quick_tix() and _crc[11].button("📋", key=f"cf_tix_{_cidx}", help="Quick Tix"):
-                st.session_state["_cf_tix_open"] = _cidx if st.session_state.get("_cf_tix_open") != _cidx else -1
-            if can_quick_tix() and _crc[12].button("🎫", key=f"cf_ptix_{_cidx}", help="Print Tix → Trade Ticket"):
-                try:
-                    from datetime import date as _cptd, timedelta as _cpttd
-                    _cp_exp_y  = label_to_years(str(_crow.get("expiry","3m")))
-                    _cp_ten_y  = float(str(_crow.get("tenor","5Y")).replace("Y","").replace("y","")) if _crow.get("tenor") else 5.0
-                    _cp_exp_dt = _cptd.today() + _cpttd(days=int(_cp_exp_y*365.25))
-                    _cp_start  = _cp_exp_dt + _cpttd(days=1)
-                    st.session_state["ticket_option_type"]     = _crow.get("structure","Cap")
-                    st.session_state["ticket_option_expiry"]   = str(_crow.get("expiry",""))
-                    st.session_state["ticket_option_expiry_y"] = _cp_exp_y
-                    st.session_state["ticket_swap_term"]       = str(_crow.get("tenor",""))
-                    st.session_state["ticket_swap_term_y"]     = _cp_ten_y
-                    st.session_state["ticket_expiry_date"]     = _cp_exp_dt.strftime("%Y-%m-%d")
-                    st.session_state["ticket_swap_start_date"] = _cp_start.strftime("%Y-%m-%d")
-                    st.session_state["ticket_strike_rate"]     = float(_crow.get("strike",0))
-                    st.session_state["ticket_premium_bp"]      = float(_crow.get("pv_bp_fwd",_crow.get("pv_bp",0)))
-                    st.session_state["ticket_notional"]        = float(_crow.get("notional_mm",100))
-                    st.session_state["ticket_currency"]        = _crow.get("currency",ccy)
-                    st.toast("📋 Loaded into Trade Ticket tab — amend premium then send to MW", icon="🎫")
-                except Exception as _cpe:
-                    st.error(f"Print Tix error: {_cpe}")
-            if _crc[13].button("🗑️", key=f"cf_del_{_cidx}", help="Remove"):
-                _del_tid = _crow.get("trade_id")
-                if _del_tid:
-                    # v2604ae: delete by unique trade_id
+            _df = pd.DataFrame(_cf_port)
+            _df["_sort"] = _df["expiry"].apply(lambda e: label_to_years(str(e)))
+            _df = _df.sort_values("_sort").reset_index(drop=True)
+    
+            _CF_STATUS_COLOURS = {
+                "TP Trade":     "rgba(220,255,220,0.95)",
+                "Away Trade":   "rgba(255,210,210,0.95)",
+                "Direct Trade": "rgba(255,235,195,0.95)",
+            }
+            _CF_STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade"]
+    
+            st.markdown(
+                "<div style='display:grid;grid-template-columns:2.5% 15% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 12.5% 6.0% 6.0% 6.0%;"
+                "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
+                "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
+                "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
+                "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot Prem</span>"
+                "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Prnt</span><span>Del</span></div>",
+                unsafe_allow_html=True)
+    
+            for _cidx, _crow in _df.iterrows():
+                _cl  = _crow.get("label", f"{_crow.get('expiry','')}x{_crow.get('tenor','')}")
+                _cex = _crow.get("expiry",""); _cten = str(_crow.get("tenor",""))
+                _cst = _crow.get("structure","")
+                _cf_sk = f"_cf_status_{_cl}_{_cex}_{_cten}"
+                _cf_cur = st.session_state.get(_cf_sk, "—")
+                _cf_bg  = _CF_STATUS_COLOURS.get(_cf_cur, "white")
+                _cf_fwd  = float(_crow.get('pv_bp_fwd', _crow.get('pv_bp', 0)))
+                _ois_cf = (lambda _x: _x if _x is not None else get_basis_curve(ccy, 'ois'))(st.session_state.get('config_basis', {}).get(ccy, {}).get('ois'))
+                def _df_cf(ey):
+                    try:
+                        if _ois_cf is not None:
+                            _ox=_ois_cf[_ois_cf.columns[0]].to_numpy().astype(float); _oy=_ois_cf[_ois_cf.columns[1]].to_numpy().astype(float)/100.0
+                            return math.exp(-float(np.interp(ey,_ox,_oy))*ey)
+                        return math.exp(-0.035*ey)
+                    except: return 1.0
+                _cf_spot = _cf_fwd * _df_cf(label_to_years(str(_crow.get('expiry','1y'))))
+                _crc = st.columns([0.25, 1.50, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.25, 0.60, 0.60, 0.65])
+                _cf_vals = [
+                    f"{_cidx+1}", _cst, _cex, _cten,
+                    f"{float(_crow.get('notional_mm',100)):.0f}mm",
+                    f"{float(_crow.get('strike',0)):.4f}",
+                    f"{float(_crow.get('forward',0)):.4f}",
+                    f"{_cf_spot:.2f}",
+                    f"{_cf_fwd:.2f}",
+                    f"{float(_crow.get('pv',0))/1000:,.1f}",
+                ]
+                _cf_colours = {7: "#22c55e", 8: "#38bdf8"}
+                for _ci2, _val2 in enumerate(_cf_vals):
+                    _cf_col = _cf_colours.get(_ci2, "#1e293b")
+                    _cf_fw  = "700" if _ci2 in _cf_colours else "400"
+                    _crc[_ci2].markdown(
+                        f"<div style='background:{_cf_bg};padding:5px 3px;font-size:12px;color:{_cf_col};"
+                        f"font-weight:{_cf_fw};border-bottom:1px solid #e2e8f0'>{_val2}</div>", unsafe_allow_html=True)
+                _cf_new = _crc[10].selectbox("", _CF_STATUS_OPTS,
+                    index=_CF_STATUS_OPTS.index(_cf_cur) if _cf_cur in _CF_STATUS_OPTS else 0,
+                    key=f"cf_status_{_cidx}", label_visibility="collapsed")
+                if _cf_new == "Clear Trade":
+                    st.session_state[_cf_sk] = "—"
                     st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", [])
-                                                      if t.get("trade_id") != _del_tid]
-                else:
-                    # Legacy trades without trade_id: remove first match only
-                    _port = st.session_state.get("portfolio", [])
-                    for _di, _dt in enumerate(_port):
-                        if _dt.get("instrument_type") == "Cap/Floor" and _dt.get("label") == _cl:
-                            _port.pop(_di)
-                            break
-                    st.session_state["portfolio"] = _port
-                _save_portfolio(); st.rerun()
+                                                      if not (t.get("instrument_type")=="Cap/Floor" and t.get("label")==_cl)]
+                    st.rerun()
+                elif _cf_new != _cf_cur:
+                    st.session_state[_cf_sk] = _cf_new; st.rerun()
+                if can_quick_tix() and _crc[11].button("📋", key=f"cf_tix_{_cidx}", help="Quick Tix"):
+                    st.session_state["_cf_tix_open"] = _cidx if st.session_state.get("_cf_tix_open") != _cidx else -1
+                if can_quick_tix() and _crc[12].button("🎫", key=f"cf_ptix_{_cidx}", help="Print Tix → Trade Ticket"):
+                    try:
+                        from datetime import date as _cptd, timedelta as _cpttd
+                        _cp_exp_y  = label_to_years(str(_crow.get("expiry","3m")))
+                        _cp_ten_y  = float(str(_crow.get("tenor","5Y")).replace("Y","").replace("y","")) if _crow.get("tenor") else 5.0
+                        _cp_exp_dt = _cptd.today() + _cpttd(days=int(_cp_exp_y*365.25))
+                        _cp_start  = _cp_exp_dt + _cpttd(days=1)
+                        st.session_state["ticket_option_type"]     = _crow.get("structure","Cap")
+                        st.session_state["ticket_option_expiry"]   = str(_crow.get("expiry",""))
+                        st.session_state["ticket_option_expiry_y"] = _cp_exp_y
+                        st.session_state["ticket_swap_term"]       = str(_crow.get("tenor",""))
+                        st.session_state["ticket_swap_term_y"]     = _cp_ten_y
+                        st.session_state["ticket_expiry_date"]     = _cp_exp_dt.strftime("%Y-%m-%d")
+                        st.session_state["ticket_swap_start_date"] = _cp_start.strftime("%Y-%m-%d")
+                        st.session_state["ticket_strike_rate"]     = float(_crow.get("strike",0))
+                        st.session_state["ticket_premium_bp"]      = float(_crow.get("pv_bp_fwd",_crow.get("pv_bp",0)))
+                        st.session_state["ticket_notional"]        = float(_crow.get("notional_mm",100))
+                        st.session_state["ticket_currency"]        = _crow.get("currency",ccy)
+                        st.toast("📋 Loaded into Trade Ticket tab — amend premium then send to MW", icon="🎫")
+                    except Exception as _cpe:
+                        st.error(f"Print Tix error: {_cpe}")
+                if _crc[13].button("🗑️", key=f"cf_del_{_cidx}", help="Remove"):
+                    _del_tid = _crow.get("trade_id")
+                    if _del_tid:
+                        # v2604ae: delete by unique trade_id
+                        st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", [])
+                                                          if t.get("trade_id") != _del_tid]
+                    else:
+                        # Legacy trades without trade_id: remove first match only
+                        _port = st.session_state.get("portfolio", [])
+                        for _di, _dt in enumerate(_port):
+                            if _dt.get("instrument_type") == "Cap/Floor" and _dt.get("label") == _cl:
+                                _port.pop(_di)
+                                break
+                        st.session_state["portfolio"] = _port
+                    _save_portfolio(); st.rerun()
+
+    # v2704a: close USD container redirect
+    if _cf_pricer_container is not None:
+        _cf_pricer_container.__exit__(None, None, None)
 
 
 def exotics_tab(vol_mode: str):
