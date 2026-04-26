@@ -12578,10 +12578,7 @@ def caps_floors_tab(vol_mode: str):
         # broke AUD. Also write _caplet_curve_key with a stable hash so the
         # ATM CFS table cache invalidates correctly.
         if caplet_vol_curve:
-            # For AUD/NZD: always write. For USD: only on Calculate
-            # (splice at L12787 handles the final USD write)
-            if ccy != "USD" or _calc_requested:
-                st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
+            st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
             # Cache key for ATM CFS table (matches v2004s shape for AUD)
             st.session_state["_caplet_curve_key"] = (
                 ccy, _spreads_tuple, _atm_hash,
@@ -12699,15 +12696,7 @@ def caps_floors_tab(vol_mode: str):
                 "SR3 full":         sr3_full_curve or otc_caplet_curve,
             }
             caplet_vol_curve = dict(_curves_by_src.get(_active_src, otc_caplet_curve))
-            # Only overwrite session_state on Calculate — otherwise keep the
-            # spliced version from the previous Calculate
-            if _calc_requested:
-                st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
-            else:
-                # Use previously spliced curve if available
-                _prev_spliced = st.session_state.get(f"caplet_vol_curve_{ccy}")
-                if _prev_spliced:
-                    caplet_vol_curve = dict(_prev_spliced)
+            st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
             # v2604c debug: show which curve is active and why
             _dbg_listed = _listed_curve_built is not None and len(_listed_curve_built or {}) > 0
             _dbg_otc = otc_caplet_curve is not None and len(otc_caplet_curve or {}) > 0
@@ -12738,65 +12727,22 @@ def caps_floors_tab(vol_mode: str):
             else:
                 st.caption("Active: OTC only (wedge chain from OTC 1Y straddle)")
 
-            # v2004x: Splice block - PCHIP join of active front with OTC tail.
-            # When Calculate is pressed, take the active source's "natural front"
-            # and splice OTC wedge tail onto it, smoothed at the join.
+            # v2604n: Splice REMOVED. _call_build_listed already overlays
+            # listed front onto OTC tail with correct anchor points.
+            # The PCHIP splice was overwriting flat vol anchors, breaking
+            # straddle premium consistency. The curve from _call_build_listed
+            # is the final curve — no post-processing needed.
             if _calc_requested:
-                try:
-                    from scipy.interpolate import PchipInterpolator as _Pchip
-                    import numpy as _np_cfs
-                    _front_end_y = None
-                    if _active_src == "Listed bootstrap":
-                        _front_end_y = 2.0 if _lf_pack_now == "both" else 1.0
-                    elif _active_src == "SR3 hybrid":
-                        _front_end_y = _sr3_cutoff_y
-                    elif _active_src == "SR3 full" and sr3_full_curve:
-                        # Find where SR3 coverage effectively ends (values diverge from OTC)
-                        _last_sr3_only = 0.5
-                        for _k in sorted(sr3_full_curve.keys()):
-                            if _k in otc_caplet_curve and abs(sr3_full_curve[_k] - otc_caplet_curve[_k]) > 0.05:
-                                _last_sr3_only = max(_last_sr3_only, _k)
-                        _front_end_y = _last_sr3_only
-                    if _front_end_y and _front_end_y > 0 and caplet_vol_curve and otc_caplet_curve:
-                        _all_keys = sorted(set(list(caplet_vol_curve.keys()) + list(otc_caplet_curve.keys())))
-                        _anchor_t, _anchor_v = [], []
-                        for _k in _all_keys:
-                            if _k <= _front_end_y + 1e-6:
-                                if _k in caplet_vol_curve:
-                                    _anchor_t.append(_k); _anchor_v.append(caplet_vol_curve[_k])
-                            else:
-                                if _k in otc_caplet_curve:
-                                    _anchor_t.append(_k); _anchor_v.append(otc_caplet_curve[_k])
-                        if len(_anchor_t) >= 2:
-                            _at = _np_cfs.array(_anchor_t, dtype=float)
-                            _av = _np_cfs.array(_anchor_v, dtype=float)
-                            _order = _np_cfs.argsort(_at)
-                            _at = _at[_order]; _av = _av[_order]
-                            _unique_mask = _np_cfs.concatenate(([True], _np_cfs.diff(_at) > 1e-6))
-                            _at = _at[_unique_mask]; _av = _av[_unique_mask]
-                            if len(_at) >= 2:
-                                _pchip = _Pchip(_at, _av, extrapolate=False)
-                                _spliced = {}
-                                _t = 0.25
-                                _max_t = max(_at[-1], max(caplet_vol_curve.keys()))
-                                while _t <= _max_t + 1e-6:
-                                    _tr = round(_t, 2)
-                                    _val = float(_pchip(_tr))
-                                    if _np_cfs.isnan(_val):
-                                        _val = _av[0] if _tr < _at[0] else _av[-1]
-                                    _spliced[_tr] = _val
-                                    _t += 0.25
-                                caplet_vol_curve = _spliced
-                                st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
-                                st.success(
-                                    f"CFS Curve calculated - front end from "
-                                    f"{_active_src} (0->{_front_end_y:.1f}Y), long end from "
-                                    f"wedge chain ({_front_end_y:.1f}Y->{_max_t:.1f}Y), PCHIP splined."
-                                )
-                    elif _active_src == "OTC only":
-                        st.success("CFS Curve calculated - OTC wedge chain (no splice needed).")
-                except Exception as _spl_e:
-                    st.warning(f"Splice build failed - falling back to Active. Error: {_spl_e}")
+                if ccy == "USD":
+                    if _active_src == "OTC only":
+                        st.success("CFS Curve calculated — OTC wedge chain.")
+                    elif _active_src == "Listed bootstrap":
+                        _anchor_lbl2 = "1Y" if _lf_pack_now == "whites" else "1Y+2Y"
+                        st.success(f"CFS Curve calculated — Listed front (≤{_anchor_lbl2}) + wedge chain tail.")
+                    elif _active_src in ("SR3 hybrid", "SR3 full"):
+                        st.success(f"CFS Curve calculated — {_active_src}.")
+                else:
+                    st.success(f"CFS Curve calculated — {ccy} wedge chain.")
 
             # v2004x: Stash all 4 pre-built curves for the overlay table + chart.
             # No separate chart-overlay-build path needed; _listed_curve_built is
