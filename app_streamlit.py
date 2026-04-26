@@ -7499,20 +7499,22 @@ def curves_tab():
                 st.session_state["usd_fwd_section_open"] = not st.session_state["usd_fwd_section_open"]
 
             if st.session_state["usd_fwd_section_open"]:
-                _usd_fwd_cols = st.columns([2, 2, 2])
+                _usd_fwd_cols = st.columns([3, 1, 3, 3])
                 with _usd_fwd_cols[0]:
                     _usd_fwd_mode = st.radio(
                         "Curve", ["SOFR OIS", "FF OIS", "SOFR-FF Basis"],
                         horizontal=True, key="usd_fwd_mode"
                     )
                 with _usd_fwd_cols[1]:
-                    _gen_usd_fwd = st.button("▶ Generate USD Forward Matrix", key="gen_usd_fwd", type="primary", use_container_width=True)
+                    pass  # spacer — matches Heatmap column in other sections
                 with _usd_fwd_cols[2]:
+                    _gen_usd_fwd = st.button("▶ Generate USD Forward Matrix", key="gen_usd_fwd", type="primary", use_container_width=True)
+                with _usd_fwd_cols[3]:
                     _has_usd_fwd = "SOFR OIS" in st.session_state.get("usd_fwd_matrix", {})
                     st.download_button("⬇ Download",
                         data=st.session_state["usd_fwd_matrix"].get(_usd_fwd_mode, pd.DataFrame()).to_csv() if _has_usd_fwd else "",
                         file_name=f"USD_fwd_{_usd_fwd_mode.replace(' ','_')}.csv",
-                        key="dl_usd_fwd", use_container_width=True, disabled=not _has_usd_fwd)
+                        key="dl_usd_fwd", use_container_width=True, type="primary", disabled=not _has_usd_fwd)
 
                 if _gen_usd_fwd:
                     st.session_state["_gen_usd_fwd_requested"] = True
