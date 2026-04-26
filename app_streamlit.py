@@ -22868,7 +22868,11 @@ def main():
 
             # ── Fallback: if curves still not loaded, try swap_rates table ──
             _cc_loaded = st.session_state.get("config_curves", {})
-            if "AUD" not in _cc_loaded or _cc_loaded.get("AUD") is None:
+            def _curve_empty(c):
+                if c is None: return True
+                if hasattr(c, '__len__') and len(c) == 0: return True
+                return False
+            if _curve_empty(_cc_loaded.get("AUD")):
                 try:
                     _aud_blend_s = _load_curve_from_db_latest("6M BBSW", "AUD")
                     if _aud_blend_s is not None and len(_aud_blend_s) > 0:
@@ -22889,7 +22893,7 @@ def main():
                         st.session_state.setdefault("basis_curves", {}).setdefault("AUD", {})["ois"] = _aud_ois_s
                 except Exception:
                     pass
-            if "USD" not in _cc_loaded or _cc_loaded.get("USD") is None:
+            if _curve_empty(_cc_loaded.get("USD")):
                 try:
                     _usd_sofr = _load_curve_from_db_latest("SOFR", "USD")
                     if _usd_sofr is not None and len(_usd_sofr) > 0:
@@ -22898,7 +22902,7 @@ def main():
                         set_timestamp("curves", "USD")
                 except Exception:
                     pass
-            if "NZD" not in _cc_loaded or _cc_loaded.get("NZD") is None:
+            if _curve_empty(_cc_loaded.get("NZD")):
                 try:
                     _nzd_bkbm = _load_curve_from_db_latest("3M BKBM", "NZD")
                     if _nzd_bkbm is not None and len(_nzd_bkbm) > 0:
