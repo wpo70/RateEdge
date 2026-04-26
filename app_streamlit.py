@@ -11963,11 +11963,9 @@ def caps_floors_tab(vol_mode: str):
 
             bl, _, br = st.columns([2, 0.2, 2])
             if bl.button("🧮 Calculate CFS Curve", key="apply_spreads", type="primary",
-                         help="Takes the Active pricer feed (OTC / Listed bootstrap / "
-                              "SR3 hybrid / SR3 full) as the FRONT END, applies your wedge "
-                              "spreads for the LONG END, and PCHIP-splines the join to "
-                              "produce a unified caplet vol curve. Persists spread edits "
-                              "to DB + disk.") and require_admin("Edit Spreads"):
+                         help="Builds caplet vol curve from wedge spreads. Derives cumulative "
+                              "straddle premiums, solves flat vols at each tenor, and cubic-splines "
+                              "on a quarterly grid. Persists spread edits to DB.") and require_admin("Edit Spreads"):
                 # ── Step 1: persist the edited spreads ────────────────
                 for spr_key, *_ in ROW_DATA:
                     st.session_state[spr_key] = new_spread_values[spr_key]
