@@ -12811,7 +12811,8 @@ def caps_floors_tab(vol_mode: str):
             st.session_state["_cfs_listed_bootstrap"] = _listed_curve_built
             st.session_state["_cfs_sr3_hybrid"]       = sr3_hybrid_curve
             st.session_state["_cfs_sr3_full"]         = sr3_full_curve
-            st.session_state["_cfs_overlay_sel"]      = _overlay_choices
+            if ccy == "USD":
+                st.session_state["_cfs_overlay_sel"]   = _overlay_choices
 
             # Clear calc flag AFTER all builds complete — not before
             st.session_state.pop("_cfs_calc_requested", None)
