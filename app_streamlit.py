@@ -12430,7 +12430,7 @@ def caps_floors_tab(vol_mode: str):
                                           and _listed_2y_stradd
                                           and _listed_2y_stradd > 0) else 1.0
                         for _lt in sorted(_listed_term_curve.keys()):
-                            if _lt <= _cutoff + 1e-6:
+                            if _lt < _cutoff - 1e-6:
                                 _built[round(_lt, 2)] = _listed_term_curve[_lt]
                     return _built
                 finally:
