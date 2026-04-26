@@ -12578,7 +12578,10 @@ def caps_floors_tab(vol_mode: str):
         # broke AUD. Also write _caplet_curve_key with a stable hash so the
         # ATM CFS table cache invalidates correctly.
         if caplet_vol_curve:
-            st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
+            # For AUD/NZD: always write. For USD: only on Calculate
+            # (splice at L12787 handles the final USD write)
+            if ccy != "USD" or _calc_requested:
+                st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
             # Cache key for ATM CFS table (matches v2004s shape for AUD)
             st.session_state["_caplet_curve_key"] = (
                 ccy, _spreads_tuple, _atm_hash,
@@ -12696,7 +12699,15 @@ def caps_floors_tab(vol_mode: str):
                 "SR3 full":         sr3_full_curve or otc_caplet_curve,
             }
             caplet_vol_curve = dict(_curves_by_src.get(_active_src, otc_caplet_curve))
-            st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
+            # Only overwrite session_state on Calculate — otherwise keep the
+            # spliced version from the previous Calculate
+            if _calc_requested:
+                st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
+            else:
+                # Use previously spliced curve if available
+                _prev_spliced = st.session_state.get(f"caplet_vol_curve_{ccy}")
+                if _prev_spliced:
+                    caplet_vol_curve = dict(_prev_spliced)
             # v2604c debug: show which curve is active and why
             _dbg_listed = _listed_curve_built is not None and len(_listed_curve_built or {}) > 0
             _dbg_otc = otc_caplet_curve is not None and len(otc_caplet_curve or {}) > 0
