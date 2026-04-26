@@ -11193,7 +11193,6 @@ def swaptions_tab(vol_mode: str):
 # slower but never crash.
 def caps_floors_tab(vol_mode: str):
     st.subheader("Caps & Floors")
-    _cf_pricer_container = None  # v2704a: set for USD after CFS table
     
     # Currency selector
     col_ccy, col_spacer = st.columns([1, 3])
@@ -11588,10 +11587,450 @@ def caps_floors_tab(vol_mode: str):
             strike = fwd + (offset/10000.0 if cf_type == "Digital Cap" else -offset/10000.0)
             st.info(f"Strike: **{strike*100:.4f}%** ({strike_mode} {'OTM' if offset > 0 else 'ATM'})")
 
-    # v2704a: USD pricer + blotter renders here (after strikes, before vol source).
-    # Container is filled from the code below — st.container() acts as a portal.
+    # v2704b: pricer function defined here, called for USD before vol source
+    def _render_cf_pricer_blotter():
+        # v2704b: pricer + blotter extracted into function so it can be
+        # called at the right position for each currency.
+        # USD: called after strikes (above vol source / wedges)
+        # Non-USD: called at original position (below caplet curve)
+        _prc_caplet_vc = st.session_state.get(f"caplet_vol_curve_{ccy}")
+        st.markdown("---")
+        
+        if st.button(" Price Cap/Floor", key="cf_price", type="primary", disabled=is_trainee()):
+            try:
+                pv_total = 0.0
+                delta_total = 0.0
+                vega_total = 0.0
+                gamma_total = 0.0
+                
+                # Store individual caplet/floorlet results
+                caplet_details = []
+                
+                # Helper to price a strip and collect caplet details
+                def price_strip(strike_val, is_cap_flag, leg_name=""):
+                    pv = delta = vega = gamma = 0.0
+                    caplets = []
+                    
+                    for i, (T_i, accrual) in enumerate(sched):
+                        # Skip caplets in the "known" period (at or before first fixing)
+                        if T_i <= first_fixing_y + 1.0 / 252.0:
+                            continue
+                        
+                        # Get caplet-specific vol from term structure
+                        caplet_vol_bp = get_caplet_vol_for_fixing(_prc_caplet_vc, T_i)
+                        if caplet_vol_bp is None:
+                            caplet_vol_bp = 35.0  # Fallback
+                        
+                        # Convert to sigma based on model
+                        if model == "Normal":
+                            sigma = caplet_vol_bp / 10000.0
+                        else:
+                            sigma = caplet_vol_bp / 100.0
+                        
+                        # Get discount rate from OIS curve
+                        disc_rate = interpolate_zero(ois_curve, T_i)
+                        
+                        # Calculate individual forward for THIS caplet period (3m)
+                        period_start = max(T_i - 0.25, 0.001)
+                        period_tenor = 0.25
+                        F_i, _, _ = forward_and_annuity_from_curve(curve, ccy, period_start, period_tenor, ois_curve)
+                        
+                        # For ATM (strike_val == fwd), use F_i as strike to ensure F=K for each caplet
+                        if abs(strike_val - fwd) < 0.0001:  # ATM straddle
+                            caplet_strike = F_i
+                        else:
+                            caplet_strike = strike_val
+                        
+                        if model == "Black":
+                            res = black_caplet(notional * 1e6, accrual, F_i, caplet_strike, sigma, T_i, disc_rate, is_cap=is_cap_flag)
+                        else:
+                            res = bachelier_caplet(notional * 1e6, accrual, F_i, caplet_strike, sigma, T_i, disc_rate, is_cap=is_cap_flag)
+                        pv += res["pv"]
+                        delta += res["delta"]
+                        vega += res["vega"]
+                        gamma += res["gamma"]
+                        
+                        # Fixing date derived from T_i (years from today)
+                        from dateutil.relativedelta import relativedelta
+                        fixing_months = round((T_i - base) * 12)
+                        caplet_date = today + relativedelta(months=fixing_months)
+                        
+                        caplets.append({
+                            "Leg": leg_name,
+                            "#": i,
+                            "Fixing": caplet_date.strftime('%d-%b-%Y'),
+                            "T (yrs)": f"{T_i:.4f}",
+                            "Fwd (%)": f"{F_i*100:.4f}",
+                            "Vol (bp)": f"{caplet_vol_bp:.2f}",
+                            "Accrual": f"{accrual:.4f}",
+                            "PV": f"${res['pv']:,.0f}",
+                            "Delta": f"{res['delta']:,.0f}",
+                        })
+                    return {"pv": pv, "delta": delta, "vega": vega, "gamma": gamma, "caplets": caplets}
+    
+                def price_digital_strip(strike_val, is_cap_flag, leg_name=""):
+                    """Digital cap/floor — 100bp × notional × accrual payout per period.
+                    Priced as tight call spread: [V(K-0.5bp) - V(K+0.5bp)] / 1bp × 100bp"""
+                    eps = 0.0001  # 1bp spread
+                    lo = price_strip(strike_val - eps/2, is_cap_flag, leg_name)
+                    hi = price_strip(strike_val + eps/2, is_cap_flag, leg_name)
+                    scale = 0.01 / eps  # 100bp payout / 1bp spread width = 100
+                    pv    = (lo["pv"]    - hi["pv"])    * scale
+                    delta = (lo["delta"] - hi["delta"]) * scale
+                    vega  = (lo["vega"]  - hi["vega"])  * scale
+                    gamma = (lo["gamma"] - hi["gamma"]) * scale
+                    return {"pv": pv, "delta": delta, "vega": vega, "gamma": gamma, "caplets": lo["caplets"]}
+                
+                legs = []
+                
+                if cf_type == "Cap":
+                    res = price_strip(strike, True, "Cap")
+                    pv_total, delta_total, vega_total, gamma_total = res["pv"], res["delta"], res["vega"], res["gamma"]
+                    caplet_details = res["caplets"]
+                    legs.append(("Cap", strike*100, 1, res))
+                    label = f"Cap {first_fixing}-{tenor} K={strike*100:.2f}%"
+                    
+                elif cf_type == "Floor":
+                    res = price_strip(strike, False, "Floor")
+                    pv_total, delta_total, vega_total, gamma_total = res["pv"], res["delta"], res["vega"], res["gamma"]
+                    caplet_details = res["caplets"]
+                    legs.append(("Floor", strike*100, 1, res))
+                    label = f"Floor {first_fixing}-{tenor} K={strike*100:.2f}%"
+                    
+                elif cf_type == "Straddle":
+                    res_cap = price_strip(fwd, True, "Cap")
+                    res_floor = price_strip(fwd, False, "Floor")
+                    pv_total = res_cap["pv"] + res_floor["pv"]
+                    delta_total = res_cap["delta"] + res_floor["delta"]
+                    vega_total = res_cap["vega"] + res_floor["vega"]
+                    gamma_total = res_cap["gamma"] + res_floor["gamma"]
+                    caplet_details = res_cap["caplets"] + res_floor["caplets"]
+                    legs.append(("Cap", fwd*100, 1, res_cap))
+                    legs.append(("Floor", fwd*100, 1, res_floor))
+                    label = f"Straddle {first_fixing}-{tenor} ATM"
+                    
+                elif cf_type == "Collar":
+                    res_cap = price_strip(strike, True, "Long Cap")
+                    res_floor = price_strip(strike_pct_2, False, "Short Floor")
+                    # Long cap, short floor (protection against rising rates)
+                    pv_total = res_cap["pv"] - res_floor["pv"]
+                    delta_total = res_cap["delta"] - res_floor["delta"]
+                    vega_total = res_cap["vega"] - res_floor["vega"]
+                    gamma_total = res_cap["gamma"] - res_floor["gamma"]
+                    caplet_details = res_cap["caplets"] + res_floor["caplets"]
+                    legs.append(("Long Cap", strike*100, 1, res_cap))
+                    legs.append(("Short Floor", strike_pct_2*100, -1, res_floor))
+                    label = f"Collar {first_fixing}-{tenor} ({strike_pct_2*100:.2f}/{strike*100:.2f})"
+                    
+                elif cf_type == "Strangle":
+                    res_cap = price_strip(strike, True, "OTM Cap")
+                    res_floor = price_strip(strike_pct_2, False, "OTM Floor")
+                    pv_total = res_cap["pv"] + res_floor["pv"]
+                    delta_total = res_cap["delta"] + res_floor["delta"]
+                    vega_total = res_cap["vega"] + res_floor["vega"]
+                    gamma_total = res_cap["gamma"] + res_floor["gamma"]
+                    caplet_details = res_cap["caplets"] + res_floor["caplets"]
+                    legs.append(("OTM Cap", strike*100, 1, res_cap))
+                    legs.append(("OTM Floor", strike_pct_2*100, 1, res_floor))
+                    label = f"Strangle {first_fixing}-{tenor} ({strike_pct_2*100:.2f}/{strike*100:.2f})"
+    
+                elif cf_type == "Cap Corridor":
+                    # Long low-strike cap, short high-strike cap
+                    res_lo = price_strip(strike, True, "Long Cap")
+                    res_hi = price_strip(strike_pct_2, True, "Short Cap")
+                    pv_total    = res_lo["pv"]    - res_hi["pv"]
+                    delta_total = res_lo["delta"] - res_hi["delta"]
+                    vega_total  = res_lo["vega"]  - res_hi["vega"]
+                    gamma_total = res_lo["gamma"] - res_hi["gamma"]
+                    caplet_details = res_lo["caplets"] + res_hi["caplets"]
+                    legs.append(("Long Cap",  strike*100,        1,  res_lo))
+                    legs.append(("Short Cap", strike_pct_2*100, -1,  res_hi))
+                    label = f"Cap Corridor {first_fixing}-{tenor} ({strike*100:.2f}/{strike_pct_2*100:.2f})"
+    
+                elif cf_type == "Floordoor":
+                    # Long high-strike floor, short low-strike floor
+                    res_hi = price_strip(strike,       False, "Long Floor")
+                    res_lo = price_strip(strike_pct_2, False, "Short Floor")
+                    pv_total    = res_hi["pv"]    - res_lo["pv"]
+                    delta_total = res_hi["delta"] - res_lo["delta"]
+                    vega_total  = res_hi["vega"]  - res_lo["vega"]
+                    gamma_total = res_hi["gamma"] - res_lo["gamma"]
+                    caplet_details = res_hi["caplets"] + res_lo["caplets"]
+                    legs.append(("Long Floor",  strike*100,        1,  res_hi))
+                    legs.append(("Short Floor", strike_pct_2*100, -1,  res_lo))
+                    label = f"Floordoor {first_fixing}-{tenor} ({strike*100:.2f}/{strike_pct_2*100:.2f})"
+    
+                elif cf_type == "Digital Cap":
+                    res = price_digital_strip(strike, True, "Digital Cap")
+                    pv_total, delta_total, vega_total, gamma_total = res["pv"], res["delta"], res["vega"], res["gamma"]
+                    caplet_details = res["caplets"]
+                    legs.append(("Digital Cap", strike*100, 1, res))
+                    label = f"Digital Cap {first_fixing}-{tenor} K={strike*100:.2f}% | 100bp payout per fixing"
+    
+                elif cf_type == "Digital Floor":
+                    res = price_digital_strip(strike, False, "Digital Floor")
+                    pv_total, delta_total, vega_total, gamma_total = res["pv"], res["delta"], res["vega"], res["gamma"]
+                    caplet_details = res["caplets"]
+                    legs.append(("Digital Floor", strike*100, 1, res))
+                    label = f"Digital Floor {first_fixing}-{tenor} K={strike*100:.2f}% | 100bp payout per fixing"
+    
+                # Calculate premium in bp: (PV / Notional) * 10000
+                pv_bp = (pv_total / (notional * 1e6)) * 10000.0 if notional > 0 else 0.0
+    
+                # Forward premium = spot / df(first_fixing) — for wedge/fwd trading convention
+                try:
+                    _r_ff = interpolate_zero(ois_curve, first_fixing_y)
+                    _df_ff = math.exp(-_r_ff * first_fixing_y)
+                    pv_bp_fwd = pv_bp / _df_ff if _df_ff > 0 else pv_bp
+                except Exception:
+                    _df_ff = 1.0
+                    pv_bp_fwd = pv_bp
+    
+                # one_bp = sum of caplet annuities
+                one_bp_annuity = 0.0
+                for _Ti, _acc in sched:
+                    if _Ti <= first_fixing_y + 1.0/252.0:
+                        continue
+                    _df_i = math.exp(-interpolate_zero(ois_curve, _Ti) * _Ti)
+                    one_bp_annuity += notional * 1e6 * _acc * _df_i * 0.0001
+    
+                st.success(f"✅ Priced: **{label}** | PV = ${pv_total:,.0f} | Spot: {pv_bp:.4f}bp | Fwd: {pv_bp_fwd:.4f}bp")
+    
+                # Store for display
+                st.session_state["cf_last_result"] = {
+                    "legs": legs,
+                    "caplet_details": caplet_details,
+                    "pv_total": pv_total,
+                    "pv_bp": pv_bp,
+                    "pv_bp_fwd": pv_bp_fwd,
+                    "df_ff": _df_ff,
+                    "first_fixing_y": first_fixing_y,
+                    "delta_total": delta_total,
+                    "gamma_total": gamma_total,
+                    "vega_total": vega_total,
+                    "one_bp": one_bp_annuity,
+                    "label": label,
+                    "notional": notional,
+                }
+    
+                st.session_state["portfolio"].append(
+                    dict(
+                        instrument_type="Cap/Floor",
+                        trade_id=f"CF{pd.Timestamp.now().strftime('%Y%m%d%H%M%S%f')}",
+                        currency=ccy,
+                        structure=cf_type,
+                        expiry=first_fixing,
+                        tenor=tenor,
+                        model=model,
+                        vol_input="Caplet Term Structure",
+                        notional_mm=notional,
+                        strike=strike * 100.0,
+                        forward=fwd * 100.0,
+                        pv=pv_total,
+                        pv_bp=pv_bp,
+                        pv_bp_fwd=pv_bp_fwd,
+                        delta=delta_total,
+                        gamma=gamma_total,
+                        vega=vega_total,
+                        theta=0.0,
+                        bpv=one_bp_annuity,
+                        label=label,
+                    )
+                )
+            except Exception as e:
+                st.error(f" Pricing error: {e}")
+                import traceback
+                st.code(traceback.format_exc())
+        
+        # Display results if available
+        if "cf_last_result" in st.session_state:
+            r = st.session_state["cf_last_result"]
+            _is_fwd = st.session_state.get("cf_prem_mode", "Spot") == "Forward"
+            _disp_bp = r.get("pv_bp_fwd", r["pv_bp"]) if _is_fwd else r["pv_bp"]
+            _prem_lbl = "Forward" if _is_fwd else "Spot"
+            _df_ff    = r.get("df_ff", 1.0)
+    
+            st.markdown("###  Results")
+            col_params, col_greeks = st.columns(2)
+    
+            with col_params:
+                if len(r["legs"]) > 0:
+                    st.markdown("##### Leg Breakdown")
+                    leg_data = []
+                    notional_val = r.get("notional", 100.0)
+                    for leg_name, leg_strike, leg_mult, leg_res in r["legs"]:
+                        leg_spot_bp = ((leg_res['pv'] * leg_mult) / (notional_val * 1e6)) * 10000.0 if notional_val > 0 else 0
+                        leg_disp_bp = leg_spot_bp / _df_ff if _is_fwd and _df_ff > 0 else leg_spot_bp
+                        leg_data.append({
+                            "Leg": leg_name,
+                            "Strike (%)": f"{leg_strike:.4f}",
+                            f"Premium {_prem_lbl} (bp)": f"{leg_disp_bp:.4f}",
+                            "PV": f"${leg_res['pv'] * leg_mult:,.0f}",
+                            "Delta": f"{leg_res['delta'] * leg_mult:,.0f}"
+                        })
+                    st.dataframe(pd.DataFrame(leg_data), use_container_width=True, hide_index=True)
+    
+            with col_greeks:
+                st.markdown("##### Valuation")
+                st.metric(f"Premium {_prem_lbl} (bp)", f"{_disp_bp:.4f}")
+                if _is_fwd:
+                    st.caption(f"Spot: {r['pv_bp']:.4f}bp | df(expiry): {_df_ff:.4f}")
+                st.metric("Total PV", f"${r['pv_total']:,.0f}")
+                
+                st.markdown("##### Greeks (Net)")
+                # Cap/Floor delta   —   same convention as swaptions
+                # delta_total = sum of caplet DV01s
+                # delta_ratio = delta_total / one_bp = hedge % of notional (50% ATM)
+                # delta_swap  = delta_ratio * notional_$ = notional-equivalent swap hedge
+                _notional_d = r['notional'] * 1e6
+                _one_bp = r['one_bp'] if r['one_bp'] > 0 else 1e-8
+                delta_ratio = r['delta_total'] / _one_bp          # e.g. 0.50 ATM
+                delta_swap  = delta_ratio * _notional_d            # e.g. 50mm for 100mm notional
+                delta_dv01  = r['delta_total']                     # already in $/bp
+                greeks_df = pd.DataFrame({
+                    "Greek": ["Delta (swap hedge)", "Delta % notional", "Delta DV01 ($/bp)", "Gamma ($/bp)", "Vega ($/bp vol)", "BPV ($/bp)"],
+                    "Value": [
+                        f"${delta_swap:,.0f}",
+                        f"{delta_ratio*100:.1f}%",
+                        f"{delta_dv01:,.1f}",
+                        f"{r['gamma_total']:,.2f}",
+                        f"{r['vega_total']:,.1f}",
+                        f"{r['one_bp']:,.1f}"
+                    ],
+                    "Per 1mm notional": [
+                        f"${delta_swap/r['notional']:,.0f}",
+                        f"{delta_ratio*100:.1f}%",
+                        f"{delta_dv01/r['notional']:,.1f}",
+                        f"{r['gamma_total']/r['notional']:,.3f}",
+                        f"{r['vega_total']/r['notional']:,.1f}",
+                        f"{r['one_bp']/r['notional']:,.1f}"
+                    ]
+                })
+                st.dataframe(greeks_df, use_container_width=True, hide_index=True)
+            
+            # Caplet/Floorlet breakdown in expander
+            if r["caplet_details"]:
+                with st.expander(" Caplet/Floorlet Breakdown", expanded=False):
+                    st.dataframe(pd.DataFrame(r["caplet_details"]), use_container_width=True, hide_index=True)
+    
+        # ── Cap/Floor Portfolio Blotter ───────────────────────────────────────────
+        _cf_port = [t for t in st.session_state.get("portfolio", []) if t.get("instrument_type") == "Cap/Floor"]
+        if _cf_port:
+            st.markdown("---")
+            with st.expander(f"📋 Cap/Floor Trade Blotter  ({len(_cf_port)} trade{'s' if len(_cf_port) != 1 else ''})",
+                             expanded=st.session_state.get("cf_blotter_expanded", True)):
+                _ph2_col = st.columns([5, 1])
+                with _ph2_col[1]:
+                    if st.button("🗑️ Clear All", key="cf_clear_portfolio"):
+                        st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", []) if t.get("instrument_type") != "Cap/Floor"]
+                        st.rerun()
+    
+                _df = pd.DataFrame(_cf_port)
+                _df["_sort"] = _df["expiry"].apply(lambda e: label_to_years(str(e)))
+                _df = _df.sort_values("_sort").reset_index(drop=True)
+        
+                _CF_STATUS_COLOURS = {
+                    "TP Trade":     "rgba(220,255,220,0.95)",
+                    "Away Trade":   "rgba(255,210,210,0.95)",
+                    "Direct Trade": "rgba(255,235,195,0.95)",
+                }
+                _CF_STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade"]
+        
+                st.markdown(
+                    "<div style='display:grid;grid-template-columns:2.5% 15% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 12.5% 6.0% 6.0% 6.0%;"
+                    "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
+                    "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
+                    "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
+                    "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot Prem</span>"
+                    "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Prnt</span><span>Del</span></div>",
+                    unsafe_allow_html=True)
+        
+                for _cidx, _crow in _df.iterrows():
+                    _cl  = _crow.get("label", f"{_crow.get('expiry','')}x{_crow.get('tenor','')}")
+                    _cex = _crow.get("expiry",""); _cten = str(_crow.get("tenor",""))
+                    _cst = _crow.get("structure","")
+                    _cf_sk = f"_cf_status_{_cl}_{_cex}_{_cten}"
+                    _cf_cur = st.session_state.get(_cf_sk, "—")
+                    _cf_bg  = _CF_STATUS_COLOURS.get(_cf_cur, "white")
+                    _cf_fwd  = float(_crow.get('pv_bp_fwd', _crow.get('pv_bp', 0)))
+                    _ois_cf = (lambda _x: _x if _x is not None else get_basis_curve(ccy, 'ois'))(st.session_state.get('config_basis', {}).get(ccy, {}).get('ois'))
+                    def _df_cf(ey):
+                        try:
+                            if _ois_cf is not None:
+                                _ox=_ois_cf[_ois_cf.columns[0]].to_numpy().astype(float); _oy=_ois_cf[_ois_cf.columns[1]].to_numpy().astype(float)/100.0
+                                return math.exp(-float(np.interp(ey,_ox,_oy))*ey)
+                            return math.exp(-0.035*ey)
+                        except: return 1.0
+                    _cf_spot = _cf_fwd * _df_cf(label_to_years(str(_crow.get('expiry','1y'))))
+                    _crc = st.columns([0.25, 1.50, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.25, 0.60, 0.60, 0.65])
+                    _cf_vals = [
+                        f"{_cidx+1}", _cst, _cex, _cten,
+                        f"{float(_crow.get('notional_mm',100)):.0f}mm",
+                        f"{float(_crow.get('strike',0)):.4f}",
+                        f"{float(_crow.get('forward',0)):.4f}",
+                        f"{_cf_spot:.2f}",
+                        f"{_cf_fwd:.2f}",
+                        f"{float(_crow.get('pv',0))/1000:,.1f}",
+                    ]
+                    _cf_colours = {7: "#22c55e", 8: "#38bdf8"}
+                    for _ci2, _val2 in enumerate(_cf_vals):
+                        _cf_col = _cf_colours.get(_ci2, "#1e293b")
+                        _cf_fw  = "700" if _ci2 in _cf_colours else "400"
+                        _crc[_ci2].markdown(
+                            f"<div style='background:{_cf_bg};padding:5px 3px;font-size:12px;color:{_cf_col};"
+                            f"font-weight:{_cf_fw};border-bottom:1px solid #e2e8f0'>{_val2}</div>", unsafe_allow_html=True)
+                    _cf_new = _crc[10].selectbox("", _CF_STATUS_OPTS,
+                        index=_CF_STATUS_OPTS.index(_cf_cur) if _cf_cur in _CF_STATUS_OPTS else 0,
+                        key=f"cf_status_{_cidx}", label_visibility="collapsed")
+                    if _cf_new == "Clear Trade":
+                        st.session_state[_cf_sk] = "—"
+                        st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", [])
+                                                          if not (t.get("instrument_type")=="Cap/Floor" and t.get("label")==_cl)]
+                        st.rerun()
+                    elif _cf_new != _cf_cur:
+                        st.session_state[_cf_sk] = _cf_new; st.rerun()
+                    if can_quick_tix() and _crc[11].button("📋", key=f"cf_tix_{_cidx}", help="Quick Tix"):
+                        st.session_state["_cf_tix_open"] = _cidx if st.session_state.get("_cf_tix_open") != _cidx else -1
+                    if can_quick_tix() and _crc[12].button("🎫", key=f"cf_ptix_{_cidx}", help="Print Tix → Trade Ticket"):
+                        try:
+                            from datetime import date as _cptd, timedelta as _cpttd
+                            _cp_exp_y  = label_to_years(str(_crow.get("expiry","3m")))
+                            _cp_ten_y  = float(str(_crow.get("tenor","5Y")).replace("Y","").replace("y","")) if _crow.get("tenor") else 5.0
+                            _cp_exp_dt = _cptd.today() + _cpttd(days=int(_cp_exp_y*365.25))
+                            _cp_start  = _cp_exp_dt + _cpttd(days=1)
+                            st.session_state["ticket_option_type"]     = _crow.get("structure","Cap")
+                            st.session_state["ticket_option_expiry"]   = str(_crow.get("expiry",""))
+                            st.session_state["ticket_option_expiry_y"] = _cp_exp_y
+                            st.session_state["ticket_swap_term"]       = str(_crow.get("tenor",""))
+                            st.session_state["ticket_swap_term_y"]     = _cp_ten_y
+                            st.session_state["ticket_expiry_date"]     = _cp_exp_dt.strftime("%Y-%m-%d")
+                            st.session_state["ticket_swap_start_date"] = _cp_start.strftime("%Y-%m-%d")
+                            st.session_state["ticket_strike_rate"]     = float(_crow.get("strike",0))
+                            st.session_state["ticket_premium_bp"]      = float(_crow.get("pv_bp_fwd",_crow.get("pv_bp",0)))
+                            st.session_state["ticket_notional"]        = float(_crow.get("notional_mm",100))
+                            st.session_state["ticket_currency"]        = _crow.get("currency",ccy)
+                            st.toast("📋 Loaded into Trade Ticket tab — amend premium then send to MW", icon="🎫")
+                        except Exception as _cpe:
+                            st.error(f"Print Tix error: {_cpe}")
+                    if _crc[13].button("🗑️", key=f"cf_del_{_cidx}", help="Remove"):
+                        _del_tid = _crow.get("trade_id")
+                        if _del_tid:
+                            # v2604ae: delete by unique trade_id
+                            st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", [])
+                                                              if t.get("trade_id") != _del_tid]
+                        else:
+                            # Legacy trades without trade_id: remove first match only
+                            _port = st.session_state.get("portfolio", [])
+                            for _di, _dt in enumerate(_port):
+                                if _dt.get("instrument_type") == "Cap/Floor" and _dt.get("label") == _cl:
+                                    _port.pop(_di)
+                                    break
+                            st.session_state["portfolio"] = _port
+                        _save_portfolio(); st.rerun()
+    
+
     if ccy == "USD":
-        _cf_pricer_container = st.container()
+        _render_cf_pricer_blotter()
 
     vol_src = st.radio(
         "Vol source",
@@ -14214,450 +14653,10 @@ def caps_floors_tab(vol_mode: str):
                 )
                 st.plotly_chart(fig2, use_container_width=True)
 
-    # v2704a: for USD, redirect pricer + blotter into the container
-    # positioned above the caplet vol chart (after ATM CFS table).
-    # Non-USD renders in place (original position).
-    if _cf_pricer_container is not None:
-        _cf_pricer_container.__enter__()
-
-    st.markdown("---")
-    
-    if st.button(" Price Cap/Floor", key="cf_price", type="primary", disabled=is_trainee()):
-        try:
-            pv_total = 0.0
-            delta_total = 0.0
-            vega_total = 0.0
-            gamma_total = 0.0
-            
-            # Store individual caplet/floorlet results
-            caplet_details = []
-            
-            # Helper to price a strip and collect caplet details
-            def price_strip(strike_val, is_cap_flag, leg_name=""):
-                pv = delta = vega = gamma = 0.0
-                caplets = []
-                
-                for i, (T_i, accrual) in enumerate(sched):
-                    # Skip caplets in the "known" period (at or before first fixing)
-                    if T_i <= first_fixing_y + 1.0 / 252.0:
-                        continue
-                    
-                    # Get caplet-specific vol from term structure
-                    caplet_vol_bp = get_caplet_vol_for_fixing(caplet_vol_curve, T_i)
-                    if caplet_vol_bp is None:
-                        caplet_vol_bp = 35.0  # Fallback
-                    
-                    # Convert to sigma based on model
-                    if model == "Normal":
-                        sigma = caplet_vol_bp / 10000.0
-                    else:
-                        sigma = caplet_vol_bp / 100.0
-                    
-                    # Get discount rate from OIS curve
-                    disc_rate = interpolate_zero(ois_curve, T_i)
-                    
-                    # Calculate individual forward for THIS caplet period (3m)
-                    period_start = max(T_i - 0.25, 0.001)
-                    period_tenor = 0.25
-                    F_i, _, _ = forward_and_annuity_from_curve(curve, ccy, period_start, period_tenor, ois_curve)
-                    
-                    # For ATM (strike_val == fwd), use F_i as strike to ensure F=K for each caplet
-                    if abs(strike_val - fwd) < 0.0001:  # ATM straddle
-                        caplet_strike = F_i
-                    else:
-                        caplet_strike = strike_val
-                    
-                    if model == "Black":
-                        res = black_caplet(notional * 1e6, accrual, F_i, caplet_strike, sigma, T_i, disc_rate, is_cap=is_cap_flag)
-                    else:
-                        res = bachelier_caplet(notional * 1e6, accrual, F_i, caplet_strike, sigma, T_i, disc_rate, is_cap=is_cap_flag)
-                    pv += res["pv"]
-                    delta += res["delta"]
-                    vega += res["vega"]
-                    gamma += res["gamma"]
-                    
-                    # Fixing date derived from T_i (years from today)
-                    from dateutil.relativedelta import relativedelta
-                    fixing_months = round((T_i - base) * 12)
-                    caplet_date = today + relativedelta(months=fixing_months)
-                    
-                    caplets.append({
-                        "Leg": leg_name,
-                        "#": i,
-                        "Fixing": caplet_date.strftime('%d-%b-%Y'),
-                        "T (yrs)": f"{T_i:.4f}",
-                        "Fwd (%)": f"{F_i*100:.4f}",
-                        "Vol (bp)": f"{caplet_vol_bp:.2f}",
-                        "Accrual": f"{accrual:.4f}",
-                        "PV": f"${res['pv']:,.0f}",
-                        "Delta": f"{res['delta']:,.0f}",
-                    })
-                return {"pv": pv, "delta": delta, "vega": vega, "gamma": gamma, "caplets": caplets}
-
-            def price_digital_strip(strike_val, is_cap_flag, leg_name=""):
-                """Digital cap/floor — 100bp × notional × accrual payout per period.
-                Priced as tight call spread: [V(K-0.5bp) - V(K+0.5bp)] / 1bp × 100bp"""
-                eps = 0.0001  # 1bp spread
-                lo = price_strip(strike_val - eps/2, is_cap_flag, leg_name)
-                hi = price_strip(strike_val + eps/2, is_cap_flag, leg_name)
-                scale = 0.01 / eps  # 100bp payout / 1bp spread width = 100
-                pv    = (lo["pv"]    - hi["pv"])    * scale
-                delta = (lo["delta"] - hi["delta"]) * scale
-                vega  = (lo["vega"]  - hi["vega"])  * scale
-                gamma = (lo["gamma"] - hi["gamma"]) * scale
-                return {"pv": pv, "delta": delta, "vega": vega, "gamma": gamma, "caplets": lo["caplets"]}
-            
-            legs = []
-            
-            if cf_type == "Cap":
-                res = price_strip(strike, True, "Cap")
-                pv_total, delta_total, vega_total, gamma_total = res["pv"], res["delta"], res["vega"], res["gamma"]
-                caplet_details = res["caplets"]
-                legs.append(("Cap", strike*100, 1, res))
-                label = f"Cap {first_fixing}-{tenor} K={strike*100:.2f}%"
-                
-            elif cf_type == "Floor":
-                res = price_strip(strike, False, "Floor")
-                pv_total, delta_total, vega_total, gamma_total = res["pv"], res["delta"], res["vega"], res["gamma"]
-                caplet_details = res["caplets"]
-                legs.append(("Floor", strike*100, 1, res))
-                label = f"Floor {first_fixing}-{tenor} K={strike*100:.2f}%"
-                
-            elif cf_type == "Straddle":
-                res_cap = price_strip(fwd, True, "Cap")
-                res_floor = price_strip(fwd, False, "Floor")
-                pv_total = res_cap["pv"] + res_floor["pv"]
-                delta_total = res_cap["delta"] + res_floor["delta"]
-                vega_total = res_cap["vega"] + res_floor["vega"]
-                gamma_total = res_cap["gamma"] + res_floor["gamma"]
-                caplet_details = res_cap["caplets"] + res_floor["caplets"]
-                legs.append(("Cap", fwd*100, 1, res_cap))
-                legs.append(("Floor", fwd*100, 1, res_floor))
-                label = f"Straddle {first_fixing}-{tenor} ATM"
-                
-            elif cf_type == "Collar":
-                res_cap = price_strip(strike, True, "Long Cap")
-                res_floor = price_strip(strike_pct_2, False, "Short Floor")
-                # Long cap, short floor (protection against rising rates)
-                pv_total = res_cap["pv"] - res_floor["pv"]
-                delta_total = res_cap["delta"] - res_floor["delta"]
-                vega_total = res_cap["vega"] - res_floor["vega"]
-                gamma_total = res_cap["gamma"] - res_floor["gamma"]
-                caplet_details = res_cap["caplets"] + res_floor["caplets"]
-                legs.append(("Long Cap", strike*100, 1, res_cap))
-                legs.append(("Short Floor", strike_pct_2*100, -1, res_floor))
-                label = f"Collar {first_fixing}-{tenor} ({strike_pct_2*100:.2f}/{strike*100:.2f})"
-                
-            elif cf_type == "Strangle":
-                res_cap = price_strip(strike, True, "OTM Cap")
-                res_floor = price_strip(strike_pct_2, False, "OTM Floor")
-                pv_total = res_cap["pv"] + res_floor["pv"]
-                delta_total = res_cap["delta"] + res_floor["delta"]
-                vega_total = res_cap["vega"] + res_floor["vega"]
-                gamma_total = res_cap["gamma"] + res_floor["gamma"]
-                caplet_details = res_cap["caplets"] + res_floor["caplets"]
-                legs.append(("OTM Cap", strike*100, 1, res_cap))
-                legs.append(("OTM Floor", strike_pct_2*100, 1, res_floor))
-                label = f"Strangle {first_fixing}-{tenor} ({strike_pct_2*100:.2f}/{strike*100:.2f})"
-
-            elif cf_type == "Cap Corridor":
-                # Long low-strike cap, short high-strike cap
-                res_lo = price_strip(strike, True, "Long Cap")
-                res_hi = price_strip(strike_pct_2, True, "Short Cap")
-                pv_total    = res_lo["pv"]    - res_hi["pv"]
-                delta_total = res_lo["delta"] - res_hi["delta"]
-                vega_total  = res_lo["vega"]  - res_hi["vega"]
-                gamma_total = res_lo["gamma"] - res_hi["gamma"]
-                caplet_details = res_lo["caplets"] + res_hi["caplets"]
-                legs.append(("Long Cap",  strike*100,        1,  res_lo))
-                legs.append(("Short Cap", strike_pct_2*100, -1,  res_hi))
-                label = f"Cap Corridor {first_fixing}-{tenor} ({strike*100:.2f}/{strike_pct_2*100:.2f})"
-
-            elif cf_type == "Floordoor":
-                # Long high-strike floor, short low-strike floor
-                res_hi = price_strip(strike,       False, "Long Floor")
-                res_lo = price_strip(strike_pct_2, False, "Short Floor")
-                pv_total    = res_hi["pv"]    - res_lo["pv"]
-                delta_total = res_hi["delta"] - res_lo["delta"]
-                vega_total  = res_hi["vega"]  - res_lo["vega"]
-                gamma_total = res_hi["gamma"] - res_lo["gamma"]
-                caplet_details = res_hi["caplets"] + res_lo["caplets"]
-                legs.append(("Long Floor",  strike*100,        1,  res_hi))
-                legs.append(("Short Floor", strike_pct_2*100, -1,  res_lo))
-                label = f"Floordoor {first_fixing}-{tenor} ({strike*100:.2f}/{strike_pct_2*100:.2f})"
-
-            elif cf_type == "Digital Cap":
-                res = price_digital_strip(strike, True, "Digital Cap")
-                pv_total, delta_total, vega_total, gamma_total = res["pv"], res["delta"], res["vega"], res["gamma"]
-                caplet_details = res["caplets"]
-                legs.append(("Digital Cap", strike*100, 1, res))
-                label = f"Digital Cap {first_fixing}-{tenor} K={strike*100:.2f}% | 100bp payout per fixing"
-
-            elif cf_type == "Digital Floor":
-                res = price_digital_strip(strike, False, "Digital Floor")
-                pv_total, delta_total, vega_total, gamma_total = res["pv"], res["delta"], res["vega"], res["gamma"]
-                caplet_details = res["caplets"]
-                legs.append(("Digital Floor", strike*100, 1, res))
-                label = f"Digital Floor {first_fixing}-{tenor} K={strike*100:.2f}% | 100bp payout per fixing"
-
-            # Calculate premium in bp: (PV / Notional) * 10000
-            pv_bp = (pv_total / (notional * 1e6)) * 10000.0 if notional > 0 else 0.0
-
-            # Forward premium = spot / df(first_fixing) — for wedge/fwd trading convention
-            try:
-                _r_ff = interpolate_zero(ois_curve, first_fixing_y)
-                _df_ff = math.exp(-_r_ff * first_fixing_y)
-                pv_bp_fwd = pv_bp / _df_ff if _df_ff > 0 else pv_bp
-            except Exception:
-                _df_ff = 1.0
-                pv_bp_fwd = pv_bp
-
-            # one_bp = sum of caplet annuities
-            one_bp_annuity = 0.0
-            for _Ti, _acc in sched:
-                if _Ti <= first_fixing_y + 1.0/252.0:
-                    continue
-                _df_i = math.exp(-interpolate_zero(ois_curve, _Ti) * _Ti)
-                one_bp_annuity += notional * 1e6 * _acc * _df_i * 0.0001
-
-            st.success(f"✅ Priced: **{label}** | PV = ${pv_total:,.0f} | Spot: {pv_bp:.4f}bp | Fwd: {pv_bp_fwd:.4f}bp")
-
-            # Store for display
-            st.session_state["cf_last_result"] = {
-                "legs": legs,
-                "caplet_details": caplet_details,
-                "pv_total": pv_total,
-                "pv_bp": pv_bp,
-                "pv_bp_fwd": pv_bp_fwd,
-                "df_ff": _df_ff,
-                "first_fixing_y": first_fixing_y,
-                "delta_total": delta_total,
-                "gamma_total": gamma_total,
-                "vega_total": vega_total,
-                "one_bp": one_bp_annuity,
-                "label": label,
-                "notional": notional,
-            }
-
-            st.session_state["portfolio"].append(
-                dict(
-                    instrument_type="Cap/Floor",
-                    trade_id=f"CF{pd.Timestamp.now().strftime('%Y%m%d%H%M%S%f')}",
-                    currency=ccy,
-                    structure=cf_type,
-                    expiry=first_fixing,
-                    tenor=tenor,
-                    model=model,
-                    vol_input="Caplet Term Structure",
-                    notional_mm=notional,
-                    strike=strike * 100.0,
-                    forward=fwd * 100.0,
-                    pv=pv_total,
-                    pv_bp=pv_bp,
-                    pv_bp_fwd=pv_bp_fwd,
-                    delta=delta_total,
-                    gamma=gamma_total,
-                    vega=vega_total,
-                    theta=0.0,
-                    bpv=one_bp_annuity,
-                    label=label,
-                )
-            )
-        except Exception as e:
-            st.error(f" Pricing error: {e}")
-            import traceback
-            st.code(traceback.format_exc())
-    
-    # Display results if available
-    if "cf_last_result" in st.session_state:
-        r = st.session_state["cf_last_result"]
-        _is_fwd = st.session_state.get("cf_prem_mode", "Spot") == "Forward"
-        _disp_bp = r.get("pv_bp_fwd", r["pv_bp"]) if _is_fwd else r["pv_bp"]
-        _prem_lbl = "Forward" if _is_fwd else "Spot"
-        _df_ff    = r.get("df_ff", 1.0)
-
-        st.markdown("###  Results")
-        col_params, col_greeks = st.columns(2)
-
-        with col_params:
-            if len(r["legs"]) > 0:
-                st.markdown("##### Leg Breakdown")
-                leg_data = []
-                notional_val = r.get("notional", 100.0)
-                for leg_name, leg_strike, leg_mult, leg_res in r["legs"]:
-                    leg_spot_bp = ((leg_res['pv'] * leg_mult) / (notional_val * 1e6)) * 10000.0 if notional_val > 0 else 0
-                    leg_disp_bp = leg_spot_bp / _df_ff if _is_fwd and _df_ff > 0 else leg_spot_bp
-                    leg_data.append({
-                        "Leg": leg_name,
-                        "Strike (%)": f"{leg_strike:.4f}",
-                        f"Premium {_prem_lbl} (bp)": f"{leg_disp_bp:.4f}",
-                        "PV": f"${leg_res['pv'] * leg_mult:,.0f}",
-                        "Delta": f"{leg_res['delta'] * leg_mult:,.0f}"
-                    })
-                st.dataframe(pd.DataFrame(leg_data), use_container_width=True, hide_index=True)
-
-        with col_greeks:
-            st.markdown("##### Valuation")
-            st.metric(f"Premium {_prem_lbl} (bp)", f"{_disp_bp:.4f}")
-            if _is_fwd:
-                st.caption(f"Spot: {r['pv_bp']:.4f}bp | df(expiry): {_df_ff:.4f}")
-            st.metric("Total PV", f"${r['pv_total']:,.0f}")
-            
-            st.markdown("##### Greeks (Net)")
-            # Cap/Floor delta   —   same convention as swaptions
-            # delta_total = sum of caplet DV01s
-            # delta_ratio = delta_total / one_bp = hedge % of notional (50% ATM)
-            # delta_swap  = delta_ratio * notional_$ = notional-equivalent swap hedge
-            _notional_d = r['notional'] * 1e6
-            _one_bp = r['one_bp'] if r['one_bp'] > 0 else 1e-8
-            delta_ratio = r['delta_total'] / _one_bp          # e.g. 0.50 ATM
-            delta_swap  = delta_ratio * _notional_d            # e.g. 50mm for 100mm notional
-            delta_dv01  = r['delta_total']                     # already in $/bp
-            greeks_df = pd.DataFrame({
-                "Greek": ["Delta (swap hedge)", "Delta % notional", "Delta DV01 ($/bp)", "Gamma ($/bp)", "Vega ($/bp vol)", "BPV ($/bp)"],
-                "Value": [
-                    f"${delta_swap:,.0f}",
-                    f"{delta_ratio*100:.1f}%",
-                    f"{delta_dv01:,.1f}",
-                    f"{r['gamma_total']:,.2f}",
-                    f"{r['vega_total']:,.1f}",
-                    f"{r['one_bp']:,.1f}"
-                ],
-                "Per 1mm notional": [
-                    f"${delta_swap/r['notional']:,.0f}",
-                    f"{delta_ratio*100:.1f}%",
-                    f"{delta_dv01/r['notional']:,.1f}",
-                    f"{r['gamma_total']/r['notional']:,.3f}",
-                    f"{r['vega_total']/r['notional']:,.1f}",
-                    f"{r['one_bp']/r['notional']:,.1f}"
-                ]
-            })
-            st.dataframe(greeks_df, use_container_width=True, hide_index=True)
-        
-        # Caplet/Floorlet breakdown in expander
-        if r["caplet_details"]:
-            with st.expander(" Caplet/Floorlet Breakdown", expanded=False):
-                st.dataframe(pd.DataFrame(r["caplet_details"]), use_container_width=True, hide_index=True)
-
-    # ── Cap/Floor Portfolio Blotter ───────────────────────────────────────────
-    _cf_port = [t for t in st.session_state.get("portfolio", []) if t.get("instrument_type") == "Cap/Floor"]
-    if _cf_port:
-        st.markdown("---")
-        with st.expander(f"📋 Cap/Floor Trade Blotter  ({len(_cf_port)} trade{'s' if len(_cf_port) != 1 else ''})",
-                         expanded=st.session_state.get("cf_blotter_expanded", True)):
-            _ph2_col = st.columns([5, 1])
-            with _ph2_col[1]:
-                if st.button("🗑️ Clear All", key="cf_clear_portfolio"):
-                    st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", []) if t.get("instrument_type") != "Cap/Floor"]
-                    st.rerun()
-
-            _df = pd.DataFrame(_cf_port)
-            _df["_sort"] = _df["expiry"].apply(lambda e: label_to_years(str(e)))
-            _df = _df.sort_values("_sort").reset_index(drop=True)
-    
-            _CF_STATUS_COLOURS = {
-                "TP Trade":     "rgba(220,255,220,0.95)",
-                "Away Trade":   "rgba(255,210,210,0.95)",
-                "Direct Trade": "rgba(255,235,195,0.95)",
-            }
-            _CF_STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade"]
-    
-            st.markdown(
-                "<div style='display:grid;grid-template-columns:2.5% 15% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 12.5% 6.0% 6.0% 6.0%;"
-                "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
-                "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
-                "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
-                "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot Prem</span>"
-                "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Prnt</span><span>Del</span></div>",
-                unsafe_allow_html=True)
-    
-            for _cidx, _crow in _df.iterrows():
-                _cl  = _crow.get("label", f"{_crow.get('expiry','')}x{_crow.get('tenor','')}")
-                _cex = _crow.get("expiry",""); _cten = str(_crow.get("tenor",""))
-                _cst = _crow.get("structure","")
-                _cf_sk = f"_cf_status_{_cl}_{_cex}_{_cten}"
-                _cf_cur = st.session_state.get(_cf_sk, "—")
-                _cf_bg  = _CF_STATUS_COLOURS.get(_cf_cur, "white")
-                _cf_fwd  = float(_crow.get('pv_bp_fwd', _crow.get('pv_bp', 0)))
-                _ois_cf = (lambda _x: _x if _x is not None else get_basis_curve(ccy, 'ois'))(st.session_state.get('config_basis', {}).get(ccy, {}).get('ois'))
-                def _df_cf(ey):
-                    try:
-                        if _ois_cf is not None:
-                            _ox=_ois_cf[_ois_cf.columns[0]].to_numpy().astype(float); _oy=_ois_cf[_ois_cf.columns[1]].to_numpy().astype(float)/100.0
-                            return math.exp(-float(np.interp(ey,_ox,_oy))*ey)
-                        return math.exp(-0.035*ey)
-                    except: return 1.0
-                _cf_spot = _cf_fwd * _df_cf(label_to_years(str(_crow.get('expiry','1y'))))
-                _crc = st.columns([0.25, 1.50, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.25, 0.60, 0.60, 0.65])
-                _cf_vals = [
-                    f"{_cidx+1}", _cst, _cex, _cten,
-                    f"{float(_crow.get('notional_mm',100)):.0f}mm",
-                    f"{float(_crow.get('strike',0)):.4f}",
-                    f"{float(_crow.get('forward',0)):.4f}",
-                    f"{_cf_spot:.2f}",
-                    f"{_cf_fwd:.2f}",
-                    f"{float(_crow.get('pv',0))/1000:,.1f}",
-                ]
-                _cf_colours = {7: "#22c55e", 8: "#38bdf8"}
-                for _ci2, _val2 in enumerate(_cf_vals):
-                    _cf_col = _cf_colours.get(_ci2, "#1e293b")
-                    _cf_fw  = "700" if _ci2 in _cf_colours else "400"
-                    _crc[_ci2].markdown(
-                        f"<div style='background:{_cf_bg};padding:5px 3px;font-size:12px;color:{_cf_col};"
-                        f"font-weight:{_cf_fw};border-bottom:1px solid #e2e8f0'>{_val2}</div>", unsafe_allow_html=True)
-                _cf_new = _crc[10].selectbox("", _CF_STATUS_OPTS,
-                    index=_CF_STATUS_OPTS.index(_cf_cur) if _cf_cur in _CF_STATUS_OPTS else 0,
-                    key=f"cf_status_{_cidx}", label_visibility="collapsed")
-                if _cf_new == "Clear Trade":
-                    st.session_state[_cf_sk] = "—"
-                    st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", [])
-                                                      if not (t.get("instrument_type")=="Cap/Floor" and t.get("label")==_cl)]
-                    st.rerun()
-                elif _cf_new != _cf_cur:
-                    st.session_state[_cf_sk] = _cf_new; st.rerun()
-                if can_quick_tix() and _crc[11].button("📋", key=f"cf_tix_{_cidx}", help="Quick Tix"):
-                    st.session_state["_cf_tix_open"] = _cidx if st.session_state.get("_cf_tix_open") != _cidx else -1
-                if can_quick_tix() and _crc[12].button("🎫", key=f"cf_ptix_{_cidx}", help="Print Tix → Trade Ticket"):
-                    try:
-                        from datetime import date as _cptd, timedelta as _cpttd
-                        _cp_exp_y  = label_to_years(str(_crow.get("expiry","3m")))
-                        _cp_ten_y  = float(str(_crow.get("tenor","5Y")).replace("Y","").replace("y","")) if _crow.get("tenor") else 5.0
-                        _cp_exp_dt = _cptd.today() + _cpttd(days=int(_cp_exp_y*365.25))
-                        _cp_start  = _cp_exp_dt + _cpttd(days=1)
-                        st.session_state["ticket_option_type"]     = _crow.get("structure","Cap")
-                        st.session_state["ticket_option_expiry"]   = str(_crow.get("expiry",""))
-                        st.session_state["ticket_option_expiry_y"] = _cp_exp_y
-                        st.session_state["ticket_swap_term"]       = str(_crow.get("tenor",""))
-                        st.session_state["ticket_swap_term_y"]     = _cp_ten_y
-                        st.session_state["ticket_expiry_date"]     = _cp_exp_dt.strftime("%Y-%m-%d")
-                        st.session_state["ticket_swap_start_date"] = _cp_start.strftime("%Y-%m-%d")
-                        st.session_state["ticket_strike_rate"]     = float(_crow.get("strike",0))
-                        st.session_state["ticket_premium_bp"]      = float(_crow.get("pv_bp_fwd",_crow.get("pv_bp",0)))
-                        st.session_state["ticket_notional"]        = float(_crow.get("notional_mm",100))
-                        st.session_state["ticket_currency"]        = _crow.get("currency",ccy)
-                        st.toast("📋 Loaded into Trade Ticket tab — amend premium then send to MW", icon="🎫")
-                    except Exception as _cpe:
-                        st.error(f"Print Tix error: {_cpe}")
-                if _crc[13].button("🗑️", key=f"cf_del_{_cidx}", help="Remove"):
-                    _del_tid = _crow.get("trade_id")
-                    if _del_tid:
-                        # v2604ae: delete by unique trade_id
-                        st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", [])
-                                                          if t.get("trade_id") != _del_tid]
-                    else:
-                        # Legacy trades without trade_id: remove first match only
-                        _port = st.session_state.get("portfolio", [])
-                        for _di, _dt in enumerate(_port):
-                            if _dt.get("instrument_type") == "Cap/Floor" and _dt.get("label") == _cl:
-                                _port.pop(_di)
-                                break
-                        st.session_state["portfolio"] = _port
-                    _save_portfolio(); st.rerun()
-
-    # v2704a: close USD container redirect
-    if _cf_pricer_container is not None:
-        _cf_pricer_container.__exit__(None, None, None)
-
+    # v2704b: pricer + blotter rendered via _render_cf_pricer_blotter()
+    # at the correct position per currency (see above for USD, here for others)
+    if ccy != "USD":
+        _render_cf_pricer_blotter()
 
 def exotics_tab(vol_mode: str):
     st.subheader("Exotics / Structured Rates")
