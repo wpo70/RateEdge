@@ -13540,12 +13540,13 @@ def caps_floors_tab(vol_mode: str):
                                 _cum_prem += float(_wedge_straddle)
                         _straddle_prem = round(_cum_prem, 4) if _cum_prem else None
 
-                        # v2004ad: when Active=Listed bootstrap, override the
-                        # 1Y / 2Y straddle with the listed-derived values so
-                        # the flat vol solver below targets the LISTED strip
-                        # premium instead of the OTC one. Without this, the
-                        # Flat Vol bp column still shows OTC-implied flats
-                        # because cfs_table_data was restored after the build.
+                        # v2604x: when Active=Listed bootstrap, override BOTH
+                        # _straddle_prem AND _cum_prem at the listed anchor
+                        # rows.  Previous code only fixed _straddle_prem
+                        # (display) but left _cum_prem on the OTC base, so
+                        # every subsequent wedge row cascaded from the wrong
+                        # 1Y.  e.g. 2Y showed OTC_1Y + 1x2 instead of
+                        # listed_1Y + 1x2.
                         if ccy == "USD":
                             _active_src_now = st.session_state.get("cfs_active_vol_src", "OTC only")
                             _lf_cache_now = st.session_state.get("_cfs_listed_curve_cache") or {}
@@ -13553,12 +13554,14 @@ def caps_floors_tab(vol_mode: str):
                                 if _key == "3m1y":
                                     _listed_stradd_now = _lf_cache_now.get("stradd_1y")
                                     if _listed_stradd_now:
-                                        _straddle_prem = round(float(_listed_stradd_now), 4)
+                                        _cum_prem = float(_listed_stradd_now)
+                                        _straddle_prem = round(_cum_prem, 4)
                                 elif _key == "1y1y":
                                     _lst_1 = _lf_cache_now.get("stradd_1y")
                                     _lst_2 = _lf_cache_now.get("stradd_2y")
                                     if _lst_1 and _lst_2:
-                                        _straddle_prem = round(float(_lst_2), 4)
+                                        _cum_prem = float(_lst_2)
+                                        _straddle_prem = round(_cum_prem, 4)
 
                         # Flat vol: for OTC-only / AUD / NZD / flat curves,
                         # caplet_vol_curve[T] IS the strip flat vol (solver
