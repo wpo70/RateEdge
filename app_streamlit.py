@@ -12520,7 +12520,7 @@ def caps_floors_tab(vol_mode: str):
         #   (b) No cached curve exists yet (first load)
         # This prevents the solver running on every keystroke in wedge spreads,
         # which was causing white-screen crashes from half-edited data.
-        _calc_requested = st.session_state.pop("_cfs_calc_requested", False)
+        _calc_requested = st.session_state.get("_cfs_calc_requested", False)
         _otc_cached = st.session_state.get("_cfs_otc_build_cache")
         _listed_cached = st.session_state.get("_cfs_listed_build_cache")
         # Build when: (a) Calculate/Commit pressed, (b) no cache at all,
@@ -12857,6 +12857,9 @@ def caps_floors_tab(vol_mode: str):
             st.session_state["_cfs_sr3_hybrid"]       = sr3_hybrid_curve
             st.session_state["_cfs_sr3_full"]         = sr3_full_curve
             st.session_state["_cfs_overlay_sel"]      = _overlay_choices
+
+            # Clear calc flag AFTER all builds complete — not before
+            st.session_state.pop("_cfs_calc_requested", None)
 
 
             # ═════════════════════════════════════════════════════════════
