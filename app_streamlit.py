@@ -20295,27 +20295,50 @@ def rv_tab():
                                           ("3m","5Y"),("6m","5Y"),("1y","5Y")]:
                             _dv = get_matrix_value(atm, _de, label_to_years(_dt))
                             st.text(f"{_de}×{_dt}: {_dv:.1f}bp" if _dv else f"{_de}×{_dt}: —")
-                    with _dbg_cols[1]:
-                        st.markdown("**Q/Q Curve (%)**")
-                        _qq_ok = _rv_zc_qq is not None
-                        st.caption("✅ loaded" if _qq_ok else "❌ NOT LOADED")
-                        for _dt in [1, 2, 3]:
-                            _dr = _par_rate_qq(_dt) if _qq_ok else None
-                            st.text(f"{_dt}Y: {_dr:.4f}%" if _dr else f"{_dt}Y: —")
-                    with _dbg_cols[2]:
-                        st.markdown("**S/S Curve (%)**")
-                        _ss_ok = _rv_zc_ss is not None
-                        st.caption("✅ loaded" if _ss_ok else "❌ NOT LOADED")
-                        for _dt in [5, 10, 20]:
-                            _dr = _par_rate(_dt) if _ss_ok else None
-                            st.text(f"{_dt}Y: {_dr:.4f}%" if _dr else f"{_dt}Y: —")
-                    with _dbg_cols[3]:
-                        st.markdown("**Fwd Rates (%)**")
-                        st.caption("Needs Q/Q + S/S loaded")
-                        for _t1, _t2, _lbl in [(0,1,"1y fwd 1Y"),(1,2,"2y fwd 1Y"),
-                                                (2,7,"2y fwd 5Y"),(5,10,"5y fwd 5Y")]:
-                            _dfr = _fwd_rate(_t1, _t2)
-                            st.text(f"{_lbl}: {_dfr:.4f}%" if _dfr else f"{_lbl}: — (missing {'QQ' if _t2<=3 else 'SS'})")
+                    if ccy == "AUD":
+                        with _dbg_cols[1]:
+                            st.markdown("**Q/Q Curve (%)**")
+                            _qq_ok = _rv_zc_qq is not None
+                            st.caption("✅ loaded" if _qq_ok else "❌ NOT LOADED")
+                            for _dt in [1, 2, 3]:
+                                _dr = _par_rate_qq(_dt) if _qq_ok else None
+                                st.text(f"{_dt}Y: {_dr:.4f}%" if _dr else f"{_dt}Y: —")
+                        with _dbg_cols[2]:
+                            st.markdown("**S/S Curve (%)**")
+                            _ss_ok = _rv_zc_ss is not None
+                            st.caption("✅ loaded" if _ss_ok else "❌ NOT LOADED")
+                            for _dt in [5, 10, 20]:
+                                _dr = _par_rate(_dt) if _ss_ok else None
+                                st.text(f"{_dt}Y: {_dr:.4f}%" if _dr else f"{_dt}Y: —")
+                        with _dbg_cols[3]:
+                            st.markdown("**Fwd Rates (%)**")
+                            st.caption("Needs Q/Q + S/S loaded")
+                            for _t1, _t2, _lbl in [(0,1,"1y fwd 1Y"),(1,2,"2y fwd 1Y"),
+                                                    (2,7,"2y fwd 5Y"),(5,10,"5y fwd 5Y")]:
+                                _dfr = _fwd_rate(_t1, _t2)
+                                st.text(f"{_lbl}: {_dfr:.4f}%" if _dfr else f"{_lbl}: — (missing {'QQ' if _t2<=3 else 'SS'})")
+                    else:
+                        # USD / NZD / other: single curve
+                        _curve_lbl = "SOFR" if ccy == "USD" else ccy
+                        with _dbg_cols[1]:
+                            st.markdown(f"**{_curve_lbl} Curve (%)**")
+                            _crv_ok = curve is not None
+                            st.caption("✅ loaded" if _crv_ok else "❌ NOT LOADED")
+                            for _dt in [1, 2, 3, 5, 10]:
+                                _dr = _par_rate(_dt) if _crv_ok else None
+                                st.text(f"{_dt}Y: {_dr:.4f}%" if _dr else f"{_dt}Y: —")
+                        with _dbg_cols[2]:
+                            st.markdown("**Fwd Rates (%)**")
+                            _crv_ok2 = curve is not None
+                            st.caption("✅ loaded" if _crv_ok2 else "❌ Needs curve")
+                            for _t1, _t2, _lbl in [(0,1,"1y fwd 1Y"),(1,2,"2y fwd 1Y"),
+                                                    (2,7,"2y fwd 5Y"),(5,10,"5y fwd 5Y")]:
+                                _dfr = _fwd_rate(_t1, _t2)
+                                st.text(f"{_lbl}: {_dfr:.4f}%" if _dfr else f"{_lbl}: —")
+                        with _dbg_cols[3]:
+                            st.markdown("**Equity Vol**")
+                            _vix_now = st.session_state.get("vix_spot")
+                            st.text(f"VIX: {_vix_now:.2f}" if _vix_now else "VIX: —")
 
 
                 # ── Select all / copy all ──────────────────────────────
