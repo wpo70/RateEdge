@@ -19436,16 +19436,17 @@ def rv_tab():
     if _rv_active == 2:
         st.markdown("### Swaption RV Trade Recommendations")
         st.caption("Gamma/vega-optimised ideas from current vol surface + curve.")
+        _cb_name = {"AUD": "RBA", "USD": "Fed", "NZD": "RBNZ", "EUR": "ECB", "GBP": "BoE", "JPY": "BoJ", "CAD": "BoC"}.get(ccy, "CB")
 
         if atm is None or curve is None:
             st.warning(f"Load both {ccy} ATM vol surface and IRS curve to generate ideas.")
         else:
             # Gate behind button — idea engine is expensive, don't run every render
-            _rv_ideas_key = "rv_ideas_run"
+            _rv_ideas_key = f"rv_ideas_run_{ccy}"
             if st.button("⚡ Generate Trade Ideas", key="rv_gen_ideas", type="primary"):
                 st.session_state[_rv_ideas_key] = True
-                st.session_state.pop("_rv_ideas_cache", None)
-                st.session_state.pop("_rv_precompute_cache", None)
+                st.session_state.pop(f"_rv_ideas_cache_{ccy}", None)
+                st.session_state.pop(f"_rv_precompute_cache_{ccy}", None)
             ideas = []
             if not st.session_state.get(_rv_ideas_key):
                 st.info("Click **⚡ Generate Trade Ideas** to run the idea engine.")
@@ -19458,14 +19459,14 @@ def rv_tab():
             _rv_tn_strs  = ["2Y", "5Y", "10Y", "15Y", "20Y"]
             _rv_exp_lbls = ["1m", "3m", "6m", "1y", "2y"]
 
-            _rv_precompute = st.session_state.get("_rv_precompute_cache")
+            _rv_precompute = st.session_state.get(f"_rv_precompute_cache_{ccy}")
             if st.session_state.get(_rv_ideas_key) and _rv_precompute is None:
                 _realised    = {tn: _compute_realised_vol_db(ccy, tn, 21) for tn in _rv_tenors}
                 _ratio_stats = _load_vol_ratio_stats_db(ccy)
                 _fv_stats    = _compute_fwd_vol_surface_stats(ccy)
                 _meetings    = {e: _meetings_in_window(ccy, e) for e in _rv_exp_lbls}
                 _move_val    = _fetch_move_index() if ccy == "USD" else None
-                st.session_state["_rv_precompute_cache"] = {
+                st.session_state[f"_rv_precompute_cache_{ccy}"] = {
                     "realised": _realised, "ratio_stats": _ratio_stats,
                     "fv_stats": _fv_stats, "meetings": _meetings, "move_val": _move_val
                 }
@@ -19944,7 +19945,7 @@ def rv_tab():
                         "Signal": f"5y5y fwd {fwd_5y5y:.3f}% vs spot 5Y {r5:.3f}%",
                         "Trade": "Buy 5y≈5Y ATM Payer",
                         "Rationale": f"Curve pricing {(fwd_5y5y-r5)*100:.0f}bp of steepening by 5Y point   —   asymmetric "
-                                     f"risk if RBA easier than fwd. Vol at {v_5y5y:.1f}bp.",
+                                     f"risk if {_cb_name} easier than fwd. Vol at {v_5y5y:.1f}bp.",
                         "Risk": "Pays premium; loses if rates fall or stay flat",
                         "Score": min(abs(fwd_5y5y - r5) * 40, 100),
                     })
@@ -19955,7 +19956,7 @@ def rv_tab():
                         "Structure": "5y≈5Y Receiver Swaption",
                         "Signal": f"5y5y fwd {fwd_5y5y:.3f}% vs spot 5Y {r5:.3f}%",
                         "Trade": "Buy 5y≈5Y ATM Receiver",
-                        "Rationale": f"Inverted fwd curve pricing easing   —   if RBA cuts more aggressively, receiver pays well.",
+                        "Rationale": f"Inverted fwd curve pricing easing   —   if {_cb_name} cuts more aggressively, receiver pays well.",
                         "Risk": "Pays premium; loses if easing is less than priced",
                         "Score": min(abs(fwd_5y5y - r5) * 40, 100),
                     })
@@ -20100,7 +20101,7 @@ def rv_tab():
                             "Signal": f"2s10s = {slope_2s10s*100:.0f}bp inverted",
                             "Trade": "Receive 2Y / Pay 10Y (IRS steepener)",
                             "Rationale": f"2s10s inverted {abs(slope_2s10s)*100:.0f}bp   —   "
-                                         f"steepener profits on RBA pivot / normalisation." + _hist_note("2s10s"),
+                                         f"steepener profits on {_cb_name} pivot / normalisation." + _hist_note("2s10s"),
                             "Risk": "Carry positive but inversion can persist",
                             "Score": min(abs(slope_2s10s) * 10, 100),
                         })
@@ -20264,7 +20265,7 @@ def rv_tab():
 
             # Cache for SOD report
             if ideas:
-                st.session_state["_rv_ideas_cache"] = ideas
+                st.session_state[f"_rv_ideas_cache_{ccy}"] = ideas
 
             if not st.session_state.get(_rv_ideas_key):
                 pass
@@ -21182,9 +21183,9 @@ def rv_tab():
 
             # Merge into combined ideas cache for SOD report
             if cf_ideas:
-                _existing = st.session_state.get("_rv_ideas_cache", [])
+                _existing = st.session_state.get(f"_rv_ideas_cache_{ccy}", [])
                 _sw_only = [i for i in _existing if i.get("Category","Swaption") != "Cap/Floor"]
-                st.session_state["_rv_ideas_cache"] = _sw_only + cf_ideas
+                st.session_state[f"_rv_ideas_cache_{ccy}"] = _sw_only + cf_ideas
 
             if not cf_ideas:
                 st.info("No strong cap/floor signals at current levels.")
@@ -27853,7 +27854,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             if _atm_now is not None and _curve_now is not None:
                 from datetime import date as _dtnow
                 _snap = {"date": str(_dtnow.today()), "atm": {}, "curve": {},
-                         "ideas": st.session_state.get("_rv_ideas_cache", [])}
+                         "ideas": st.session_state.get(f"_rv_ideas_cache_AUD", [])}
                 for _e in ["1m","3m","6m","1y","2y","3y","5y"]:
                     for _t in [2.0,3.0,5.0,7.0,10.0,15.0,20.0]:
                         _v = get_matrix_value(_atm_now, _e, _t)
@@ -28345,7 +28346,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         from datetime import date as _dtnow
         _curr  = st.session_state.get("rv_daily_snap_curr", {})
         _prev  = st.session_state.get("rv_daily_snap_prev", {})
-        _ideas = st.session_state.get("_rv_ideas_cache", [])
+        _ideas = st.session_state.get(f"_rv_ideas_cache_AUD", [])
         _today_str = _curr.get("date", str(_dtnow.today()))
         _prev_date = _prev.get("date","prior EOD") if _prev else "prior EOD"
 
