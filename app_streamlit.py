@@ -19461,15 +19461,20 @@ def rv_tab():
 
             _rv_precompute = st.session_state.get(f"_rv_precompute_cache_{ccy}")
             if st.session_state.get(_rv_ideas_key) and _rv_precompute is None:
-                _realised    = {tn: _compute_realised_vol_db(ccy, tn, 21) for tn in _rv_tenors}
-                _ratio_stats = _load_vol_ratio_stats_db(ccy)
-                _fv_stats    = _compute_fwd_vol_surface_stats(ccy)
-                _meetings    = {e: _meetings_in_window(ccy, e) for e in _rv_exp_lbls}
-                _move_val    = _fetch_move_index() if ccy == "USD" else None
-                st.session_state[f"_rv_precompute_cache_{ccy}"] = {
-                    "realised": _realised, "ratio_stats": _ratio_stats,
-                    "fv_stats": _fv_stats, "meetings": _meetings, "move_val": _move_val
-                }
+                try:
+                    _realised    = {tn: _compute_realised_vol_db(ccy, tn, 21) for tn in _rv_tenors}
+                    _ratio_stats = _load_vol_ratio_stats_db(ccy)
+                    _fv_stats    = _compute_fwd_vol_surface_stats(ccy)
+                    _meetings    = {e: _meetings_in_window(ccy, e) for e in _rv_exp_lbls}
+                    _move_val    = _fetch_move_index() if ccy == "USD" else None
+                    st.session_state[f"_rv_precompute_cache_{ccy}"] = {
+                        "realised": _realised, "ratio_stats": _ratio_stats,
+                        "fv_stats": _fv_stats, "meetings": _meetings, "move_val": _move_val
+                    }
+                except Exception as _pre_err:
+                    st.error(f"Trade idea precompute error: {_pre_err}")
+                    _realised = {}; _ratio_stats = {}; _fv_stats = {}
+                    _meetings = {e: 0 for e in _rv_exp_lbls}; _move_val = None
             elif _rv_precompute is not None:
                 _realised    = _rv_precompute["realised"]
                 _ratio_stats = _rv_precompute["ratio_stats"]
