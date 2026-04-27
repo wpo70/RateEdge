@@ -18584,7 +18584,7 @@ def rv_tab():
     with _rv_main_tab:
         st.caption("Live vol surface + IRS curve for richness/cheapness signals.")
 
-    ccy = "AUD"
+    ccy = st.session_state.get("sidebar_ccy", "AUD")
     curve     = get_ccy_curve(ccy)
     _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
     ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
@@ -18719,7 +18719,7 @@ def rv_tab():
         st.markdown("### Vol Surface Richness / Cheapness")
 
         if atm is None:
-            st.warning("Load your AUD ATM vol surface first (Vol/SABR tab).")
+            st.warning(f"Load your {ccy} ATM vol surface first (Vol/SABR tab).")
         else:
             # ── Butterfly richness ────────────────────────────────────
             st.markdown("#### Volatility Butterfly (Smile Curvature)")
@@ -19005,6 +19005,106 @@ def rv_tab():
                         st.caption(f"Today — SPI: **{_spi_front_atm:.2f}%** | Swptn 3m×5Y: **{_sw_3m5y:.1f}bp** | "
                                    f"Ratio: **{_sw_3m5y/(_spi_front_atm*100*math.sqrt(0.25)):.3f}**")
 
+        # ── Cross-Asset Vol: Swaption vs VIX/SPX (USD) ────────────────
+        elif ccy == "USD":
+            _spx_surf_rv = st.session_state.get("spx_vol_surface", {})
+            _vix_spot_rv = st.session_state.get("vix_spot")
+            # Use SPX front ATM or VIX spot as equity vol proxy
+            _spx_front_atm = st.session_state.get("spx_vol_override")
+            if not _spx_front_atm and _spx_surf_rv:
+                _front_key = next(iter(_spx_surf_rv), None)
+                if _front_key:
+                    _spx_front_atm = _spx_surf_rv.get(_front_key, {}).get("50D")
+            _eq_vol = _spx_front_atm or _vix_spot_rv
+            if atm is not None and _eq_vol:
+                st.markdown("---")
+                _eq_label = "SPX" if _spx_front_atm else "VIX"
+                st.markdown(f"#### 📊 Cross-Asset Vol — Swaption vs {_eq_label}")
+
+                _EXPIRY_MAP = [("1m",1/12),("3m",0.25),("6m",0.5),("1y",1.0),("2y",2.0)]
+                _ratio_rows = []
+                for _exp_lbl, _exp_y in _EXPIRY_MAP:
+                    _sw_vol = get_matrix_value(atm, _exp_lbl, 5.0)
+                    if _sw_vol is None:
+                        continue
+                    _eq_bp_equiv = _eq_vol * 100 * math.sqrt(_exp_y)
+                    _ratio = _sw_vol / _eq_bp_equiv if _eq_bp_equiv > 0 else None
+                    _ratio_rows.append({
+                        "Expiry": _exp_lbl,
+                        "Swptn ATM 5Y (bp)": round(_sw_vol, 1),
+                        f"{_eq_label} ATM (%)": round(_eq_vol, 2),
+                        f"{_eq_label} bp-equiv": round(_eq_bp_equiv, 1),
+                        f"Ratio Swptn/{_eq_label}": round(_ratio, 3) if _ratio else None,
+                        "Signal": ("🔴 Rates Rich" if _ratio and _ratio > 1.2 else
+                                   "🟢 Rates Cheap" if _ratio and _ratio < 0.8 else
+                                   "⚪ Neutral") if _ratio else "—"
+                    })
+
+                if _ratio_rows:
+                    _ratio_df = pd.DataFrame(_ratio_rows)
+                    _ratio_col = f"Ratio Swptn/{_eq_label}"
+                    def _ratio_color_usd(v):
+                        try:
+                            f = float(v)
+                            if f > 1.2: return "color:#ef4444;font-weight:600"
+                            if f < 0.8: return "color:#22c55e;font-weight:600"
+                            return "color:#94a3b8"
+                        except: return ""
+                    st.dataframe(
+                        _ratio_df.style.map(_ratio_color_usd, subset=[_ratio_col]),
+                        use_container_width=True, hide_index=True)
+                    st.caption(f"Ratio > 1.2 = rates vol rich vs equity vol. < 0.8 = rates cheap. "
+                               f"{_eq_label} bp-equiv = {_eq_label}% × 100 × √T.")
+
+                with st.expander(f"🎯 Vol Regime Quadrant — {_eq_label} vs Rates", expanded=False):
+                    st.caption(f"Today's cross-asset vol position. X = {_eq_label} ATM (%), Y = Swaption 3m×5Y ATM (bp)")
+                    _sw_3m5y = get_matrix_value(atm, "3m", 5.0)
+                    if _sw_3m5y and _eq_vol:
+                        import plotly.graph_objects as go
+                        _xav_fig = go.Figure()
+                        _xav_mid_x = 20.0   # VIX/SPX midpoint (%)
+                        _xav_mid_y = 85.0   # Swaption ATM midpoint (bp)
+                        _xav_fig.add_shape(type="rect", x0=0, x1=_xav_mid_x, y0=_xav_mid_y, y1=200,
+                                           fillcolor="rgba(34,197,94,0.08)", line_width=0)
+                        _xav_fig.add_shape(type="rect", x0=_xav_mid_x, x1=50, y0=_xav_mid_y, y1=200,
+                                           fillcolor="rgba(239,68,68,0.08)", line_width=0)
+                        _xav_fig.add_shape(type="rect", x0=0, x1=_xav_mid_x, y0=0, y1=_xav_mid_y,
+                                           fillcolor="rgba(239,68,68,0.08)", line_width=0)
+                        _xav_fig.add_shape(type="rect", x0=_xav_mid_x, x1=50, y0=0, y1=_xav_mid_y,
+                                           fillcolor="rgba(34,197,94,0.08)", line_width=0)
+                        for _ql, _qx, _qy in [
+                            ("Equity Cheap\nRates Rich",   _xav_mid_x*0.5, _xav_mid_y*1.4),
+                            ("Both Rich",                  _xav_mid_x*1.5, _xav_mid_y*1.4),
+                            ("Both Cheap",                 _xav_mid_x*0.5, _xav_mid_y*0.6),
+                            ("Equity Rich\nRates Cheap",   _xav_mid_x*1.5, _xav_mid_y*0.6),
+                        ]:
+                            _xav_fig.add_annotation(x=_qx, y=_qy, text=_ql, showarrow=False,
+                                                    font=dict(size=9, color="#475569"), xanchor="center")
+                        _xav_fig.add_vline(x=_xav_mid_x, line_dash="dot", line_color="#334155", line_width=1)
+                        _xav_fig.add_hline(y=_xav_mid_y, line_dash="dot", line_color="#334155", line_width=1)
+                        _xav_fig.add_trace(go.Scatter(
+                            x=[_eq_vol], y=[_sw_3m5y],
+                            mode="markers+text",
+                            marker=dict(size=16, color="#f59e0b", symbol="star",
+                                        line=dict(color="white", width=1.5)),
+                            text=["Today"], textposition="top center",
+                            textfont=dict(color="#f59e0b", size=11),
+                            name="Today",
+                            hovertemplate=f"{_eq_label} ATM: {_eq_vol:.2f}%<br>Swptn 3m×5Y: {_sw_3m5y:.1f}bp<extra></extra>"
+                        ))
+                        _xav_fig.update_layout(
+                            xaxis=dict(title=f"{_eq_label} ATM (%)", range=[0, 45]),
+                            yaxis=dict(title="Swaption 3m×5Y ATM (bp)", range=[30, 160]),
+                            template="plotly_dark", height=340,
+                            margin=dict(t=20, l=60, r=20, b=50),
+                            showlegend=False,
+                            plot_bgcolor="rgba(15,23,42,0.6)",
+                            paper_bgcolor="rgba(0,0,0,0)",
+                        )
+                        st.plotly_chart(_xav_fig, use_container_width=True)
+                        st.caption(f"Today — {_eq_label}: **{_eq_vol:.2f}%** | Swptn 3m×5Y: **{_sw_3m5y:.1f}bp** | "
+                                   f"Ratio: **{_sw_3m5y/(_eq_vol*100*math.sqrt(0.25)):.3f}**")
+
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     # TAB 2   —   CURVE RV & SPREAD ANALYSIS
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
@@ -19012,7 +19112,7 @@ def rv_tab():
         st.markdown("### Curve Shape & Forward Spread RV")
 
         if curve is None:
-            st.warning("Load AUD IRS curve first (Curves tab).")
+            st.warning(f"Load {ccy} IRS curve first (Curves tab).")
         else:
             # Current curve shape
             xs_c = curve["MaturityY"].to_numpy().astype(float)
@@ -19133,7 +19233,7 @@ def rv_tab():
             fig_curve = go.Figure()
             fig_curve.add_trace(go.Scatter(
                 x=list(xs_c), y=list(ys_c),
-                name="Current AUD Curve", line=dict(color="#3b82f6", width=2.5)))
+                name=f"Current {ccy} Curve", line=dict(color="#3b82f6", width=2.5)))
             # Add key fwd rates as markers
             fwd_pts = [(2, fwds_live["2y1y"], "2y1y"), (2, fwds_live["2y3y"], "2y3y"),
                        (5, fwds_live["5y5y"], "5y5y")]
@@ -19143,7 +19243,7 @@ def rv_tab():
                         text=f"{lbl}: {v:.2f}%",
                         showarrow=True, arrowhead=2, arrowcolor="#f59e0b",
                         font=dict(color="#f59e0b", size=10))
-            fig_curve.update_layout(title="AUD IRS Curve   —   Current", xaxis_title="Tenor (y)",
+            fig_curve.update_layout(title=f"{ccy} IRS Curve   —   Current", xaxis_title="Tenor (y)",
                 yaxis_title="Rate (%)", template="plotly_dark", height=300)
             st.plotly_chart(fig_curve, use_container_width=True)
 
@@ -19196,7 +19296,7 @@ def rv_tab():
                                            line_color="#94a3b8",
                                            annotation_text=f"Median {med:.1f}bp")
                         fig_hist.update_layout(
-                            title=f"AUD {spread_sel} Spread History ({lookback})",
+                            title=f"{ccy} {spread_sel} Spread History ({lookback})",
                             xaxis_title="Date", yaxis_title="bp",
                             template="plotly_dark", height=300)
                         st.plotly_chart(fig_hist, use_container_width=True)
@@ -29698,6 +29798,55 @@ RateEdge Options Platform""",
                 st.success(f"✅ Saved **{_label}** for {', '.join(_saved)}")
             if _failed:
                 st.error(f"❌ Save failed for: {', '.join(_failed)}")
+
+    # ── USD Timezone Snapshots ─────────────────────────────────────────
+    if "USD" in (export_currencies or []):
+        st.markdown("---")
+        st.markdown("### 🇺🇸 USD Vol Snapshots — by Trading Centre")
+        import datetime as _dt_usd
+        _nyc_now = _dt_usd.datetime.now(ZoneInfo("America/New_York"))
+        _ldn_now = _dt_usd.datetime.now(ZoneInfo("Europe/London"))
+        _tky_now = _dt_usd.datetime.now(ZoneInfo("Asia/Tokyo"))
+        _nyc_date = _nyc_now.strftime("%d-%b-%Y")
+        _usd_snap = None
+        _usd_sb1, _usd_sb2, _usd_sb3, _usd_sb4 = st.columns(4)
+        with _usd_sb1:
+            if st.button(f"🌅 SOD Tokyo\n{_tky_now.strftime('%H:%M JST')}", key="usd_snap_tky", use_container_width=True):
+                _usd_snap = f"USD SOD Tokyo {_tky_now.strftime('%d-%b-%Y %H:%M JST')}"
+        with _usd_sb2:
+            if st.button(f"🌅 SOD London\n{_ldn_now.strftime('%H:%M GMT' if _ldn_now.utcoffset().total_seconds()==0 else '%H:%M BST')}", key="usd_snap_ldn", use_container_width=True):
+                _ldn_tz = "GMT" if _ldn_now.utcoffset().total_seconds() == 0 else "BST"
+                _usd_snap = f"USD SOD London {_ldn_now.strftime(f'%d-%b-%Y %H:%M {_ldn_tz}')}"
+        with _usd_sb3:
+            if st.button(f"🌙 EOD NYC\n{_nyc_now.strftime('%H:%M ET')}", key="usd_snap_nyc", use_container_width=True):
+                _usd_snap = f"USD EOD NYC {_nyc_now.strftime('%d-%b-%Y %H:%M ET')}"
+        with _usd_sb4:
+            if st.button("⏪ Revert to\nPrev EOD NYC", key="usd_revert_eod", use_container_width=True):
+                # Load previous EOD NYC snapshot and restore
+                if HAS_POSTGRES:
+                    _usd_snaps = list_vol_snapshots(user_id, "USD")
+                    _prev_eod = [s for s in _usd_snaps if "EOD NYC" in s.get("label", "")]
+                    if len(_prev_eod) >= 2:
+                        _revert_to = _prev_eod[1]  # Second most recent = previous
+                        _rv_data = load_vol_snapshot(_revert_to["id"])
+                        if _rv_data and "atm" in _rv_data:
+                            st.session_state.setdefault("vol_data", {}).setdefault("USD", {})["atm"] = _rv_data["atm"]
+                            st.success(f"✅ Reverted USD surface to: **{_revert_to['label']}**")
+                            st.rerun()
+                        else:
+                            st.error("Could not load previous EOD NYC snapshot data.")
+                    elif len(_prev_eod) == 1:
+                        st.warning("Only one EOD NYC snapshot found — nothing to revert to.")
+                    else:
+                        st.warning("No EOD NYC snapshots found. Save an EOD NYC first.")
+
+        if _usd_snap and HAS_POSTGRES:
+            _sid = save_vol_snapshot(user_id, "USD", _usd_snap, _eod_notes.strip())
+            if _sid:
+                list_vol_snapshots.clear()
+                st.success(f"✅ Saved **{_usd_snap}**")
+            else:
+                st.error("❌ USD snapshot save failed.")
 
 def send_vol_email(recipients: list, subject: str, message: str, currencies: list, include_sabr: bool, smtp_config: dict) -> bool:
     """Send email with vol surface Excel attachments"""
