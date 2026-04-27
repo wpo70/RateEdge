@@ -815,13 +815,16 @@ def get_db_connection():
 
 
 def init_database():
-    """Create tables if they don't exist"""
+    """Create tables if they don't exist.
+    v2804f: graceful failure — tables already exist in production, so
+    deadlocks/timeouts on CREATE IF NOT EXISTS should not block login."""
     conn = get_db_connection()
     if not conn:
         return False
     
     try:
         cur = conn.cursor()
+        cur.execute("SET statement_timeout = '5s'")  # fail fast, don't hang
         cur.execute("""
             CREATE TABLE IF NOT EXISTS user_configs (
                 id SERIAL PRIMARY KEY,
@@ -899,8 +902,18 @@ def init_database():
         conn.close()
         return True
     except Exception as e:
-        st.error(f"Database init failed: {e}")
-        return False
+        # v2804f: don't block login — tables already exist in production.
+        # Deadlocks and timeouts on CREATE IF NOT EXISTS are harmless.
+        try:
+            conn.close()
+        except:
+            pass
+        _err_str = str(e).lower()
+        if "deadlock" in _err_str or "timeout" in _err_str or "lock" in _err_str:
+            # Expected during concurrent deploys — silently continue
+            return True
+        st.warning(f"Database init warning (non-blocking): {e}")
+        return True  # Continue to login regardless
 
 
 def save_user_config(user_id: str, config_type: str, currency: str, data: dict, _conn=None):
