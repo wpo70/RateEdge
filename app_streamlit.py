@@ -19116,6 +19116,8 @@ def rv_tab():
                         st.plotly_chart(_xav_fig, use_container_width=True)
                         st.caption(f"Today — {_eq_label}: **{_eq_vol:.2f}%** | Swptn 3m×5Y: **{_sw_3m5y:.1f}bp** | "
                                    f"Ratio: **{_sw_3m5y/(_eq_vol*100*math.sqrt(0.25)):.3f}**")
+            elif atm is None:
+                st.warning(f"Load your {ccy} ATM vol surface first to see cross-asset analysis.")
 
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     # TAB 2   —   CURVE RV & SPREAD ANALYSIS
@@ -29648,11 +29650,9 @@ def vol_export_tab():
 
     with col_left:
         st.markdown("### 📊 Export Settings")
-        _exp_default_ccy = st.session_state.get("sidebar_ccy", "AUD")
-        _exp_defaults = [_exp_default_ccy] if _exp_default_ccy in SUPPORTED_CURRENCIES else [SUPPORTED_CURRENCIES[0]]
         export_currencies = st.multiselect(
             "Select Currencies", SUPPORTED_CURRENCIES,
-            default=_exp_defaults, key="export_currencies"
+            default=[SUPPORTED_CURRENCIES[0]], key="export_currencies"
         )
         col1, col2 = st.columns(2)
         with col1:
@@ -29814,7 +29814,7 @@ RateEdge Options Platform""",
                 st.error(f"❌ Save failed for: {', '.join(_failed)}")
 
     # ── USD Timezone Snapshots ─────────────────────────────────────────
-    if "USD" in (export_currencies or []):
+    if st.session_state.get("sidebar_ccy", "AUD") == "USD":
         st.markdown("---")
         st.markdown("### 🇺🇸 USD Vol Snapshots — by Trading Centre")
         import datetime as _dt_usd
