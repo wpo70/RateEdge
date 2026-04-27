@@ -18678,31 +18678,45 @@ def rv_tab():
                     pass
             return float(np.interp(t, _xs_c, _ys_c))
         # Use the fwd matrix directly — authoritative source
-        _rv_fwd_matrix = st.session_state.get("fwd_matrix", {}).get(ccy)
+        # USD stores fwd matrix in usd_fwd_matrix["SOFR OIS"], not fwd_matrix["USD"]
+        if ccy == "USD":
+            _rv_fwd_matrix = st.session_state.get("usd_fwd_matrix", {}).get("SOFR OIS")
+        else:
+            _rv_fwd_matrix = st.session_state.get("fwd_matrix", {}).get(ccy)
         def _fwd_rate(t1, t2):
-            """Look up forward rate from the committed fwd matrix."""
+            """Look up forward rate from the committed fwd matrix, fallback to par curve."""
             tenor = t2 - t1
             if tenor <= 0: return None
             try:
-                if _rv_fwd_matrix is None or _rv_fwd_matrix.empty:
-                    return None
-                # Expiry label from t1 years
-                _exp_labels = list(_rv_fwd_matrix.index)
-                _exp_yrs = np.array([label_to_years(str(e)) for e in _exp_labels], dtype=float)
-                # Tenor columns
-                _ten_cols = list(_rv_fwd_matrix.columns)
-                _ten_yrs = np.array([float(c.replace("Y","")) for c in _ten_cols], dtype=float)
-                # Interpolate across expiry axis at t1, then tenor axis at tenor
-                _col_vals = []
-                for _col in _ten_cols:
-                    _cv = pd.to_numeric(_rv_fwd_matrix[_col], errors='coerce').values.astype(float)
-                    _mask = ~np.isnan(_cv)
-                    if _mask.sum() < 2: _col_vals.append(np.nan); continue
-                    _col_vals.append(float(np.interp(t1, _exp_yrs[_mask], _cv[_mask])))
-                _col_vals = np.array(_col_vals, dtype=float)
-                _valid = ~np.isnan(_col_vals)
-                if _valid.sum() < 1: return None
-                return float(np.interp(tenor, _ten_yrs[_valid], _col_vals[_valid]))
+                if _rv_fwd_matrix is not None and not _rv_fwd_matrix.empty:
+                    # Expiry label from t1 years
+                    _exp_labels = list(_rv_fwd_matrix.index)
+                    _exp_yrs = np.array([label_to_years(str(e)) for e in _exp_labels], dtype=float)
+                    # Tenor columns
+                    _ten_cols = list(_rv_fwd_matrix.columns)
+                    _ten_yrs = np.array([float(c.replace("Y","")) for c in _ten_cols], dtype=float)
+                    # Interpolate across expiry axis at t1, then tenor axis at tenor
+                    _col_vals = []
+                    for _col in _ten_cols:
+                        _cv = pd.to_numeric(_rv_fwd_matrix[_col], errors='coerce').values.astype(float)
+                        _mask = ~np.isnan(_cv)
+                        if _mask.sum() < 2: _col_vals.append(np.nan); continue
+                        _col_vals.append(float(np.interp(t1, _exp_yrs[_mask], _cv[_mask])))
+                    _col_vals = np.array(_col_vals, dtype=float)
+                    _valid = ~np.isnan(_col_vals)
+                    if _valid.sum() >= 1:
+                        return float(np.interp(tenor, _ten_yrs[_valid], _col_vals[_valid]))
+            except Exception:
+                pass
+            # v2704v: fallback — compute from par curve directly
+            # fwd(t1,t2) = (par(t2)*t2 - par(t1)*t1) / (t2-t1)
+            try:
+                r1 = _par_rate(t1) if t1 > 0 else 0.0
+                r2 = _par_rate(t2)
+                if r2 is None: return None
+                if t1 == 0: return r2
+                if r1 is None: return None
+                return (r2 * t2 - r1 * t1) / tenor
             except Exception:
                 return None
     else:
@@ -19207,26 +19221,39 @@ def rv_tab():
             _rv_zc_qq = _rv_zc_qq_full2 if _rv_zc_qq_full2 is not None else st.session_state.get("_aud_zc_qq")
             _rv_zc_ss = st.session_state.get("_aud_zc_ss")
 
-            _rv_fwd_matrix2 = st.session_state.get("fwd_matrix", {}).get(ccy)
+            if ccy == "USD":
+                _rv_fwd_matrix2 = st.session_state.get("usd_fwd_matrix", {}).get("SOFR OIS")
+            else:
+                _rv_fwd_matrix2 = st.session_state.get("fwd_matrix", {}).get(ccy)
             def _fwd_rate(t1, t2):
                 tenor = t2 - t1
                 if tenor <= 0: return None
                 try:
-                    if _rv_fwd_matrix2 is None or _rv_fwd_matrix2.empty: return None
-                    _exp_labels = list(_rv_fwd_matrix2.index)
-                    _exp_yrs = np.array([label_to_years(str(e)) for e in _exp_labels], dtype=float)
-                    _ten_cols = list(_rv_fwd_matrix2.columns)
-                    _ten_yrs = np.array([float(c.replace("Y","")) for c in _ten_cols], dtype=float)
-                    _col_vals = []
-                    for _col in _ten_cols:
-                        _cv = pd.to_numeric(_rv_fwd_matrix2[_col], errors='coerce').values.astype(float)
-                        _mask = ~np.isnan(_cv)
-                        if _mask.sum() < 2: _col_vals.append(np.nan); continue
-                        _col_vals.append(float(np.interp(t1, _exp_yrs[_mask], _cv[_mask])))
-                    _col_vals = np.array(_col_vals, dtype=float)
-                    _valid = ~np.isnan(_col_vals)
-                    if _valid.sum() < 1: return None
-                    return float(np.interp(tenor, _ten_yrs[_valid], _col_vals[_valid]))
+                    if _rv_fwd_matrix2 is not None and not _rv_fwd_matrix2.empty:
+                        _exp_labels = list(_rv_fwd_matrix2.index)
+                        _exp_yrs = np.array([label_to_years(str(e)) for e in _exp_labels], dtype=float)
+                        _ten_cols = list(_rv_fwd_matrix2.columns)
+                        _ten_yrs = np.array([float(c.replace("Y","")) for c in _ten_cols], dtype=float)
+                        _col_vals = []
+                        for _col in _ten_cols:
+                            _cv = pd.to_numeric(_rv_fwd_matrix2[_col], errors='coerce').values.astype(float)
+                            _mask = ~np.isnan(_cv)
+                            if _mask.sum() < 2: _col_vals.append(np.nan); continue
+                            _col_vals.append(float(np.interp(t1, _exp_yrs[_mask], _cv[_mask])))
+                        _col_vals = np.array(_col_vals, dtype=float)
+                        _valid = ~np.isnan(_col_vals)
+                        if _valid.sum() >= 1:
+                            return float(np.interp(tenor, _ten_yrs[_valid], _col_vals[_valid]))
+                except Exception:
+                    pass
+                # v2704v: fallback — compute from par curve
+                try:
+                    r1 = _par_rate(t1) if t1 > 0 else 0.0
+                    r2 = _par_rate(t2)
+                    if r2 is None: return None
+                    if t1 == 0: return r2
+                    if r1 is None: return None
+                    return (r2 * t2 - r1 * t1) / (t2 - t1)
                 except Exception:
                     return None
 
