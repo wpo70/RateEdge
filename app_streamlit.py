@@ -10996,11 +10996,11 @@ def swaptions_tab(vol_mode: str):
         df = df.sort_values("_expiry_sort").reset_index(drop=True)
 
         _STATUS_COLOURS = {
-            "TP Trade":     "rgba(220,255,220,0.95)",
+            "Our Trade":     "rgba(220,255,220,0.95)",
             "Away Trade":   "rgba(255,210,210,0.95)",
             "Direct Trade": "rgba(255,235,195,0.95)",
         }
-        _STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade"]
+        _STATUS_OPTS = ["—", "Our Trade", "Away Trade", "Direct Trade"]
 
         # Header row — light grey background
         st.markdown(
@@ -11930,11 +11930,11 @@ def caps_floors_tab(vol_mode: str):
                 _df = _df.sort_values("_sort").reset_index(drop=True)
         
                 _CF_STATUS_COLOURS = {
-                    "TP Trade":     "rgba(220,255,220,0.95)",
+                    "Our Trade":     "rgba(220,255,220,0.95)",
                     "Away Trade":   "rgba(255,210,210,0.95)",
                     "Direct Trade": "rgba(255,235,195,0.95)",
                 }
-                _CF_STATUS_OPTS = ["—", "TP Trade", "Away Trade", "Direct Trade"]
+                _CF_STATUS_OPTS = ["—", "Our Trade", "Away Trade", "Direct Trade"]
         
                 st.markdown(
                     "<div style='display:grid;grid-template-columns:2.5% 15% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 12.5% 6.0% 6.0% 6.0%;"
@@ -21906,8 +21906,8 @@ def portfolio_tab():
                 "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Prnt</span><span>Del</span></div>",
                 unsafe_allow_html=True)
 
-            _PTF_STATUS_COLOURS = {"TP Trade":"rgba(220,255,220,0.95)","Away Trade":"rgba(255,210,210,0.95)","Direct Trade":"rgba(255,235,195,0.95)"}
-            _PTF_STATUS_OPTS = ["—","TP Trade","Away Trade","Direct Trade"]
+            _PTF_STATUS_COLOURS = {"Our Trade":"rgba(220,255,220,0.95)","Away Trade":"rgba(255,210,210,0.95)","Direct Trade":"rgba(255,235,195,0.95)"}
+            _PTF_STATUS_OPTS = ["—","Our Trade","Away Trade","Direct Trade"]
 
             for idx, row in df_sw.iterrows():
                 _label  = row.get("label","")
@@ -22082,8 +22082,8 @@ def portfolio_tab():
                 "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Prnt</span><span>Del</span></div>",
                 unsafe_allow_html=True)
 
-            _CFPTF_STATUS_COLOURS = {"TP Trade":"rgba(220,255,220,0.95)","Away Trade":"rgba(255,210,210,0.95)","Direct Trade":"rgba(255,235,195,0.95)"}
-            _CFPTF_STATUS_OPTS = ["—","TP Trade","Away Trade","Direct Trade"]
+            _CFPTF_STATUS_COLOURS = {"Our Trade":"rgba(220,255,220,0.95)","Away Trade":"rgba(255,210,210,0.95)","Direct Trade":"rgba(255,235,195,0.95)"}
+            _CFPTF_STATUS_OPTS = ["—","Our Trade","Away Trade","Direct Trade"]
 
             for _ci3, _cr3 in df_cf.iterrows():
                 _lbl3 = _cr3.get("label","")
