@@ -19317,8 +19317,35 @@ def rv_tab():
                         fig_hist.update_layout(
                             title=f"{ccy} {spread_sel} Spread History ({lookback})",
                             xaxis_title="Date", yaxis_title="bp",
-                            template="plotly_dark", height=300)
+                            template="plotly_dark", height=300,
+                            showlegend=True,
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
                         st.plotly_chart(fig_hist, use_container_width=True)
+
+                        # ── Distribution chart ─────────────────────────────
+                        _sp_vals = df_sp_lb["spread"].dropna().values
+                        if len(_sp_vals) > 5:
+                            fig_dist = go.Figure()
+                            fig_dist.add_trace(go.Histogram(
+                                x=_sp_vals, nbinsx=30,
+                                marker_color="#3b82f6", opacity=0.7,
+                                name=f"{spread_sel} distribution"))
+                            fig_dist.add_vline(x=curr_spread, line_dash="dash",
+                                               line_color="#f59e0b", line_width=2,
+                                               annotation_text=f"Current {curr_spread:.1f}bp",
+                                               annotation_font_color="#f59e0b")
+                            fig_dist.add_vline(x=med, line_dash="dot",
+                                               line_color="#94a3b8", line_width=1,
+                                               annotation_text=f"Median {med:.1f}bp",
+                                               annotation_font_color="#94a3b8")
+                            _pct_below = ((_sp_vals < curr_spread).sum() / len(_sp_vals)) * 100
+                            fig_dist.update_layout(
+                                title=f"{ccy} {spread_sel} Distribution ({lookback})   —   {_pct_below:.0f}% of obs below current",
+                                xaxis_title="bp", yaxis_title="Frequency",
+                                template="plotly_dark", height=250,
+                                showlegend=False,
+                                bargap=0.05)
+                            st.plotly_chart(fig_dist, use_container_width=True)
 
             # Fwd spread scatter (replicated from swap_relative_value.py)
             if has_hist:
