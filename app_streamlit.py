@@ -26516,7 +26516,7 @@ def sod_report_tab():
     _atm2 = _norm(_atm2)
 
     # ── USD Vol Change Matrix ─────────────────────────────────────
-    st.markdown("### 🇺🇸 USD Vol Changes   —   Overnight (T-1 close vs T-2 close)")
+    st.markdown("### 💵 USD Vol Changes   —   Overnight (T-1 close vs T-2 close)")
 
     _common_exp = [e for e in _atm1.index if e in _atm2.index]
     _common_ten = [c for c in _atm1.columns if c in _atm2.columns]
@@ -29781,67 +29781,33 @@ RateEdge Options Platform""",
     _ccys_str = "/".join(export_currencies) if export_currencies else "AUD"
     _eod_notes = st.text_input("Notes (optional)", value="", key="eod_snap_notes")
 
-    _sb1, _sb2, _sb3 = st.columns(3)
-    _snap_type = None
-    with _sb1:
-        if st.button(f"🌙 EOD {_date_str}", key="snap_eod", use_container_width=True):
-            _snap_type = "EOD"
-    with _sb2:
-        if st.button(f"🌅 SOD {_date_str}", key="snap_sod", use_container_width=True):
-            _snap_type = "SOD"
-    with _sb3:
-        if st.button(f"⏱ Intraday {_syd_now.strftime('%H:%M')}", key="snap_intraday", use_container_width=True):
-            _snap_type = "Intraday"
+    _sidebar_ccy_snap = st.session_state.get("sidebar_ccy", "AUD")
 
-    if _snap_type:
-        _label = f"{_ccys_str} {_ts_str}" if _snap_type == "Intraday" else f"{_ccys_str} {_snap_type} {_ts_str}"
-        if not HAS_POSTGRES:
-            st.error("Database not connected.")
-        elif not export_currencies:
-            st.error("Select at least one currency above first.")
-        else:
-            _saved, _failed = [], []
-            for _ccy in export_currencies:
-                _sid = save_vol_snapshot(user_id, _ccy, _label, _eod_notes.strip())
-                if _sid:
-                    _saved.append(_ccy)
-                else:
-                    _failed.append(_ccy)
-            if _saved:
-                list_vol_snapshots.clear()
-                st.success(f"✅ Saved **{_label}** for {', '.join(_saved)}")
-            if _failed:
-                st.error(f"❌ Save failed for: {', '.join(_failed)}")
-
-    # ── USD Timezone Snapshots ─────────────────────────────────────────
-    if st.session_state.get("sidebar_ccy", "AUD") == "USD":
-        st.markdown("---")
-        st.markdown("### 🇺🇸 USD Vol Snapshots — by Trading Centre")
-        import datetime as _dt_usd
-        _nyc_now = _dt_usd.datetime.now(ZoneInfo("America/New_York"))
-        _ldn_now = _dt_usd.datetime.now(ZoneInfo("Europe/London"))
-        _tky_now = _dt_usd.datetime.now(ZoneInfo("Asia/Tokyo"))
-        _nyc_date = _nyc_now.strftime("%d-%b-%Y")
+    if _sidebar_ccy_snap == "USD":
+        # ── USD Timezone Snapshots ─────────────────────────────────────
+        st.markdown("### 💵 USD Vol Snapshots — by Trading Centre")
+        _nyc_now = _dt_snap.datetime.now(ZoneInfo("America/New_York"))
+        _ldn_now = _dt_snap.datetime.now(ZoneInfo("Europe/London"))
+        _tky_now = _dt_snap.datetime.now(ZoneInfo("Asia/Tokyo"))
         _usd_snap = None
         _usd_sb1, _usd_sb2, _usd_sb3, _usd_sb4 = st.columns(4)
         with _usd_sb1:
             if st.button(f"🌅 SOD Tokyo\n{_tky_now.strftime('%H:%M JST')}", key="usd_snap_tky", use_container_width=True):
                 _usd_snap = f"USD SOD Tokyo {_tky_now.strftime('%d-%b-%Y %H:%M JST')}"
         with _usd_sb2:
-            if st.button(f"🌅 SOD London\n{_ldn_now.strftime('%H:%M GMT' if _ldn_now.utcoffset().total_seconds()==0 else '%H:%M BST')}", key="usd_snap_ldn", use_container_width=True):
-                _ldn_tz = "GMT" if _ldn_now.utcoffset().total_seconds() == 0 else "BST"
+            _ldn_tz = "GMT" if _ldn_now.utcoffset().total_seconds() == 0 else "BST"
+            if st.button(f"🌅 SOD London\n{_ldn_now.strftime('%H:%M')} {_ldn_tz}", key="usd_snap_ldn", use_container_width=True):
                 _usd_snap = f"USD SOD London {_ldn_now.strftime(f'%d-%b-%Y %H:%M {_ldn_tz}')}"
         with _usd_sb3:
             if st.button(f"🌙 EOD NYC\n{_nyc_now.strftime('%H:%M ET')}", key="usd_snap_nyc", use_container_width=True):
                 _usd_snap = f"USD EOD NYC {_nyc_now.strftime('%d-%b-%Y %H:%M ET')}"
         with _usd_sb4:
             if st.button("⏪ Revert to\nPrev EOD NYC", key="usd_revert_eod", use_container_width=True):
-                # Load previous EOD NYC snapshot and restore
                 if HAS_POSTGRES:
                     _usd_snaps = list_vol_snapshots(user_id, "USD")
                     _prev_eod = [s for s in _usd_snaps if "EOD NYC" in s.get("label", "")]
                     if len(_prev_eod) >= 2:
-                        _revert_to = _prev_eod[1]  # Second most recent = previous
+                        _revert_to = _prev_eod[1]
                         _rv_data = load_vol_snapshot(_revert_to["id"])
                         if _rv_data and "atm" in _rv_data:
                             st.session_state.setdefault("vol_data", {}).setdefault("USD", {})["atm"] = _rv_data["atm"]
@@ -29861,6 +29827,40 @@ RateEdge Options Platform""",
                 st.success(f"✅ Saved **{_usd_snap}**")
             else:
                 st.error("❌ USD snapshot save failed.")
+
+    else:
+        # ── AUD / other — Sydney time buttons ──────────────────────────
+        _sb1, _sb2, _sb3 = st.columns(3)
+        _snap_type = None
+        with _sb1:
+            if st.button(f"🌙 EOD {_date_str}", key="snap_eod", use_container_width=True):
+                _snap_type = "EOD"
+        with _sb2:
+            if st.button(f"🌅 SOD {_date_str}", key="snap_sod", use_container_width=True):
+                _snap_type = "SOD"
+        with _sb3:
+            if st.button(f"⏱ Intraday {_syd_now.strftime('%H:%M')}", key="snap_intraday", use_container_width=True):
+                _snap_type = "Intraday"
+
+        if _snap_type:
+            _label = f"{_ccys_str} {_ts_str}" if _snap_type == "Intraday" else f"{_ccys_str} {_snap_type} {_ts_str}"
+            if not HAS_POSTGRES:
+                st.error("Database not connected.")
+            elif not export_currencies:
+                st.error("Select at least one currency above first.")
+            else:
+                _saved, _failed = [], []
+                for _ccy in export_currencies:
+                    _sid = save_vol_snapshot(user_id, _ccy, _label, _eod_notes.strip())
+                    if _sid:
+                        _saved.append(_ccy)
+                    else:
+                        _failed.append(_ccy)
+                if _saved:
+                    list_vol_snapshots.clear()
+                    st.success(f"✅ Saved **{_label}** for {', '.join(_saved)}")
+                if _failed:
+                    st.error(f"❌ Save failed for: {', '.join(_failed)}")
 
 def send_vol_email(recipients: list, subject: str, message: str, currencies: list, include_sabr: bool, smtp_config: dict) -> bool:
     """Send email with vol surface Excel attachments"""
