@@ -3391,23 +3391,58 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
             _t += 0.25
         prev_anchor = mat
     
-    # Final cubic spline interpolation with solved anchors
-    from scipy.interpolate import CubicSpline
+    # v2804e: CubicSpline through solved anchor vols, then iteratively
+    # adjust anchors so that repricing FROM the splined curve reproduces
+    # the target premium at each tenor.  This is what AUD does — the
+    # solver and spline work together.
     anchor_mats = np.array(sorted([m for m in caplet_vols.keys() if m >= 1.0 and m == int(m)]))
     anchor_vols = np.array([caplet_vols[m] for m in anchor_mats])
     
     if len(anchor_mats) >= 2:
-        cs = CubicSpline(anchor_mats, anchor_vols)
+        # Iterative adjustment: solve → spline → reprice → adjust → repeat
+        for _iteration in range(8):
+            cs = CubicSpline(anchor_mats, anchor_vols)
+            
+            # Build interpolated curve
+            _splined = {}
+            for t in [0.25, 0.5, 0.75, 1.0]:
+                _splined[t] = caplet_vols.get(t, caplet_vols.get(1.0, 75.0))
+            t = 1.25
+            max_mat = anchor_mats[-1]
+            while t <= max_mat + 1e-6:
+                _splined[round(t, 2)] = max(float(cs(t)), 1.0)
+                t += 0.25
+            
+            # Check each anchor — does repricing from splined curve match target?
+            _max_err = 0.0
+            for mat in anchor_mats:
+                if mat <= 1.0:
+                    continue
+                target = cumulative_leg_prems.get(mat)
+                if target is None:
+                    continue
+                actual = price_caplets_with_vol_curve(ccy, mat, _splined, notional_mm=1.0)
+                err = actual - target
+                _max_err = max(_max_err, abs(err))
+                if abs(err) > 0.01:
+                    # Adjust this anchor vol to compensate
+                    idx = list(anchor_mats).index(mat)
+                    # Scale adjustment: if repriced too high, lower the vol
+                    _adj = -err * 0.3  # damped Newton step in vol space
+                    anchor_vols[idx] = max(anchor_vols[idx] + _adj, 1.0)
+            
+            if _max_err < 0.01:
+                break  # Converged
         
+        # Final spline with converged anchors
+        cs = CubicSpline(anchor_mats, anchor_vols)
         caplet_vols_final = {}
         for t in [0.25, 0.5, 0.75, 1.0]:
             caplet_vols_final[t] = caplet_vols.get(t, caplet_vols.get(1.0, 75.0))
-        
         t = 1.25
-        max_mat = anchor_mats[-1]
         while t <= max_mat + 1e-6:
             caplet_vols_final[round(t, 2)] = max(float(cs(t)), 1.0)
-            t += 0.25  # Caps are always quarterly
+            t += 0.25
         
         return caplet_vols_final
     
