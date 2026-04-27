@@ -19010,6 +19010,8 @@ def rv_tab():
 
         # ── Cross-Asset Vol: Swaption vs VIX/SPX (USD) ────────────────
         elif ccy == "USD":
+            st.markdown("---")
+            st.markdown("#### 📊 Cross-Asset Vol — Swaption vs VIX")
             _spx_surf_rv = st.session_state.get("spx_vol_surface", {})
             _vix_spot_rv = st.session_state.get("vix_spot")
             # Use SPX front ATM or VIX spot as equity vol proxy
@@ -19019,10 +19021,17 @@ def rv_tab():
                 if _front_key:
                     _spx_front_atm = _spx_surf_rv.get(_front_key, {}).get("50D")
             _eq_vol = _spx_front_atm or _vix_spot_rv
+            # VIX input always visible
+            _rv_vix_col, _ = st.columns([2, 4])
+            with _rv_vix_col:
+                _rv_vix_input = st.number_input("VIX Spot", min_value=0.0, max_value=100.0,
+                    step=0.1, format="%.2f",
+                    value=float(_eq_vol if _eq_vol else 18.0),
+                    key="rv_vix_spot_input")
+                st.session_state["vix_spot"] = _rv_vix_input
+                _eq_vol = _rv_vix_input
+            _eq_label = "SPX" if _spx_front_atm else "VIX"
             if atm is not None and _eq_vol:
-                st.markdown("---")
-                _eq_label = "SPX" if _spx_front_atm else "VIX"
-                st.markdown(f"#### 📊 Cross-Asset Vol — Swaption vs {_eq_label}")
 
                 _EXPIRY_MAP = [("1m",1/12),("3m",0.25),("6m",0.5),("1y",1.0),("2y",2.0)]
                 _ratio_rows = []
@@ -29639,9 +29648,11 @@ def vol_export_tab():
 
     with col_left:
         st.markdown("### 📊 Export Settings")
+        _exp_default_ccy = st.session_state.get("sidebar_ccy", "AUD")
+        _exp_defaults = [_exp_default_ccy] if _exp_default_ccy in SUPPORTED_CURRENCIES else [SUPPORTED_CURRENCIES[0]]
         export_currencies = st.multiselect(
             "Select Currencies", SUPPORTED_CURRENCIES,
-            default=[SUPPORTED_CURRENCIES[0]], key="export_currencies"
+            default=_exp_defaults, key="export_currencies"
         )
         col1, col2 = st.columns(2)
         with col1:
