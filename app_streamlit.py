@@ -18114,8 +18114,8 @@ def _load_vol_ratio_stats_db(ccy: str) -> dict:
                 # Build lookup: expiry -> {tenor -> vol}
                 exp_map = {}
                 for row in vals:
-                    exp = row.get("expiry", "").lower()
-                    exp_map[exp] = {k: v for k, v in row.items() if k != "expiry"}
+                    exp = (row.get("Expiry") or row.get("expiry") or "").lower()
+                    exp_map[exp] = {k: v for k, v in row.items() if k.lower() != "expiry"}
 
                 v1m = exp_map.get("1m", {})
                 v1y = exp_map.get("1y", {})
@@ -18201,8 +18201,8 @@ def _compute_fwd_vol_surface_stats(ccy: str) -> dict:
                 vals = atm_json.get("values", [])
                 exp_map = {}
                 for row in vals:
-                    exp = row.get("expiry", "").lower()
-                    exp_map[exp] = {k: v for k, v in row.items() if k != "expiry"}
+                    exp = (row.get("Expiry") or row.get("expiry") or "").lower()
+                    exp_map[exp] = {k: v for k, v in row.items() if k.lower() != "expiry"}
 
                 for e1_lbl, e2_lbl, T1, T2 in EXP_PAIRS:
                     dT = T2 - T1
