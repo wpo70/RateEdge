@@ -19442,11 +19442,17 @@ def rv_tab():
             st.warning(f"Load both {ccy} ATM vol surface and IRS curve to generate ideas.")
         else:
             # Gate behind button — idea engine is expensive, don't run every render
-            _rv_ideas_key = f"rv_ideas_run_{ccy}"
+            # v2704t: invalidate ideas cache if currency changed
+            _rv_ideas_key = "rv_ideas_run"
+            if st.session_state.get("_rv_ideas_ccy") != ccy:
+                st.session_state.pop("_rv_ideas_cache", None)
+                st.session_state.pop("_rv_precompute_cache", None)
+                st.session_state.pop(_rv_ideas_key, None)
+                st.session_state["_rv_ideas_ccy"] = ccy
             if st.button("⚡ Generate Trade Ideas", key="rv_gen_ideas", type="primary"):
                 st.session_state[_rv_ideas_key] = True
-                st.session_state.pop(f"_rv_ideas_cache_{ccy}", None)
-                st.session_state.pop(f"_rv_precompute_cache_{ccy}", None)
+                st.session_state.pop("_rv_ideas_cache", None)
+                st.session_state.pop("_rv_precompute_cache", None)
             ideas = []
             if not st.session_state.get(_rv_ideas_key):
                 st.info("Click **⚡ Generate Trade Ideas** to run the idea engine.")
@@ -19459,7 +19465,7 @@ def rv_tab():
             _rv_tn_strs  = ["2Y", "5Y", "10Y", "15Y", "20Y"]
             _rv_exp_lbls = ["1m", "3m", "6m", "1y", "2y"]
 
-            _rv_precompute = st.session_state.get(f"_rv_precompute_cache_{ccy}")
+            _rv_precompute = st.session_state.get("_rv_precompute_cache")
             if st.session_state.get(_rv_ideas_key) and _rv_precompute is None:
                 try:
                     _realised    = {tn: _compute_realised_vol_db(ccy, tn, 21) for tn in _rv_tenors}
@@ -19467,7 +19473,7 @@ def rv_tab():
                     _fv_stats    = _compute_fwd_vol_surface_stats(ccy)
                     _meetings    = {e: _meetings_in_window(ccy, e) for e in _rv_exp_lbls}
                     _move_val    = _fetch_move_index() if ccy == "USD" else None
-                    st.session_state[f"_rv_precompute_cache_{ccy}"] = {
+                    st.session_state["_rv_precompute_cache"] = {
                         "realised": _realised, "ratio_stats": _ratio_stats,
                         "fv_stats": _fv_stats, "meetings": _meetings, "move_val": _move_val
                     }
@@ -20270,7 +20276,7 @@ def rv_tab():
 
             # Cache for SOD report
             if ideas:
-                st.session_state[f"_rv_ideas_cache_{ccy}"] = ideas
+                st.session_state["_rv_ideas_cache"] = ideas
 
             if not st.session_state.get(_rv_ideas_key):
                 pass
@@ -21188,9 +21194,9 @@ def rv_tab():
 
             # Merge into combined ideas cache for SOD report
             if cf_ideas:
-                _existing = st.session_state.get(f"_rv_ideas_cache_{ccy}", [])
+                _existing = st.session_state.get("_rv_ideas_cache", [])
                 _sw_only = [i for i in _existing if i.get("Category","Swaption") != "Cap/Floor"]
-                st.session_state[f"_rv_ideas_cache_{ccy}"] = _sw_only + cf_ideas
+                st.session_state["_rv_ideas_cache"] = _sw_only + cf_ideas
 
             if not cf_ideas:
                 st.info("No strong cap/floor signals at current levels.")
@@ -27859,7 +27865,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
             if _atm_now is not None and _curve_now is not None:
                 from datetime import date as _dtnow
                 _snap = {"date": str(_dtnow.today()), "atm": {}, "curve": {},
-                         "ideas": st.session_state.get(f"_rv_ideas_cache_AUD", [])}
+                         "ideas": st.session_state.get("_rv_ideas_cache", [])}
                 for _e in ["1m","3m","6m","1y","2y","3y","5y"]:
                     for _t in [2.0,3.0,5.0,7.0,10.0,15.0,20.0]:
                         _v = get_matrix_value(_atm_now, _e, _t)
@@ -28351,7 +28357,7 @@ These are indicative adjustments based on observed USD/AUD correlations and shou
         from datetime import date as _dtnow
         _curr  = st.session_state.get("rv_daily_snap_curr", {})
         _prev  = st.session_state.get("rv_daily_snap_prev", {})
-        _ideas = st.session_state.get(f"_rv_ideas_cache_AUD", [])
+        _ideas = st.session_state.get("_rv_ideas_cache", [])
         _today_str = _curr.get("date", str(_dtnow.today()))
         _prev_date = _prev.get("date","prior EOD") if _prev else "prior EOD"
 
