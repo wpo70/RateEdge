@@ -6376,7 +6376,8 @@ def vol_config_tab():
                         st.session_state["_avail_curve_dates_cache"] = _avail_dates
                         st.session_state["_avail_curve_dates_ts"] = _time_vc.time()
                 except: pass
-            _today = _dt_date.today()
+            from datetime import datetime as _dt_now_syd
+            _today = _dt_now_syd.now(SYDNEY_TZ).date()
             _latest_db = _avail_dates[0] if _avail_dates else _today
             _default_date = _today if _today >= _latest_db else _latest_db
             _load_date = st.date_input(
