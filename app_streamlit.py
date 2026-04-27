@@ -11854,6 +11854,7 @@ def caps_floors_tab(vol_mode: str):
                         label=label,
                     )
                 )
+                _save_portfolio()  # v2804c: persist Cap/Floor trades to DB
             except Exception as e:
                 st.error(f" Pricing error: {e}")
                 import traceback
@@ -11940,7 +11941,7 @@ def caps_floors_tab(vol_mode: str):
                 with _ph2_col[1]:
                     if st.button("🗑️ Clear All", key="cf_clear_portfolio"):
                         st.session_state["portfolio"] = [t for t in st.session_state.get("portfolio", []) if t.get("instrument_type") != "Cap/Floor"]
-                        st.rerun()
+                        _save_portfolio(); st.rerun()
     
                 _df = pd.DataFrame(_cf_port)
                 _df["_sort"] = _df["expiry"].apply(lambda e: label_to_years(str(e)))
