@@ -18163,6 +18163,31 @@ def _fetch_move_index() -> Optional[float]:
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
+def _load_vix_move_history(index_name: str, limit: int = 120) -> pd.DataFrame:
+    """Load VIX or MOVE daily close history from vix_move_history table.
+    Returns DataFrame with columns [date, close] sorted by date DESC."""
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return pd.DataFrame()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT date, close_price FROM vix_move_history
+            WHERE index_name=%s
+            ORDER BY date DESC LIMIT %s
+        """, (index_name, limit))
+        rows = cur.fetchall()
+        conn.close()
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows, columns=["date", "close"]).sort_values("date")
+        df["close"] = df["close"].astype(float)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
 def _compute_fwd_vol_surface_stats(ccy: str) -> dict:
     """Compute implied forward vol pairs from vol_history and return mean/std.
     σ_fwd(T1→T2) = sqrt[(σ²(T2)·T2 - σ²(T1)·T1) / (T2-T1)]
@@ -20292,6 +20317,131 @@ def rv_tab():
                                     "Risk": "Negative carry on long-dated short",
                                     "Score": min(_excess * 200, 60),
                                 })
+
+            # ── USD-SPECIFIC IDEAS ──────────────────────────────────────
+            if ccy == "USD":
+                try:
+                    _vix_hist = _load_vix_move_history("VIX", 60)
+                    _move_hist = _load_vix_move_history("MOVE", 60)
+                    _vix_close = float(_vix_hist["close"].iloc[-1]) if len(_vix_hist) > 0 else None
+                    _move_close = float(_move_hist["close"].iloc[-1]) if len(_move_hist) > 0 else None
+
+                    # ── FOMC Gamma Play ──────────────────────────────
+                    # If FOMC meeting in next 30d, buy short-dated gamma
+                    _fomc_mtgs_raw = _meetings.get("1m", []) if _meetings else []
+                    _fomc_mtgs = _fomc_mtgs_raw if isinstance(_fomc_mtgs_raw, list) else []
+                    _fomc_count = len(_fomc_mtgs) if _fomc_mtgs else (int(_fomc_mtgs_raw) if isinstance(_fomc_mtgs_raw, (int, float)) and _fomc_mtgs_raw > 0 else 0)
+                    if _fomc_count > 0:
+                        _v1m2y = get_matrix_value(atm, "1m", 2.0)
+                        _v1m5y = get_matrix_value(atm, "1m", 5.0)
+                        if _v1m2y:
+                            ideas.append({
+                                "Type": "FOMC Gamma",
+                                "Structure": f"1m×2Y straddle into FOMC ({_fomc_count} meeting{'s' if _fomc_count>1 else ''})",
+                                "Signal": f"FOMC in 1m window | VIX: {_vix_close:.1f}" + (f" | MOVE: {_move_close:.1f}" if _move_close else ""),
+                                "Trade": f"Buy 1m×2Y ATM straddle at {_v1m2y:.1f}bp — gamma into Fed decision",
+                                "Rationale": (
+                                    f"FOMC meeting within 1m expiry window. "
+                                    f"Historical USD vol jumps 5-15bp around FOMC. "
+                                    f"{'MOVE at ' + f'{_move_close:.0f}' + ' suggests rates vol elevated — already priced in.' if _move_close and _move_close > 80 else 'MOVE at ' + f'{_move_close:.0f}' + ' suggests cheap gamma — not fully priced.' if _move_close else ''}"
+                                ),
+                                "Risk": "Premium decay if FOMC is a non-event; theta burn",
+                                "Score": 55 + min(_fomc_count * 10, 20),
+                            })
+
+                    # ── MOVE Divergence ───────────────────────────────
+                    # Compare MOVE level to swaption ATM 3m×5Y
+                    if _move_close and len(_move_hist) > 10:
+                        _v3m5y = get_matrix_value(atm, "3m", 5.0)
+                        if _v3m5y:
+                            _move_mean = float(_move_hist["close"].mean())
+                            _move_std = float(_move_hist["close"].std())
+                            # MOVE is in bp of Treasury yields — normalise to compare
+                            # Ratio: swaption vol / MOVE (higher = swaption rich vs MOVE)
+                            _sw_move_ratio = _v3m5y / _move_close if _move_close > 0 else 1.0
+                            _sw_move_z = (_move_close - _move_mean) / max(_move_std, 1.0)
+                            if abs(_sw_move_z) > 1.0:
+                                _move_rich = _sw_move_z < -1.0  # MOVE low = swaption cheap
+                                ideas.append({
+                                    "Type": "MOVE Divergence",
+                                    "Structure": f"MOVE {_move_close:.0f} vs 3m×5Y {_v3m5y:.1f}bp",
+                                    "Signal": f"MOVE z={_sw_move_z:+.1f}σ vs 60d mean {_move_mean:.0f} | Ratio: {_sw_move_ratio:.2f}",
+                                    "Trade": (
+                                        f"Buy 3m×5Y straddle — MOVE at {_move_close:.0f} is {abs(_sw_move_z):.1f}σ below mean, rates vol underpriced"
+                                        if _move_rich else
+                                        f"Sell 3m×5Y straddle — MOVE at {_move_close:.0f} is {abs(_sw_move_z):.1f}σ above mean, rates vol overpriced"
+                                    ),
+                                    "Rationale": (
+                                        f"MOVE Index (Treasury option implied vol) at {_move_close:.0f} vs "
+                                        f"60-day mean {_move_mean:.0f} (z={_sw_move_z:+.1f}σ). "
+                                        f"Swaption 3m×5Y at {_v3m5y:.1f}bp — "
+                                        f"{'cheap' if _move_rich else 'rich'} relative to broad rates vol regime."
+                                    ),
+                                    "Risk": "MOVE and swaption vol can stay divergent; basis risk between Treasury and swap vol",
+                                    "Score": min(abs(_sw_move_z) * 20, 70),
+                                })
+
+                    # ── VIX/MOVE Ratio Regime ─────────────────────────
+                    if _vix_close and _move_close and _move_close > 0:
+                        _vm_ratio = _vix_close / _move_close
+                        # Historical VIX/MOVE: ~0.25-0.35 normal
+                        # >0.35 = equity vol leading (equity stress)
+                        # <0.20 = rates vol leading (rates stress)
+                        if _vm_ratio > 0.35:
+                            ideas.append({
+                                "Type": "VIX/MOVE Regime",
+                                "Structure": f"VIX/MOVE ratio {_vm_ratio:.2f}",
+                                "Signal": f"VIX {_vix_close:.1f} / MOVE {_move_close:.0f} = {_vm_ratio:.2f} (>0.35 = equity-led)",
+                                "Trade": f"Sell equity vol / buy rates vol — VIX/MOVE ratio elevated at {_vm_ratio:.2f}",
+                                "Rationale": (
+                                    f"VIX/MOVE at {_vm_ratio:.2f} indicates equity vol is elevated relative to rates. "
+                                    f"In equity-led regimes, rates vol tends to catch up. "
+                                    f"Buy 3m×5Y straddle as rates vol convergence play."
+                                ),
+                                "Risk": "Ratio can stay elevated in equity selloffs; cross-asset basis",
+                                "Score": min((_vm_ratio - 0.25) * 100, 65),
+                            })
+                        elif _vm_ratio < 0.20:
+                            ideas.append({
+                                "Type": "VIX/MOVE Regime",
+                                "Structure": f"VIX/MOVE ratio {_vm_ratio:.2f}",
+                                "Signal": f"VIX {_vix_close:.1f} / MOVE {_move_close:.0f} = {_vm_ratio:.2f} (<0.20 = rates-led)",
+                                "Trade": f"Sell rates vol / buy equity vol — VIX/MOVE ratio depressed at {_vm_ratio:.2f}",
+                                "Rationale": (
+                                    f"VIX/MOVE at {_vm_ratio:.2f} indicates rates vol is elevated relative to equity. "
+                                    f"Rates-led regimes often see swaption vol mean-revert. "
+                                    f"Sell 3m×5Y straddle as rates vol normalisation play."
+                                ),
+                                "Risk": "CB policy surprise can keep rates vol elevated",
+                                "Score": min((0.30 - _vm_ratio) * 150, 65),
+                            })
+
+                    # ── VIX/Swaption Correlation Break ────────────────
+                    if _vix_close and len(_vix_hist) > 20:
+                        _v3m5y_2 = get_matrix_value(atm, "3m", 5.0)
+                        if _v3m5y_2:
+                            _vix_mean = float(_vix_hist["close"].mean())
+                            _vix_std = float(_vix_hist["close"].std())
+                            _vix_z = (_vix_close - _vix_mean) / max(_vix_std, 1.0)
+                            # Compare VIX z-score direction to swaption vol regime
+                            _sw_at_high = _v3m5y_2 > 85  # arbitrary threshold
+                            if _vix_z > 1.5 and not _sw_at_high:
+                                ideas.append({
+                                    "Type": "VIX/Swaption Divergence",
+                                    "Structure": f"VIX spike ({_vix_close:.1f}) vs flat swptn ({_v3m5y_2:.1f}bp)",
+                                    "Signal": f"VIX z={_vix_z:+.1f}σ | Swptn 3m×5Y {_v3m5y_2:.1f}bp — not following",
+                                    "Trade": f"Buy 1m×5Y straddle — equity stress not yet priced into rates vol",
+                                    "Rationale": (
+                                        f"VIX at {_vix_close:.1f} is {_vix_z:.1f}σ above mean ({_vix_mean:.1f}), "
+                                        f"but swaption 3m×5Y at {_v3m5y_2:.1f}bp hasn't followed. "
+                                        f"If equity stress spills into rates, swaption vol has room to catch up."
+                                    ),
+                                    "Risk": "Equity stress may not transmit to rates; VIX may normalise without contagion",
+                                    "Score": min(_vix_z * 15, 65),
+                                })
+
+                except Exception as _usd_err:
+                    pass  # Silently skip USD-specific ideas if data unavailable
 
             # ── HIGH CONVICTION composite signals ──────────────────────
             # Where VRP + z-score + historical percentile all agree,
