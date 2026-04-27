@@ -10021,11 +10021,14 @@ def swaptions_tab(vol_mode: str):
 | **Underlying** | SOFR compounded in arrears |
 | **Fixed leg** | Annual, Act/360 |
 | **Float leg** | Annual, Act/360 |
+| **Exercise** | European |
 | **Settlement** | Cash (ICE SOFR Swap Rate) or Physical (LCH/CME) |
 | **Spot** | T+2 New York BD |
 | **Discounting** | SOFR flat |
 | **Premium** | bp of notional, T+2 |
 | **Vol** | Normal (bp/annum) |
+| **Margin (Physical)** | LCH PAIRS / CME CORE — IM on cleared swap delivery |
+| **LCH vs CME basis** | *Pending — BBG feed* |
 """)
 
     # ── SABR Smile Mode & Alpha Monitor ──────────────────────────────
