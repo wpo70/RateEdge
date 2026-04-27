@@ -18646,32 +18646,36 @@ def rv_tab():
     if curve is not None:
         _xs_c = curve["MaturityY"].to_numpy().astype(float)
         _ys_c = curve["ZeroRatePct"].to_numpy().astype(float)
-        _rv_zc_qq_full = st.session_state.get("_aud_zc_qq_full")
-        _rv_zc_qq = _rv_zc_qq_full if _rv_zc_qq_full is not None else st.session_state.get("_aud_zc_qq")
-        _rv_zc_ss = st.session_state.get("_aud_zc_ss")
+        _rv_zc_qq_full = st.session_state.get("_aud_zc_qq_full") if ccy == "AUD" else None
+        _rv_zc_qq = (_rv_zc_qq_full if _rv_zc_qq_full is not None else st.session_state.get("_aud_zc_qq")) if ccy == "AUD" else None
+        _rv_zc_ss = st.session_state.get("_aud_zc_ss") if ccy == "AUD" else None
         def _par_rate(t):
-            # Blended: Q/Q for ≤3Y, S/S for ≥4Y
-            try:
-                if t <= 3.0 and _rv_zc_qq is not None:
-                    _xq = _rv_zc_qq["MaturityY"].to_numpy().astype(float)
-                    _yq = _rv_zc_qq["ZeroRatePct"].to_numpy().astype(float)
-                    return float(np.interp(t, _xq, _yq))
-                if t >= 4.0 and _rv_zc_ss is not None:
-                    _xs2 = _rv_zc_ss["MaturityY"].to_numpy().astype(float)
-                    _ys2 = _rv_zc_ss["ZeroRatePct"].to_numpy().astype(float)
-                    return float(np.interp(t, _xs2, _ys2))
-            except Exception:
-                pass
+            # AUD: Blended Q/Q for ≤3Y, S/S for ≥4Y
+            # USD/other: single curve throughout
+            if ccy == "AUD":
+                try:
+                    if t <= 3.0 and _rv_zc_qq is not None:
+                        _xq = _rv_zc_qq["MaturityY"].to_numpy().astype(float)
+                        _yq = _rv_zc_qq["ZeroRatePct"].to_numpy().astype(float)
+                        return float(np.interp(t, _xq, _yq))
+                    if t >= 4.0 and _rv_zc_ss is not None:
+                        _xs2 = _rv_zc_ss["MaturityY"].to_numpy().astype(float)
+                        _ys2 = _rv_zc_ss["ZeroRatePct"].to_numpy().astype(float)
+                        return float(np.interp(t, _xs2, _ys2))
+                except Exception:
+                    pass
             return float(np.interp(t, _xs_c, _ys_c))
         def _par_rate_qq(t):
-            # Q/Q only — for cap/floor analysis (3M BBSW resets throughout)
-            try:
-                if _rv_zc_qq is not None:
-                    _xq = _rv_zc_qq["MaturityY"].to_numpy().astype(float)
-                    _yq = _rv_zc_qq["ZeroRatePct"].to_numpy().astype(float)
-                    return float(np.interp(t, _xq, _yq))
-            except Exception:
-                pass
+            # AUD: Q/Q only — for cap/floor analysis (3M BBSW resets throughout)
+            # USD/other: same as _par_rate (single curve)
+            if ccy == "AUD":
+                try:
+                    if _rv_zc_qq is not None:
+                        _xq = _rv_zc_qq["MaturityY"].to_numpy().astype(float)
+                        _yq = _rv_zc_qq["ZeroRatePct"].to_numpy().astype(float)
+                        return float(np.interp(t, _xq, _yq))
+                except Exception:
+                    pass
             return float(np.interp(t, _xs_c, _ys_c))
         # Use the fwd matrix directly — authoritative source
         _rv_fwd_matrix = st.session_state.get("fwd_matrix", {}).get(ccy)
@@ -19139,10 +19143,11 @@ def rv_tab():
             # Basis adjustment: AUD curve ≤3Y is Q/Q, ≥4Y is S/S
             # For spreads crossing the Q/Q-S/S boundary, convert Q/Q rates to S/S
             # by ADDING the 6v3 basis (Q/Q payer pays more = S/S equivalent is higher)
-            _basis_6v3 = get_basis_curve(ccy, "6v3")
+            # USD/other: no basis adjustment needed (single curve)
+            _basis_6v3 = get_basis_curve(ccy, "6v3") if ccy == "AUD" else None
             def _basis_at(t):
-                """6v3 basis in % at maturity t (only applies to Q/Q tenors <=3Y)"""
-                if _basis_6v3 is None or t > 3.0:
+                """6v3 basis in % at maturity t (only applies to AUD Q/Q tenors <=3Y)"""
+                if _basis_6v3 is None or t > 3.0 or ccy != "AUD":
                     return 0.0
                 bx = _basis_6v3["MaturityY"].to_numpy().astype(float)
                 by = _basis_6v3["BasisBp"].to_numpy().astype(float) / 100.0
@@ -19433,7 +19438,7 @@ def rv_tab():
         st.caption("Gamma/vega-optimised ideas from current vol surface + curve.")
 
         if atm is None or curve is None:
-            st.warning("Load both AUD ATM vol surface and IRS curve to generate ideas.")
+            st.warning(f"Load both {ccy} ATM vol surface and IRS curve to generate ideas.")
         else:
             # Gate behind button — idea engine is expensive, don't run every render
             _rv_ideas_key = "rv_ideas_run"
@@ -21046,34 +21051,35 @@ def rv_tab():
                                    "Breakeven range = rate move where P&L = 0 (straddle sellers only).")
     if _rv_active == 3:
         st.markdown("### Cap/Floor RV Trade Recommendations")
-        st.caption("Forward BBSW path vs caplet vol   —   find richness/cheapness by strike and maturity.")
+        _cf_ref_rate = "BBSW" if ccy == "AUD" else ("SOFR" if ccy == "USD" else "BKBM" if ccy == "NZD" else "Rate")
+        st.caption(f"Forward {_cf_ref_rate} path vs caplet vol   —   find richness/cheapness by strike and maturity.")
 
         if curve is None:
-            st.warning("Load AUD IRS curve to generate cap/floor ideas.")
+            st.warning(f"Load {ccy} IRS curve to generate cap/floor ideas.")
         else:
-            # ── Forward BBSW path ────────────────────────────────────
-            st.markdown("#### Implied Forward BBSW Path vs Current Level")
+            # ── Forward rate path ────────────────────────────────────
+            st.markdown(f"#### Implied Forward 3m {_cf_ref_rate} Path vs Current Level")
 
             fwd_bbsw_pts = []
             for t_start in [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 7.0]:
                 r = _fwd_rate(t_start, t_start + 0.25)
                 if r:
-                    fwd_bbsw_pts.append({"Start (y)": t_start, "Fwd 3m BBSW (%)": round(r, 4)})
+                    fwd_bbsw_pts.append({"Start (y)": t_start, f"Fwd 3m {_cf_ref_rate} (%)": round(r, 4)})
 
             if fwd_bbsw_pts:
                 fig_fwd = go.Figure()
                 t_pts = [p["Start (y)"] for p in fwd_bbsw_pts]
-                r_pts = [p["Fwd 3m BBSW (%)"] for p in fwd_bbsw_pts]
+                r_pts = [p[f"Fwd 3m {_cf_ref_rate} (%)"] for p in fwd_bbsw_pts]
                 fig_fwd.add_trace(go.Scatter(x=t_pts, y=r_pts,
                     mode="lines+markers",
                     line=dict(color="#3b82f6", width=2),
-                    marker=dict(size=8), name="Fwd 3m BBSW"))
+                    marker=dict(size=8), name=f"Fwd 3m {_cf_ref_rate}"))
                 # Add current 3m rate
                 r_spot = _par_rate_qq(0.25)
                 fig_fwd.add_hline(y=r_spot, line_dash="dot", line_color="#94a3b8",
                                   annotation_text=f"Spot 3m: {r_spot:.3f}%")
                 fig_fwd.update_layout(
-                    title="Implied Forward 3m BBSW Path",
+                    title=f"Implied Forward 3m {_cf_ref_rate} Path",
                     xaxis_title="Forward Start (y)", yaxis_title="Rate (%)",
                     template="plotly_dark", height=280)
                 st.plotly_chart(fig_fwd, use_container_width=True)
@@ -21081,10 +21087,10 @@ def rv_tab():
             # ── Cap/floor ideas ──────────────────────────────────────
             cf_ideas = []
             spot_3m = _par_rate_qq(0.25)
-            peak_fwd = max((p["Fwd 3m BBSW (%)"] for p in fwd_bbsw_pts), default=spot_3m)
-            trough_fwd = min((p["Fwd 3m BBSW (%)"] for p in fwd_bbsw_pts), default=spot_3m)
+            peak_fwd = max((p[f"Fwd 3m {_cf_ref_rate} (%)"] for p in fwd_bbsw_pts), default=spot_3m)
+            trough_fwd = min((p[f"Fwd 3m {_cf_ref_rate} (%)"] for p in fwd_bbsw_pts), default=spot_3m)
             t_pts = [p["Start (y)"] for p in fwd_bbsw_pts] if fwd_bbsw_pts else []
-            r_pts = [p["Fwd 3m BBSW (%)"] for p in fwd_bbsw_pts] if fwd_bbsw_pts else []
+            r_pts = [p[f"Fwd 3m {_cf_ref_rate} (%)"] for p in fwd_bbsw_pts] if fwd_bbsw_pts else []
 
             # Idea 1: curve shape → cap vs floor preference
             # Use Q/Q only. Historical stats: mean=19.4bp, std=8.0bp (Jan25-Apr26)
@@ -21099,8 +21105,8 @@ def rv_tab():
                     "Type": "Cap",
                     "Structure": "2Y ATM Cap",
                     "Signal": f"2s5s = {curve_slope_2s5s*100:.0f}bp ({_2s5s_z:+.1f}σ vs {_2s5s_mean*100:.0f}bp mean)",
-                    "Trade": "Buy 2Y ATM Cap (receive if BBSW > strike at each reset)",
-                    "Rationale": f"Q/Q 2s5s at {curve_slope_2s5s*100:.0f}bp is {_2s5s_z:.1f}σ above its {_2s5s_mean*100:.0f}bp historical mean. "
+                    "Trade": f"Buy 2Y ATM Cap (receive if {_cf_ref_rate} > strike at each reset)",
+                    "Rationale": f"2s5s at {curve_slope_2s5s*100:.0f}bp is {_2s5s_z:.1f}σ above its {_2s5s_mean*100:.0f}bp historical mean. "
                                  f"Steeper-than-normal curve implies market pricing rate rises above spot. "
                                  f"{'Cap vol ~' + str(round(v_2y_cap,1)) + 'bp.' if v_2y_cap else ''}",
                     "Risk": "Pays premium; loses if rates stay flat or fall",
@@ -21113,8 +21119,8 @@ def rv_tab():
                     "Type": "Floor",
                     "Structure": "2Y ATM Floor",
                     "Signal": f"2s5s = {curve_slope_2s5s*100:.0f}bp ({_2s5s_z:+.1f}σ vs {_2s5s_mean*100:.0f}bp mean)",
-                    "Trade": "Buy 2Y ATM Floor (receive if BBSW < strike)",
-                    "Rationale": f"Q/Q 2s5s at {curve_slope_2s5s*100:.0f}bp is {abs(_2s5s_z):.1f}σ below its {_2s5s_mean*100:.0f}bp mean. "
+                    "Trade": f"Buy 2Y ATM Floor (receive if {_cf_ref_rate} < strike)",
+                    "Rationale": f"2s5s at {curve_slope_2s5s*100:.0f}bp is {abs(_2s5s_z):.1f}σ below its {_2s5s_mean*100:.0f}bp mean. "
                                  f"Flat/inverted curve implies cuts priced. Floor benefits from deeper/faster cuts.",
                     "Risk": "Pays premium; loses if cuts slower than priced",
                     "Score": min(abs(_2s5s_z) * 15, 100),
@@ -21129,11 +21135,11 @@ def rv_tab():
                     "Type": "Cap",
                     "Structure": f"2Y Cap struck at fwd peak ({peak_rate:.3f}%)",
                     "Signal": f"Fwd peak {peak_rate:.3f}% at {fwd_peak_t:.1f}y",
-                    "Trade": f"Buy 2Y Cap struck at {peak_rate:.3f}%   —   OTM cap on peak BBSW",
-                    "Rationale": f"Curve implies BBSW peaks at {peak_rate:.3f}% around {fwd_peak_t:.1f}y. "
+                    "Trade": f"Buy 2Y Cap struck at {peak_rate:.3f}%   —   OTM cap on peak {_cf_ref_rate}",
+                    "Rationale": f"Curve implies {_cf_ref_rate} peaks at {peak_rate:.3f}% around {fwd_peak_t:.1f}y. "
                                  f"OTM cap cheap if realised path overshoots. "
                                  f"{'Cap vol ~' + str(round(v_exp,1)) + 'bp.' if v_exp else ''}",
-                    "Risk": "OTM   —   needs BBSW to exceed forward peak",
+                    "Risk": "OTM   —   needs {_cf_ref_rate} to exceed forward peak",
                     "Score": 15,
                     "Category": "Cap/Floor",
                 })
