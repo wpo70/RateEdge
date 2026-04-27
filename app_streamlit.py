@@ -11212,6 +11212,19 @@ def caps_floors_tab(vol_mode: str):
         return
 
     # ═══════════════════════════════════════════════════════════════════
+    # v2704w: clear chart cache when currency changes — prevents USD curves
+    # showing on AUD page (and vice versa)
+    # ═══════════════════════════════════════════════════════════════════
+    if st.session_state.get("_cfs_chart_ccy") != ccy:
+        for _ck in ["_cfs_chart_fig", "_cfs_chart_sig", "_cfs_chart_tbl",
+                     "_cfs_otc_curve", "_cfs_listed_bootstrap",
+                     "_cfs_sr3_hybrid", "_cfs_sr3_full",
+                     "_cfs_overlay_sel", "cfs_overlay_choices",
+                     "_cfs_listed_curve_cache"]:
+            st.session_state.pop(_ck, None)
+        st.session_state["_cfs_chart_ccy"] = ccy
+
+    # ═══════════════════════════════════════════════════════════════════
     # CRITICAL: Restore preserved widget state BEFORE any dependent code.
     # ═══════════════════════════════════════════════════════════════════
     # When the Calculate CFS Curve button fires st.rerun(), Streamlit's
