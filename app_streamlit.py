@@ -10027,7 +10027,7 @@ def swaptions_tab(vol_mode: str):
 | **Discounting** | SOFR flat |
 | **Premium** | bp of notional, T+2 |
 | **Vol** | Normal (bp/annum) |
-| **Margin (Physical)** | LCH PAIRS / CME CORE — IM on cleared swap delivery |
+| **Margin (Physical)** | LCH SwapClear / CME IRS Clearing — IM on delivery |
 | **LCH vs CME basis** | *Pending — BBG feed* |
 """)
 
