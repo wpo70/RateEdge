@@ -21390,12 +21390,12 @@ def rv_tab():
     if _rv_active == 3:
         st.markdown("### Cap/Floor RV Trade Recommendations")
         _cf_ref_rate = "BBSW" if ccy == "AUD" else ("SOFR" if ccy == "USD" else "BKBM" if ccy == "NZD" else "Rate")
-        st.caption(f"Forward {_cf_ref_rate} path vs caplet vol   —   find richness/cheapness by strike and maturity.")
+        st.caption(f"Wedge RV, caplet vol vs realised, listed/OTC arb, forward path analysis.")
 
         if curve is None:
             st.warning(f"Load {ccy} IRS curve to generate cap/floor ideas.")
         else:
-            # ── Forward rate path ────────────────────────────────────
+            # ── Forward rate path chart ──────────────────────────────
             st.markdown(f"#### Implied Forward 3m {_cf_ref_rate} Path vs Current Level")
 
             fwd_bbsw_pts = []
@@ -21412,17 +21412,18 @@ def rv_tab():
                     mode="lines+markers",
                     line=dict(color="#3b82f6", width=2),
                     marker=dict(size=8), name=f"Fwd 3m {_cf_ref_rate}"))
-                # Add current 3m rate
                 r_spot = _par_rate_qq(0.25)
                 fig_fwd.add_hline(y=r_spot, line_dash="dot", line_color="#94a3b8",
                                   annotation_text=f"Spot 3m: {r_spot:.3f}%")
                 fig_fwd.update_layout(
                     title=f"Implied Forward 3m {_cf_ref_rate} Path",
                     xaxis_title="Forward Start (y)", yaxis_title="Rate (%)",
-                    template="plotly_dark", height=280)
+                    template="plotly_dark", height=280,
+                    showlegend=True,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
                 st.plotly_chart(fig_fwd, use_container_width=True)
 
-            # ── Cap/floor ideas ──────────────────────────────────────
+            # ── Build ideas ──────────────────────────────────────────
             cf_ideas = []
             spot_3m = _par_rate_qq(0.25)
             peak_fwd = max((p[f"Fwd 3m {_cf_ref_rate} (%)"] for p in fwd_bbsw_pts), default=spot_3m)
@@ -21430,91 +21431,293 @@ def rv_tab():
             t_pts = [p["Start (y)"] for p in fwd_bbsw_pts] if fwd_bbsw_pts else []
             r_pts = [p[f"Fwd 3m {_cf_ref_rate} (%)"] for p in fwd_bbsw_pts] if fwd_bbsw_pts else []
 
-            # Idea 1: curve shape → cap vs floor preference
-            # Use Q/Q only. Historical stats: mean=19.4bp, std=8.0bp (Jan25-Apr26)
-            curve_slope_2s5s = _par_rate_qq(5) - _par_rate_qq(2)
-            _2s5s_mean = 0.194; _2s5s_std = 0.080
-            _2s5s_z = (curve_slope_2s5s - _2s5s_mean) / _2s5s_std if _2s5s_std > 0 else 0
-            fwd_peak_t = t_pts[r_pts.index(max(r_pts))] if r_pts else 0
+            # ── 1. WEDGE RV — the primary CFS signal ─────────────────
+            # Compare current wedge spreads to defaults. Large deviation = signal.
+            _cfs_tdata = st.session_state.get("cfs_table_data", {})
+            _wedge_defaults = {"AUD": {"3m1y": 10.0, "1y1y": 11.5, "2y1y": 13.0, "3y1y": 17.5,
+                                       "4y1y": 20.0, "5y2y": 45.0, "7y3y": 50.0},
+                               "USD": {"3m1y": -3.0, "1y1y": 12.0, "2y1y": 15.0, "3y1y": 19.0,
+                                       "4y1y": 22.0, "5y2y": 40.0, "7y3y": 60.0},
+                               "NZD": {"3m1y": 10.0, "1y1y": 11.5, "2y1y": 13.0, "3y1y": 17.5,
+                                       "4y1y": 20.0, "5y2y": 45.0, "7y3y": 50.0}}
+            _wedge_def = _wedge_defaults.get(ccy, _wedge_defaults["USD"])
+            _wedge_labels = {"3m1y": "3m×1Y", "1y1y": "1×2", "2y1y": "2×3",
+                             "3y1y": "3×4", "4y1y": "4×5", "5y2y": "5×7", "7y3y": "7×10"}
 
-            if _2s5s_z > 1.0:  # >1σ above mean → meaningfully steep
+            for _wk, _wdef in _wedge_def.items():
+                _wcurr = st.session_state.get(f"cf_spr_{_wk}")
+                if _wcurr is not None:
+                    _wdiff = _wcurr - _wdef
+                    _wlbl = _wedge_labels.get(_wk, _wk)
+                    # Flag if moved >3bp from default (meaningful for most wedges)
+                    _w_thresh = 5.0 if "5y2y" in _wk or "7y3y" in _wk else 3.0
+                    if abs(_wdiff) > _w_thresh:
+                        _w_rich = _wdiff > 0  # wider wedge = CFS expensive vs swaption
+                        cf_ideas.append({
+                            "Type": "Wedge RV",
+                            "Structure": f"{_wlbl} wedge {'wide' if _w_rich else 'tight'}",
+                            "Signal": f"{_wlbl} wedge: {_wcurr:.1f}bp (default {_wdef:.1f}bp, diff {_wdiff:+.1f}bp)",
+                            "Trade": (f"Sell {_wlbl} CFS, buy swaption — wedge {abs(_wdiff):.0f}bp wider than normal"
+                                      if _w_rich else
+                                      f"Buy {_wlbl} CFS, sell swaption — wedge {abs(_wdiff):.0f}bp tighter than normal"),
+                            "Rationale": (f"{_wlbl} calendar spread at {_wcurr:.1f}bp vs default {_wdef:.1f}bp. "
+                                          f"{'CFS expensive relative to swaption — sell CFS straddle, buy swaption straddle same expiry/tenor.' if _w_rich else 'CFS cheap relative to swaption — buy CFS straddle, sell swaption straddle.'}"),
+                            "Risk": "Wedge can stay dislocated; execution across two instruments",
+                            "Score": min(abs(_wdiff) * 5, 70),
+                            "Category": "Cap/Floor",
+                        })
+
+            # ── 2. LISTED vs OTC ARBITRAGE ────────────────────────────
+            if ccy == "USD":
+                _lf_cache = st.session_state.get("_cfs_listed_curve_cache") or {}
+                _listed_1y = _lf_cache.get("stradd_1y")
+                _listed_2y = _lf_cache.get("stradd_2y")
+                _otc_1y_cfs = (_cfs_tdata.get("3m1y", {}) or {}).get("cfs_straddle")
+
+                if _listed_1y and _otc_1y_cfs:
+                    _listed_1y_f = float(_listed_1y)
+                    _otc_1y_f = float(_otc_1y_cfs)
+                    _arb_diff = _listed_1y_f - _otc_1y_f
+                    if abs(_arb_diff) > 0.3:  # >0.3bp meaningful
+                        cf_ideas.append({
+                            "Type": "Listed/OTC Arb",
+                            "Structure": f"1Y CFS: Listed {_listed_1y_f:.2f} vs OTC {_otc_1y_f:.2f}",
+                            "Signal": f"Listed-OTC gap: {_arb_diff:+.2f}bp",
+                            "Trade": (f"Sell listed 1Y CFS (SR3 strip), buy OTC 1Y CFS — {_arb_diff:.2f}bp rich"
+                                      if _arb_diff > 0 else
+                                      f"Buy listed 1Y CFS (SR3 strip), sell OTC 1Y CFS — {abs(_arb_diff):.2f}bp cheap"),
+                            "Rationale": (f"SR3 strip implies 1Y CFS of {_listed_1y_f:.2f}bp vs OTC wedge chain {_otc_1y_f:.2f}bp. "
+                                          f"Gap of {_arb_diff:+.2f}bp. "
+                                          f"{'Listed front overpriced — sell SR3 straddle, buy OTC.' if _arb_diff > 0 else 'Listed front cheap — buy SR3 straddle, sell OTC.'}"),
+                            "Risk": "Execution risk; bid-offer on both legs; basis between listed and OTC",
+                            "Score": min(abs(_arb_diff) * 20, 65),
+                            "Category": "Cap/Floor",
+                        })
+
+            # ── 3. CAPLET FLAT VOL vs REALISED ────────────────────────
+            _caplet_vc = st.session_state.get(f"caplet_vol_curve_{ccy}")
+            _cfs_flat_vols = {}
+            for _row in st.session_state.get("_atm_cfs_rows_cache", []):
+                try:
+                    _t = int(_row.get("Tenor", "").replace("Y", ""))
+                    _fv = float(_row.get("Flat Vol bp", "0"))
+                    if _fv > 0:
+                        _cfs_flat_vols[_t] = _fv
+                except:
+                    pass
+
+            for _tn in [1, 2, 3, 5]:
+                _flat_v = _cfs_flat_vols.get(_tn)
+                _realised_v = _compute_realised_vol_db(ccy, float(_tn), 21) if HAS_POSTGRES else None
+                if _flat_v and _realised_v and _realised_v > 0:
+                    _vrp = _flat_v / _realised_v
+                    if _vrp > 1.4:
+                        cf_ideas.append({
+                            "Type": "Caplet VRP",
+                            "Structure": f"{_tn}Y CFS vol rich vs realised",
+                            "Signal": f"Flat vol {_flat_v:.1f}bp vs 21d realised {_realised_v:.1f}bp (VRP={_vrp:.2f}×)",
+                            "Trade": f"Sell {_tn}Y CFS straddle — implied {_vrp:.1f}× realised, rich gamma",
+                            "Rationale": (f"{_tn}Y CFS flat vol {_flat_v:.1f}bp vs 21-day realised {_realised_v:.1f}bp = "
+                                          f"{_vrp:.2f}× VRP. Implied compensates well above delivered vol. "
+                                          f"Sell CFS straddle to capture vol risk premium."),
+                            "Risk": "Realised can spike; short gamma; CB meeting risk",
+                            "Score": min((_vrp - 1.0) * 30, 65),
+                            "Category": "Cap/Floor",
+                        })
+                    elif _vrp < 0.75:
+                        cf_ideas.append({
+                            "Type": "Caplet VRP",
+                            "Structure": f"{_tn}Y CFS vol cheap vs realised",
+                            "Signal": f"Flat vol {_flat_v:.1f}bp vs 21d realised {_realised_v:.1f}bp (VRP={_vrp:.2f}×)",
+                            "Trade": f"Buy {_tn}Y CFS straddle — implied only {_vrp:.2f}× realised, cheap gamma",
+                            "Rationale": (f"{_tn}Y CFS flat vol {_flat_v:.1f}bp vs 21-day realised {_realised_v:.1f}bp = "
+                                          f"only {_vrp:.2f}× VRP. Implied fails to compensate for delivered vol. "
+                                          f"Buy CFS straddle — cheap entry for long gamma."),
+                            "Risk": "Realised could normalise lower; theta drag",
+                            "Score": min((1.0 - _vrp) * 40, 65),
+                            "Category": "Cap/Floor",
+                        })
+
+            # ── 4. FLAT VOL CURVE SHAPE ───────────────────────────────
+            if len(_cfs_flat_vols) >= 4:
+                _fv_sorted = sorted(_cfs_flat_vols.items())
+                _fv_tenors = [t for t, v in _fv_sorted]
+                _fv_vals = [v for t, v in _fv_sorted]
+                _fv_max_idx = _fv_vals.index(max(_fv_vals))
+                _fv_min_idx = _fv_vals.index(min(_fv_vals))
+                _fv_range = max(_fv_vals) - min(_fv_vals)
+
+                # Detect hump (peak in the middle)
+                if 0 < _fv_max_idx < len(_fv_vals) - 1 and _fv_range > 5:
+                    _hump_tenor = _fv_tenors[_fv_max_idx]
+                    cf_ideas.append({
+                        "Type": "Vol Curve Shape",
+                        "Structure": f"Humped at {_hump_tenor}Y ({_fv_vals[_fv_max_idx]:.1f}bp)",
+                        "Signal": f"Peak {_fv_vals[_fv_max_idx]:.1f}bp at {_hump_tenor}Y, range {_fv_range:.1f}bp",
+                        "Trade": f"Sell {_hump_tenor}Y CFS straddle, buy wings ({_fv_tenors[0]}Y + {_fv_tenors[-1]}Y) — butterfly",
+                        "Rationale": (f"CFS flat vol curve humped at {_hump_tenor}Y ({_fv_vals[_fv_max_idx]:.1f}bp) — "
+                                      f"belly is {_fv_range:.0f}bp above wings. Sell the rich belly, buy cheap wings as butterfly."),
+                        "Risk": "Hump can persist; need vol to flatten",
+                        "Score": min(_fv_range * 3, 55),
+                        "Category": "Cap/Floor",
+                    })
+
+                # Detect strong inversion (front > back by >8bp)
+                if _fv_vals[0] > _fv_vals[-1] + 8:
+                    _inv_diff = _fv_vals[0] - _fv_vals[-1]
+                    cf_ideas.append({
+                        "Type": "Vol Curve Shape",
+                        "Structure": f"Inverted: {_fv_tenors[0]}Y {_fv_vals[0]:.1f}bp vs {_fv_tenors[-1]}Y {_fv_vals[-1]:.1f}bp",
+                        "Signal": f"Front-back inversion: {_inv_diff:.1f}bp",
+                        "Trade": f"Sell {_fv_tenors[0]}Y CFS, buy {_fv_tenors[-1]}Y CFS — vol curve flattener",
+                        "Rationale": (f"CFS flat vol inverted by {_inv_diff:.0f}bp ({_fv_tenors[0]}Y at {_fv_vals[0]:.1f}bp, "
+                                      f"{_fv_tenors[-1]}Y at {_fv_vals[-1]:.1f}bp). Front vol rich relative to long end. "
+                                      f"Sell front CFS, buy back CFS as mean-reversion play."),
+                        "Risk": "Front event risk (CB) can maintain inversion",
+                        "Score": min(_inv_diff * 3, 55),
+                        "Category": "Cap/Floor",
+                    })
+
+            # ── 5. CURVE DIRECTIONALITY ───────────────────────────────
+            # Replace hardcoded AUD 2s5s stats with ccy-specific
+            _2s5s_defaults = {
+                "AUD": {"mean": 0.194, "std": 0.080},
+                "USD": {"mean": 0.060, "std": 0.040},  # USD typically flatter
+                "NZD": {"mean": 0.150, "std": 0.070},
+            }
+            _2s5s_cfg = _2s5s_defaults.get(ccy, {"mean": 0.100, "std": 0.060})
+            curve_slope_2s5s = _par_rate_qq(5) - _par_rate_qq(2)
+            _2s5s_z = (curve_slope_2s5s - _2s5s_cfg["mean"]) / max(_2s5s_cfg["std"], 0.01)
+
+            if _2s5s_z > 1.5:
                 v_2y_cap = get_matrix_value(atm, "2y", 2.0)
                 cf_ideas.append({
-                    "Type": "Cap",
+                    "Type": "Directional Cap",
                     "Structure": "2Y ATM Cap",
-                    "Signal": f"2s5s = {curve_slope_2s5s*100:.0f}bp ({_2s5s_z:+.1f}σ vs {_2s5s_mean*100:.0f}bp mean)",
-                    "Trade": f"Buy 2Y ATM Cap (receive if {_cf_ref_rate} > strike at each reset)",
-                    "Rationale": f"2s5s at {curve_slope_2s5s*100:.0f}bp is {_2s5s_z:.1f}σ above its {_2s5s_mean*100:.0f}bp historical mean. "
-                                 f"Steeper-than-normal curve implies market pricing rate rises above spot. "
-                                 f"{'Cap vol ~' + str(round(v_2y_cap,1)) + 'bp.' if v_2y_cap else ''}",
+                    "Signal": f"2s5s = {curve_slope_2s5s*100:.0f}bp ({_2s5s_z:+.1f}σ vs {_2s5s_cfg['mean']*100:.0f}bp {ccy} mean)",
+                    "Trade": f"Buy 2Y ATM Cap — steep curve implies rate rises above spot {_cf_ref_rate}",
+                    "Rationale": (f"2s5s at {curve_slope_2s5s*100:.0f}bp is {_2s5s_z:.1f}σ above {ccy} historical mean "
+                                  f"({_2s5s_cfg['mean']*100:.0f}bp). Steeper-than-normal curve implies market pricing rate rises. "
+                                  f"{'Cap vol ~' + str(round(v_2y_cap,1)) + 'bp.' if v_2y_cap else ''}"),
                     "Risk": "Pays premium; loses if rates stay flat or fall",
-                    "Score": min(abs(_2s5s_z) * 15, 100),
+                    "Score": min(abs(_2s5s_z) * 12, 60),
                     "Category": "Cap/Floor",
                 })
-            elif _2s5s_z < -1.0:  # >1σ below mean → inverted vs normal
+            elif _2s5s_z < -1.5:
                 v_2y_floor = get_matrix_value(atm, "2y", 2.0)
                 cf_ideas.append({
-                    "Type": "Floor",
+                    "Type": "Directional Floor",
                     "Structure": "2Y ATM Floor",
-                    "Signal": f"2s5s = {curve_slope_2s5s*100:.0f}bp ({_2s5s_z:+.1f}σ vs {_2s5s_mean*100:.0f}bp mean)",
-                    "Trade": f"Buy 2Y ATM Floor (receive if {_cf_ref_rate} < strike)",
-                    "Rationale": f"2s5s at {curve_slope_2s5s*100:.0f}bp is {abs(_2s5s_z):.1f}σ below its {_2s5s_mean*100:.0f}bp mean. "
-                                 f"Flat/inverted curve implies cuts priced. Floor benefits from deeper/faster cuts.",
+                    "Signal": f"2s5s = {curve_slope_2s5s*100:.0f}bp ({_2s5s_z:+.1f}σ vs {_2s5s_cfg['mean']*100:.0f}bp {ccy} mean)",
+                    "Trade": f"Buy 2Y ATM Floor — flat/inverted curve implies cuts priced",
+                    "Rationale": (f"2s5s at {curve_slope_2s5s*100:.0f}bp is {abs(_2s5s_z):.1f}σ below {ccy} historical mean "
+                                  f"({_2s5s_cfg['mean']*100:.0f}bp). Flat/inverted curve implies cuts. Floor benefits from deeper/faster cuts."),
                     "Risk": "Pays premium; loses if cuts slower than priced",
-                    "Score": min(abs(_2s5s_z) * 15, 100),
+                    "Score": min(abs(_2s5s_z) * 12, 60),
                     "Category": "Cap/Floor",
                 })
 
-            # Idea 2: Forward peak timing
-            if fwd_peak_t > 0:
-                peak_rate = peak_fwd
-                v_exp = get_matrix_value(atm, "1y", 2.0)
-                cf_ideas.append({
-                    "Type": "Cap",
-                    "Structure": f"2Y Cap struck at fwd peak ({peak_rate:.3f}%)",
-                    "Signal": f"Fwd peak {peak_rate:.3f}% at {fwd_peak_t:.1f}y",
-                    "Trade": f"Buy 2Y Cap struck at {peak_rate:.3f}%   —   OTM cap on peak {_cf_ref_rate}",
-                    "Rationale": f"Curve implies {_cf_ref_rate} peaks at {peak_rate:.3f}% around {fwd_peak_t:.1f}y. "
-                                 f"OTM cap cheap if realised path overshoots. "
-                                 f"{'Cap vol ~' + str(round(v_exp,1)) + 'bp.' if v_exp else ''}",
-                    "Risk": "OTM   —   needs {_cf_ref_rate} to exceed forward peak",
-                    "Score": 15,
-                    "Category": "Cap/Floor",
-                })
+            # ── 6. COLLAR from SABR SKEW ──────────────────────────────
+            _sabr_data = st.session_state.get("vol_data", {}).get(ccy, {})
+            _sabr_rho = _sabr_data.get("rho")
+            if _sabr_rho is not None and hasattr(_sabr_rho, 'empty') and not _sabr_rho.empty:
+                try:
+                    # Check 3m×5Y rho as representative
+                    _rho_3m5y = get_matrix_value(_sabr_rho, "3m", 5.0)
+                    if _rho_3m5y is not None:
+                        _rho_val = float(_rho_3m5y)
+                        if _rho_val < -0.25:
+                            cf_ideas.append({
+                                "Type": "Skew / Collar",
+                                "Structure": f"2Y zero-cost collar (rho={_rho_val:.2f})",
+                                "Signal": f"SABR rho 3m×5Y = {_rho_val:.2f} — negative skew favours receiver bias",
+                                "Trade": f"Buy 2Y ATM floor, sell 2Y OTM cap — zero-cost collar if skew steep enough",
+                                "Rationale": (f"SABR rho at {_rho_val:.2f} indicates steep negative skew — "
+                                              f"OTM caps are cheap relative to OTM floors. Zero-cost collar: "
+                                              f"buy ATM floor (protection), sell OTM cap (funded by skew). "
+                                              f"Net zero premium with downside protection."),
+                                "Risk": "Capped upside; if rates rise above cap strike, short position kicks in",
+                                "Score": min(abs(_rho_val) * 80, 55),
+                                "Category": "Cap/Floor",
+                            })
+                        elif _rho_val > 0.15:
+                            cf_ideas.append({
+                                "Type": "Skew / Collar",
+                                "Structure": f"2Y zero-cost cap collar (rho={_rho_val:+.2f})",
+                                "Signal": f"SABR rho 3m×5Y = {_rho_val:+.2f} — positive skew favours payer bias",
+                                "Trade": f"Buy 2Y ATM cap, sell 2Y OTM floor — zero-cost cap collar",
+                                "Rationale": (f"SABR rho at {_rho_val:+.2f} indicates positive skew — "
+                                              f"OTM floors are cheap relative to OTM caps. "
+                                              f"Buy ATM cap (upside), sell OTM floor (funded by skew)."),
+                                "Risk": "Capped downside protection; if rates fall below floor strike, short position kicks in",
+                                "Score": min(abs(_rho_val) * 60, 50),
+                                "Category": "Cap/Floor",
+                            })
+                except Exception:
+                    pass
 
-            # Idea 3: Vol cone percentile for caps
-            if has_hist and not df_vols.empty:
-                for tn in [1, 2, 3]:
-                    curr_v = get_matrix_value(atm, "1y", float(tn))
-                    if not curr_v:
-                        continue
-                    hist_v = df_vols[(df_vols["tenor"] == tn) & (df_vols["expiry"] == "1y")]["vol_bp"]
-                    if len(hist_v) < 10:
-                        continue
-                    pct = float((hist_v < curr_v).mean() * 100)
-                    if pct < 25:
-                        cf_ideas.append({
-                            "Type": "Cap/Floor",
-                            "Structure": f"1y≈{tn}Y vol cheap",
-                            "Signal": f"Vol at {pct:.0f}th percentile",
-                            "Trade": f"Buy 1y≈{tn}Y straddle (long gamma + vol)",
-                            "Rationale": f"1y caplet vol at {curr_v:.0f}bp = {pct:.0f}th percentile historically. "
-                                         f"Cheap entry for long vol / long gamma position.",
-                            "Risk": "Theta drag if rates stay range-bound",
-                            "Score": min((25 - pct) * 2, 100),
-                            "Category": "Cap/Floor",
-                        })
-                    elif pct > 75:
-                        cf_ideas.append({
-                            "Type": "Cap/Floor",
-                            "Structure": f"1y≈{tn}Y vol rich",
-                            "Signal": f"Vol at {pct:.0f}th percentile",
-                            "Trade": f"Sell 1y≈{tn}Y cap or floor vs delta hedge",
-                            "Rationale": f"1y caplet vol at {curr_v:.0f}bp = {pct:.0f}th percentile. Rich historically.",
-                            "Risk": "Short gamma; realised vol could exceed implied",
-                            "Score": min((pct - 75) * 2, 100),
-                            "Category": "Cap/Floor",
-                        })
+            # ── 7. VOL CONE PERCENTILE ────────────────────────────────
+            if HAS_POSTGRES:
+                try:
+                    conn = get_db_connection()
+                    if conn:
+                        cur = conn.cursor()
+                        cur.execute("""
+                            SELECT atm_vols FROM vol_history
+                            WHERE currency=%s AND user_id IN ('wpo@rateedge.au','wpo70@icloud.com','shared')
+                            ORDER BY snapshot_date DESC LIMIT 60
+                        """, (ccy,))
+                        _vh_rows = cur.fetchall()
+                        conn.close()
+
+                        if _vh_rows and len(_vh_rows) >= 10:
+                            # Build vol history for each tenor
+                            for _tn in [1, 2, 3, 5]:
+                                curr_v = get_matrix_value(atm, "1y", float(_tn)) if atm is not None else None
+                                if not curr_v:
+                                    continue
+                                _hist_vols = []
+                                for (_atm_json,) in _vh_rows:
+                                    if not _atm_json:
+                                        continue
+                                    try:
+                                        vals = _atm_json.get("values", [])
+                                        for row in vals:
+                                            exp = (row.get("Expiry") or row.get("expiry") or "").lower()
+                                            if exp == "1y":
+                                                v = row.get(f"{_tn}Y")
+                                                if v:
+                                                    _hist_vols.append(float(v))
+                                    except:
+                                        pass
+                                if len(_hist_vols) >= 10:
+                                    pct = float((np.array(_hist_vols) < curr_v).mean() * 100)
+                                    if pct < 20:
+                                        cf_ideas.append({
+                                            "Type": "Vol Cone",
+                                            "Structure": f"1y≈{_tn}Y caplet vol cheap ({pct:.0f}th pct)",
+                                            "Signal": f"Vol at {pct:.0f}th percentile ({len(_hist_vols)} obs)",
+                                            "Trade": f"Buy 1y≈{_tn}Y CFS straddle — vol at {pct:.0f}th percentile, cheap historically",
+                                            "Rationale": (f"1y caplet vol at {curr_v:.0f}bp = {pct:.0f}th percentile over "
+                                                          f"{len(_hist_vols)} snapshots. Cheap entry for long vol."),
+                                            "Risk": "Theta drag if rates stay range-bound",
+                                            "Score": min((20 - pct) * 2.5, 60),
+                                            "Category": "Cap/Floor",
+                                        })
+                                    elif pct > 80:
+                                        cf_ideas.append({
+                                            "Type": "Vol Cone",
+                                            "Structure": f"1y≈{_tn}Y caplet vol rich ({pct:.0f}th pct)",
+                                            "Signal": f"Vol at {pct:.0f}th percentile ({len(_hist_vols)} obs)",
+                                            "Trade": f"Sell 1y≈{_tn}Y CFS vs delta hedge — vol at {pct:.0f}th percentile",
+                                            "Rationale": (f"1y caplet vol at {curr_v:.0f}bp = {pct:.0f}th percentile. "
+                                                          f"Rich historically over {len(_hist_vols)} snapshots."),
+                                            "Risk": "Short gamma; realised vol could exceed implied",
+                                            "Score": min((pct - 80) * 2.5, 60),
+                                            "Category": "Cap/Floor",
+                                        })
+                except Exception:
+                    pass
 
             cf_ideas.sort(key=lambda x: x["Score"], reverse=True)
 
@@ -21528,7 +21731,7 @@ def rv_tab():
                 st.info("No strong cap/floor signals at current levels.")
             else:
                 st.markdown(f"**{len(cf_ideas)} cap/floor ideas generated**")
-                for i, idea in enumerate(cf_ideas[:6]):
+                for i, idea in enumerate(cf_ideas[:8]):
                     with st.expander(
                         f"**{idea['Type']}**   —   {idea['Structure']}  |  {idea['Signal']}",
                         expanded=i < 2):
