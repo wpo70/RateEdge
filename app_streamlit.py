@@ -20780,7 +20780,13 @@ def rv_tab():
                 # Matrix expiry labels and their year fractions
                 _matrix_exp_labels = list(_fwd_matrix_ss.index) if _has_matrix else []
                 _matrix_exp_yf     = [label_to_years(e) for e in _matrix_exp_labels] if _has_matrix else []
-                _matrix_tenors     = [float(c[:-1]) for c in _fwd_matrix_ss.columns] if _has_matrix else []
+                _matrix_tenors     = []
+                if _has_matrix:
+                    for c in _fwd_matrix_ss.columns:
+                        try:
+                            _matrix_tenors.append(float(str(c).replace("Y","").replace("y","")))
+                        except:
+                            _matrix_tenors.append(float(len(_matrix_tenors) + 1))
 
                 def _matrix_rate_at(exp_y: float, tenor_y: float) -> float | None:
                     """Interpolate fwd matrix at (expiry_yf_from_today, tenor_y).
