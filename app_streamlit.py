@@ -4264,7 +4264,7 @@ def init_session():
     if "history_configs" not in st.session_state:
         st.session_state["history_configs"] = {}
     if "theme_name" not in st.session_state:
-        st.session_state["theme_name"] = "Dealer Dark"
+        st.session_state["theme_name"] = "Clean Light"
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
     if "username" not in st.session_state:
@@ -23421,7 +23421,7 @@ def main():
         theme_choice = st.selectbox(
             " Theme",
             ["Dealer Dark", "Clean Light"],
-            index=0 if st.session_state.get("theme_name", "Dealer Dark") == "Dealer Dark" else 1,
+            index=0 if st.session_state.get("theme_name", "Clean Light") == "Dealer Dark" else 1,
             key="sidebar_theme",
         )
         st.session_state["theme_name"] = theme_choice
