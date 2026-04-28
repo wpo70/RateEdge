@@ -13116,6 +13116,13 @@ def caps_floors_tab(vol_mode: str):
                          "SR3 hybrid = listed to cutoff, OTC beyond. "
                          "SR3 full = all listed anchors, OTC beyond.",
                 )
+                # v2804h: auto-rebuild when feed changes — stale _cfs_tdata
+                # from previous mode gives wrong wedge premiums
+                if ccy == "USD":
+                    _prev_src = st.session_state.get("_cfs_prev_active_src")
+                    if _prev_src is not None and _prev_src != _active_src:
+                        st.session_state["_cfs_calc_requested"] = True
+                    st.session_state["_cfs_prev_active_src"] = _active_src
             with _mc3:
                 # Ensure active feed is always in overlay — set BEFORE widget renders
                 _cur_overlay = st.session_state.get("cfs_overlay_choices", None)
@@ -13973,7 +13980,8 @@ def caps_floors_tab(vol_mode: str):
                     for k, v in sorted((_caplet_vc or {}).items())
                 )) if _caplet_vc else 0,
                 _lf_sig,
-                "v2204q",
+                st.session_state.get("cfs_active_vol_src", "OTC only") if ccy == "USD" else None,
+                "v2804h",
             )
             _cfs_cached = (st.session_state.get("_atm_cfs_cache_key") == _cfs_id)  # v2704e: re-enabled
             if _cfs_cached and st.session_state.get("_atm_cfs_rows_cache"):
