@@ -3198,7 +3198,8 @@ def build_caplet_vol_curve_sr3_full(
 def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None, 
                           spread_3m1y=-3.0, spread_1y1y=12.0, spread_2y1y=15.0, 
                           spread_3y1y=19.0, spread_4y1y=22.0, spread_5y2y=40.0, spread_7y3y=60.0,
-                          spread_10y2y=50.0, spread_12y3y=70.0):
+                          spread_10y2y=50.0, spread_12y3y=70.0,
+                          listed_front_vols=None):
     """
     Build caplet vol curve using cumulative premium method with proper solving.
     """
@@ -3267,20 +3268,33 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         cfs_1y_leg = cfs_1y_straddle / 2.0
         cumulative_leg_prems[1.0] = cfs_1y_leg
         
-        # Solve for FLAT vol to 1Y
-        def objective_1y(vol_bp):
-            return price_caplets_flat_vol(vol_bp, 1.0) - cfs_1y_leg
-        
-        try:
-            vol_1y = opt.brentq(objective_1y, 1.0, 200.0, xtol=0.001)
-            # Store flat vol at quarterly points for final interpolation
+        if listed_front_vols:
+            # v2804k: use SR3 per-quarter vols directly — no flat vol solve.
+            # This ensures the solver calibrates with the correct listed front,
+            # so the CubicSpline shape and repricing are consistent throughout.
             for t in [0.25, 0.5, 0.75, 1.0]:
-                caplet_vols[t] = max(vol_1y, 1.0)
-        except:
-            vol_fallback = max(cfs_1y_leg * 1.58, 1.0)
-            for t in [0.25, 0.5, 0.75, 1.0]:
-                caplet_vols[t] = vol_fallback
+                caplet_vols[t] = listed_front_vols.get(t, listed_front_vols.get(1.0, 75.0))
+        else:
+            # OTC: solve for FLAT vol to 1Y
+            def objective_1y(vol_bp):
+                return price_caplets_flat_vol(vol_bp, 1.0) - cfs_1y_leg
+            
+            try:
+                vol_1y = opt.brentq(objective_1y, 1.0, 200.0, xtol=0.001)
+                for t in [0.25, 0.5, 0.75, 1.0]:
+                    caplet_vols[t] = max(vol_1y, 1.0)
+            except:
+                vol_fallback = max(cfs_1y_leg * 1.58, 1.0)
+                for t in [0.25, 0.5, 0.75, 1.0]:
+                    caplet_vols[t] = vol_fallback
     
+    # v2804k: if listed_front_vols extends beyond 1.0 (whites+reds),
+    # pre-set quarter vols for 1.25-2.0 before the solver runs.
+    if listed_front_vols:
+        for _lft in sorted(listed_front_vols.keys()):
+            if _lft > 1.0 + 1e-6:
+                caplet_vols[round(_lft, 2)] = listed_front_vols[_lft]
+
     # === STEP 2: BOOTSTRAP EACH 1Y GAP SEPARATELY ===
     # Helper: price ONLY caplets in a specific gap
     def price_gap_caplets(vol_bp, gap_start_y, gap_end_y):
@@ -12927,6 +12941,15 @@ def caps_floors_tab(vol_mode: str):
                     if (_lf_pack_now == "both" and _listed_2y_stradd
                             and _listed_2y_stradd > _listed_1y_stradd):
                         _cfs_td.setdefault("1y1y", {})["cfs_straddle"] = _listed_2y_stradd - _listed_1y_stradd
+                    # v2804k: pass SR3 front vols INTO the solver so it
+                    # calibrates with the correct listed front from the start.
+                    # No post-build overlay needed — solver sees the real vols.
+                    _cutoff = 2.0 if (_lf_pack_now == "both"
+                                      and _listed_2y_stradd
+                                      and _listed_2y_stradd > 0) else 1.0
+                    # Only pass front vols up to cutoff
+                    _front = {k: v for k, v in _listed_term_curve.items()
+                              if k <= _cutoff + 1e-6} if _listed_term_curve else None
                     _built = build_caplet_vol_curve(
                         ccy, atm, None,
                         spread_3m1y=spreads_dict["3m1y"],
@@ -12938,21 +12961,15 @@ def caps_floors_tab(vol_mode: str):
                         spread_7y3y=spreads_dict["7y3y"],
                         spread_10y2y=spreads_dict["10y2y"],
                         spread_12y3y=spreads_dict["12y3y"],
+                        listed_front_vols=_front,
                     )
-                    # v2604y: overlay SR3 listed per-quarter vols on
-                    # the front.  Whites only = 0→1Y, whites+reds =
-                    # 0→2Y.  Tail keeps flat vol anchors from wedge
-                    # chain.  The listed front IS the whole point of
-                    # "Listed bootstrap" — v2604s removed the overlay
-                    # too aggressively (it was the post-cutoff overlay
-                    # that was corrupting anchors, not the front).
-                    if _built and _listed_term_curve:
-                        _cutoff = 2.0 if (_lf_pack_now == "both"
-                                          and _listed_2y_stradd
-                                          and _listed_2y_stradd > 0) else 1.0
-                        for _lt in sorted(_listed_term_curve.keys()):
-                            if _lt < _cutoff - 1e-6:
-                                _built[round(_lt, 2)] = _listed_term_curve[_lt]
+                    # v2804k: after solver+CubicSpline, restore ALL listed
+                    # front vols including cutoff point.  The solver saw them
+                    # for correct calibration, but CubicSpline may have
+                    # deviated at non-integer quarters (1.25, 1.50, 1.75).
+                    if _built and _front:
+                        for _lt, _lv in _front.items():
+                            _built[round(_lt, 2)] = _lv
                     return _built
                 finally:
                     if _save_3m1y:
