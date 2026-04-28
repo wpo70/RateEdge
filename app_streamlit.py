@@ -20342,46 +20342,65 @@ def rv_tab():
                     })
 
             # ── Calendar Vol Spreads ──────────────────────────────────
+            # v2804l: sqrt(T) fair ratio was WRONG for normal vol. Normal
+            # vol (bp/annum) is roughly flat across expiry — fair ratio ≈ 1.0.
+            # sqrt(T) is a PREMIUM relationship, not vol. Using it made every
+            # surface look 60%+ rich on the front. Now uses:
+            # 1. Historical ratio from vol_history (if available, via _fv_stats)
+            # 2. Empirical fair ratio: slight inversion is normal (front > back
+            #    from event risk / gamma decay), so fair ≈ 1.02-1.05 for
+            #    1m/3m, tapering to 1.0 for longer pairs.
             if atm is not None:
+                _PAIR_FAIR = {
+                    ("1m","3m"):  1.03,  # front typically 3% above 3m
+                    ("3m","6m"):  1.02,  # slight inversion normal
+                    ("6m","1y"):  1.01,
+                    ("1y","2y"):  1.00,  # longer pairs roughly flat
+                }
                 for tn in [2, 5, 10]:
                     for short_e, long_e in [("1m","3m"),("3m","6m"),("6m","1y"),("1y","2y")]:
                         v_short = get_matrix_value(atm, short_e, float(tn))
                         v_long  = get_matrix_value(atm, long_e,  float(tn))
                         if v_short and v_long and v_long > 0:
                             ratio = v_short / v_long
-                            import re as _re
-                            def _e2y(e):
-                                m = _re.match(r"(\d+)(m|y)", e)
-                                if m:
-                                    return float(m.group(1))/12 if m.group(2)=="m" else float(m.group(1))
-                                return 1.0
-                            fair_ratio = math.sqrt(_e2y(short_e) / _e2y(long_e))
-                            rich_cheap = ratio / fair_ratio
-                            # Use tighter thresholds — sqrt(T) is aggressive benchmark
-                            # Require 20% rich/cheap AND score proportional to excess only
-                            if rich_cheap > 1.20:
-                                _excess = rich_cheap - 1.20  # only score the excess above 20%
+
+                            # Try historical fair from fwd vol stats
+                            _fv_key = (short_e, long_e, f"{tn}Y")
+                            _fv = _fv_stats.get(_fv_key) if _fv_stats else None
+                            if _fv and _fv.get("n", 0) >= 10:
+                                fair_ratio = _fv["mean"]
+                                _fair_std = _fv.get("std", 0.03)
+                                z_cal = (ratio - fair_ratio) / max(_fair_std, 0.01)
+                                fair_desc = f"hist mean {fair_ratio:.3f} (n={_fv['n']})"
+                            else:
+                                fair_ratio = _PAIR_FAIR.get((short_e, long_e), 1.0)
+                                z_cal = (ratio - fair_ratio) / 0.05  # assume 5% normal std
+                                fair_desc = f"empirical fair {fair_ratio:.2f}x"
+
+                            # Only flag if >2σ from fair
+                            if z_cal > 2.0:
                                 ideas.append({
                                     "Type": "Calendar Vol Spread",
                                     "Structure": f"Sell {short_e} / Buy {long_e} ≈{tn}Y",
-                                    "Signal": f"Ratio {ratio:.2f}x vs fair {fair_ratio:.2f}x ({(rich_cheap-1)*100:.0f}% rich)",
+                                    "Signal": f"Ratio {ratio:.3f}x vs {fair_desc} (z={z_cal:+.1f}σ)",
                                     "Trade": f"Sell {short_e}≈{tn}Y straddle, Buy {long_e}≈{tn}Y straddle (vega-neutral)",
-                                    "Rationale": f"{short_e} vol {(rich_cheap-1)*100:.0f}% rich vs {long_e} on sqrt(T) basis. "
-                                                 f"Sell expensive short-dated gamma, buy cheap long-dated vega.",
+                                    "Rationale": f"{short_e} vol {v_short:.1f}bp vs {long_e} vol {v_long:.1f}bp — "
+                                                 f"ratio {ratio:.3f}x is {z_cal:.1f}σ rich vs {fair_desc}. "
+                                                 f"Sell expensive near-dated gamma, buy cheap vega.",
                                     "Risk": "Short near-term gamma; large move hurts",
-                                    "Score": min(_excess * 200, 60),  # max 60 from this signal alone
+                                    "Score": min(z_cal * 15, 70),
                                 })
-                            elif rich_cheap < 0.85:
-                                _excess = 0.85 - rich_cheap
+                            elif z_cal < -2.0:
                                 ideas.append({
                                     "Type": "Calendar Vol Spread",
                                     "Structure": f"Buy {short_e} / Sell {long_e} ≈{tn}Y",
-                                    "Signal": f"Ratio {ratio:.2f}x vs fair {fair_ratio:.2f}x ({(1-rich_cheap)*100:.0f}% cheap)",
+                                    "Signal": f"Ratio {ratio:.3f}x vs {fair_desc} (z={z_cal:+.1f}σ)",
                                     "Trade": f"Buy {short_e}≈{tn}Y straddle, Sell {long_e}≈{tn}Y straddle",
-                                    "Rationale": f"{short_e} vol {(1-rich_cheap)*100:.0f}% cheap vs {long_e}. "
+                                    "Rationale": f"{short_e} vol {v_short:.1f}bp vs {long_e} vol {v_long:.1f}bp — "
+                                                 f"ratio {ratio:.3f}x is {abs(z_cal):.1f}σ cheap vs {fair_desc}. "
                                                  f"Buy cheap near-dated gamma vs expensive long-dated vol.",
                                     "Risk": "Negative carry on long-dated short",
-                                    "Score": min(_excess * 200, 60),
+                                    "Score": min(abs(z_cal) * 15, 70),
                                 })
 
             # ── USD-SPECIFIC IDEAS ──────────────────────────────────────
