@@ -20789,34 +20789,33 @@ def rv_tab():
                             _matrix_tenors.append(float(len(_matrix_tenors) + 1))
 
                 def _matrix_rate_at(exp_y: float, tenor_y: float) -> float | None:
-                    """Interpolate fwd matrix at (expiry_yf_from_today, tenor_y).
-                    exp_y is already the year fraction from today   —   no date conversion needed here."""
+                    """Interpolate fwd matrix at (expiry_yf_from_today, tenor_y)."""
                     if not _has_matrix:
                         return None
                     if len(_matrix_exp_yf) < 2 or len(_matrix_tenors) < 2:
                         return None
                     _ey = max(exp_y, _matrix_exp_yf[0])
                     try:
-                        from scipy.interpolate import CubicSpline as _CS
-                        # Interpolate across tenor columns first, then spline across expiry axis
+                        # Convert columns to numeric, coerce errors to NaN
                         if tenor_y <= _matrix_tenors[0]:
-                            rates = _fwd_matrix_ss[_fwd_matrix_ss.columns[0]].values.astype(float)
+                            rates = pd.to_numeric(_fwd_matrix_ss.iloc[:, 0], errors='coerce').values
                         elif tenor_y >= _matrix_tenors[-1]:
-                            rates = _fwd_matrix_ss[_fwd_matrix_ss.columns[-1]].values.astype(float)
+                            rates = pd.to_numeric(_fwd_matrix_ss.iloc[:, -1], errors='coerce').values
                         else:
                             col_idx = int(np.searchsorted(_matrix_tenors, tenor_y))
-                            col_lo  = _fwd_matrix_ss.columns[col_idx - 1]
-                            col_hi  = _fwd_matrix_ss.columns[col_idx]
                             w = (tenor_y - _matrix_tenors[col_idx-1]) / (_matrix_tenors[col_idx] - _matrix_tenors[col_idx-1])
-                            rates = ((1-w) * _fwd_matrix_ss[col_lo].values +
-                                        w  * _fwd_matrix_ss[col_hi].values).astype(float)
-                        cs = _CS(_matrix_exp_yf, rates, extrapolate=True)
-                        return float(cs(_ey))
+                            lo = pd.to_numeric(_fwd_matrix_ss.iloc[:, col_idx-1], errors='coerce').values
+                            hi = pd.to_numeric(_fwd_matrix_ss.iloc[:, col_idx], errors='coerce').values
+                            rates = (1-w) * lo + w * hi
+                        # Drop NaN rows for interpolation
+                        _valid = ~np.isnan(rates)
+                        if _valid.sum() < 2:
+                            return None
+                        _eyf = np.array(_matrix_exp_yf)[_valid]
+                        _rv = rates[_valid]
+                        return float(np.interp(_ey, _eyf, _rv))
                     except Exception:
-                        return float(np.interp(_ey, _matrix_exp_yf,
-                                   [float(np.interp(tenor_y, _matrix_tenors,
-                                    [float(_fwd_matrix_ss[c].iloc[i]) for c in _fwd_matrix_ss.columns]))
-                                    for i in range(len(_matrix_exp_yf))]))
+                        return None
 
                 # ── UI ─────────────────────────────────────────────────────
                 _src_col, _notional_col = st.columns([5, 2])
