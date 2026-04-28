@@ -3366,93 +3366,85 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         initial_vol_guess = max(gap_premium * 1.5, 50.0)
         caplet_vols[result_mat] = initial_vol_guess
     
-    # === STEP 3: SOLVE FORWARD BUCKET VOLS (sequential) ===
-    # v2604ae: Each anchor gets the FORWARD vol for its year-bucket
-    # (prev_anchor→anchor) that reproduces the cumulative premium.
-    # Forward vols ≈ marginal/spot vols (same concept as SR3 per-quarter
-    # vols), so the SR3 overlay on the front transitions smoothly into
-    # the tail without the 10bp cliff that flat vols caused.
-    anchor_mats_to_solve = sorted([m for m in cumulative_leg_prems.keys() if m > 1.0])
-
-    # Build solved quarter grid starting from the 1Y front
-    solved_quarters = {}
-    for t in [0.25, 0.5, 0.75, 1.0]:
-        solved_quarters[t] = caplet_vols.get(t, caplet_vols.get(1.0, 75.0))
-
-    prev_anchor = 1.0
-    for mat in anchor_mats_to_solve:
-        target = cumulative_leg_prems[mat]
-
-        def _fwd_err(trial_vol, _m=mat, _pa=prev_anchor):
-            temp_curve = dict(solved_quarters)
-            _t = round(_pa + 0.25, 2)
-            while _t <= _m + 1e-6:
-                temp_curve[round(_t, 2)] = max(trial_vol, 1.0)
-                _t += 0.25
-            return price_caplets_with_vol_curve(ccy, _m, temp_curve, notional_mm=1.0) - target
-
-        try:
-            solved = opt.brentq(_fwd_err, 1.0, 300.0, xtol=0.01)
-        except Exception:
-            solved = caplet_vols.get(mat, 80.0)
-
-        caplet_vols[mat] = max(solved, 1.0)
-        # Lock in quarter vols for next iteration
-        _t = round(prev_anchor + 0.25, 2)
-        while _t <= mat + 1e-6:
-            solved_quarters[round(_t, 2)] = max(solved, 1.0)
-            _t += 0.25
-        prev_anchor = mat
+    # === STEP 3: SOLVE FOR ALL ANCHOR VOLS SIMULTANEOUSLY ===
+    # Must solve all at once because cubic spline shape depends on ALL anchors
+    # v2804g: RESTORED from v2604w. The forward bucket solver + iterative
+    # CubicSpline approach was wrong — it couldn't converge because adjusting
+    # one anchor distorts all others through the spline. least_squares handles
+    # the cross-dependencies correctly.
     
-    # v2804e: CubicSpline through solved anchor vols, then iteratively
-    # adjust anchors so that repricing FROM the splined curve reproduces
-    # the target premium at each tenor.  This is what AUD does — the
-    # solver and spline work together.
+    def price_with_interp_curve(anchor_vols_array):
+        """
+        Given vols at anchor points, cubic spline interpolate and price all maturities.
+        Returns array of pricing errors vs targets.
+        """
+        # Build vol dict from array
+        temp_vols = dict(caplet_vols)  # Start with 1Y vols
+        anchor_mats_to_solve = sorted([m for m in cumulative_leg_prems.keys() if m > 1.0])
+        
+        for i, mat in enumerate(anchor_mats_to_solve):
+            temp_vols[mat] = max(anchor_vols_array[i], 1.0)
+        
+        # Cubic spline - only use integer anchors
+        all_anchor_mats = np.array(sorted([m for m in temp_vols.keys() if m >= 1.0 and m == int(m)]))
+        all_anchor_vols = np.array([temp_vols[m] for m in all_anchor_mats])
+        
+        if len(all_anchor_mats) < 2:
+            return np.array([0.0] * len(anchor_mats_to_solve))
+        
+        cs = CubicSpline(all_anchor_mats, all_anchor_vols)
+        
+        # Build interpolated curve
+        interp_curve = {}
+        for t in [0.25, 0.5, 0.75, 1.0]:
+            interp_curve[t] = temp_vols.get(t, temp_vols.get(1.0, 75.0))
+        
+        t = 1.25
+        max_mat = all_anchor_mats[-1]
+        while t <= max_mat + 1e-6:
+            interp_curve[round(t, 2)] = max(float(cs(t)), 1.0)
+            t += 0.25
+        
+        # Price each maturity using SHARED pricing function
+        errors = []
+        for check_mat in anchor_mats_to_solve:
+            target_prem = cumulative_leg_prems[check_mat]
+            actual_prem = price_caplets_with_vol_curve(ccy, check_mat, interp_curve, notional_mm=1.0)
+            errors.append(actual_prem - target_prem)
+        
+        return np.array(errors)
+    
+    # Solve for all anchor vols simultaneously
+    anchor_mats_to_solve = sorted([m for m in cumulative_leg_prems.keys() if m > 1.0])
+    
+    if len(anchor_mats_to_solve) > 0:
+        initial_guess = np.array([caplet_vols[m] for m in anchor_mats_to_solve])
+        
+        from scipy.optimize import least_squares
+        try:
+            result = least_squares(price_with_interp_curve, initial_guess,
+                                   ftol=1e-6, xtol=1e-6, gtol=1e-6,
+                                   max_nfev=500)
+            
+            if result.success:
+                for i, mat in enumerate(anchor_mats_to_solve):
+                    caplet_vols[mat] = max(result.x[i], 1.0)
+        except:
+            pass
+    
+    # Final cubic spline interpolation with solved anchors
     anchor_mats = np.array(sorted([m for m in caplet_vols.keys() if m >= 1.0 and m == int(m)]))
     anchor_vols = np.array([caplet_vols[m] for m in anchor_mats])
     
     if len(anchor_mats) >= 2:
-        # Iterative adjustment: solve → spline → reprice → adjust → repeat
-        for _iteration in range(8):
-            cs = CubicSpline(anchor_mats, anchor_vols)
-            
-            # Build interpolated curve
-            _splined = {}
-            for t in [0.25, 0.5, 0.75, 1.0]:
-                _splined[t] = caplet_vols.get(t, caplet_vols.get(1.0, 75.0))
-            t = 1.25
-            max_mat = anchor_mats[-1]
-            while t <= max_mat + 1e-6:
-                _splined[round(t, 2)] = max(float(cs(t)), 1.0)
-                t += 0.25
-            
-            # Check each anchor — does repricing from splined curve match target?
-            _max_err = 0.0
-            for mat in anchor_mats:
-                if mat <= 1.0:
-                    continue
-                target = cumulative_leg_prems.get(mat)
-                if target is None:
-                    continue
-                actual = price_caplets_with_vol_curve(ccy, mat, _splined, notional_mm=1.0)
-                err = actual - target
-                _max_err = max(_max_err, abs(err))
-                if abs(err) > 0.01:
-                    # Adjust this anchor vol to compensate
-                    idx = list(anchor_mats).index(mat)
-                    # Scale adjustment: if repriced too high, lower the vol
-                    _adj = -err * 0.3  # damped Newton step in vol space
-                    anchor_vols[idx] = max(anchor_vols[idx] + _adj, 1.0)
-            
-            if _max_err < 0.01:
-                break  # Converged
-        
-        # Final spline with converged anchors
         cs = CubicSpline(anchor_mats, anchor_vols)
+        
         caplet_vols_final = {}
         for t in [0.25, 0.5, 0.75, 1.0]:
             caplet_vols_final[t] = caplet_vols.get(t, caplet_vols.get(1.0, 75.0))
+        
         t = 1.25
+        max_mat = anchor_mats[-1]
         while t <= max_mat + 1e-6:
             caplet_vols_final[round(t, 2)] = max(float(cs(t)), 1.0)
             t += 0.25
