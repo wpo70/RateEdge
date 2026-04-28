@@ -20770,8 +20770,12 @@ def rv_tab():
                     return (d - val_date).days / 365.0
 
                 # ── Build forward rate lookup from matrix ──────────────────
-                _fwd_matrix_ss = st.session_state.get("fwd_matrix", {}).get("AUD")
+                if ccy == "USD":
+                    _fwd_matrix_ss = st.session_state.get("usd_fwd_matrix", {}).get("SOFR OIS")
+                else:
+                    _fwd_matrix_ss = st.session_state.get("fwd_matrix", {}).get(ccy)
                 _has_matrix = _fwd_matrix_ss is not None and not _fwd_matrix_ss.empty
+                _dflt_rate = _par_rate(5.0) if curve is not None else 3.5
 
                 # Matrix expiry labels and their year fractions
                 _matrix_exp_labels = list(_fwd_matrix_ss.index) if _has_matrix else []
@@ -20814,7 +20818,7 @@ def rv_tab():
                     _pnl_src = st.radio("Rate source", ["Manual shift (bp)", "Fwd Curve from Matrix"],
                                         horizontal=True, key="rv_pnl_src")
                 with _notional_col:
-                    _notional_mm = st.number_input("Notional (AUD mm)", min_value=1.0, max_value=5000.0,
+                    _notional_mm = st.number_input(f"Notional ({ccy} mm)", min_value=1.0, max_value=5000.0,
                                                    value=100.0, step=25.0, key="rv_pnl_notional")
 
                 if _pnl_src == "Manual shift (bp)":
@@ -20829,7 +20833,7 @@ def rv_tab():
 
                     def _get_move_for_idea(exp_y, tenor_y, val_date=None):
                         """Manual: shift is same for all."""
-                        spot = (_par_rate(tenor_y) or 4.5) if curve is not None else 4.5
+                        spot = (_par_rate(tenor_y) or _dflt_rate) if curve is not None else _dflt_rate
                         return _manual_shift_bp, spot, spot + _manual_shift_bp / 100
 
                     _val_date_used = None
@@ -20838,7 +20842,7 @@ def rv_tab():
                 else:  # Fwd Curve from Matrix
                     if not _has_matrix:
                         st.warning("No fwd matrix loaded   —   go to Rate/Vol Matrix tab and click 'Generate All Matrices' first.")
-                        _get_move_for_idea = lambda e, t, d=None: (0.0, 4.5, 4.5)
+                        _get_move_for_idea = lambda e, t, d=None: (0.0, _dflt_rate, _dflt_rate)
                         _val_date_used = None
                         _show_fwd_curve = False
                     else:
@@ -20899,7 +20903,7 @@ def rv_tab():
 
                         def _get_move_for_idea(exp_y, tenor_y, val_date=None):
                             """Fwd rate at (val_date offset + trade expiry), vs today's spot."""
-                            spot = (_par_rate(tenor_y) or 4.5) if curve is not None else 4.5
+                            spot = (_par_rate(tenor_y) or _dflt_rate) if curve is not None else _dflt_rate
                             # Total expiry from today = time to val_date + trade's own expiry
                             total_exp_y = _val_exp_y + exp_y
                             fwd = _matrix_rate_at(total_exp_y, tenor_y)
@@ -20944,7 +20948,7 @@ def rv_tab():
                             _short_y = max(tenor_y - 8, 2.0)
                             _, _, _fwd_short = _get_move_for_idea(exp_y, _short_y, _val_date_used)
                             _, _, _fwd_long  = _get_move_for_idea(exp_y, tenor_y, _val_date_used)
-                            _slope_move = ((_fwd_long - (_par_rate(tenor_y) or 4.5)) -
+                            _slope_move = ((_fwd_long - (_par_rate(tenor_y) or _dflt_rate)) -
                                            (_fwd_short - (_par_rate(_short_y) or 4.0))) * 100
                             _est_pnl = -_slope_move * _notional * 0.0001 * tenor_y / 100
                             _basis += f" | slope {_slope_move:+.1f}bp"
@@ -20952,7 +20956,7 @@ def rv_tab():
                             _short_y = max(tenor_y - 8, 2.0)
                             _, _, _fwd_short = _get_move_for_idea(exp_y, _short_y, _val_date_used)
                             _, _, _fwd_long  = _get_move_for_idea(exp_y, tenor_y, _val_date_used)
-                            _slope_move = ((_fwd_long - (_par_rate(tenor_y) or 4.5)) -
+                            _slope_move = ((_fwd_long - (_par_rate(tenor_y) or _dflt_rate)) -
                                            (_fwd_short - (_par_rate(_short_y) or 4.0))) * 100
                             _est_pnl = _slope_move * _notional * 0.0001 * tenor_y / 100
                             _basis += f" | slope {_slope_move:+.1f}bp"
