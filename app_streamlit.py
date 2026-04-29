@@ -9242,7 +9242,8 @@ def _fwd_analysis_tab_usd():
 
     # ── Sub-tab buttons ────────────────────────────────────────────
     _an_tab_names = ["IRS Spreads", "IRS Butterflies", "Fwd-Fwd Rates",
-                     "SOFR-FF Outright", "SOFR-FF Fwd-Fwd", "SOFR-FF Spreads", "SOFR-FF Butterflies"]
+                     "SOFR-FF Outright", "SOFR-FF Fwd-Fwd", "SOFR-FF Spreads", "SOFR-FF Butterflies",
+                     "Fwd Spread RV"]
     _an_active = st.session_state.get("_an_active_tab_usd", 0)
     _an_cols = st.columns(len(_an_tab_names))
     for _ai, _an in enumerate(_an_tab_names):
@@ -9790,6 +9791,154 @@ def _fwd_analysis_tab_usd():
             _fig_layout(_fig_bbfly, _cut_bbfly, "SOFR-FF Fly (bp)")
             st.plotly_chart(_fig_bbfly, use_container_width=True)
             _chart_tools_usd(_fig_bbfly, _bbfly_active, "bfly_bs", "bp")
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 8: FWD SPREAD RV (from fwd_matrix_history)
+    # ─────────────────────────────────────────────────────────────
+    if _an_active == 7:
+        st.markdown("#### Forward Spread RV — USD")
+        st.caption("Forward rate pairs, curve steepness z-scores & percentiles from stored forward matrices.")
+
+        _fwd_expiries = ["1m", "3m", "6m", "1y", "2y", "3y", "5y", "7y", "10y"]
+        _fwd_tenors = ["1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "15Y", "20Y", "30Y"]
+
+        _fs_c1, _fs_c2, _fs_c3, _fs_c4 = st.columns([1, 1, 1, 1])
+        with _fs_c1:
+            _fs_fr = st.selectbox("Curve", ["SOFR", "FEDFUNDS"], key="fwd_rv_fr")
+        with _fs_c2:
+            _fs_tenor = st.selectbox("Tenor", _fwd_tenors, index=0, key="fwd_rv_tenor")
+        with _fs_c3:
+            _fs_exp1 = st.selectbox("Expiry A", _fwd_expiries, index=3, key="fwd_rv_exp1")
+        with _fs_c4:
+            _fs_exp2 = st.selectbox("Expiry B", _fwd_expiries, index=4, key="fwd_rv_exp2")
+
+        _fs_yr = st.slider("History (years)", 1, 8, 3, key="fwd_rv_yr")
+        _fc1, _fc2 = st.columns(2)
+        with _fc1:
+            _fs_show_spread = st.checkbox("Show spread (B − A)", True, key="fwd_rv_spread")
+        with _fc2:
+            _fs_show_zscore = st.checkbox("Show rolling Z-score", True, key="fwd_rv_zscore")
+
+        @st.cache_data(ttl=300)
+        def _load_fwd_matrix_history_usd(_fr, _years):
+            try:
+                _conn = get_db_connection()
+                if not _conn: return {}
+                _cur = _conn.cursor()
+                _cut = (pd.Timestamp.now() - pd.DateOffset(years=_years)).strftime("%Y-%m-%d")
+                _cur.execute("""
+                    SELECT date, matrix FROM fwd_matrix_history
+                    WHERE currency='USD' AND floating_rate=%s AND date >= %s
+                    ORDER BY date
+                """, (_fr, _cut))
+                _rows = _cur.fetchall()
+                _cur.close(); _conn.close()
+                import json as _json_fmh
+                result = {}
+                for _d, _m in _rows:
+                    try:
+                        _mdata = _m if isinstance(_m, dict) else _json_fmh.loads(_m)
+                        result[str(_d)[:10]] = _mdata
+                    except: pass
+                return result
+            except: return {}
+
+        _fwd_data = _load_fwd_matrix_history_usd(_fs_fr, _fs_yr)
+
+        if not _fwd_data:
+            st.info(f"No forward matrix history for USD {_fs_fr}. Backfill from **RV tab → Curve RV → Backfill**.")
+        else:
+            def _extract_fwd_series(data, expiry, tenor):
+                dates, vals = [], []
+                for d, m in sorted(data.items()):
+                    for row in m.get("values", []):
+                        if str(row.get("Expiry", "")).lower() == expiry.lower():
+                            v = row.get(tenor)
+                            if v is not None:
+                                dates.append(pd.Timestamp(d))
+                                vals.append(float(v))
+                            break
+                if not dates: return None
+                return pd.Series(vals, index=dates, name=f"{expiry}{tenor.lower()}")
+
+            _s1 = _extract_fwd_series(_fwd_data, _fs_exp1, _fs_tenor)
+            _s2 = _extract_fwd_series(_fwd_data, _fs_exp2, _fs_tenor)
+            _label_a = f"{_fs_exp1}{_fs_tenor.lower()}"
+            _label_b = f"{_fs_exp2}{_fs_tenor.lower()}"
+
+            if _s1 is not None or _s2 is not None:
+                _fig_fs = go.Figure()
+                if not _fs_show_spread:
+                    if _s1 is not None:
+                        _fig_fs.add_trace(go.Scatter(x=_s1.index, y=_s1.values, mode="lines",
+                            name=_label_a, line=dict(color="#3b82f6", width=1.8)))
+                    if _s2 is not None:
+                        _fig_fs.add_trace(go.Scatter(x=_s2.index, y=_s2.values, mode="lines",
+                            name=_label_b, line=dict(color="#ef4444", width=1.8)))
+                    _fig_fs.update_layout(
+                        title=f"USD {_fs_fr}: {_label_a} vs {_label_b}",
+                        yaxis_title="Rate (%)", template="plotly_dark",
+                        height=420, margin=dict(l=60,r=20,t=40,b=40),
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                    st.plotly_chart(_fig_fs, use_container_width=True)
+                else:
+                    if _s1 is not None and _s2 is not None:
+                        _spread = (_s2 - _s1).dropna() * 100
+                        if not _spread.empty:
+                            _fig_fs.add_trace(go.Scatter(x=_spread.index, y=_spread.values, mode="lines",
+                                name=f"{_label_b} − {_label_a}", line=dict(color="#3b82f6", width=1.8)))
+                            _mean = _spread.mean(); _std = _spread.std()
+                            _fig_fs.add_hline(y=_mean, line=dict(color="#94a3b8", dash="dash", width=1),
+                                annotation_text=f"Mean: {_mean:.1f}bp")
+                            _fig_fs.add_hline(y=_mean + _std, line=dict(color="#22c55e", dash="dot", width=0.8),
+                                annotation_text=f"+1σ: {_mean+_std:.1f}bp")
+                            _fig_fs.add_hline(y=_mean - _std, line=dict(color="#ef4444", dash="dot", width=0.8),
+                                annotation_text=f"−1σ: {_mean-_std:.1f}bp")
+                            _fig_fs.update_layout(
+                                title=f"USD {_fs_fr}: {_label_b} − {_label_a} (bp)",
+                                yaxis_title="Spread (bp)", template="plotly_dark",
+                                height=420, margin=dict(l=60,r=20,t=40,b=40),
+                                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                            st.plotly_chart(_fig_fs, use_container_width=True)
+
+                            # Stats table
+                            _current = _spread.iloc[-1]
+                            _z = (_current - _mean) / _std if _std > 0 else 0
+                            _pctl = ((_spread < _current).sum() / len(_spread)) * 100
+                            _stats_df = pd.DataFrame({
+                                "Metric": ["Current", "Mean", "Std Dev", "Z-Score", "Percentile",
+                                           "Min", "Max", "1Y Min", "1Y Max"],
+                                "Value": [
+                                    f"{_current:.1f}bp", f"{_mean:.1f}bp", f"{_std:.1f}bp",
+                                    f"{_z:.2f}", f"{_pctl:.0f}%",
+                                    f"{_spread.min():.1f}bp", f"{_spread.max():.1f}bp",
+                                    f"{_spread.tail(252).min():.1f}bp" if len(_spread) >= 252 else "—",
+                                    f"{_spread.tail(252).max():.1f}bp" if len(_spread) >= 252 else "—"
+                                ]
+                            })
+                            st.dataframe(_stats_df, hide_index=True, use_container_width=False)
+
+                            # Rolling Z-score
+                            if _fs_show_zscore and _std > 0:
+                                _roll_z = (_spread - _spread.rolling(63).mean()) / _spread.rolling(63).std()
+                                _roll_z = _roll_z.dropna()
+                                if not _roll_z.empty:
+                                    _fig_z = go.Figure()
+                                    _fig_z.add_trace(go.Scatter(x=_roll_z.index, y=_roll_z.values,
+                                        mode="lines", name="63d Rolling Z", line=dict(color="#a855f7", width=1.5)))
+                                    _fig_z.add_hline(y=0, line=dict(color="#64748b", width=1))
+                                    _fig_z.add_hline(y=2, line=dict(color="#ef4444", dash="dot", width=0.8))
+                                    _fig_z.add_hline(y=-2, line=dict(color="#22c55e", dash="dot", width=0.8))
+                                    _fig_z.update_layout(
+                                        title="Rolling 63d Z-Score", yaxis_title="Z-Score",
+                                        template="plotly_dark", height=300,
+                                        margin=dict(l=60,r=20,t=40,b=40),
+                                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                                    st.plotly_chart(_fig_z, use_container_width=True)
+                        else:
+                            st.warning("No overlapping dates for spread calculation.")
+                    else:
+                        st.warning(f"Need both {_label_a} and {_label_b} in history.")
 
 
 def _build_aud_par_splines():
@@ -18760,6 +18909,7 @@ def rv_tab():
     _rv_tab_names = [
         "📊 Vol Surface RV",
         "📈 Curve RV & Spread Analysis",
+        "🌐 X-Ccy RV",
         "💡 Swaption Trade Ideas",
         "💡 Cap/Floor Trade Ideas",
         "🔮 What-If Scenarios",
@@ -19724,148 +19874,6 @@ def rv_tab():
             except:
                 pass
 
-        # ── Forward spread time series ──
-        _fwd_expiries = ["1m", "3m", "6m", "1y", "2y", "3y", "5y", "7y", "10y"]
-        _fwd_tenors = ["1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "15Y", "20Y", "30Y"]
-
-        _fs_c1, _fs_c2, _fs_c3, _fs_c4 = st.columns([1, 1, 1, 1])
-        with _fs_c1:
-            _fs_fr = st.selectbox("Curve", _fsh_fr_opts, key="rv_fwd_fs_fr")
-        with _fs_c2:
-            _fs_tenor = st.selectbox("Tenor", _fwd_tenors, index=0, key="rv_fwd_fs_tenor")
-        with _fs_c3:
-            _fs_exp1 = st.selectbox("Expiry A", _fwd_expiries, index=3, key="rv_fwd_fs_exp1")
-        with _fs_c4:
-            _fs_exp2 = st.selectbox("Expiry B", _fwd_expiries, index=4, key="rv_fwd_fs_exp2")
-
-        _fs_yr = st.slider("History (years)", 1, 8, 3, key="rv_fwd_fs_yr")
-        _fs_show_spread = st.checkbox("Show spread (B − A)", True, key="rv_fwd_fs_spread")
-        _fs_show_zscore = st.checkbox("Show Z-score", False, key="rv_fwd_fs_zscore")
-
-        @st.cache_data(ttl=300)
-        def _load_fwd_matrix_history(_ccy, _fr, _years):
-            try:
-                _conn = get_db_connection()
-                if not _conn:
-                    return {}
-                _cur = _conn.cursor()
-                _cut = (pd.Timestamp.now() - pd.DateOffset(years=_years)).strftime("%Y-%m-%d")
-                _cur.execute("""
-                    SELECT date, matrix FROM fwd_matrix_history
-                    WHERE currency=%s AND floating_rate=%s AND date >= %s
-                    ORDER BY date
-                """, (_ccy, _fr, _cut))
-                _rows = _cur.fetchall()
-                _cur.close(); _conn.close()
-                import json as _json_fmh
-                result = {}
-                for _d, _m in _rows:
-                    try:
-                        _mdata = _m if isinstance(_m, dict) else _json_fmh.loads(_m)
-                        result[str(_d)[:10]] = _mdata
-                    except:
-                        pass
-                return result
-            except:
-                return {}
-
-        _fwd_data = _load_fwd_matrix_history(ccy, _fs_fr, _fs_yr)
-
-        if not _fwd_data:
-            st.info(f"No forward matrix history for {ccy} {_fs_fr}. Use **Backfill** above to generate.")
-        else:
-            def _extract_fwd_series(data, expiry, tenor):
-                dates, vals = [], []
-                for d, m in sorted(data.items()):
-                    for row in m.get("values", []):
-                        if str(row.get("Expiry", "")).lower() == expiry.lower():
-                            v = row.get(tenor)
-                            if v is not None:
-                                dates.append(pd.Timestamp(d))
-                                vals.append(float(v))
-                            break
-                if not dates:
-                    return None
-                return pd.Series(vals, index=dates, name=f"{expiry}{tenor.lower()}")
-
-            _s1 = _extract_fwd_series(_fwd_data, _fs_exp1, _fs_tenor)
-            _s2 = _extract_fwd_series(_fwd_data, _fs_exp2, _fs_tenor)
-            _label_a = f"{_fs_exp1}{_fs_tenor.lower()}"
-            _label_b = f"{_fs_exp2}{_fs_tenor.lower()}"
-
-            if _s1 is not None or _s2 is not None:
-                _fig_fs = go.Figure()
-                if not _fs_show_spread:
-                    if _s1 is not None:
-                        _fig_fs.add_trace(go.Scatter(x=_s1.index, y=_s1.values, mode="lines",
-                            name=_label_a, line=dict(color="#3b82f6", width=1.8)))
-                    if _s2 is not None:
-                        _fig_fs.add_trace(go.Scatter(x=_s2.index, y=_s2.values, mode="lines",
-                            name=_label_b, line=dict(color="#ef4444", width=1.8)))
-                    _fig_fs.update_layout(
-                        title=f"{ccy} {_fs_fr} Forward Rates: {_label_a} vs {_label_b}",
-                        yaxis_title="Rate (%)", template="plotly_dark",
-                        height=420, margin=dict(l=60,r=20,t=40,b=40),
-                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                    st.plotly_chart(_fig_fs, use_container_width=True)
-                else:
-                    if _s1 is not None and _s2 is not None:
-                        _spread = (_s2 - _s1).dropna() * 100  # bp
-                        if not _spread.empty:
-                            _fig_fs.add_trace(go.Scatter(x=_spread.index, y=_spread.values, mode="lines",
-                                name=f"{_label_b} − {_label_a}", line=dict(color="#3b82f6", width=1.8)))
-                            _mean = _spread.mean()
-                            _std = _spread.std()
-                            _fig_fs.add_hline(y=_mean, line=dict(color="#94a3b8", dash="dash", width=1),
-                                annotation_text=f"Mean: {_mean:.1f}bp")
-                            _fig_fs.add_hline(y=_mean + _std, line=dict(color="#22c55e", dash="dot", width=0.8),
-                                annotation_text=f"+1σ: {_mean+_std:.1f}bp")
-                            _fig_fs.add_hline(y=_mean - _std, line=dict(color="#ef4444", dash="dot", width=0.8),
-                                annotation_text=f"−1σ: {_mean-_std:.1f}bp")
-                            _fig_fs.update_layout(
-                                title=f"{ccy} {_fs_fr} Curve Spread: {_label_b} − {_label_a} (bp)",
-                                yaxis_title="Spread (bp)", template="plotly_dark",
-                                height=420, margin=dict(l=60,r=20,t=40,b=40),
-                                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                            st.plotly_chart(_fig_fs, use_container_width=True)
-
-                            # Stats
-                            _current = _spread.iloc[-1]
-                            _z = (_current - _mean) / _std if _std > 0 else 0
-                            _pctl = ((_spread < _current).sum() / len(_spread)) * 100
-                            _stats_df = pd.DataFrame({
-                                "Metric": ["Current", "Mean", "Std Dev", "Z-Score", "Percentile",
-                                           "Min", "Max", "1Y Min", "1Y Max"],
-                                "Value": [
-                                    f"{_current:.1f}bp", f"{_mean:.1f}bp", f"{_std:.1f}bp",
-                                    f"{_z:.2f}", f"{_pctl:.0f}%",
-                                    f"{_spread.min():.1f}bp", f"{_spread.max():.1f}bp",
-                                    f"{_spread.tail(252).min():.1f}bp" if len(_spread) >= 252 else "—",
-                                    f"{_spread.tail(252).max():.1f}bp" if len(_spread) >= 252 else "—"
-                                ]
-                            })
-                            st.dataframe(_stats_df, hide_index=True, use_container_width=False)
-
-                            if _fs_show_zscore and _std > 0:
-                                _roll_z = (_spread - _spread.rolling(63).mean()) / _spread.rolling(63).std()
-                                _roll_z = _roll_z.dropna()
-                                if not _roll_z.empty:
-                                    _fig_z = go.Figure()
-                                    _fig_z.add_trace(go.Scatter(x=_roll_z.index, y=_roll_z.values,
-                                        mode="lines", name="63d Rolling Z", line=dict(color="#a855f7", width=1.5)))
-                                    _fig_z.add_hline(y=0, line=dict(color="#64748b", width=1))
-                                    _fig_z.add_hline(y=2, line=dict(color="#ef4444", dash="dot", width=0.8))
-                                    _fig_z.add_hline(y=-2, line=dict(color="#22c55e", dash="dot", width=0.8))
-                                    _fig_z.update_layout(
-                                        title="Rolling 63d Z-Score", yaxis_title="Z-Score",
-                                        template="plotly_dark", height=300,
-                                        margin=dict(l=60,r=20,t=40,b=40),
-                                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                                    st.plotly_chart(_fig_z, use_container_width=True)
-                        else:
-                            st.warning("No overlapping dates for spread calculation.")
-                    else:
-                        st.warning(f"Need both {_label_a} and {_label_b} in history to compute spread.")
 
         # ── Save current session matrix to DB ──
         if st.button(f"💾 Save Current {ccy} Forward Matrix to DB", key="rv_fwd_save_current"):
@@ -19884,7 +19892,7 @@ def rv_tab():
                         _save_date = pd.Timestamp.now().strftime("%Y-%m-%d")
                         _save_reset = _curr_fwd.reset_index() if "Expiry" not in _curr_fwd.columns else _curr_fwd
                         _save_json = {"values": _save_reset.to_dict("records")}
-                        _save_fr = _fsh_fr_opts[0]  # default floating rate for currency
+                        _save_fr = _fsh_fr_opts[0]
                         _save_cur.execute("""
                             INSERT INTO fwd_matrix_history (date, currency, floating_rate, matrix)
                             VALUES (%s, %s, %s, %s)
@@ -19897,10 +19905,198 @@ def rv_tab():
             except Exception as _se:
                 st.error(f"Save error: {_se}")
 
-    # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
+    # ─────────────────────────────────────────────────────────────
+    # TAB 2b  —   X-CCY FORWARD SPREAD RV
+    # ─────────────────────────────────────────────────────────────
+    if _rv_active == 2:
+        st.markdown("### 🌐 Cross-Currency Forward Spread RV")
+        st.caption("Compare forward curve steepness across currencies — spread-of-spreads, regression & z-scores.")
+
+        _xccy_all = ["AUD", "USD", "NZD", "EUR", "JPY", "CAD", "GBP", "NOK", "SEK"]
+        _xccy_fr_map = {
+            "AUD": "6M BBSW", "USD": "SOFR", "NZD": "3M BKBM", "EUR": "EURIBOR 6M",
+            "JPY": "JPY TONA", "CAD": "CORRA", "GBP": "SONIA", "NOK": "NOWA", "SEK": "SWESTR",
+        }
+        _xccy_expiries = ["1m", "3m", "6m", "1y", "2y", "3y", "5y", "7y", "10y"]
+        _xccy_tenors = ["1Y", "2Y", "3Y", "5Y", "7Y", "10Y"]
+
+        st.markdown("##### Define Curve Spread")
+        _xc1, _xc2, _xc3 = st.columns([1, 1, 1])
+        with _xc1:
+            _xccy_tenor = st.selectbox("Tenor", _xccy_tenors, index=0, key="xccy_tenor")
+        with _xc2:
+            _xccy_exp_a = st.selectbox("Short Expiry", _xccy_expiries, index=3, key="xccy_exp_a")
+        with _xc3:
+            _xccy_exp_b = st.selectbox("Long Expiry", _xccy_expiries, index=4, key="xccy_exp_b")
+
+        _spread_label = f"{_xccy_exp_b}{_xccy_tenor.lower()} − {_xccy_exp_a}{_xccy_tenor.lower()}"
+        st.caption(f"Curve spread = **{_spread_label}** (steepness measure)")
+
+        st.markdown("##### Select Currencies")
+        _xd1, _xd2 = st.columns(2)
+        with _xd1:
+            _xccy_a = st.selectbox("Currency A", _xccy_all, index=_xccy_all.index(ccy) if ccy in _xccy_all else 0, key="xccy_a")
+        with _xd2:
+            _xccy_b_opts = [c for c in _xccy_all if c != _xccy_a]
+            _xccy_b = st.selectbox("Currency B", _xccy_b_opts, index=0, key="xccy_b")
+
+        _xccy_yr = st.slider("History (years)", 1, 8, 3, key="xccy_yr")
+
+        @st.cache_data(ttl=300)
+        def _load_xccy_fwd_history(_ccy, _fr, _years):
+            try:
+                _conn = get_db_connection()
+                if not _conn: return {}
+                _cur = _conn.cursor()
+                _cut = (pd.Timestamp.now() - pd.DateOffset(years=_years)).strftime("%Y-%m-%d")
+                _cur.execute("""
+                    SELECT date, matrix FROM fwd_matrix_history
+                    WHERE currency=%s AND floating_rate=%s AND date >= %s ORDER BY date
+                """, (_ccy, _fr, _cut))
+                _rows = _cur.fetchall()
+                _cur.close(); _conn.close()
+                import json as _json_xc
+                return {str(d)[:10]: (_json_xc.loads(m) if isinstance(m, str) else m) for d, m in _rows}
+            except:
+                return {}
+
+        def _xccy_extract_spread(data, exp_short, exp_long, tenor):
+            """Extract curve spread time series from fwd_matrix_history data."""
+            dates, vals = [], []
+            for d, m in sorted(data.items()):
+                short_v = long_v = None
+                for row in m.get("values", []):
+                    exp = str(row.get("Expiry", "")).lower()
+                    if exp == exp_short.lower():
+                        short_v = row.get(tenor)
+                    if exp == exp_long.lower():
+                        long_v = row.get(tenor)
+                if short_v is not None and long_v is not None:
+                    dates.append(pd.Timestamp(d))
+                    vals.append((float(long_v) - float(short_v)) * 100)  # bp
+            if not dates: return None
+            return pd.Series(vals, index=dates)
+
+        _fr_a = _xccy_fr_map.get(_xccy_a, "SOFR")
+        _fr_b = _xccy_fr_map.get(_xccy_b, "SOFR")
+        _data_a = _load_xccy_fwd_history(_xccy_a, _fr_a, _xccy_yr)
+        _data_b = _load_xccy_fwd_history(_xccy_b, _fr_b, _xccy_yr)
+
+        _has_a = len(_data_a) > 0
+        _has_b = len(_data_b) > 0
+
+        if not _has_a and not _has_b:
+            st.info(f"No forward matrix history for {_xccy_a} or {_xccy_b}. Backfill from **Curve RV → Backfill**.")
+        else:
+            _spread_a = _xccy_extract_spread(_data_a, _xccy_exp_a, _xccy_exp_b, _xccy_tenor) if _has_a else None
+            _spread_b = _xccy_extract_spread(_data_b, _xccy_exp_a, _xccy_exp_b, _xccy_tenor) if _has_b else None
+
+            # Individual curve spreads
+            _fig_xc = go.Figure()
+            if _spread_a is not None:
+                _fig_xc.add_trace(go.Scatter(x=_spread_a.index, y=_spread_a.values, mode="lines",
+                    name=f"{_xccy_a} {_spread_label}", line=dict(color="#3b82f6", width=1.8)))
+            if _spread_b is not None:
+                _fig_xc.add_trace(go.Scatter(x=_spread_b.index, y=_spread_b.values, mode="lines",
+                    name=f"{_xccy_b} {_spread_label}", line=dict(color="#ef4444", width=1.8)))
+            _fig_xc.add_hline(y=0, line=dict(color="#64748b", width=0.8))
+            _fig_xc.update_layout(
+                title=f"Forward Curve Steepness: {_xccy_a} vs {_xccy_b} ({_spread_label})",
+                yaxis_title="Spread (bp)", template="plotly_dark", height=400,
+                margin=dict(l=60,r=20,t=40,b=40),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+            st.plotly_chart(_fig_xc, use_container_width=True)
+
+            # Spread-of-spreads
+            if _spread_a is not None and _spread_b is not None:
+                st.markdown("##### Spread of Spreads")
+                _sos = (_spread_a - _spread_b).dropna()
+                if not _sos.empty:
+                    _sos_mean = _sos.mean(); _sos_std = _sos.std()
+                    _fig_sos = go.Figure()
+                    _fig_sos.add_trace(go.Scatter(x=_sos.index, y=_sos.values, mode="lines",
+                        name=f"{_xccy_a} − {_xccy_b}", line=dict(color="#22c55e", width=1.8)))
+                    _fig_sos.add_hline(y=_sos_mean, line=dict(color="#94a3b8", dash="dash", width=1),
+                        annotation_text=f"Mean: {_sos_mean:.1f}bp")
+                    _fig_sos.add_hline(y=_sos_mean + _sos_std, line=dict(color="#3b82f6", dash="dot", width=0.8),
+                        annotation_text=f"+1σ: {_sos_mean+_sos_std:.1f}bp")
+                    _fig_sos.add_hline(y=_sos_mean - _sos_std, line=dict(color="#ef4444", dash="dot", width=0.8),
+                        annotation_text=f"−1σ: {_sos_mean-_sos_std:.1f}bp")
+                    _fig_sos.add_hline(y=0, line=dict(color="#64748b", width=0.8))
+                    _fig_sos.update_layout(
+                        title=f"Spread of Spreads: {_xccy_a} − {_xccy_b} ({_spread_label})",
+                        yaxis_title="Spread-of-Spreads (bp)", template="plotly_dark", height=400,
+                        margin=dict(l=60,r=20,t=40,b=40),
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                    st.plotly_chart(_fig_sos, use_container_width=True)
+
+                    # Stats
+                    _sos_current = _sos.iloc[-1]
+                    _sos_z = (_sos_current - _sos_mean) / _sos_std if _sos_std > 0 else 0
+                    _sos_pctl = ((_sos < _sos_current).sum() / len(_sos)) * 100
+                    _xc_stats = pd.DataFrame({
+                        "Metric": ["Current", "Mean", "Std Dev", "Z-Score", "Percentile",
+                                   "Min", "Max", "1Y Min", "1Y Max"],
+                        "Value": [
+                            f"{_sos_current:.1f}bp", f"{_sos_mean:.1f}bp", f"{_sos_std:.1f}bp",
+                            f"{_sos_z:.2f}", f"{_sos_pctl:.0f}%",
+                            f"{_sos.min():.1f}bp", f"{_sos.max():.1f}bp",
+                            f"{_sos.tail(252).min():.1f}bp" if len(_sos) >= 252 else "—",
+                            f"{_sos.tail(252).max():.1f}bp" if len(_sos) >= 252 else "—"
+                        ]
+                    })
+                    st.dataframe(_xc_stats, hide_index=True, use_container_width=False)
+
+                    # Scatter regression
+                    if len(_spread_a) > 20 and len(_spread_b) > 20:
+                        _merged = pd.DataFrame({"A": _spread_a, "B": _spread_b}).dropna()
+                        if len(_merged) > 20:
+                            from scipy import stats as _scipy_stats
+                            _slope, _intercept, _r, _p, _se = _scipy_stats.linregress(_merged["A"], _merged["B"])
+                            _merged["predicted"] = _slope * _merged["A"] + _intercept
+                            _merged["residual"] = _merged["B"] - _merged["predicted"]
+                            _fig_sc = go.Figure()
+                            _fig_sc.add_trace(go.Scatter(x=_merged["A"], y=_merged["B"],
+                                mode="markers", marker=dict(color="#3b82f6", size=4, opacity=0.5),
+                                name="History"))
+                            _x_range = np.linspace(_merged["A"].min(), _merged["A"].max(), 50)
+                            _fig_sc.add_trace(go.Scatter(x=_x_range, y=_slope*_x_range+_intercept,
+                                mode="lines", line=dict(color="#f59e0b", width=2, dash="dash"),
+                                name=f"β={_slope:.2f}, R²={_r**2:.2f}"))
+                            # Current point
+                            if not _merged.empty:
+                                _fig_sc.add_trace(go.Scatter(
+                                    x=[_merged["A"].iloc[-1]], y=[_merged["B"].iloc[-1]],
+                                    mode="markers", marker=dict(color="#ef4444", size=14, symbol="star"),
+                                    name=f"Now (resid {_merged['residual'].iloc[-1]:+.1f}bp)"))
+                            _fig_sc.update_layout(
+                                title=f"Regression: {_xccy_b} vs {_xccy_a} ({_spread_label})",
+                                xaxis_title=f"{_xccy_a} (bp)", yaxis_title=f"{_xccy_b} (bp)",
+                                template="plotly_dark", height=400,
+                                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                            st.plotly_chart(_fig_sc, use_container_width=True)
+
+                    # Rolling Z-score
+                    if _sos_std > 0:
+                        _sos_roll_z = (_sos - _sos.rolling(63).mean()) / _sos.rolling(63).std()
+                        _sos_roll_z = _sos_roll_z.dropna()
+                        if not _sos_roll_z.empty:
+                            _fig_xz = go.Figure()
+                            _fig_xz.add_trace(go.Scatter(x=_sos_roll_z.index, y=_sos_roll_z.values,
+                                mode="lines", name="63d Rolling Z", line=dict(color="#a855f7", width=1.5)))
+                            _fig_xz.add_hline(y=0, line=dict(color="#64748b", width=1))
+                            _fig_xz.add_hline(y=2, line=dict(color="#ef4444", dash="dot", width=0.8))
+                            _fig_xz.add_hline(y=-2, line=dict(color="#22c55e", dash="dot", width=0.8))
+                            _fig_xz.update_layout(
+                                title=f"Rolling 63d Z-Score: {_xccy_a} − {_xccy_b}",
+                                yaxis_title="Z-Score", template="plotly_dark", height=300,
+                                margin=dict(l=60,r=20,t=40,b=40),
+                                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                            st.plotly_chart(_fig_xz, use_container_width=True)
+
     # TAB 3   —   SWAPTION TRADE IDEAS
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
-    if _rv_active == 2:
+    if _rv_active == 3:
         st.markdown("### Swaption RV Trade Recommendations")
         st.caption("Gamma/vega-optimised ideas from current vol surface + curve.")
         _cb_name = {"AUD": "RBA", "USD": "Fed", "NZD": "RBNZ", "EUR": "ECB", "GBP": "BoE", "JPY": "BoJ", "CAD": "BoC"}.get(ccy, "CB")
@@ -21704,7 +21900,7 @@ def rv_tab():
                                      hide_index=True)
                         st.caption("Theta P&L = P&L with zero rate move at that horizon. "
                                    "Breakeven range = rate move where P&L = 0 (straddle sellers only).")
-    if _rv_active == 3:
+    if _rv_active == 4:
         st.markdown("### Cap/Floor RV Trade Recommendations")
         _cf_ref_rate = "BBSW" if ccy == "AUD" else ("SOFR" if ccy == "USD" else "BKBM" if ccy == "NZD" else "Rate")
         st.caption(f"Wedge RV, caplet vol vs realised, listed/OTC arb, forward path analysis.")
@@ -22064,7 +22260,7 @@ def rv_tab():
 
 
 
-    if _rv_active == 4:
+    if _rv_active == 5:
         st.markdown("### 🔮 What-If Scenarios")
         st.caption("Stress-test and scenario analysis using 2+ months of AUD vol history.")
 
