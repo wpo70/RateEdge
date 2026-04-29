@@ -1135,7 +1135,11 @@ def save_all_session_data(user_id: str):
         _cf_spread_data = {k: float(st.session_state.get(k, 0)) for k in _cf_spread_keys
                            if k in st.session_state}
         _cf_save_ccy = st.session_state.get("_cf_last_active_ccy", "AUD")
-        if _cf_spread_data:
+        # GUARD: never save all-zero wedges — this means session_state wasn't
+        # properly restored yet (e.g. after deploy restart). Writing zeros
+        # would permanently overwrite calibrated values in the DB.
+        _cf_nonzero = [v for v in _cf_spread_data.values() if abs(v) > 0.001]
+        if _cf_spread_data and len(_cf_nonzero) >= 3:
             _save("cf_spreads", _cf_save_ccy, _cf_spread_data)
 
         # CFS table data — manually entered straddle overrides per wedge
@@ -12645,8 +12649,10 @@ def caps_floors_tab(vol_mode: str):
                                        "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y",
                                        "cf_spr_12y3y","cf_spr_15v20","cf_spr_20v30"]
                     _cf_data = {k: float(st.session_state.get(k, 0)) for k in _cf_spread_keys}
+                    # GUARD: refuse to save if all values are zero (session not restored)
+                    _cf_nz = [v for v in _cf_data.values() if abs(v) > 0.001]
                     _uid_cf = st.session_state.get("username", "default")
-                    if HAS_POSTGRES:
+                    if HAS_POSTGRES and len(_cf_nz) >= 3:
                         save_user_config(_uid_cf, "cf_spreads", ccy, _cf_data)
                         # Save under both IDs so data persists regardless of login method
                         for _alt_uid in ["wpo@rateedge.au", "wpo70@icloud.com"]:
