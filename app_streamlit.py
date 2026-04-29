@@ -1533,6 +1533,7 @@ def list_vol_snapshots(user_id: str, currency: str = None):
         return []
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def load_vol_snapshot(snapshot_id: int):
     """Load a historical vol snapshot"""
     conn = get_db_connection()
@@ -7281,6 +7282,7 @@ def vol_config_tab():
 
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def _load_curve_from_db_latest(floating_rate: str, ccy: str = "AUD", load_date: str = None) -> pd.DataFrame:
     """Load swap rates from swap_rates table. load_date: specific date or None for latest."""
     try:
@@ -23580,93 +23582,95 @@ def main():
                     pass
             st.session_state["db_auto_loaded"] = True
 
-            # ── Fallback: if curves still not loaded, try swap_rates table ──
+            # ── v2904e: Currency-specific curve loading ──────────────
+            # Only loads the active currency's curves on startup.
+            # When sidebar_ccy changes, _load_ccy_curves is called for
+            # the new currency on demand. Saves 4-6 DB calls on startup.
             _cc_loaded = st.session_state.get("config_curves", {})
             def _curve_empty(c):
                 if c is None: return True
                 if hasattr(c, '__len__') and len(c) == 0: return True
                 return False
-            if _curve_empty(_cc_loaded.get("AUD")):
-                try:
-                    _aud_blend_s = _load_curve_from_db_latest("6M BBSW", "AUD")
-                    if _aud_blend_s is not None and len(_aud_blend_s) > 0:
-                        st.session_state.setdefault("curves", {})["AUD"] = _aud_blend_s
-                        st.session_state.setdefault("config_curves", {})["AUD"] = _aud_blend_s
-                        st.session_state["_aud_proj_curve"] = _aud_blend_s
-                        _zc_qq_s = {float(r["MaturityY"]): float(r["ZeroRatePct"]) for _, r in _aud_blend_s.iterrows() if float(r["MaturityY"]) <= 3.25}
-                        _zc_ss_s = {float(r["MaturityY"]): float(r["ZeroRatePct"]) for _, r in _aud_blend_s.iterrows() if float(r["MaturityY"]) >= 0.25}
-                        _zc_qqf_s = {float(r["MaturityY"]): float(r["ZeroRatePct"]) for _, r in _aud_blend_s.iterrows()}
-                        st.session_state["_aud_zc_qq"] = _zc_qq_s
-                        st.session_state["_aud_zc_ss"] = _zc_ss_s
-                        st.session_state["_aud_zc_qq_full"] = _zc_qqf_s
-                        st.session_state.get("_fwd_ann_cache", {}).clear()
-                        set_timestamp("curves", "AUD")
-                    _aud_ois_s = _load_curve_from_db_latest("AONIA", "AUD")
-                    if _aud_ois_s is not None and len(_aud_ois_s) > 0:
-                        st.session_state.setdefault("config_basis", {}).setdefault("AUD", {})["ois"] = _aud_ois_s
-                        st.session_state.setdefault("basis_curves", {}).setdefault("AUD", {})["ois"] = _aud_ois_s
-                except Exception:
-                    pass
-            if _curve_empty(_cc_loaded.get("USD")):
-                try:
-                    _usd_sofr = _load_curve_from_db_latest("SOFR", "USD")
-                    if _usd_sofr is not None and len(_usd_sofr) > 0:
-                        st.session_state.setdefault("curves", {})["USD"] = _usd_sofr
-                        st.session_state.setdefault("config_curves", {})["USD"] = _usd_sofr
-                        set_timestamp("curves", "USD")
-                except Exception:
-                    pass
-            if _curve_empty(_cc_loaded.get("NZD")):
-                try:
-                    _nzd_bkbm = _load_curve_from_db_latest("3M BKBM", "NZD")
-                    if _nzd_bkbm is not None and len(_nzd_bkbm) > 0:
-                        st.session_state.setdefault("curves", {})["NZD"] = _nzd_bkbm
-                        st.session_state.setdefault("config_curves", {})["NZD"] = _nzd_bkbm
-                        set_timestamp("curves", "NZD")
-                except Exception:
-                    pass
 
-            # ── Display-only curves (startup fallback) — don't affect CFS pricer ──
-            try:
-                _ff_s = _load_curve_from_db_latest("FEDFUNDS", "USD")
-                if _ff_s is not None and len(_ff_s) > 0:
-                    st.session_state.setdefault("config_basis", {}).setdefault("USD", {})["fedfunds_ois"] = _ff_s
-            except Exception:
-                pass
-            try:
-                _nz_ois_s = _load_curve_from_db_latest("NZONIA", "NZD")
-                if _nz_ois_s is not None and len(_nz_ois_s) > 0:
-                    st.session_state.setdefault("config_basis", {}).setdefault("NZD", {})["nzonia_display"] = _nz_ois_s
-            except Exception:
-                pass
-            try:
-                _bconn_s = get_db_connection()
-                if _bconn_s:
-                    _bcur_s = _bconn_s.cursor()
-                    _bcur_s.execute("""
-                        SELECT rate_type, rate FROM benchmark_rates
-                        WHERE currency='USD' AND rate_type LIKE 'SOFR_FF_BASIS_%%'
-                          AND date = (SELECT MAX(date) FROM benchmark_rates
-                                      WHERE currency='USD' AND rate_type LIKE 'SOFR_FF_BASIS_%%')
-                    """)
-                    _brows_s = _bcur_s.fetchall()
-                    _bcur_s.close(); _bconn_s.close()
-                    if _brows_s:
+            def _load_ccy_curves(target_ccy, force=False):
+                """Load curves for a single currency from swap_rates DB.
+                force=True: always reload (used on ccy switch).
+                force=False: skip if already loaded (used on startup)."""
+                _cc = st.session_state.get("config_curves", {})
+                if not force and not _curve_empty(_cc.get(target_ccy)):
+                    return  # already loaded
+                if force:
+                    _load_curve_from_db_latest.clear()  # bust cache so we get fresh data
+
+                _curve_map = {
+                    "AUD": [("6M BBSW", "main"), ("AONIA", "ois")],
+                    "USD": [("SOFR", "main"), ("FEDFUNDS", "basis")],
+                    "NZD": [("3M BKBM", "main"), ("NZONIA", "basis")],
+                }
+                for _fr, _role in _curve_map.get(target_ccy, []):
+                    try:
+                        _df = _load_curve_from_db_latest(_fr, target_ccy)
+                        if _df is None or len(_df) == 0:
+                            continue
+                        if _role == "main":
+                            st.session_state.setdefault("curves", {})[target_ccy] = _df
+                            st.session_state.setdefault("config_curves", {})[target_ccy] = _df
+                            set_timestamp("curves", target_ccy)
+                            if target_ccy == "AUD":
+                                st.session_state["_aud_proj_curve"] = _df
+                                _zc_qq_s = {float(r["MaturityY"]): float(r["ZeroRatePct"]) for _, r in _df.iterrows() if float(r["MaturityY"]) <= 3.25}
+                                _zc_ss_s = {float(r["MaturityY"]): float(r["ZeroRatePct"]) for _, r in _df.iterrows() if float(r["MaturityY"]) >= 0.25}
+                                _zc_qqf_s = {float(r["MaturityY"]): float(r["ZeroRatePct"]) for _, r in _df.iterrows()}
+                                st.session_state["_aud_zc_qq"] = _zc_qq_s
+                                st.session_state["_aud_zc_ss"] = _zc_ss_s
+                                st.session_state["_aud_zc_qq_full"] = _zc_qqf_s
+                                st.session_state.get("_fwd_ann_cache", {}).clear()
+                        elif _role == "ois":
+                            st.session_state.setdefault("config_basis", {}).setdefault(target_ccy, {})["ois"] = _df
+                            st.session_state.setdefault("basis_curves", {}).setdefault(target_ccy, {})["ois"] = _df
+                        elif _role == "basis":
+                            _bk = "fedfunds_ois" if target_ccy == "USD" else "nzonia_display"
+                            st.session_state.setdefault("config_basis", {}).setdefault(target_ccy, {})[_bk] = _df
+                    except Exception:
+                        pass
+
+                # USD: also load SOFR-FF basis from benchmark_rates
+                if target_ccy == "USD":
+                    try:
                         import re as _re_bs
-                        _basis_pts_s = {}
-                        for _rt, _rv in _brows_s:
-                            _lbl = _rt.replace("SOFR_FF_BASIS_", "")
-                            _mb = _re_bs.match(r"(\d+)(Y|M)", _lbl)
-                            if _mb:
-                                _mv = float(_mb.group(1))
-                                _mat = _mv if _mb.group(2) == "Y" else _mv / 12
-                                _basis_pts_s[_mat] = float(_rv)
-                        if _basis_pts_s:
-                            _bxs = sorted(_basis_pts_s)
-                            st.session_state.setdefault("config_basis", {}).setdefault("USD", {})["sofr_ff_basis"] = \
-                                pd.DataFrame({"MaturityY": _bxs, "BasisBp": [_basis_pts_s[t] for t in _bxs]})
-            except Exception:
-                pass
+                        _bconn_s = get_db_connection()
+                        if _bconn_s:
+                            _bcur_s = _bconn_s.cursor()
+                            _bcur_s.execute("""
+                                SELECT rate_type, rate FROM benchmark_rates
+                                WHERE currency='USD' AND rate_type LIKE 'SOFR_FF_BASIS_%%'
+                                  AND date = (SELECT MAX(date) FROM benchmark_rates
+                                              WHERE currency='USD' AND rate_type LIKE 'SOFR_FF_BASIS_%%')
+                            """)
+                            _basis_rows = _bcur_s.fetchall()
+                            _bcur_s.close(); _bconn_s.close()
+                            if _basis_rows:
+                                _basis_pts_s = {}
+                                for _rt, _rv in _basis_rows:
+                                    _lbl = _rt.replace("SOFR_FF_BASIS_", "")
+                                    _mb = _re_bs.match(r"(\d+)(Y|M)", _lbl)
+                                    if _mb:
+                                        _mv = float(_mb.group(1))
+                                        _mat = _mv if _mb.group(2) == "Y" else _mv / 12
+                                        _basis_pts_s[_mat] = float(_rv)
+                                if _basis_pts_s:
+                                    _bxs = sorted(_basis_pts_s)
+                                    st.session_state.setdefault("config_basis", {}).setdefault("USD", {})["sofr_ff_basis"] = \
+                                        pd.DataFrame({"MaturityY": _bxs, "BasisBp": [_basis_pts_s[t] for t in _bxs]})
+                    except Exception:
+                        pass
+
+            # Load ALL currencies at startup
+            for _sc in SUPPORTED_CURRENCIES:
+                _load_ccy_curves(_sc)
+
+            # Store function reference for on-demand currency refresh
+            st.session_state["_load_ccy_curves_fn"] = _load_ccy_curves
 
     # Sidebar for settings
     with st.sidebar:
@@ -23699,6 +23703,13 @@ def main():
             index=_ccy_idx,
             key="sidebar_ccy",
         )
+        # v2904e: refresh curves from DB when currency actually changes
+        _loader = st.session_state.get("_load_ccy_curves_fn")
+        if _loader and HAS_POSTGRES:
+            _prev_sidebar_ccy = st.session_state.get("_prev_sidebar_ccy")
+            if _prev_sidebar_ccy is not None and _prev_sidebar_ccy != ccy:
+                _loader(ccy, force=True)
+            st.session_state["_prev_sidebar_ccy"] = ccy
         
         # Vol mode
         vol_mode = st.selectbox(
