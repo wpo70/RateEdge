@@ -26442,6 +26442,19 @@ def usd_sod_tab():
     _eod_curve = _load_curve_from_db_latest("SOFR", "USD", load_date=_base_date)
     _curr_curve = get_ccy_curve("USD")
 
+    # Get current curve date from DB for display
+    _curr_curve_date = "session"
+    try:
+        _cc_conn = get_db_connection()
+        if _cc_conn:
+            _cc_cur = _cc_conn.cursor()
+            _cc_cur.execute("SELECT MAX(date) FROM swap_rates WHERE currency='USD' AND floating_rate='SOFR'")
+            _cd_row = _cc_cur.fetchone()
+            _cc_cur.close(); _cc_conn.close()
+            if _cd_row and _cd_row[0]:
+                _curr_curve_date = str(_cd_row[0])
+    except: pass
+
     if _eod_curve is None or _eod_curve.empty:
         st.warning(f"No SOFR curve found for {_base_date}.")
         _eod_curve = _curr_curve
@@ -26449,6 +26462,8 @@ def usd_sod_tab():
     if _curr_curve is None or _curr_curve.empty:
         st.warning("No current USD SOFR curve loaded.")
         return
+
+    st.caption(f"**Base curve:** {_base_date} (NYC EOD)  →  **Current curve:** {_curr_curve_date} (latest SOFR in DB)")
 
     def _rate_at(curve_df, tenor_y):
         try:
@@ -26682,6 +26697,8 @@ def usd_sod_tab():
         _cal_col1, _cal_col2 = st.columns([2, 1])
         with _cal_col1:
             _cal_method = st.radio("Regression", ["OLS", "Ridge"], horizontal=True, key="usd_sod_cal_method")
+            st.caption("**OLS:** standard least squares — best fit, can overfit with few observations.  "
+                       "**Ridge:** adds regularisation penalty — shrinks noisy betas toward zero, better with limited data.")
         with _cal_col2:
             _cal_min_obs = st.number_input("Min observations", min_value=5, max_value=50, value=10, key="usd_sod_min_obs")
 
