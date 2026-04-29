@@ -19932,7 +19932,104 @@ def rv_tab():
         _spread_label = f"{_xccy_exp_b}{_xccy_tenor.lower()} − {_xccy_exp_a}{_xccy_tenor.lower()}"
         st.caption(f"Curve spread = **{_spread_label}** (steepness measure)")
 
-        st.markdown("##### Select Currencies")
+        # ── AUTO-SCANNER: scan all pairs ──────────────────────────
+        @st.cache_data(ttl=300)
+        def _xccy_scan_all(_exp_a, _exp_b, _tenor, _years):
+            """Load all currencies from fwd_matrix_history, compute pairwise spread-of-spreads z-scores."""
+            try:
+                _conn = get_db_connection()
+                if not _conn: return [], {}
+                _cur = _conn.cursor()
+                # Find all currencies with data
+                _cur.execute("SELECT DISTINCT currency, floating_rate, COUNT(*) FROM fwd_matrix_history GROUP BY currency, floating_rate HAVING COUNT(*) > 20")
+                _avail = _cur.fetchall()
+                _cut = (pd.Timestamp.now() - pd.DateOffset(years=_years)).strftime("%Y-%m-%d")
+                # Load all matrices
+                _all_data = {}
+                for _ac, _afr, _cnt in _avail:
+                    _cur.execute("SELECT date, matrix FROM fwd_matrix_history WHERE currency=%s AND floating_rate=%s AND date >= %s ORDER BY date",
+                                 (_ac, _afr, _cut))
+                    _rows = _cur.fetchall()
+                    import json as _json_sc
+                    _mdata = {}
+                    for _d, _m in _rows:
+                        try:
+                            _md = _m if isinstance(_m, dict) else _json_sc.loads(_m)
+                            _mdata[str(_d)[:10]] = _md
+                        except: pass
+                    if _mdata:
+                        _all_data[_ac] = _mdata
+                _cur.close(); _conn.close()
+
+                # Extract spread series per currency
+                _spreads = {}
+                for _cc, _data in _all_data.items():
+                    dates, vals = [], []
+                    for d, m in sorted(_data.items()):
+                        sv = lv = None
+                        for row in m.get("values", []):
+                            exp = str(row.get("Expiry", "")).lower()
+                            if exp == _exp_a.lower(): sv = row.get(_tenor)
+                            if exp == _exp_b.lower(): lv = row.get(_tenor)
+                        if sv is not None and lv is not None:
+                            dates.append(pd.Timestamp(d))
+                            vals.append((float(lv) - float(sv)) * 100)
+                    if len(dates) > 20:
+                        _spreads[_cc] = pd.Series(vals, index=dates)
+
+                # Compute all pairwise spread-of-spreads
+                _results = []
+                _ccys = sorted(_spreads.keys())
+                for i, ca in enumerate(_ccys):
+                    for cb in _ccys[i+1:]:
+                        _sos = (_spreads[ca] - _spreads[cb]).dropna()
+                        if len(_sos) < 20: continue
+                        _mean = _sos.mean(); _std = _sos.std()
+                        if _std < 0.01: continue
+                        _curr = _sos.iloc[-1]
+                        _z = (_curr - _mean) / _std
+                        _pctl = ((_sos < _curr).sum() / len(_sos)) * 100
+                        _results.append({
+                            "Pair": f"{ca}/{cb}", "CcyA": ca, "CcyB": cb,
+                            "Current": round(_curr, 1), "Mean": round(_mean, 1),
+                            "StdDev": round(_std, 1), "Z-Score": round(_z, 2),
+                            "Pctl": round(_pctl, 0), "Obs": len(_sos),
+                        })
+                _results.sort(key=lambda x: abs(x["Z-Score"]), reverse=True)
+                return _results, _spreads
+            except:
+                return [], {}
+
+        with st.expander("🔍 **Auto-Scan All Pairs**", expanded=True):
+            _scan_yr = st.slider("Scan lookback (years)", 1, 5, 3, key="xccy_scan_yr")
+            _scan_results, _scan_spreads = _xccy_scan_all(_xccy_exp_a, _xccy_exp_b, _xccy_tenor, _scan_yr)
+
+            if not _scan_results:
+                st.info("No currencies with sufficient forward matrix history. Backfill from **Curve RV → Backfill**.")
+            else:
+                # Signal summary
+                _strong = [r for r in _scan_results if abs(r["Z-Score"]) > 2]
+                _moderate = [r for r in _scan_results if 1 < abs(r["Z-Score"]) <= 2]
+                _sc1, _sc2, _sc3 = st.columns(3)
+                with _sc1:
+                    st.metric("Pairs Scanned", len(_scan_results))
+                with _sc2:
+                    st.metric("🔴 Strong Signals", len(_strong))
+                with _sc3:
+                    st.metric("🟡 Moderate Signals", len(_moderate))
+
+                # Results table
+                _scan_df = pd.DataFrame(_scan_results)
+                _scan_df["Signal"] = _scan_df["Z-Score"].apply(
+                    lambda z: "🔴 STRONG" if abs(z) > 2 else "🟡 MODERATE" if abs(z) > 1 else "⚪ Weak" if abs(z) > 0.5 else "—")
+                _scan_df["Direction"] = _scan_df.apply(
+                    lambda r: f"Pay {r['CcyA']} / Rcv {r['CcyB']}" if r["Z-Score"] > 0.5
+                    else f"Rcv {r['CcyA']} / Pay {r['CcyB']}" if r["Z-Score"] < -0.5 else "Neutral", axis=1)
+                _display_cols = ["Pair", "Signal", "Direction", "Current", "Mean", "StdDev", "Z-Score", "Pctl", "Obs"]
+                st.dataframe(_scan_df[_display_cols], hide_index=True, use_container_width=True)
+
+        st.markdown("---")
+        st.markdown("##### Manual Pair Deep-Dive")
         _xd1, _xd2 = st.columns(2)
         with _xd1:
             _xccy_a = st.selectbox("Currency A", _xccy_all, index=_xccy_all.index(ccy) if ccy in _xccy_all else 0, key="xccy_a")
