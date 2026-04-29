@@ -6831,6 +6831,8 @@ def vol_config_tab():
                     st.warning(f"Auto-save failed: {_e}")
 
             # Save uploaded curves to swap_rates (AUD 6M BBSW/3M BBSW/AONIA, NZD 3M BKBM/NZONIA, USD SOFR)
+            # AUD: publish PAR rates from _aud_par_qq / _aud_par_ss (not zero rates)
+            # NZD/USD/OIS: config_curves/config_basis store BBG mids directly (par rates)
             if HAS_POSTGRES and is_admin():
                 try:
                     import datetime as _dt
@@ -6839,53 +6841,68 @@ def vol_config_tab():
                     if _conn:
                         _cur = _conn.cursor()
                         _swap_rows_saved = 0
-                        _curve_saves = [
-                            ("AUD", "6M BBSW",      None),
-                            ("AUD", "3M BBSW",      None),
-                            ("AUD", "AONIA",        "ois"),
-                            ("NZD", "3M BKBM",      None),
-                            ("NZD", "NZONIA",       "ois"),
-                            ("USD", "SOFR",         None),
-                            ("USD", "FEDFUNDS",     "ois"),
-                        ]
                         _commit_sanity_warns = []
-                        for _ccy, _fr, _basis_type in _curve_saves:
-                            if _basis_type:
-                                _cdf = st.session_state.get("config_basis", {}).get(_ccy, {}).get(_basis_type)
-                                # USD FEDFUNDS stored under ois key
-                                if _cdf is None and _fr == "FEDFUNDS":
-                                    _cdf = st.session_state.get("config_basis", {}).get(_ccy, {}).get("fedfunds_ois")
-                            else:
-                                _cdf = st.session_state.get("config_curves", {}).get(_ccy)
-                            if _cdf is None or len(_cdf) == 0:
-                                continue
-                            # Build rate dict for sanity check before INSERT
-                            _pre_check = {}
-                            for _, _row in _cdf.iterrows():
-                                _mat = float(_row.get("MaturityY", 0))
-                                _rate = float(_row.get("ZeroRatePct", 0))
-                                # Convert maturity to tenor label
-                                _days = _mat * 365.25
-                                if _days < 10:
-                                    _tenor = "1W"
-                                elif _days < 25:
-                                    _tenor = "2W"
-                                elif _mat < 1.0:
-                                    _months = max(1, round(_mat * 12))
-                                    _tenor = f"{_months}M"
-                                else:
-                                    _tenor = f"{int(round(_mat))}Y"
-                                _pre_check[_tenor] = _rate
-                            _sw = check_swap_rates_sanity(_pre_check, _fr, _ccy)
+
+                        def _mat_to_tenor(_mat):
+                            _days = _mat * 365.25
+                            if _days < 10: return "1W"
+                            elif _days < 25: return "2W"
+                            elif _mat < 1.0: return f"{max(1, round(_mat * 12))}M"
+                            else: return f"{int(round(_mat))}Y"
+
+                        def _publish_rate_dict(_rate_dict, _fr, _ccy):
+                            nonlocal _swap_rows_saved
+                            _pre = {_mat_to_tenor(m): r for m, r in _rate_dict.items()}
+                            _sw = check_swap_rates_sanity(_pre, _fr, _ccy)
                             _commit_sanity_warns.extend(_sw)
-                            # INSERT to DB
-                            for _tenor, _rate in _pre_check.items():
+                            for _tn, _r in _pre.items():
                                 _cur.execute("""
                                     INSERT INTO swap_rates (date, currency, tenor, floating_rate, rate)
                                     VALUES (%s, %s, %s, %s, %s)
                                     ON CONFLICT (date, currency, tenor, floating_rate) DO UPDATE SET rate = EXCLUDED.rate
-                                """, (_today, _ccy, _tenor, _fr, _rate))
+                                """, (_today, _ccy, _tn, _fr, _r))
                                 _swap_rows_saved += 1
+
+                        def _publish_df(_df, _fr, _ccy):
+                            if _df is None or len(_df) == 0: return
+                            _rd = {}
+                            for _, _row in _df.iterrows():
+                                _m = float(_row.get("MaturityY", 0))
+                                _r = float(_row.get("ZeroRatePct", 0))
+                                _rd[_m] = _r
+                            _publish_rate_dict(_rd, _fr, _ccy)
+
+                        # ── AUD: use PAR rates, not zero rates ──
+                        _par_qq = st.session_state.get("_aud_par_qq", {})
+                        _par_ss = st.session_state.get("_aud_par_ss", {})
+                        if _par_qq:
+                            _publish_rate_dict(_par_qq, "3M BBSW", "AUD")
+                        if _par_ss:
+                            _publish_rate_dict(_par_ss, "6M BBSW", "AUD")
+
+                        # ── AUD AONIA: BBG par OIS mids ──
+                        _ois_df = st.session_state.get("config_basis", {}).get("AUD", {}).get("ois")
+                        if _ois_df is not None and len(_ois_df) > 0:
+                            _publish_df(_ois_df, "AONIA", "AUD")
+
+                        # ── NZD: BBG mids stored directly (par rates) ──
+                        _nzd_df = st.session_state.get("config_curves", {}).get("NZD")
+                        if _nzd_df is not None and len(_nzd_df) > 0:
+                            _publish_df(_nzd_df, "3M BKBM", "NZD")
+                        _nzd_ois = st.session_state.get("config_basis", {}).get("NZD", {}).get("ois")
+                        if _nzd_ois is not None and len(_nzd_ois) > 0:
+                            _publish_df(_nzd_ois, "NZONIA", "NZD")
+
+                        # ── USD: BBG mids stored directly (par rates) ──
+                        _usd_df = st.session_state.get("config_curves", {}).get("USD")
+                        if _usd_df is not None and len(_usd_df) > 0:
+                            _publish_df(_usd_df, "SOFR", "USD")
+                        _usd_ff = st.session_state.get("config_basis", {}).get("USD", {}).get("ois")
+                        if _usd_ff is None:
+                            _usd_ff = st.session_state.get("config_basis", {}).get("USD", {}).get("fedfunds_ois")
+                        if _usd_ff is not None and len(_usd_ff) > 0:
+                            _publish_df(_usd_ff, "FEDFUNDS", "USD")
+
                         # Show commit sanity warnings BEFORE success message
                         for _csw in _commit_sanity_warns:
                             st.error(f"🔴 COMMIT SANITY — {_csw}")
