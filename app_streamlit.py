@@ -19608,6 +19608,295 @@ def rv_tab():
                         st.plotly_chart(fig_resid, use_container_width=True)
                         st.caption("Residual > +1┬ñ├ó = forward spread RICH vs curve → fade. Residual <  → 1┬ñ├ó = CHEAP → buy.")
 
+        # ── FORWARD SPREAD HISTORY (from fwd_matrix_history DB) ──────
+        st.markdown("---")
+        st.markdown("### Forward Spread History")
+        st.caption("Historical forward rate time series with z-score analysis. Backfill from swap_rates.")
+
+        # Floating rate options per currency
+        _fsh_fr_map = {
+            "AUD": ["6M BBSW", "3M BBSW", "AONIA"],
+            "USD": ["SOFR", "FEDFUNDS"],
+            "NZD": ["3M BKBM", "NZONIA"],
+            "EUR": ["EURIBOR 6M", "ESTR"],
+            "JPY": ["JPY TONA"],
+            "CAD": ["CORRA"],
+        }
+        _fsh_fr_opts = _fsh_fr_map.get(ccy, ["SOFR"])
+
+        with st.expander("🔧 Backfill & Storage", expanded=False):
+            st.markdown(f"**Build {ccy} forward matrices from historical swap curves and store to DB.**")
+            _bf_c1, _bf_c2, _bf_c3 = st.columns([1, 1, 1])
+            with _bf_c1:
+                _bf_fr = st.selectbox("Floating rate", _fsh_fr_opts, key="rv_fwd_bf_fr")
+            with _bf_c2:
+                _bf_limit = st.number_input("Max dates", 10, 2000, 100, 50, key="rv_fwd_bf_limit")
+            with _bf_c3:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                _bf_go = st.button("▶️ Backfill", key="rv_fwd_bf_go", type="primary")
+            if _bf_go:
+                _bf_msg = st.empty()
+                _bf_bar = st.progress(0)
+                try:
+                    _bf_conn = get_db_connection()
+                    if not _bf_conn:
+                        st.error("No DB connection.")
+                    else:
+                        _bf_cur = _bf_conn.cursor()
+                        _bf_cur.execute("""
+                            SELECT DISTINCT s.date FROM swap_rates s
+                            WHERE s.currency=%s AND s.floating_rate=%s
+                              AND s.date NOT IN (
+                                SELECT date FROM fwd_matrix_history
+                                WHERE currency=%s AND floating_rate=%s
+                              )
+                            ORDER BY s.date DESC LIMIT %s
+                        """, (ccy, _bf_fr, ccy, _bf_fr, _bf_limit))
+                        _bf_dates = [str(r[0]) for r in _bf_cur.fetchall()]
+                        _bf_msg.info(f"Processing {len(_bf_dates)} dates for {ccy} {_bf_fr}...")
+                        _bf_ok = 0
+                        for _bi, _bd in enumerate(_bf_dates):
+                            try:
+                                _bf_cur.execute("""
+                                    SELECT tenor, rate FROM swap_rates
+                                    WHERE currency=%s AND floating_rate=%s AND date=%s
+                                    ORDER BY tenor
+                                """, (ccy, _bf_fr, _bd))
+                                _bf_rows = _bf_cur.fetchall()
+                                if len(_bf_rows) < 5:
+                                    continue
+                                import re as _re_bf
+                                _bf_xs, _bf_ys = [], []
+                                for _bft, _bfr in _bf_rows:
+                                    _tm = _re_bf.match(r"(\d+(?:\.\d+)?)(Y|M|W)", str(_bft).strip().upper())
+                                    if not _tm:
+                                        continue
+                                    _tv, _tu = float(_tm.group(1)), _tm.group(2)
+                                    _ty = _tv if _tu == "Y" else (_tv / 12.0 if _tu == "M" else _tv / 52.0)
+                                    _bf_xs.append(_ty)
+                                    _bf_ys.append(float(_bfr))
+                                if len(_bf_xs) < 5:
+                                    continue
+                                _bf_sorted = sorted(zip(_bf_xs, _bf_ys))
+                                _bf_xs = [p[0] for p in _bf_sorted]
+                                _bf_ys = [p[1] for p in _bf_sorted]
+                                _bf_ct = (tuple(_bf_xs), tuple(_bf_ys))
+                                _bf_matrix = _generate_forward_matrix_cached(ccy, _bf_ct, None, convention="market")
+                                if _bf_matrix is None or _bf_matrix.empty:
+                                    continue
+                                _bf_matrix_reset = _bf_matrix.reset_index()
+                                _bf_json = {"values": _bf_matrix_reset.to_dict("records")}
+                                import json as _json_bf
+                                _bf_cur.execute("""
+                                    INSERT INTO fwd_matrix_history (date, currency, floating_rate, matrix)
+                                    VALUES (%s, %s, %s, %s)
+                                    ON CONFLICT (date, currency, floating_rate)
+                                    DO UPDATE SET matrix = EXCLUDED.matrix, created_at = NOW()
+                                """, (_bd, ccy, _bf_fr, _json_bf.dumps(_bf_json)))
+                                _bf_ok += 1
+                            except:
+                                pass
+                            _bf_bar.progress((_bi + 1) / max(len(_bf_dates), 1))
+                        _bf_conn.commit()
+                        _bf_cur.close(); _bf_conn.close()
+                        _bf_msg.success(f"✅ Backfilled {_bf_ok} / {len(_bf_dates)} dates for {ccy} {_bf_fr}.")
+                except Exception as _bfe2:
+                    st.error(f"Backfill error: {_bfe2}")
+
+            # DB stats
+            try:
+                _st_conn = get_db_connection()
+                if _st_conn:
+                    _st_cur = _st_conn.cursor()
+                    _st_cur.execute("""
+                        SELECT floating_rate, COUNT(*), MIN(date), MAX(date)
+                        FROM fwd_matrix_history WHERE currency=%s
+                        GROUP BY floating_rate ORDER BY floating_rate
+                    """, (ccy,))
+                    _st_rows = _st_cur.fetchall()
+                    _st_cur.close(); _st_conn.close()
+                    if _st_rows:
+                        st.markdown("**Stored matrices:**")
+                        for _sr in _st_rows:
+                            st.caption(f"{_sr[0]}: {_sr[1]} dates ({_sr[2]} → {_sr[3]})")
+                    else:
+                        st.caption("No forward matrices stored yet. Run backfill above.")
+            except:
+                pass
+
+        # ── Forward spread time series ──
+        _fwd_expiries = ["1m", "3m", "6m", "1y", "2y", "3y", "5y", "7y", "10y"]
+        _fwd_tenors = ["1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "15Y", "20Y", "30Y"]
+
+        _fs_c1, _fs_c2, _fs_c3, _fs_c4 = st.columns([1, 1, 1, 1])
+        with _fs_c1:
+            _fs_fr = st.selectbox("Curve", _fsh_fr_opts, key="rv_fwd_fs_fr")
+        with _fs_c2:
+            _fs_tenor = st.selectbox("Tenor", _fwd_tenors, index=0, key="rv_fwd_fs_tenor")
+        with _fs_c3:
+            _fs_exp1 = st.selectbox("Expiry A", _fwd_expiries, index=3, key="rv_fwd_fs_exp1")
+        with _fs_c4:
+            _fs_exp2 = st.selectbox("Expiry B", _fwd_expiries, index=4, key="rv_fwd_fs_exp2")
+
+        _fs_yr = st.slider("History (years)", 1, 8, 3, key="rv_fwd_fs_yr")
+        _fs_show_spread = st.checkbox("Show spread (B − A)", True, key="rv_fwd_fs_spread")
+        _fs_show_zscore = st.checkbox("Show Z-score", False, key="rv_fwd_fs_zscore")
+
+        @st.cache_data(ttl=300)
+        def _load_fwd_matrix_history(_ccy, _fr, _years):
+            try:
+                _conn = get_db_connection()
+                if not _conn:
+                    return {}
+                _cur = _conn.cursor()
+                _cut = (pd.Timestamp.now() - pd.DateOffset(years=_years)).strftime("%Y-%m-%d")
+                _cur.execute("""
+                    SELECT date, matrix FROM fwd_matrix_history
+                    WHERE currency=%s AND floating_rate=%s AND date >= %s
+                    ORDER BY date
+                """, (_ccy, _fr, _cut))
+                _rows = _cur.fetchall()
+                _cur.close(); _conn.close()
+                import json as _json_fmh
+                result = {}
+                for _d, _m in _rows:
+                    try:
+                        _mdata = _m if isinstance(_m, dict) else _json_fmh.loads(_m)
+                        result[str(_d)[:10]] = _mdata
+                    except:
+                        pass
+                return result
+            except:
+                return {}
+
+        _fwd_data = _load_fwd_matrix_history(ccy, _fs_fr, _fs_yr)
+
+        if not _fwd_data:
+            st.info(f"No forward matrix history for {ccy} {_fs_fr}. Use **Backfill** above to generate.")
+        else:
+            def _extract_fwd_series(data, expiry, tenor):
+                dates, vals = [], []
+                for d, m in sorted(data.items()):
+                    for row in m.get("values", []):
+                        if str(row.get("Expiry", "")).lower() == expiry.lower():
+                            v = row.get(tenor)
+                            if v is not None:
+                                dates.append(pd.Timestamp(d))
+                                vals.append(float(v))
+                            break
+                if not dates:
+                    return None
+                return pd.Series(vals, index=dates, name=f"{expiry}{tenor.lower()}")
+
+            _s1 = _extract_fwd_series(_fwd_data, _fs_exp1, _fs_tenor)
+            _s2 = _extract_fwd_series(_fwd_data, _fs_exp2, _fs_tenor)
+            _label_a = f"{_fs_exp1}{_fs_tenor.lower()}"
+            _label_b = f"{_fs_exp2}{_fs_tenor.lower()}"
+
+            if _s1 is not None or _s2 is not None:
+                _fig_fs = go.Figure()
+                if not _fs_show_spread:
+                    if _s1 is not None:
+                        _fig_fs.add_trace(go.Scatter(x=_s1.index, y=_s1.values, mode="lines",
+                            name=_label_a, line=dict(color="#3b82f6", width=1.8)))
+                    if _s2 is not None:
+                        _fig_fs.add_trace(go.Scatter(x=_s2.index, y=_s2.values, mode="lines",
+                            name=_label_b, line=dict(color="#ef4444", width=1.8)))
+                    _fig_fs.update_layout(
+                        title=f"{ccy} {_fs_fr} Forward Rates: {_label_a} vs {_label_b}",
+                        yaxis_title="Rate (%)", template="plotly_dark",
+                        height=420, margin=dict(l=60,r=20,t=40,b=40),
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                    st.plotly_chart(_fig_fs, use_container_width=True)
+                else:
+                    if _s1 is not None and _s2 is not None:
+                        _spread = (_s2 - _s1).dropna() * 100  # bp
+                        if not _spread.empty:
+                            _fig_fs.add_trace(go.Scatter(x=_spread.index, y=_spread.values, mode="lines",
+                                name=f"{_label_b} − {_label_a}", line=dict(color="#3b82f6", width=1.8)))
+                            _mean = _spread.mean()
+                            _std = _spread.std()
+                            _fig_fs.add_hline(y=_mean, line=dict(color="#94a3b8", dash="dash", width=1),
+                                annotation_text=f"Mean: {_mean:.1f}bp")
+                            _fig_fs.add_hline(y=_mean + _std, line=dict(color="#22c55e", dash="dot", width=0.8),
+                                annotation_text=f"+1σ: {_mean+_std:.1f}bp")
+                            _fig_fs.add_hline(y=_mean - _std, line=dict(color="#ef4444", dash="dot", width=0.8),
+                                annotation_text=f"−1σ: {_mean-_std:.1f}bp")
+                            _fig_fs.update_layout(
+                                title=f"{ccy} {_fs_fr} Curve Spread: {_label_b} − {_label_a} (bp)",
+                                yaxis_title="Spread (bp)", template="plotly_dark",
+                                height=420, margin=dict(l=60,r=20,t=40,b=40),
+                                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                            st.plotly_chart(_fig_fs, use_container_width=True)
+
+                            # Stats
+                            _current = _spread.iloc[-1]
+                            _z = (_current - _mean) / _std if _std > 0 else 0
+                            _pctl = ((_spread < _current).sum() / len(_spread)) * 100
+                            _stats_df = pd.DataFrame({
+                                "Metric": ["Current", "Mean", "Std Dev", "Z-Score", "Percentile",
+                                           "Min", "Max", "1Y Min", "1Y Max"],
+                                "Value": [
+                                    f"{_current:.1f}bp", f"{_mean:.1f}bp", f"{_std:.1f}bp",
+                                    f"{_z:.2f}", f"{_pctl:.0f}%",
+                                    f"{_spread.min():.1f}bp", f"{_spread.max():.1f}bp",
+                                    f"{_spread.tail(252).min():.1f}bp" if len(_spread) >= 252 else "—",
+                                    f"{_spread.tail(252).max():.1f}bp" if len(_spread) >= 252 else "—"
+                                ]
+                            })
+                            st.dataframe(_stats_df, hide_index=True, use_container_width=False)
+
+                            if _fs_show_zscore and _std > 0:
+                                _roll_z = (_spread - _spread.rolling(63).mean()) / _spread.rolling(63).std()
+                                _roll_z = _roll_z.dropna()
+                                if not _roll_z.empty:
+                                    _fig_z = go.Figure()
+                                    _fig_z.add_trace(go.Scatter(x=_roll_z.index, y=_roll_z.values,
+                                        mode="lines", name="63d Rolling Z", line=dict(color="#a855f7", width=1.5)))
+                                    _fig_z.add_hline(y=0, line=dict(color="#64748b", width=1))
+                                    _fig_z.add_hline(y=2, line=dict(color="#ef4444", dash="dot", width=0.8))
+                                    _fig_z.add_hline(y=-2, line=dict(color="#22c55e", dash="dot", width=0.8))
+                                    _fig_z.update_layout(
+                                        title="Rolling 63d Z-Score", yaxis_title="Z-Score",
+                                        template="plotly_dark", height=300,
+                                        margin=dict(l=60,r=20,t=40,b=40),
+                                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                                    st.plotly_chart(_fig_z, use_container_width=True)
+                        else:
+                            st.warning("No overlapping dates for spread calculation.")
+                    else:
+                        st.warning(f"Need both {_label_a} and {_label_b} in history to compute spread.")
+
+        # ── Save current session matrix to DB ──
+        if st.button(f"💾 Save Current {ccy} Forward Matrix to DB", key="rv_fwd_save_current"):
+            try:
+                _fwd_key = f"usd_fwd_matrix" if ccy == "USD" else f"{ccy.lower()}_fwd_matrix"
+                _curr_fwd = st.session_state.get(_fwd_key)
+                if _curr_fwd is None:
+                    _curr_fwd = st.session_state.get(f"_usd_fwd_matrix_sofr") if ccy == "USD" else None
+                if _curr_fwd is None or (hasattr(_curr_fwd, 'empty') and _curr_fwd.empty):
+                    st.warning(f"No {ccy} forward matrix in session. Generate one first on the Curves tab.")
+                else:
+                    _save_conn = get_db_connection()
+                    if _save_conn:
+                        import json as _json_save
+                        _save_cur = _save_conn.cursor()
+                        _save_date = pd.Timestamp.now().strftime("%Y-%m-%d")
+                        _save_reset = _curr_fwd.reset_index() if "Expiry" not in _curr_fwd.columns else _curr_fwd
+                        _save_json = {"values": _save_reset.to_dict("records")}
+                        _save_fr = _fsh_fr_opts[0]  # default floating rate for currency
+                        _save_cur.execute("""
+                            INSERT INTO fwd_matrix_history (date, currency, floating_rate, matrix)
+                            VALUES (%s, %s, %s, %s)
+                            ON CONFLICT (date, currency, floating_rate)
+                            DO UPDATE SET matrix = EXCLUDED.matrix, created_at = NOW()
+                        """, (_save_date, ccy, _save_fr, _json_save.dumps(_save_json)))
+                        _save_conn.commit()
+                        _save_cur.close(); _save_conn.close()
+                        st.success(f"✅ Saved {ccy} {_save_fr} forward matrix for {_save_date}.")
+            except Exception as _se:
+                st.error(f"Save error: {_se}")
+
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     # TAB 3   —   SWAPTION TRADE IDEAS
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
