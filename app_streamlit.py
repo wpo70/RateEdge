@@ -24011,11 +24011,18 @@ def main():
         ("🔍 Vol Lookup",                "tab_show_vollookup", vol_lookup_tab),
         ("🔮 Exotics",                   "tab_show_exotics",   lambda: exotics_tab(vol_mode)),
         ("📏 SOD Report",                "tab_show_sod",       sod_report_tab),
+        ("💵 USD SOD",                   "tab_show_usd_sod",   usd_sod_tab),
         ("✅ Vol Editor",                "tab_show_voleditor", vol_surface_editor_tab),
         ("📑 Vol Export",                "tab_show_volexport", vol_export_tab),
         ("📐 Midcurve & Curve Options",  "tab_show_midcurve",  midcurve_tab),
         ("🎫 Trade Ticket",              "tab_show_ticket",    lambda: render_ticket_tab(st.session_state)),
     ]
+    # v2904a: USD SOD tab only visible when USD selected
+    if st.session_state.get("sidebar_ccy", "AUD") != "USD":
+        st.session_state["tab_show_usd_sod"] = False
+    elif "tab_show_usd_sod" not in st.session_state:
+        st.session_state["tab_show_usd_sod"] = True
+
     # Multi-CCY is super_admin only, added separately below
     _tab_names = [n for n, k, f in _ALL_TAB_DEFS if st.session_state.get(k, True)]
     _tab_funcs = [f for n, k, f in _ALL_TAB_DEFS if st.session_state.get(k, True)]
@@ -26378,6 +26385,241 @@ def vol_lookup_tab():
         )
         _render_copy_button(_df_to_tsv(_df_r2), "r2_mat")
 
+
+
+def usd_sod_tab():
+    """USD Start-of-Day — Carry-Forward Vol Estimator.
+    NYC EOD → Tokyo Open → London Open."""
+    import plotly.graph_objects as go
+
+    st.subheader("💵 USD SOD — Carry-Forward Vol Estimator")
+    st.caption("NYC EOD vol snapshot → curve move decomposition → estimated vol adjustment at Tokyo/London open.")
+
+    if not HAS_POSTGRES:
+        st.warning("Database not connected.")
+        return
+
+    ccy = "USD"
+    user_id = st.session_state.get("username", "wpo@rateedge.au")
+
+    st.markdown("---")
+    st.markdown("### 📸 NYC EOD Base Snapshot")
+
+    _snaps = list_vol_snapshots(user_id, ccy)
+    _eod_snaps = [s for s in _snaps if "EOD" in s.get("label", "")]
+    if not _eod_snaps:
+        st.warning("No USD EOD snapshots found. Save a USD EOD NYC snapshot from the Vol Export tab first.")
+        return
+
+    _snap_labels = [f"{s['label']}  ({s.get('snapshot_date', s.get('created_at', ''))[:10]})" for s in _eod_snaps]
+    _sel_idx = st.selectbox("Select NYC EOD base", range(len(_snap_labels)),
+                            format_func=lambda i: _snap_labels[i], key="usd_sod_eod_sel")
+    _base_snap = _eod_snaps[_sel_idx]
+    _base_data = load_vol_snapshot(_base_snap["id"])
+
+    if not _base_data or "atm" not in _base_data:
+        st.error("Could not load snapshot data.")
+        return
+
+    _base_atm = _base_data["atm"]
+    _base_date = _base_snap.get("snapshot_date", _base_snap.get("created_at", ""))[:10]
+    st.success(f"✅ Base: **{_base_snap['label']}** ({_base_date})")
+
+    st.markdown("---")
+    st.markdown("### 📈 Curve Move Decomposition")
+
+    _eod_curve = _load_curve_from_db_latest("SOFR", "USD", load_date=_base_date)
+    _curr_curve = get_ccy_curve("USD")
+
+    if _eod_curve is None or _eod_curve.empty:
+        st.warning(f"No SOFR curve found for {_base_date}.")
+        _eod_curve = _curr_curve
+
+    if _curr_curve is None or _curr_curve.empty:
+        st.warning("No current USD SOFR curve loaded.")
+        return
+
+    def _rate_at(curve_df, tenor_y):
+        try:
+            xs = curve_df["MaturityY"].to_numpy().astype(float)
+            ys = curve_df["ZeroRatePct"].to_numpy().astype(float)
+            return float(np.interp(tenor_y, xs, ys))
+        except:
+            return None
+
+    _eod_5y = _rate_at(_eod_curve, 5.0) or 0
+    _cur_5y = _rate_at(_curr_curve, 5.0) or 0
+    _eod_2y = _rate_at(_eod_curve, 2.0) or 0
+    _cur_2y = _rate_at(_curr_curve, 2.0) or 0
+    _eod_10y = _rate_at(_eod_curve, 10.0) or 0
+    _cur_10y = _rate_at(_curr_curve, 10.0) or 0
+
+    _d_level = (_cur_5y - _eod_5y) * 100
+    _eod_slope = (_eod_10y - _eod_2y) * 100
+    _cur_slope = (_cur_10y - _cur_2y) * 100
+    _d_slope = _cur_slope - _eod_slope
+    _eod_bfly = (2 * _eod_5y - _eod_2y - _eod_10y) * 100
+    _cur_bfly = (2 * _cur_5y - _cur_2y - _cur_10y) * 100
+    _d_curve = _cur_bfly - _eod_bfly
+
+    _fc1, _fc2, _fc3 = st.columns(3)
+    with _fc1:
+        st.metric("Δ Level (5Y)", f"{_d_level:+.1f}bp",
+                  delta=f"5Y: {_eod_5y:.3f}% → {_cur_5y:.3f}%")
+    with _fc2:
+        st.metric("Δ Slope (2s10s)", f"{_d_slope:+.1f}bp",
+                  delta=f"2s10s: {_eod_slope:.1f}bp → {_cur_slope:.1f}bp")
+    with _fc3:
+        st.metric("Δ Curvature (2s5s10s)", f"{_d_curve:+.1f}bp",
+                  delta=f"Bfly: {_eod_bfly:.1f}bp → {_cur_bfly:.1f}bp")
+
+    _typical_tokyo_move = 3.0
+    if abs(_d_level) > _typical_tokyo_move * 2:
+        st.warning(f"⚠️ Large overnight move ({_d_level:+.1f}bp). Estimate may understate actual vol adjustment.")
+    elif abs(_d_level) < 0.5:
+        st.info("ℹ️ Minimal overnight move. Vol matrix likely unchanged from NYC EOD.")
+
+    with st.expander("📊 Curve Comparison", expanded=False):
+        _tenors_chart = [0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30]
+        _eod_rates = [_rate_at(_eod_curve, t) for t in _tenors_chart]
+        _cur_rates = [_rate_at(_curr_curve, t) for t in _tenors_chart]
+        fig_crv = go.Figure()
+        fig_crv.add_trace(go.Scatter(x=_tenors_chart, y=_eod_rates,
+            name=f"NYC EOD ({_base_date})", line=dict(color="#94a3b8", width=2, dash="dot")))
+        fig_crv.add_trace(go.Scatter(x=_tenors_chart, y=_cur_rates,
+            name="Current", line=dict(color="#3b82f6", width=2.5)))
+        fig_crv.update_layout(title="SOFR Curve: NYC EOD vs Current",
+            xaxis_title="Tenor (y)", yaxis_title="Rate (%)",
+            template="plotly_dark", height=300, showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        st.plotly_chart(fig_crv, use_container_width=True)
+
+    st.markdown("---")
+    st.markdown("### 🎯 Estimated Vol Adjustment")
+
+    EXPIRIES = ["1w", "1m", "2m", "3m", "6m", "1y", "2y", "3y", "5y"]
+    TENORS = [2, 3, 5, 7, 10, 15, 20, 30]
+    EXP_YEARS = {"1w": 1/52, "1m": 1/12, "2m": 2/12, "3m": 0.25, "6m": 0.5,
+                 "1y": 1.0, "2y": 2.0, "3y": 3.0, "5y": 5.0}
+
+    def _beta_level(exp_y):
+        base = 1.0 / max(np.sqrt(exp_y), 0.1)
+        return min(base * 0.28, 1.5)
+
+    def _beta_slope(exp_y, tenor_y):
+        return 0.15 * min(tenor_y / 10.0, 1.5) * (0.6 + 0.4 * min(exp_y, 2.0))
+
+    def _beta_curve(exp_y, tenor_y):
+        belly = np.exp(-0.5 * ((tenor_y - 6.0) / 3.0) ** 2)
+        return 0.10 * belly * (0.5 + 0.5 * min(exp_y, 1.0))
+
+    _adj_rows = []
+    _base_atm_df = _base_atm if isinstance(_base_atm, pd.DataFrame) else None
+
+    if _base_atm_df is not None:
+        for exp in EXPIRIES:
+            row_base = {"Expiry": exp}
+            row_adj = {"Expiry": exp}
+            row_delta = {"Expiry": exp}
+            exp_y = EXP_YEARS.get(exp, 1.0)
+            for tn in TENORS:
+                _v_base = get_matrix_value(_base_atm_df, exp, float(tn))
+                if _v_base is None:
+                    row_base[f"{tn}Y"] = None; row_adj[f"{tn}Y"] = None; row_delta[f"{tn}Y"] = None
+                    continue
+                _dv = (_beta_level(exp_y) * _d_level + _beta_slope(exp_y, float(tn)) * _d_slope +
+                       _beta_curve(exp_y, float(tn)) * _d_curve)
+                row_base[f"{tn}Y"] = round(_v_base, 2)
+                row_adj[f"{tn}Y"] = round(_v_base + _dv, 2)
+                row_delta[f"{tn}Y"] = round(_dv, 2)
+            _adj_rows.append({"type": "base", **row_base})
+            _adj_rows.append({"type": "adj", **row_adj})
+            _adj_rows.append({"type": "delta", **row_delta})
+
+        _df_base = pd.DataFrame([r for r in _adj_rows if r["type"] == "base"]).drop(columns=["type"])
+        _df_adj = pd.DataFrame([r for r in _adj_rows if r["type"] == "adj"]).drop(columns=["type"])
+        _df_delta = pd.DataFrame([r for r in _adj_rows if r["type"] == "delta"]).drop(columns=["type"])
+
+        _view_mode = st.radio("View", ["Side by Side", "Delta Only", "Adjusted Only"],
+                              horizontal=True, key="usd_sod_view")
+
+        if _view_mode == "Side by Side":
+            _sc1, _sc2 = st.columns(2)
+            with _sc1:
+                st.markdown("**NYC EOD Base (bp)**")
+                st.dataframe(_df_base.set_index("Expiry"), use_container_width=True)
+            with _sc2:
+                st.markdown("**Estimated Open (bp)**")
+                st.dataframe(_df_adj.set_index("Expiry"), use_container_width=True)
+        elif _view_mode == "Delta Only":
+            st.markdown("**Vol Change Estimate (bp)**")
+            def _delta_style(val):
+                try:
+                    v = float(val)
+                    if abs(v) > 3: return "background-color: rgba(239,68,68,0.3); font-weight: bold"
+                    if abs(v) > 1: return "background-color: rgba(251,191,36,0.2)"
+                    return "background-color: rgba(34,197,94,0.1)"
+                except: return ""
+            st.dataframe(_df_delta.set_index("Expiry").style.map(_delta_style), use_container_width=True)
+            st.caption("🟢 <1bp  |  🟡 1-3bp  |  🔴 >3bp")
+        else:
+            st.markdown("**Estimated Open (bp)**")
+            st.dataframe(_df_adj.set_index("Expiry"), use_container_width=True)
+
+        _deltas_flat = [r[f"{tn}Y"] for r in _adj_rows if r["type"] == "delta"
+                        for tn in TENORS if r.get(f"{tn}Y") is not None]
+        if _deltas_flat:
+            st.caption(f"Avg adjustment: {np.mean(_deltas_flat):+.2f}bp  |  "
+                       f"Max adjustment: {max(_deltas_flat, key=abs):+.2f}bp  |  "
+                       f"Curve factors: level {_d_level:+.1f}bp, slope {_d_slope:+.1f}bp, bfly {_d_curve:+.1f}bp")
+
+        st.markdown("---")
+        _ac1, _ac2, _ac3, _ac4 = st.columns(4)
+
+        def _build_adj_surface():
+            _s = _base_atm_df.copy()
+            for exp in EXPIRIES:
+                exp_y = EXP_YEARS.get(exp, 1.0)
+                for tn in TENORS:
+                    _v = get_matrix_value(_base_atm_df, exp, float(tn))
+                    if _v is None: continue
+                    _dv = (_beta_level(exp_y) * _d_level + _beta_slope(exp_y, float(tn)) * _d_slope +
+                           _beta_curve(exp_y, float(tn)) * _d_curve)
+                    try:
+                        _s.loc[_s.iloc[:, 0].astype(str).str.lower() == exp.lower(), f"{tn}Y"] = round(_v + _dv, 2)
+                    except: pass
+            return _s
+
+        with _ac1:
+            if st.button("💾 Save IND TOKYO OPEN", key="usd_sod_save_tky", type="primary"):
+                _adj_s = _build_adj_surface()
+                st.session_state.setdefault("vol_data", {}).setdefault("USD", {})["atm"] = _adj_s
+                from datetime import datetime as _dt_sod
+                _tky_now = _dt_sod.now(ZoneInfo("Asia/Tokyo"))
+                _label = f"USD IND TOKYO OPEN {_tky_now.strftime('%d-%b-%Y %H:%M JST')}"
+                _sid = save_vol_snapshot(user_id, "USD", _label, f"Carry-forward from {_base_snap['label']}")
+                if _sid:
+                    list_vol_snapshots.clear()
+                    st.success(f"✅ Saved **{_label}**")
+                else: st.error("Save failed.")
+
+        with _ac2:
+            if st.button("📋 Load to Vol Editor", key="usd_sod_load_editor"):
+                _adj_s = _build_adj_surface()
+                st.session_state.setdefault("vol_data", {}).setdefault("USD", {})["atm"] = _adj_s
+                st.success("✅ Loaded estimated surface to Vol Editor.")
+
+        with _ac3:
+            if st.button("⏪ Revert to NYC EOD", key="usd_sod_revert"):
+                st.session_state.setdefault("vol_data", {}).setdefault("USD", {})["atm"] = _base_atm_df
+                st.success(f"✅ Reverted to **{_base_snap['label']}**")
+                st.rerun()
+
+        with _ac4:
+            if st.button("🔄 Refresh Curve", key="usd_sod_refresh"):
+                st.rerun()
+    else:
+        st.error("NYC EOD snapshot does not contain a valid ATM vol surface.")
 
 @st.fragment
 def sod_report_tab():
