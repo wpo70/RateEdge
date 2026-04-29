@@ -26411,7 +26411,7 @@ def usd_sod_tab():
         st.warning("No USD EOD snapshots found. Save a USD EOD NYC snapshot from the Vol Export tab first.")
         return
 
-    _snap_labels = [f"{s['label']}  ({s.get('snapshot_date', s.get('created_at', ''))[:10]})" for s in _eod_snaps]
+    _snap_labels = [f"{s['label']}  ({str(s.get('snapshot_date') or s.get('created_at') or '')[:10]})" for s in _eod_snaps]
     _sel_idx = st.selectbox("Select NYC EOD base", range(len(_snap_labels)),
                             format_func=lambda i: _snap_labels[i], key="usd_sod_eod_sel")
     _base_snap = _eod_snaps[_sel_idx]
@@ -26422,7 +26422,7 @@ def usd_sod_tab():
         return
 
     _base_atm = _base_data["atm"]
-    _base_date = _base_snap.get("snapshot_date", _base_snap.get("created_at", ""))[:10]
+    _base_date = str(_base_snap.get("snapshot_date") or _base_snap.get("created_at") or "")[:10]
     st.success(f"✅ Base: **{_base_snap['label']}** ({_base_date})")
 
     st.markdown("---")
@@ -26502,6 +26502,39 @@ def usd_sod_tab():
     EXP_YEARS = {"1w": 1/52, "1m": 1/12, "2m": 2/12, "3m": 0.25, "6m": 0.5,
                  "1y": 1.0, "2y": 2.0, "3y": 3.0, "5y": 5.0}
 
+    # Load calibrated betas from DB (if available)
+    _cal_betas = {}  # {(expiry, tenor_str): {beta_level, beta_slope, beta_curve, r2}}
+    _using_calibrated = False
+    if HAS_POSTGRES:
+        try:
+            _cconn = get_db_connection()
+            if _cconn:
+                _ccur = _cconn.cursor()
+                _ccur.execute("""
+                    SELECT expiry, tenor, beta_level, beta_slope, beta_curve, r_squared
+                    FROM vol_curve_sensitivity
+                    WHERE currency='USD'
+                      AND calibration_date = (SELECT MAX(calibration_date)
+                                              FROM vol_curve_sensitivity WHERE currency='USD')
+                """)
+                for _ce, _ct, _bl, _bs, _bc, _r2 in _ccur.fetchall():
+                    _cal_betas[(_ce.lower(), _ct)] = {
+                        "level": float(_bl), "slope": float(_bs),
+                        "curve": float(_bc), "r2": float(_r2) if _r2 else 0
+                    }
+                _cconn.close()
+                if _cal_betas:
+                    _using_calibrated = True
+                    _avg_r2 = np.mean([v["r2"] for v in _cal_betas.values()])
+                    st.caption(f"🔬 Using **calibrated betas** ({len(_cal_betas)} cells, avg R²={_avg_r2:.3f}). "
+                               f"Theoretical priors used for cells without calibration.")
+        except:
+            pass
+
+    if not _using_calibrated:
+        st.caption("📐 Using **theoretical beta priors** (β_level ∝ 1/√T). "
+                   "Run calibration below to improve with empirical data.")
+
     def _beta_level(exp_y):
         base = 1.0 / max(np.sqrt(exp_y), 0.1)
         return min(base * 0.28, 1.5)
@@ -26512,6 +26545,15 @@ def usd_sod_tab():
     def _beta_curve(exp_y, tenor_y):
         belly = np.exp(-0.5 * ((tenor_y - 6.0) / 3.0) ** 2)
         return 0.10 * belly * (0.5 + 0.5 * min(exp_y, 1.0))
+
+    def _get_betas(exp, tenor_y):
+        """Return (bl, bs, bc) — calibrated if available, else theoretical."""
+        tn_str = f"{int(tenor_y)}Y"
+        cal = _cal_betas.get((exp.lower(), tn_str))
+        exp_y = EXP_YEARS.get(exp, 1.0)
+        if cal and cal["r2"] > 0.05:  # only use calibrated if R² > 5%
+            return cal["level"], cal["slope"], cal["curve"]
+        return _beta_level(exp_y), _beta_slope(exp_y, tenor_y), _beta_curve(exp_y, tenor_y)
 
     _adj_rows = []
     _base_atm_df = _base_atm if isinstance(_base_atm, pd.DataFrame) else None
@@ -26527,8 +26569,8 @@ def usd_sod_tab():
                 if _v_base is None:
                     row_base[f"{tn}Y"] = None; row_adj[f"{tn}Y"] = None; row_delta[f"{tn}Y"] = None
                     continue
-                _dv = (_beta_level(exp_y) * _d_level + _beta_slope(exp_y, float(tn)) * _d_slope +
-                       _beta_curve(exp_y, float(tn)) * _d_curve)
+                _bl, _bs, _bc = _get_betas(exp, float(tn))
+                _dv = _bl * _d_level + _bs * _d_slope + _bc * _d_curve
                 row_base[f"{tn}Y"] = round(_v_base, 2)
                 row_adj[f"{tn}Y"] = round(_v_base + _dv, 2)
                 row_delta[f"{tn}Y"] = round(_dv, 2)
@@ -26579,12 +26621,11 @@ def usd_sod_tab():
         def _build_adj_surface():
             _s = _base_atm_df.copy()
             for exp in EXPIRIES:
-                exp_y = EXP_YEARS.get(exp, 1.0)
                 for tn in TENORS:
                     _v = get_matrix_value(_base_atm_df, exp, float(tn))
                     if _v is None: continue
-                    _dv = (_beta_level(exp_y) * _d_level + _beta_slope(exp_y, float(tn)) * _d_slope +
-                           _beta_curve(exp_y, float(tn)) * _d_curve)
+                    _bl, _bs, _bc = _get_betas(exp, float(tn))
+                    _dv = _bl * _d_level + _bs * _d_slope + _bc * _d_curve
                     try:
                         _s.loc[_s.iloc[:, 0].astype(str).str.lower() == exp.lower(), f"{tn}Y"] = round(_v + _dv, 2)
                     except: pass
@@ -26620,6 +26661,238 @@ def usd_sod_tab():
                 st.rerun()
     else:
         st.error("NYC EOD snapshot does not contain a valid ATM vol surface.")
+
+    # ── 5. Calibration Engine ──────────────────────────────────────────
+    st.markdown("---")
+    with st.expander("🔬 Beta Calibration Engine", expanded=False):
+        st.caption("Pair consecutive vol snapshots with curve moves to estimate empirical betas. "
+                   "Replaces theoretical priors with data-driven sensitivities.")
+
+        _cal_col1, _cal_col2 = st.columns([2, 1])
+        with _cal_col1:
+            _cal_method = st.radio("Regression", ["OLS", "Ridge"], horizontal=True, key="usd_sod_cal_method")
+        with _cal_col2:
+            _cal_min_obs = st.number_input("Min observations", min_value=5, max_value=50, value=10, key="usd_sod_min_obs")
+
+        if st.button("⚡ Run Calibration", key="usd_sod_calibrate", type="primary"):
+            try:
+                conn = get_db_connection()
+                if not conn:
+                    st.error("No DB connection.")
+                else:
+                    cur = conn.cursor()
+
+                    # 1. Load all USD vol snapshots ordered by date
+                    cur.execute("""
+                        SELECT id, snapshot_date, label, atm_vols
+                        FROM vol_history
+                        WHERE currency='USD'
+                          AND user_id IN ('wpo@rateedge.au','wpo70@icloud.com','shared')
+                          AND atm_vols IS NOT NULL
+                        ORDER BY snapshot_date ASC
+                    """)
+                    _snaps_raw = cur.fetchall()
+
+                    # 2. Load USD SOFR swap rates for all available dates
+                    cur.execute("""
+                        SELECT date, tenor, rate FROM swap_rates
+                        WHERE currency='USD' AND floating_rate='SOFR'
+                        ORDER BY date
+                    """)
+                    _rates_raw = cur.fetchall()
+                    conn.close()
+
+                    if len(_snaps_raw) < 5:
+                        st.warning(f"Only {len(_snaps_raw)} snapshots — need at least 5 for meaningful calibration.")
+                    elif len(_rates_raw) < 10:
+                        st.warning(f"Only {len(_rates_raw)} rate rows — need SOFR curve history.")
+                    else:
+                        # Build rate lookup: date → {tenor_y → rate}
+                        _rate_by_date = {}
+                        for _rd, _rt, _rv in _rates_raw:
+                            d = str(_rd)
+                            _rate_by_date.setdefault(d, {})
+                            try:
+                                _ty = float(str(_rt).replace("Y", "").replace("y", ""))
+                                _rate_by_date[d][_ty] = float(_rv)
+                            except:
+                                pass
+
+                        def _interp_rate(date_str, tenor_y):
+                            rd = _rate_by_date.get(date_str, {})
+                            if not rd:
+                                return None
+                            xs = sorted(rd.keys())
+                            ys = [rd[x] for x in xs]
+                            if len(xs) < 2:
+                                return None
+                            return float(np.interp(tenor_y, xs, ys))
+
+                        # Build vol lookup: date → {(expiry, tenor) → vol}
+                        _vol_by_date = {}
+                        for _sid, _sdate, _slabel, _satm in _snaps_raw:
+                            d = str(_sdate)
+                            if not _satm or "values" not in _satm:
+                                continue
+                            _vm = {}
+                            for row in _satm.get("values", []):
+                                exp = (row.get("Expiry") or row.get("expiry") or "").lower()
+                                if not exp:
+                                    continue
+                                for k, v in row.items():
+                                    if k.lower() == "expiry":
+                                        continue
+                                    try:
+                                        _vm[(exp, k)] = float(v)
+                                    except:
+                                        pass
+                            if _vm:
+                                _vol_by_date[d] = _vm
+
+                        # 3. Pair consecutive dates
+                        _vol_dates = sorted(_vol_by_date.keys())
+                        _pairs = []
+                        for i in range(len(_vol_dates) - 1):
+                            d0 = _vol_dates[i]
+                            d1 = _vol_dates[i + 1]
+                            # Curve factors at both dates
+                            r0_2 = _interp_rate(d0, 2.0)
+                            r0_5 = _interp_rate(d0, 5.0)
+                            r0_10 = _interp_rate(d0, 10.0)
+                            r1_2 = _interp_rate(d1, 2.0)
+                            r1_5 = _interp_rate(d1, 5.0)
+                            r1_10 = _interp_rate(d1, 10.0)
+                            if None in (r0_2, r0_5, r0_10, r1_2, r1_5, r1_10):
+                                continue
+                            dl = (r1_5 - r0_5) * 100  # bp
+                            ds = ((r1_10 - r1_2) - (r0_10 - r0_2)) * 100
+                            dc = ((2*r1_5 - r1_2 - r1_10) - (2*r0_5 - r0_2 - r0_10)) * 100
+                            _pairs.append((d0, d1, dl, ds, dc))
+
+                        st.info(f"Found {len(_pairs)} date pairs with both vol and curve data.")
+
+                        if len(_pairs) < _cal_min_obs:
+                            st.warning(f"Need at least {_cal_min_obs} pairs. Currently {len(_pairs)}.")
+                        else:
+                            # 4. Regression per cell
+                            EXPIRIES_CAL = ["1w", "1m", "2m", "3m", "6m", "1y", "2y", "3y", "5y"]
+                            TENORS_CAL = ["2Y", "3Y", "5Y", "7Y", "10Y", "15Y", "20Y", "30Y"]
+
+                            _cal_results = []
+                            _n_good = 0
+                            for exp in EXPIRIES_CAL:
+                                for tn in TENORS_CAL:
+                                    key = (exp, tn)
+                                    # Build X (factors) and y (vol changes) arrays
+                                    X_rows = []
+                                    y_rows = []
+                                    for d0, d1, dl, ds, dc in _pairs:
+                                        v0 = _vol_by_date.get(d0, {}).get(key)
+                                        v1 = _vol_by_date.get(d1, {}).get(key)
+                                        if v0 is not None and v1 is not None:
+                                            X_rows.append([dl, ds, dc])
+                                            y_rows.append(v1 - v0)
+
+                                    n = len(y_rows)
+                                    if n < _cal_min_obs:
+                                        continue
+
+                                    X = np.array(X_rows)
+                                    y = np.array(y_rows)
+
+                                    try:
+                                        if _cal_method == "Ridge":
+                                            # Ridge regression with small lambda
+                                            XtX = X.T @ X + 0.01 * np.eye(3)
+                                            betas = np.linalg.solve(XtX, X.T @ y)
+                                        else:
+                                            # OLS
+                                            betas, residuals, rank, sv = np.linalg.lstsq(X, y, rcond=None)
+
+                                        y_hat = X @ betas
+                                        ss_res = np.sum((y - y_hat) ** 2)
+                                        ss_tot = np.sum((y - np.mean(y)) ** 2)
+                                        r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
+
+                                        _cal_results.append({
+                                            "expiry": exp, "tenor": tn,
+                                            "beta_level": round(float(betas[0]), 6),
+                                            "beta_slope": round(float(betas[1]), 6),
+                                            "beta_curve": round(float(betas[2]), 6),
+                                            "r_squared": round(float(r2), 4),
+                                            "n": n,
+                                        })
+                                        if r2 > 0.1:
+                                            _n_good += 1
+                                    except Exception:
+                                        pass
+
+                            if _cal_results:
+                                st.success(f"✅ Calibrated {len(_cal_results)} cells ({_n_good} with R²>0.1)")
+
+                                # Display results
+                                _cal_df = pd.DataFrame(_cal_results)
+                                st.dataframe(_cal_df.style.format({
+                                    "beta_level": "{:.4f}", "beta_slope": "{:.4f}",
+                                    "beta_curve": "{:.4f}", "r_squared": "{:.3f}"
+                                }), use_container_width=True, hide_index=True)
+
+                                # Save to DB
+                                if st.button("💾 Save Calibration to DB", key="usd_sod_save_cal"):
+                                    try:
+                                        conn2 = get_db_connection()
+                                        cur2 = conn2.cursor()
+                                        _today = pd.Timestamp.now().strftime("%Y-%m-%d")
+                                        _saved = 0
+                                        for cr in _cal_results:
+                                            cur2.execute("""
+                                                INSERT INTO vol_curve_sensitivity
+                                                    (currency, expiry, tenor, beta_level, beta_slope, beta_curve,
+                                                     r_squared, sample_size, calibration_date, calibration_method)
+                                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                                ON CONFLICT (currency, expiry, tenor, calibration_date)
+                                                DO UPDATE SET beta_level=EXCLUDED.beta_level,
+                                                    beta_slope=EXCLUDED.beta_slope,
+                                                    beta_curve=EXCLUDED.beta_curve,
+                                                    r_squared=EXCLUDED.r_squared,
+                                                    sample_size=EXCLUDED.sample_size,
+                                                    calibration_method=EXCLUDED.calibration_method
+                                            """, ("USD", cr["expiry"], cr["tenor"],
+                                                  cr["beta_level"], cr["beta_slope"], cr["beta_curve"],
+                                                  cr["r_squared"], cr["n"], _today, _cal_method))
+                                            _saved += 1
+                                        conn2.commit()
+                                        conn2.close()
+                                        st.success(f"✅ Saved {_saved} calibrated betas to DB.")
+                                    except Exception as _ce:
+                                        st.error(f"Save error: {_ce}")
+                            else:
+                                st.warning("No cells could be calibrated — check vol_history and swap_rates data overlap.")
+            except Exception as _cal_err:
+                st.error(f"Calibration error: {_cal_err}")
+
+        # Show existing calibration
+        if HAS_POSTGRES:
+            try:
+                conn3 = get_db_connection()
+                if conn3:
+                    cur3 = conn3.cursor()
+                    cur3.execute("""
+                        SELECT calibration_date, COUNT(*), AVG(r_squared)
+                        FROM vol_curve_sensitivity
+                        WHERE currency='USD'
+                        GROUP BY calibration_date
+                        ORDER BY calibration_date DESC
+                        LIMIT 5
+                    """)
+                    _cal_hist = cur3.fetchall()
+                    conn3.close()
+                    if _cal_hist:
+                        st.markdown("**Previous calibrations:**")
+                        for _cd, _cn, _cr2 in _cal_hist:
+                            st.caption(f"{_cd}: {_cn} cells, avg R²={_cr2:.3f}")
+            except:
+                pass
 
 @st.fragment
 def sod_report_tab():
