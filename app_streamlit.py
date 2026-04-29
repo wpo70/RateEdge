@@ -19769,7 +19769,7 @@ def rv_tab():
             "USD": ["SOFR", "FEDFUNDS"],
             "NZD": ["3M BKBM", "NZONIA"],
             "EUR": ["EURIBOR 6M", "ESTR"],
-            "JPY": ["JPY TONA"],
+            "JPY": ["TONAR"],
             "CAD": ["CORRA"],
         }
         _fsh_fr_opts = _fsh_fr_map.get(ccy, ["SOFR"])
@@ -19915,7 +19915,7 @@ def rv_tab():
         _xccy_all = ["AUD", "USD", "NZD", "EUR", "JPY", "CAD", "GBP", "NOK", "SEK"]
         _xccy_fr_map = {
             "AUD": "6M BBSW", "USD": "SOFR", "NZD": "3M BKBM", "EUR": "EURIBOR 6M",
-            "JPY": "JPY TONA", "CAD": "CORRA", "GBP": "SONIA", "NOK": "NOWA", "SEK": "SWESTR",
+            "JPY": "TONAR", "CAD": "CORRA", "GBP": "SONIA", "NOK": "NOWA", "SEK": "SWESTR",
         }
         _xccy_expiries = ["1m", "3m", "6m", "1y", "2y", "3y", "5y", "7y", "10y"]
         _xccy_tenors = ["1Y", "2Y", "3Y", "5Y", "7Y", "10Y"]
