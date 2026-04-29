@@ -26640,13 +26640,13 @@ def usd_sod_tab():
         if _view_mode == "Side by Side":
             _sc1, _sc2 = st.columns(2)
             with _sc1:
-                st.markdown("**NYC EOD Base (bp)**")
+                st.markdown("**NYC EOD Base (Normal Vol bp/yr)**")
                 st.dataframe(_df_base.set_index("Expiry"), use_container_width=True)
             with _sc2:
-                st.markdown("**Estimated Open (bp)**")
+                st.markdown("**Estimated Open (Normal Vol bp/yr)**")
                 st.dataframe(_df_adj.set_index("Expiry"), use_container_width=True)
         elif _view_mode == "Delta Only":
-            st.markdown("**Vol Change Estimate (bp)**")
+            st.markdown("**Vol Change Estimate (Normal Vol bp/yr)**")
             def _delta_style(val):
                 try:
                     v = float(val)
@@ -26657,7 +26657,7 @@ def usd_sod_tab():
             st.dataframe(_df_delta.set_index("Expiry").style.map(_delta_style), use_container_width=True)
             st.caption("🟢 <1bp  |  🟡 1-3bp  |  🔴 >3bp")
         else:
-            st.markdown("**Estimated Open (bp)**")
+            st.markdown("**Estimated Open (Normal Vol bp/yr)**")
             st.dataframe(_df_adj.set_index("Expiry"), use_container_width=True)
 
         _deltas_flat = [r[f"{tn}Y"] for r in _adj_rows if r["type"] == "delta"
@@ -26764,10 +26764,15 @@ def usd_sod_tab():
                         # Build rate lookup: date → {tenor_y → rate}
                         _rate_by_date = {}
                         for _rd, _rt, _rv in _rates_raw:
-                            d = str(_rd)
+                            d = str(_rd)[:10]  # normalise to YYYY-MM-DD
                             _rate_by_date.setdefault(d, {})
                             try:
-                                _ty = float(str(_rt).replace("Y", "").replace("y", ""))
+                                t = str(_rt).strip().upper()
+                                import re as _re_cal
+                                _tm = _re_cal.match(r"(\d+(?:\.\d+)?)(Y|M)", t)
+                                if not _tm: continue
+                                _tv, _tu = float(_tm.group(1)), _tm.group(2)
+                                _ty = _tv if _tu == "Y" else _tv / 12
                                 _rate_by_date[d][_ty] = float(_rv)
                             except:
                                 pass
@@ -26785,7 +26790,7 @@ def usd_sod_tab():
                         # Build vol lookup: date → {(expiry, tenor) → vol}
                         _vol_by_date = {}
                         for _sid, _sdate, _slabel, _satm in _snaps_raw:
-                            d = str(_sdate)
+                            d = str(_sdate)[:10]  # normalise to YYYY-MM-DD
                             if not _satm or "values" not in _satm:
                                 continue
                             _vm = {}
@@ -26805,6 +26810,11 @@ def usd_sod_tab():
 
                         # 3. Pair consecutive dates
                         _vol_dates = sorted(_vol_by_date.keys())
+                        _rate_dates = set(_rate_by_date.keys())
+                        _overlap = [d for d in _vol_dates if d in _rate_dates]
+                        st.caption(f"📊 Vol snapshots: {len(_vol_dates)} dates | "
+                                   f"SOFR curves: {len(_rate_dates)} dates | "
+                                   f"Overlap: {len(_overlap)} dates")
                         _pairs = []
                         for i in range(len(_vol_dates) - 1):
                             d0 = _vol_dates[i]
