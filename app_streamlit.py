@@ -19995,17 +19995,64 @@ def rv_tab():
             _fig_xc = go.Figure()
             if _spread_a is not None:
                 _fig_xc.add_trace(go.Scatter(x=_spread_a.index, y=_spread_a.values, mode="lines",
-                    name=f"{_xccy_a} {_spread_label}", line=dict(color="#3b82f6", width=1.8)))
+                    name=f"{_xccy_a} {_spread_label}", line=dict(color="#00d4ff", width=2.2)))
             if _spread_b is not None:
                 _fig_xc.add_trace(go.Scatter(x=_spread_b.index, y=_spread_b.values, mode="lines",
-                    name=f"{_xccy_b} {_spread_label}", line=dict(color="#ef4444", width=1.8)))
+                    name=f"{_xccy_b} {_spread_label}", line=dict(color="#ff6b6b", width=2.2)))
             _fig_xc.add_hline(y=0, line=dict(color="#64748b", width=0.8))
             _fig_xc.update_layout(
-                title=f"Forward Curve Steepness: {_xccy_a} vs {_xccy_b} ({_spread_label})",
+                title=dict(text=f"Forward Curve Steepness: {_xccy_a} vs {_xccy_b} ({_spread_label})", font=dict(size=16, color="#e2e8f0")),
                 yaxis_title="Spread (bp)", template="plotly_dark", height=400,
-                margin=dict(l=60,r=20,t=40,b=40),
+                margin=dict(l=60,r=20,t=50,b=40), legend=dict(font=dict(size=13, color="#e2e8f0")),
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
             st.plotly_chart(_fig_xc, use_container_width=True)
+
+            # Scatter regression — prominent, right after spreads
+            if _spread_a is not None and _spread_b is not None:
+                _merged = pd.DataFrame({"A": _spread_a, "B": _spread_b}).dropna()
+                if len(_merged) > 20:
+                    from scipy import stats as _scipy_stats
+                    _slope, _intercept, _r, _p, _se = _scipy_stats.linregress(_merged["A"], _merged["B"])
+                    _merged["predicted"] = _slope * _merged["A"] + _intercept
+                    _merged["residual"] = _merged["B"] - _merged["predicted"]
+
+                    # Color by date — recent points brighter
+                    _n_pts = len(_merged)
+                    _ages = np.linspace(0.3, 1.0, _n_pts)
+                    _fig_sc = go.Figure()
+                    _fig_sc.add_trace(go.Scatter(x=_merged["A"], y=_merged["B"],
+                        mode="markers", marker=dict(
+                            color=_ages, colorscale="Viridis", size=7, opacity=0.8,
+                            colorbar=dict(title="Recent→", thickness=12, len=0.5)),
+                        name="History", text=[str(d.date()) for d in _merged.index],
+                        hovertemplate="%{text}<br>%{x:.1f}bp vs %{y:.1f}bp<extra></extra>"))
+                    _x_range = np.linspace(_merged["A"].min(), _merged["A"].max(), 50)
+                    _fig_sc.add_trace(go.Scatter(x=_x_range, y=_slope*_x_range+_intercept,
+                        mode="lines", line=dict(color="#fbbf24", width=3),
+                        name=f"β={_slope:.2f}, R²={_r**2:.2f}"))
+                    # +/- 1σ bands
+                    _resid_std = _merged["residual"].std()
+                    _fig_sc.add_trace(go.Scatter(x=_x_range, y=_slope*_x_range+_intercept+_resid_std,
+                        mode="lines", line=dict(color="#4ade80", width=1, dash="dot"), name="+1σ", showlegend=False))
+                    _fig_sc.add_trace(go.Scatter(x=_x_range, y=_slope*_x_range+_intercept-_resid_std,
+                        mode="lines", line=dict(color="#f87171", width=1, dash="dot"), name="−1σ", showlegend=False))
+                    # Current point
+                    if not _merged.empty:
+                        _curr_resid = _merged['residual'].iloc[-1]
+                        _fig_sc.add_trace(go.Scatter(
+                            x=[_merged["A"].iloc[-1]], y=[_merged["B"].iloc[-1]],
+                            mode="markers+text", marker=dict(color="#ff3366", size=16, symbol="star",
+                                line=dict(color="white", width=2)),
+                            text=[f"NOW {_curr_resid:+.1f}bp"], textposition="top right",
+                            textfont=dict(color="#ff3366", size=13),
+                            name=f"Current ({_curr_resid:+.1f}bp vs model)"))
+                    _fig_sc.update_layout(
+                        title=dict(text=f"Regression: {_xccy_b} vs {_xccy_a} ({_spread_label})",
+                                   font=dict(size=16, color="#e2e8f0")),
+                        xaxis_title=f"{_xccy_a} (bp)", yaxis_title=f"{_xccy_b} (bp)",
+                        template="plotly_dark", height=450, legend=dict(font=dict(size=12, color="#e2e8f0")),
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                    st.plotly_chart(_fig_sc, use_container_width=True)
 
             # Spread-of-spreads
             if _spread_a is not None and _spread_b is not None:
@@ -20015,66 +20062,75 @@ def rv_tab():
                     _sos_mean = _sos.mean(); _sos_std = _sos.std()
                     _fig_sos = go.Figure()
                     _fig_sos.add_trace(go.Scatter(x=_sos.index, y=_sos.values, mode="lines",
-                        name=f"{_xccy_a} − {_xccy_b}", line=dict(color="#22c55e", width=1.8)))
-                    _fig_sos.add_hline(y=_sos_mean, line=dict(color="#94a3b8", dash="dash", width=1),
-                        annotation_text=f"Mean: {_sos_mean:.1f}bp")
-                    _fig_sos.add_hline(y=_sos_mean + _sos_std, line=dict(color="#3b82f6", dash="dot", width=0.8),
-                        annotation_text=f"+1σ: {_sos_mean+_sos_std:.1f}bp")
-                    _fig_sos.add_hline(y=_sos_mean - _sos_std, line=dict(color="#ef4444", dash="dot", width=0.8),
-                        annotation_text=f"−1σ: {_sos_mean-_sos_std:.1f}bp")
+                        name=f"{_xccy_a} − {_xccy_b}", line=dict(color="#4ade80", width=2.2)))
+                    _fig_sos.add_hline(y=_sos_mean, line=dict(color="#e2e8f0", dash="dash", width=1.2),
+                        annotation=dict(text=f"Mean: {_sos_mean:.1f}bp", font=dict(size=12, color="#e2e8f0")))
+                    _fig_sos.add_hline(y=_sos_mean + _sos_std, line=dict(color="#4ade80", dash="dot", width=1),
+                        annotation=dict(text=f"+1σ: {_sos_mean+_sos_std:.1f}bp", font=dict(size=11, color="#4ade80")))
+                    _fig_sos.add_hline(y=_sos_mean - _sos_std, line=dict(color="#f87171", dash="dot", width=1),
+                        annotation=dict(text=f"−1σ: {_sos_mean-_sos_std:.1f}bp", font=dict(size=11, color="#f87171")))
                     _fig_sos.add_hline(y=0, line=dict(color="#64748b", width=0.8))
                     _fig_sos.update_layout(
-                        title=f"Spread of Spreads: {_xccy_a} − {_xccy_b} ({_spread_label})",
+                        title=dict(text=f"Spread of Spreads: {_xccy_a} − {_xccy_b} ({_spread_label})",
+                                   font=dict(size=16, color="#e2e8f0")),
                         yaxis_title="Spread-of-Spreads (bp)", template="plotly_dark", height=400,
-                        margin=dict(l=60,r=20,t=40,b=40),
+                        margin=dict(l=60,r=20,t=50,b=40), legend=dict(font=dict(size=13, color="#e2e8f0")),
                         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
                     st.plotly_chart(_fig_sos, use_container_width=True)
 
-                    # Stats
+                    # Stats + Trade Ideas side by side
                     _sos_current = _sos.iloc[-1]
                     _sos_z = (_sos_current - _sos_mean) / _sos_std if _sos_std > 0 else 0
                     _sos_pctl = ((_sos < _sos_current).sum() / len(_sos)) * 100
-                    _xc_stats = pd.DataFrame({
-                        "Metric": ["Current", "Mean", "Std Dev", "Z-Score", "Percentile",
-                                   "Min", "Max", "1Y Min", "1Y Max"],
-                        "Value": [
-                            f"{_sos_current:.1f}bp", f"{_sos_mean:.1f}bp", f"{_sos_std:.1f}bp",
-                            f"{_sos_z:.2f}", f"{_sos_pctl:.0f}%",
-                            f"{_sos.min():.1f}bp", f"{_sos.max():.1f}bp",
-                            f"{_sos.tail(252).min():.1f}bp" if len(_sos) >= 252 else "—",
-                            f"{_sos.tail(252).max():.1f}bp" if len(_sos) >= 252 else "—"
-                        ]
-                    })
-                    st.dataframe(_xc_stats, hide_index=True, use_container_width=False)
 
-                    # Scatter regression
-                    if len(_spread_a) > 20 and len(_spread_b) > 20:
-                        _merged = pd.DataFrame({"A": _spread_a, "B": _spread_b}).dropna()
-                        if len(_merged) > 20:
-                            from scipy import stats as _scipy_stats
-                            _slope, _intercept, _r, _p, _se = _scipy_stats.linregress(_merged["A"], _merged["B"])
-                            _merged["predicted"] = _slope * _merged["A"] + _intercept
-                            _merged["residual"] = _merged["B"] - _merged["predicted"]
-                            _fig_sc = go.Figure()
-                            _fig_sc.add_trace(go.Scatter(x=_merged["A"], y=_merged["B"],
-                                mode="markers", marker=dict(color="#3b82f6", size=4, opacity=0.5),
-                                name="History"))
-                            _x_range = np.linspace(_merged["A"].min(), _merged["A"].max(), 50)
-                            _fig_sc.add_trace(go.Scatter(x=_x_range, y=_slope*_x_range+_intercept,
-                                mode="lines", line=dict(color="#f59e0b", width=2, dash="dash"),
-                                name=f"β={_slope:.2f}, R²={_r**2:.2f}"))
-                            # Current point
-                            if not _merged.empty:
-                                _fig_sc.add_trace(go.Scatter(
-                                    x=[_merged["A"].iloc[-1]], y=[_merged["B"].iloc[-1]],
-                                    mode="markers", marker=dict(color="#ef4444", size=14, symbol="star"),
-                                    name=f"Now (resid {_merged['residual'].iloc[-1]:+.1f}bp)"))
-                            _fig_sc.update_layout(
-                                title=f"Regression: {_xccy_b} vs {_xccy_a} ({_spread_label})",
-                                xaxis_title=f"{_xccy_a} (bp)", yaxis_title=f"{_xccy_b} (bp)",
-                                template="plotly_dark", height=400,
-                                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-                            st.plotly_chart(_fig_sc, use_container_width=True)
+                    _ti_c1, _ti_c2 = st.columns([1, 2])
+                    with _ti_c1:
+                        _xc_stats = pd.DataFrame({
+                            "Metric": ["Current", "Mean", "Std Dev", "Z-Score", "Percentile",
+                                       "Min", "Max", "1Y Min", "1Y Max"],
+                            "Value": [
+                                f"{_sos_current:.1f}bp", f"{_sos_mean:.1f}bp", f"{_sos_std:.1f}bp",
+                                f"{_sos_z:.2f}", f"{_sos_pctl:.0f}%",
+                                f"{_sos.min():.1f}bp", f"{_sos.max():.1f}bp",
+                                f"{_sos.tail(252).min():.1f}bp" if len(_sos) >= 252 else "—",
+                                f"{_sos.tail(252).max():.1f}bp" if len(_sos) >= 252 else "—"
+                            ]
+                        })
+                        st.dataframe(_xc_stats, hide_index=True, use_container_width=True)
+
+                    with _ti_c2:
+                        st.markdown("##### 💡 Trade Idea")
+                        if abs(_sos_z) < 0.5:
+                            st.info(f"**No signal** — {_xccy_a} vs {_xccy_b} spread-of-spreads is within 0.5σ of mean. No clear RV.")
+                        else:
+                            # Generate trade idea
+                            if _sos_z > 0:
+                                _ti_dir_a = "Flatten"
+                                _ti_dir_b = "Steepen"
+                                _ti_action = f"**Pay** {_xccy_a} {_spread_label} / **Receive** {_xccy_b} {_spread_label}"
+                                _ti_rationale = f"{_xccy_a} curve is **rich** vs {_xccy_b} (Z={_sos_z:+.1f}, {_sos_pctl:.0f}th pctl)"
+                            else:
+                                _ti_dir_a = "Steepen"
+                                _ti_dir_b = "Flatten"
+                                _ti_action = f"**Receive** {_xccy_a} {_spread_label} / **Pay** {_xccy_b} {_spread_label}"
+                                _ti_rationale = f"{_xccy_a} curve is **cheap** vs {_xccy_b} (Z={_sos_z:+.1f}, {_sos_pctl:.0f}th pctl)"
+
+                            _ti_entry = _sos_current
+                            _ti_target = _sos_mean
+                            _ti_stop = _sos_current + (_sos_std * (1.0 if _sos_z > 0 else -1.0))
+
+                            st.markdown(f"**Direction:** {_ti_action}")
+                            st.markdown(f"**Rationale:** {_ti_rationale}")
+                            st.markdown(f"""
+| | Level |
+|---|---|
+| **Entry** | {_ti_entry:.1f}bp |
+| **Target** | {_ti_target:.1f}bp ({abs(_ti_entry - _ti_target):.1f}bp P&L) |
+| **Stop** | {_ti_stop:.1f}bp ({abs(_ti_stop - _ti_entry):.1f}bp risk) |
+| **Reward/Risk** | {abs(_ti_entry - _ti_target) / max(abs(_ti_stop - _ti_entry), 0.1):.1f}x |
+""")
+                            _signal_str = "🔴 STRONG" if abs(_sos_z) > 2 else "🟡 MODERATE" if abs(_sos_z) > 1 else "⚪ WEAK"
+                            st.markdown(f"**Signal strength:** {_signal_str} ({abs(_sos_z):.1f}σ)")
 
                     # Rolling Z-score
                     if _sos_std > 0:
@@ -20083,14 +20139,17 @@ def rv_tab():
                         if not _sos_roll_z.empty:
                             _fig_xz = go.Figure()
                             _fig_xz.add_trace(go.Scatter(x=_sos_roll_z.index, y=_sos_roll_z.values,
-                                mode="lines", name="63d Rolling Z", line=dict(color="#a855f7", width=1.5)))
-                            _fig_xz.add_hline(y=0, line=dict(color="#64748b", width=1))
-                            _fig_xz.add_hline(y=2, line=dict(color="#ef4444", dash="dot", width=0.8))
-                            _fig_xz.add_hline(y=-2, line=dict(color="#22c55e", dash="dot", width=0.8))
+                                mode="lines", name="63d Rolling Z", line=dict(color="#c084fc", width=2)))
+                            _fig_xz.add_hline(y=0, line=dict(color="#94a3b8", width=1))
+                            _fig_xz.add_hline(y=2, line=dict(color="#f87171", dash="dot", width=1.2),
+                                annotation=dict(text="+2σ", font=dict(color="#f87171", size=12)))
+                            _fig_xz.add_hline(y=-2, line=dict(color="#4ade80", dash="dot", width=1.2),
+                                annotation=dict(text="−2σ", font=dict(color="#4ade80", size=12)))
                             _fig_xz.update_layout(
-                                title=f"Rolling 63d Z-Score: {_xccy_a} − {_xccy_b}",
+                                title=dict(text=f"Rolling 63d Z-Score: {_xccy_a} − {_xccy_b}",
+                                           font=dict(size=15, color="#e2e8f0")),
                                 yaxis_title="Z-Score", template="plotly_dark", height=300,
-                                margin=dict(l=60,r=20,t=40,b=40),
+                                margin=dict(l=60,r=20,t=50,b=40),
                                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
                             st.plotly_chart(_fig_xz, use_container_width=True)
 
