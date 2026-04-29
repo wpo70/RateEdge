@@ -26439,31 +26439,54 @@ def usd_sod_tab():
     st.markdown("---")
     st.markdown("### 📈 Curve Move Decomposition")
 
-    _eod_curve = _load_curve_from_db_latest("SOFR", "USD", load_date=_base_date)
-    _curr_curve = get_ccy_curve("USD")
-
-    # Get current curve date from DB for display
-    _curr_curve_date = "session"
+    # ── Load available curve dates for comparison picker ──
+    _avail_curve_dates = []
+    _avail_ff_dates = []
     try:
-        _cc_conn = get_db_connection()
-        if _cc_conn:
-            _cc_cur = _cc_conn.cursor()
-            _cc_cur.execute("SELECT MAX(date) FROM swap_rates WHERE currency='USD' AND floating_rate='SOFR'")
-            _cd_row = _cc_cur.fetchone()
-            _cc_cur.close(); _cc_conn.close()
-            if _cd_row and _cd_row[0]:
-                _curr_curve_date = str(_cd_row[0])
-    except: pass
+        _cd_conn = get_db_connection()
+        if _cd_conn:
+            _cd_cur = _cd_conn.cursor()
+            _cd_cur.execute("SELECT DISTINCT date FROM swap_rates WHERE currency='USD' AND floating_rate='SOFR' ORDER BY date DESC")
+            _avail_curve_dates = [str(r[0]) for r in _cd_cur.fetchall()]
+            _cd_cur.execute("SELECT DISTINCT date FROM swap_rates WHERE currency='USD' AND floating_rate='FEDFUNDS' ORDER BY date DESC")
+            _avail_ff_dates = [str(r[0]) for r in _cd_cur.fetchall()]
+            _cd_cur.close(); _cd_conn.close()
+    except:
+        pass
+
+    _eod_curve = _load_curve_from_db_latest("SOFR", "USD", load_date=_base_date)
+
+    # ── Comparison curve picker ──
+    _cmp_c1, _cmp_c2 = st.columns([1, 2])
+    with _cmp_c1:
+        _cmp_rate_type = st.selectbox("Compare curve", ["SOFR", "FEDFUNDS"],
+                                       key="usd_sod_cmp_rate", index=0)
+    with _cmp_c2:
+        _date_list = _avail_curve_dates if _cmp_rate_type == "SOFR" else _avail_ff_dates
+        if _date_list:
+            _cmp_date_idx = st.selectbox("Compare date", range(len(_date_list)),
+                                          format_func=lambda i: _date_list[i],
+                                          key="usd_sod_cmp_date", index=0)
+            _curr_curve_date = _date_list[_cmp_date_idx]
+        else:
+            _curr_curve_date = None
+            st.warning(f"No {_cmp_rate_type} curve dates found in DB.")
+
+    if _curr_curve_date:
+        _curr_curve = _load_curve_from_db_latest(_cmp_rate_type, "USD", load_date=_curr_curve_date)
+    else:
+        _curr_curve = get_ccy_curve("USD")
+        _curr_curve_date = "session"
 
     if _eod_curve is None or _eod_curve.empty:
         st.warning(f"No SOFR curve found for {_base_date}.")
         _eod_curve = _curr_curve
 
     if _curr_curve is None or _curr_curve.empty:
-        st.warning("No current USD SOFR curve loaded.")
+        st.warning(f"No {_cmp_rate_type} curve loaded for {_curr_curve_date}.")
         return
 
-    st.caption(f"**Base curve:** {_base_date} (NYC EOD)  →  **Current curve:** {_curr_curve_date} (latest SOFR in DB)")
+    st.caption(f"**Base curve:** {_base_date} (SOFR NYC EOD)  →  **Compare:** {_curr_curve_date} ({_cmp_rate_type})")
 
     def _rate_at(curve_df, tenor_y):
         try:
@@ -26511,10 +26534,10 @@ def usd_sod_tab():
         _cur_rates = [_rate_at(_curr_curve, t) for t in _tenors_chart]
         fig_crv = go.Figure()
         fig_crv.add_trace(go.Scatter(x=_tenors_chart, y=_eod_rates,
-            name=f"NYC EOD ({_base_date})", line=dict(color="#94a3b8", width=2, dash="dot")))
+            name=f"SOFR EOD ({_base_date})", line=dict(color="#94a3b8", width=2, dash="dot")))
         fig_crv.add_trace(go.Scatter(x=_tenors_chart, y=_cur_rates,
-            name="Current", line=dict(color="#3b82f6", width=2.5)))
-        fig_crv.update_layout(title="SOFR Curve: NYC EOD vs Current",
+            name=f"{_cmp_rate_type} ({_curr_curve_date})", line=dict(color="#3b82f6", width=2.5)))
+        fig_crv.update_layout(title=f"SOFR EOD vs {_cmp_rate_type} ({_curr_curve_date})",
             xaxis_title="Tenor (y)", yaxis_title="Rate (%)",
             template="plotly_dark", height=300, showlegend=True,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
