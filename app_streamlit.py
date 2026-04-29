@@ -24031,7 +24031,7 @@ def main():
     # v2904a: USD SOD tab only visible when USD selected
     if st.session_state.get("sidebar_ccy", "AUD") != "USD":
         st.session_state["tab_show_usd_sod"] = False
-    elif "tab_show_usd_sod" not in st.session_state:
+    else:
         st.session_state["tab_show_usd_sod"] = True
 
     # Multi-CCY is super_admin only, added separately below
