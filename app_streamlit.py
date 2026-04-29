@@ -26463,20 +26463,23 @@ def usd_sod_tab():
                                        key="usd_sod_cmp_rate", index=0)
     with _cmp_c2:
         _date_list = _avail_curve_dates if _cmp_rate_type == "SOFR" else _avail_ff_dates
-        if _date_list:
-            _cmp_date_idx = st.selectbox("Compare date", range(len(_date_list)),
-                                          format_func=lambda i: _date_list[i],
+        _date_options = ["Most Recent"] + _date_list
+        if _date_options:
+            _cmp_date_idx = st.selectbox("Compare date", range(len(_date_options)),
+                                          format_func=lambda i: _date_options[i],
                                           key="usd_sod_cmp_date", index=0)
-            _curr_curve_date = _date_list[_cmp_date_idx]
+            _curr_curve_date = _date_options[_cmp_date_idx] if _cmp_date_idx > 0 else None
         else:
             _curr_curve_date = None
             st.warning(f"No {_cmp_rate_type} curve dates found in DB.")
 
-    if _curr_curve_date:
+    if _curr_curve_date and _curr_curve_date != "Most Recent":
         _curr_curve = _load_curve_from_db_latest(_cmp_rate_type, "USD", load_date=_curr_curve_date)
     else:
-        _curr_curve = get_ccy_curve("USD")
-        _curr_curve_date = "session"
+        _curr_curve = _load_curve_from_db_latest(_cmp_rate_type, "USD")
+        _curr_curve_date = "Most Recent"
+        if _curr_curve is not None and "_source_date" in _curr_curve.columns:
+            _curr_curve_date = f"Most Recent ({_curr_curve['_source_date'].iloc[0]})"
 
     if _eod_curve is None or _eod_curve.empty:
         st.warning(f"No SOFR curve found for {_base_date}.")
