@@ -5692,7 +5692,10 @@ Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
 ```
 """)
         # Quick DB status
-        if HAS_POSTGRES:
+        @st.cache_data(ttl=120)
+        def _sdr_status():
+            if not HAS_POSTGRES:
+                return None, 0, 0
             try:
                 _sdr_chk = get_db_connection()
                 if _sdr_chk:
@@ -5702,15 +5705,19 @@ Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
                     _sdr_c.execute("SELECT COUNT(*) FROM dtcc_sdr")
                     _total = _sdr_c.fetchone()[0]
                     _sdr_c.close(); _sdr_chk.close()
-                    if _last:
-                        _age = (pd.Timestamp.now(tz='UTC') - pd.Timestamp(_last, tz='UTC')).total_seconds() / 3600
-                        _status = "🟢 Running" if _age < 1 else "🟡 Stale" if _age < 6 else "🔴 Stopped"
-                        st.caption(f"{_status} — Last fetch: {str(_last)[:19]} ({_age:.1f}h ago) | "
-                                   f"24h trades: {_cnt:,} | Total: {_total:,}")
-                    else:
-                        st.warning(f"🔴 No trades in last 24h. Total in DB: {_total:,}. Fetcher likely stopped.")
+                    return _last, _cnt, _total
             except:
                 pass
+            return None, 0, 0
+
+        _last, _cnt, _total = _sdr_status()
+        if _last:
+            _age = (pd.Timestamp.now(tz='UTC') - pd.Timestamp(_last, tz='UTC')).total_seconds() / 3600
+            _status = "🟢 Running" if _age < 1 else "🟡 Stale" if _age < 6 else "🔴 Stopped"
+            st.caption(f"{_status} — Last fetch: {str(_last)[:19]} ({_age:.1f}h ago) | "
+                       f"24h trades: {_cnt:,} | Total: {_total:,}")
+        elif _total:
+            st.warning(f"🔴 No trades in last 24h. Total in DB: {_total:,}. Fetcher likely stopped.")
 
     # ── Platform code → full name ─────────────────────────────────────────────
     PLATFORM_NAMES = {
@@ -19903,25 +19910,31 @@ def rv_tab():
                     st.error(f"Backfill error: {_bfe2}")
 
             # DB stats
-            try:
-                _st_conn = get_db_connection()
-                if _st_conn:
-                    _st_cur = _st_conn.cursor()
-                    _st_cur.execute("""
-                        SELECT floating_rate, COUNT(*), MIN(date), MAX(date)
-                        FROM fwd_matrix_history WHERE currency=%s
-                        GROUP BY floating_rate ORDER BY floating_rate
-                    """, (ccy,))
-                    _st_rows = _st_cur.fetchall()
-                    _st_cur.close(); _st_conn.close()
-                    if _st_rows:
-                        st.markdown("**Stored matrices:**")
-                        for _sr in _st_rows:
-                            st.caption(f"{_sr[0]}: {_sr[1]} dates ({_sr[2]} → {_sr[3]})")
-                    else:
-                        st.caption("No forward matrices stored yet. Run backfill above.")
-            except:
-                pass
+            @st.cache_data(ttl=300)
+            def _load_backfill_stats(_ccy):
+                try:
+                    _st_conn = get_db_connection()
+                    if _st_conn:
+                        _st_cur = _st_conn.cursor()
+                        _st_cur.execute("""
+                            SELECT floating_rate, COUNT(*), MIN(date), MAX(date)
+                            FROM fwd_matrix_history WHERE currency=%s
+                            GROUP BY floating_rate ORDER BY floating_rate
+                        """, (_ccy,))
+                        _st_rows = _st_cur.fetchall()
+                        _st_cur.close(); _st_conn.close()
+                        return _st_rows
+                except:
+                    pass
+                return []
+
+            _st_rows = _load_backfill_stats(ccy)
+            if _st_rows:
+                st.markdown("**Stored matrices:**")
+                for _sr in _st_rows:
+                    st.caption(f"{_sr[0]}: {_sr[1]} dates ({_sr[2]} → {_sr[3]})")
+            else:
+                st.caption("No forward matrices stored yet. Run backfill above.")
 
 
         # ── Save current session matrix to DB ──
@@ -27137,19 +27150,24 @@ def usd_sod_tab():
     st.markdown("### 📈 Curve Move Decomposition")
 
     # ── Load available curve dates for comparison picker ──
-    _avail_curve_dates = []
-    _avail_ff_dates = []
-    try:
-        _cd_conn = get_db_connection()
-        if _cd_conn:
-            _cd_cur = _cd_conn.cursor()
-            _cd_cur.execute("SELECT DISTINCT date FROM swap_rates WHERE currency='USD' AND floating_rate='SOFR' ORDER BY date DESC")
-            _avail_curve_dates = [str(r[0]) for r in _cd_cur.fetchall()]
-            _cd_cur.execute("SELECT DISTINCT date FROM swap_rates WHERE currency='USD' AND floating_rate='FEDFUNDS' ORDER BY date DESC")
-            _avail_ff_dates = [str(r[0]) for r in _cd_cur.fetchall()]
-            _cd_cur.close(); _cd_conn.close()
-    except:
-        pass
+    @st.cache_data(ttl=300)
+    def _get_avail_curve_dates():
+        _sofr_dates = []
+        _ff_dates = []
+        try:
+            _cd_conn = get_db_connection()
+            if _cd_conn:
+                _cd_cur = _cd_conn.cursor()
+                _cd_cur.execute("SELECT DISTINCT date FROM swap_rates WHERE currency='USD' AND floating_rate='SOFR' ORDER BY date DESC")
+                _sofr_dates = [str(r[0]) for r in _cd_cur.fetchall()]
+                _cd_cur.execute("SELECT DISTINCT date FROM swap_rates WHERE currency='USD' AND floating_rate='FEDFUNDS' ORDER BY date DESC")
+                _ff_dates = [str(r[0]) for r in _cd_cur.fetchall()]
+                _cd_cur.close(); _cd_conn.close()
+        except:
+            pass
+        return _sofr_dates, _ff_dates
+
+    _avail_curve_dates, _avail_ff_dates = _get_avail_curve_dates()
 
     _eod_curve = _load_curve_from_db_latest("SOFR", "USD", load_date=_base_date)
 
@@ -27330,9 +27348,11 @@ def usd_sod_tab():
                  "12y": 12.0, "15y": 15.0, "20y": 20.0, "25y": 25.0, "30y": 30.0}
 
     # Load calibrated betas from DB (if available)
-    _cal_betas = {}  # {(expiry, tenor_str): {beta_level, beta_slope, beta_curve, r2}}
-    _using_calibrated = False
-    if HAS_POSTGRES:
+    @st.cache_data(ttl=600)
+    def _load_cal_betas_usd():
+        _betas = {}
+        if not HAS_POSTGRES:
+            return _betas
         try:
             _cconn = get_db_connection()
             if _cconn:
@@ -27345,18 +27365,21 @@ def usd_sod_tab():
                                               FROM vol_curve_sensitivity WHERE currency='USD')
                 """)
                 for _ce, _ct, _bl, _bs, _bc, _r2 in _ccur.fetchall():
-                    _cal_betas[(_ce.lower(), _ct)] = {
+                    _betas[(_ce.lower(), _ct)] = {
                         "level": float(_bl), "slope": float(_bs),
                         "curve": float(_bc), "r2": float(_r2) if _r2 else 0
                     }
                 _cconn.close()
-                if _cal_betas:
-                    _using_calibrated = True
-                    _avg_r2 = np.mean([v["r2"] for v in _cal_betas.values()])
-                    st.caption(f"🔬 Using **calibrated betas** ({len(_cal_betas)} cells, avg R²={_avg_r2:.3f}). "
-                               f"Theoretical priors used for cells without calibration.")
         except:
             pass
+        return _betas
+
+    _cal_betas = _load_cal_betas_usd()
+    _using_calibrated = bool(_cal_betas)
+    if _using_calibrated:
+        _avg_r2 = np.mean([v["r2"] for v in _cal_betas.values()])
+        st.caption(f"🔬 Using **calibrated betas** ({len(_cal_betas)} cells, avg R²={_avg_r2:.3f}). "
+                   f"Theoretical priors used for cells without calibration.")
 
     if not _using_calibrated:
         st.caption("📐 Using **theoretical beta priors** (β_level ∝ 1/√T). "
@@ -27787,7 +27810,10 @@ def usd_sod_tab():
                 st.error(f"Calibration error: {_cal_err}")
 
         # Show existing calibration
-        if HAS_POSTGRES:
+        @st.cache_data(ttl=600)
+        def _load_cal_history():
+            if not HAS_POSTGRES:
+                return []
             try:
                 conn3 = get_db_connection()
                 if conn3:
@@ -27800,14 +27826,18 @@ def usd_sod_tab():
                         ORDER BY calibration_date DESC
                         LIMIT 5
                     """)
-                    _cal_hist = cur3.fetchall()
+                    result = cur3.fetchall()
                     conn3.close()
-                    if _cal_hist:
-                        st.markdown("**Previous calibrations:**")
-                        for _cd, _cn, _cr2 in _cal_hist:
-                            st.caption(f"{_cd}: {_cn} cells, avg R²={_cr2:.3f}")
+                    return result
             except:
                 pass
+            return []
+
+        _cal_hist = _load_cal_history()
+        if _cal_hist:
+            st.markdown("**Previous calibrations:**")
+            for _cd, _cn, _cr2 in _cal_hist:
+                st.caption(f"{_cd}: {_cn} cells, avg R²={_cr2:.3f}")
 
     # ═══════════════════════════════════════════════════════════════════
     # USD SOD COMMENTARY + TRADE IDEAS (Tokyo Open)
@@ -27843,9 +27873,12 @@ def usd_sod_tab():
         _usd_vol_lines.append(f"Fwd rate Δ: 2Y {_dl_2y:+.1f}bp | 5Y {_dl_5y:+.1f}bp | 10Y {_dl_10y:+.1f}bp")
         _usd_vol_block = "\n".join(_usd_vol_lines)
 
-    # ── USD SDR flow block ──
-    _usd_sdr_block = ""
-    if HAS_POSTGRES:
+    # ── USD SDR flow block (cached) ──
+    @st.cache_data(ttl=300)
+    def _load_usd_sdr_flow():
+        _block = ""
+        if not HAS_POSTGRES:
+            return _block
         try:
             _sdr_conn = get_db_connection()
             if _sdr_conn:
@@ -27871,9 +27904,12 @@ def usd_sod_tab():
                         _nl_fmt = f"${float(_nl)/1e6:.0f}m" if _nl else ""
                         _sk_fmt = f"K={float(_sk):.2f}%" if _sk else ""
                         _sdr_lines.append(f"  {_otn}x{_stn} {_ot} {_sk_fmt} {_nl_fmt}")
-                    _usd_sdr_block = "\n".join(_sdr_lines)
+                    _block = "\n".join(_sdr_lines)
         except:
             pass
+        return _block
+
+    _usd_sdr_block = _load_usd_sdr_flow()
 
     # ── AI Commentary — exact AUD pattern ──
     with st.expander("🧠 AI Commentary Generator — USD SOD Tokyo", expanded=False):
