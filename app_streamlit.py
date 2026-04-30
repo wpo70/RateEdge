@@ -27875,167 +27875,173 @@ def usd_sod_tab():
         except:
             pass
 
-    # ── AI Commentary Generator ──
+    # ── AI Commentary — exact AUD pattern ──
     with st.expander("🧠 AI Commentary Generator — USD SOD Tokyo", expanded=False):
-        _comm_mode_usd = st.radio(
-            "Input mode",
-            ["🤖 AI Generate from raw news", "📝 Manual (paste finished commentary)"],
-            index=0 if st.session_state.get("_usd_comm_mode", "ai") == "ai" else 1,
-            horizontal=True, key="_usd_comm_mode_radio")
-        _is_manual_usd = _comm_mode_usd.startswith("📝")
-        st.session_state["_usd_comm_mode"] = "manual" if _is_manual_usd else "ai"
+        _usd_raw_news = st.text_area(
+            "Raw news / market inputs",
+            height=180,
+            placeholder=(
+                "Example:\n"
+                "- 10Y UST closed 4.24%, from 4.32% w/w\n"
+                "- Fed Waller speaks 14:00 NYC\n"
+                "- SOFR 3m10y vol 73.5bp, down 2bp\n"
+                "..."
+            ),
+            key="usd_sod_raw_news",
+        )
+        _usd_desk_colour = st.text_area(
+            "Desk colour / flow (optional)",
+            height=80,
+            placeholder="e.g. gamma sellers in 1y10y, real$ receivers 5y...",
+            key="usd_sod_desk_colour",
+        )
 
-        if _is_manual_usd:
-            from datetime import datetime as _dt_usd
-            _day_usd = _dt_usd.now(ZoneInfo("Asia/Tokyo")).strftime("%A")
-            st.caption("Paste finished commentary below — goes straight to edit area.")
-            _manual_usd = st.text_area("Finished commentary", value=st.session_state.get("_usd_comm_manual", ""),
-                                        height=300, placeholder=f"{_day_usd} AM — USD SOD Tokyo Open\n\n...",
-                                        key="_usd_comm_manual_input")
-            if st.button("📋 Use This Commentary", key="_usd_comm_manual_use"):
-                st.session_state["_usd_sod_output"] = _manual_usd
-                st.session_state["_usd_comm_manual"] = _manual_usd
-                st.rerun()
-        else:
-            _raw_news_usd = st.text_area("Raw news / macro inputs",
-                value=st.session_state.get("_usd_sod_raw_news", ""),
-                height=150, placeholder="Paste Bloomberg headlines, Fed commentary, data releases...",
-                key="_usd_sod_raw_news_input")
-            st.session_state["_usd_sod_raw_news"] = _raw_news_usd
+        _uc1, _uc2, _uc3 = st.columns([1, 1, 2])
+        with _uc1:
+            _usd_gen_btn = st.button("✨ Generate USD SOD", key="usd_sod_ai_generate",
+                                      type="primary", use_container_width=True)
+        with _uc2:
+            _usd_clear_btn = st.button("🗑 Clear", key="usd_sod_ai_clear",
+                                        use_container_width=True)
+        with _uc3:
+            _usd_length = st.radio(
+                "Length",
+                ["Concise (4 paras)", "Standard (6 paras)", "Detailed (8+ paras)"],
+                index=1, horizontal=True, label_visibility="collapsed",
+                key="usd_sod_ai_length",
+            )
 
-            _desk_col_usd = st.text_area("Desk colour / broker flow (optional)",
-                value=st.session_state.get("_usd_sod_desk_colour", ""),
-                height=80, placeholder="e.g. 'gamma sellers in 1y10y, real$ receivers 5y...'",
-                key="_usd_sod_desk_col_input")
-            st.session_state["_usd_sod_desk_colour"] = _desk_col_usd
+        if _usd_clear_btn:
+            for _k in ("usd_sod_raw_news", "_usd_sod_output", "usd_sod_desk_colour"):
+                if _k in st.session_state:
+                    del st.session_state[_k]
+            st.rerun()
 
-            _usd_sod_length = st.selectbox("Length", ["Brief (4 paras)", "Standard (6 paras)", "Detailed (8 paras)"],
-                                            index=1, key="_usd_sod_length")
+        if _usd_gen_btn:
+          try:
+            _api_key = None
+            try:
+                _api_key = st.secrets.get("ANTHROPIC_API_KEY")
+            except Exception:
+                pass
+            if not _api_key:
+                _api_key = os.environ.get("ANTHROPIC_API_KEY")
+            if not _api_key:
+                st.error(
+                    "ANTHROPIC_API_KEY not configured. "
+                    "Add it in Streamlit Cloud → Manage app → Settings → Secrets "
+                    "as `ANTHROPIC_API_KEY = \"sk-ant-...\"` (or set as env var locally)."
+                )
+            else:
+                from zoneinfo import ZoneInfo as _ZI_usd
+                from datetime import datetime as _dt_usd2
+                _today_usd = _dt_usd2.now(_ZI_usd("Asia/Tokyo")).strftime("%A")
+                _raw_news_final = (_usd_raw_news.strip() if _usd_raw_news else "") or \
+                    "No macro news provided — focus on vol surface and flow data only."
 
-            if st.button("⚡ Generate USD SOD Commentary", key="_usd_sod_gen", type="primary"):
-                st.session_state["_usd_sod_debug"] = "Button clicked"
-                _api_key = None
-                try:
-                    _api_key = st.secrets.get("ANTHROPIC_API_KEY")
-                    st.session_state["_usd_sod_debug"] = f"Key from secrets: {bool(_api_key)}"
-                except Exception:
-                    st.session_state["_usd_sod_debug"] = "No secrets available"
-                if not _api_key:
-                    _api_key = os.environ.get("ANTHROPIC_API_KEY")
-                if not _api_key:
-                    _api_key = st.session_state.get("anthropic_api_key", "")
-                if not _api_key:
-                    st.session_state["_usd_sod_error"] = "❌ No Anthropic API key found. Set in Streamlit secrets or environment."
+                _sys_prompt_usd = (
+                    f"You are a senior USD rates vol market commentator writing the "
+                    f"{_today_usd}-AM Tokyo Open Start-of-Day technical briefing. "
+                    "The audience is institutional rates traders and portfolio managers "
+                    "at a USD interest rate options desk opening in Tokyo.\n\n"
+                    "CRITICAL RULES:\n"
+                    "• 3-minute read MAX. Focus on OBSERVABLE TECHNICAL vol moves.\n"
+                    "• Macro context is MINIMAL — bullet points only, no editorial.\n"
+                    "• Reference specific expiry×tenor cells with bp levels "
+                    "(e.g. '3m10y +2.1bp to 73.5bp').\n"
+                    "• Use bp units throughout for vol. Use market shorthand.\n"
+                    "• DO NOT make up numbers. Only cite what's in the data provided.\n"
+                    "• American English spelling.\n"
+                    "• DO NOT use bullet points EXCEPT in MACRO CONTEXT section.\n"
+                    "• No geopolitical commentary beyond the MACRO CONTEXT bullets.\n"
+                    "• No opinions on rate direction.\n\n"
+                    "STRUCTURE — follow exactly:\n\n"
+                    "AT A GLANCE (2-3 lines MAX)\n"
+                    "   Quick snapshot — key vol move, direction, repricing needed?\n\n"
+                    "1. MACRO CONTEXT (2-3 bullet points MAX, factual)\n\n"
+                    "2. HEADLINE (one sentence — single biggest technical vol move)\n\n"
+                    "3. SURFACE (2-3 sentences on shape changes)\n"
+                    "   Describe: gamma zone (≤3m) vs mid vol (3m-2y) vs vega (2y+).\n\n"
+                    "4. TERM STRUCTURE (1-2 sentences on front/back vol spread)\n\n"
+                    "5. FLOW (1-2 sentences on notable SDR activity)\n"
+                    "   CRITICAL: ONLY reference flow data explicitly provided.\n\n"
+                    "6. WATCH (1 sentence — technically interesting observation)\n\n"
+                    f"TODAY IS {_today_usd}. Start with "
+                    f"'{_today_usd} AM — USD SOD Tokyo Open' as header.\n\n"
+                    "Keep UNDER 300 words total.\n\n"
+                    f"LENGTH PREFERENCE: {_usd_length}"
+                )
+
+                _data_secs = ["=== RAW NEWS / MACRO INPUTS ===", _raw_news_final]
+                if _usd_vol_block:
+                    _data_secs.append("\n=== USD VOL SURFACE DATA (carry-forward estimate) ===")
+                    _data_secs.append(_usd_vol_block)
+                if _usd_sdr_block:
+                    _data_secs.append("\n=== USD OPTIONS FLOW (DTCC SDR, last 24h) ===")
+                    _data_secs.append(_usd_sdr_block)
                 else:
+                    _data_secs.append("\n=== USD OPTIONS FLOW ===")
+                    _data_secs.append("NO SDR FLOW DATA AVAILABLE. Do NOT invent flow.")
+                if _usd_desk_colour and _usd_desk_colour.strip():
+                    _data_secs.append("\n=== DESK COLOUR / BROKER FLOW ===")
+                    _data_secs.append(_usd_desk_colour.strip())
+                _data_secs.append("\n=== END ===")
+
+                _user_prompt_usd = (
+                    "Synthesise the following into a polished USD SOD commentary "
+                    "for the Tokyo open, following the structure in your instructions. "
+                    "The vol surface data is from the carry-forward estimator. "
+                    "SDR flow data is from the live DTCC database.\n\n"
+                    + "\n".join(_data_secs)
+                )
+
+                # Call Anthropic API directly via urllib (no extra deps)
+                import urllib.request as _ur2
+                import urllib.error as _ue2
+                import json as _json_usd
+
+                _body_usd = _json_usd.dumps({
+                    "model": "claude-sonnet-4-6",
+                    "max_tokens": 2000,
+                    "system": _sys_prompt_usd,
+                    "messages": [{"role": "user", "content": _user_prompt_usd}],
+                }).encode("utf-8")
+                _req_usd = _ur2.Request(
+                    "https://api.anthropic.com/v1/messages",
+                    data=_body_usd,
+                    headers={
+                        "x-api-key": _api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                    method="POST",
+                )
+                with st.spinner("✨ Writing USD SOD commentary..."):
                     try:
-                        from datetime import datetime as _dt_usd2
-                        _today_usd = _dt_usd2.now(ZoneInfo("Asia/Tokyo")).strftime("%A")
-                        _raw_news_final = _raw_news_usd.strip() or "No macro news provided — focus on vol surface and flow data only."
-
-                        _sys_prompt_usd = (
-                            f"You are a senior USD rates vol market commentator writing the "
-                            f"{_today_usd}-AM Tokyo Open Start-of-Day technical briefing. "
-                            "The audience is institutional rates traders and portfolio managers "
-                            "at a USD interest rate options desk opening in Tokyo.\n\n"
-                            "CRITICAL RULES:\n"
-                            "• 3-minute read MAX. Focus on OBSERVABLE TECHNICAL vol moves.\n"
-                            "• Macro context is MINIMAL — bullet points only, no editorial.\n"
-                            "• Reference specific expiry×tenor cells with bp levels "
-                            "(e.g. '3m10y +2.1bp to 73.5bp').\n"
-                            "• Use bp units throughout for vol. Use market shorthand.\n"
-                            "• DO NOT make up numbers. Only cite what's in the data provided.\n"
-                            "• American English spelling.\n"
-                            "• DO NOT use bullet points EXCEPT in MACRO CONTEXT section.\n"
-                            "• No geopolitical commentary beyond the MACRO CONTEXT bullets.\n"
-                            "• No opinions on rate direction.\n\n"
-                            "STRUCTURE — follow exactly:\n\n"
-                            "AT A GLANCE (2-3 lines MAX)\n"
-                            "   Quick snapshot — key vol move, direction, repricing needed?\n\n"
-                            "1. MACRO CONTEXT (2-3 bullet points MAX, factual)\n"
-                            "   Example: • UST 10Y closed 4.29% (+1bp). • Fed Waller speaks 14:00 NYC.\n\n"
-                            "2. HEADLINE (one sentence — single biggest technical vol move)\n\n"
-                            "3. SURFACE (2-3 sentences on shape changes)\n"
-                            "   Describe: gamma zone (≤3m) vs mid vol (3m-2y) vs vega (2y+).\n"
-                            "   Use zone-specific factors provided.\n\n"
-                            "4. TERM STRUCTURE (1-2 sentences on front/back vol spread)\n\n"
-                            "5. FLOW (1-2 sentences on notable SDR activity)\n"
-                            "   CRITICAL: ONLY reference flow data explicitly provided.\n"
-                            "   If none provided, state flow was not available.\n\n"
-                            "6. WATCH (1 sentence — technically interesting observation)\n\n"
-                            f"TODAY IS {_today_usd}. Start with "
-                            f"'{_today_usd} AM — USD SOD Tokyo Open' as header.\n\n"
-                            "Keep UNDER 300 words total.\n\n"
-                            f"LENGTH PREFERENCE: {_usd_sod_length}"
-                        )
-
-                        _data_secs = ["=== RAW NEWS / MACRO INPUTS ===", _raw_news_final]
-                        if _usd_vol_block:
-                            _data_secs.append("\n=== USD VOL SURFACE DATA (carry-forward estimate) ===")
-                            _data_secs.append(_usd_vol_block)
-                        if _usd_sdr_block:
-                            _data_secs.append("\n=== USD OPTIONS FLOW (DTCC SDR, last 24h) ===")
-                            _data_secs.append(_usd_sdr_block)
+                        with _ur2.urlopen(_req_usd, timeout=60) as _resp_usd:
+                            _result_usd = _json_usd.loads(_resp_usd.read().decode("utf-8"))
+                        _content_usd = _result_usd.get("content", [])
+                        _text_blocks = [b.get("text", "") for b in _content_usd if b.get("type") == "text"]
+                        _commentary = "\n\n".join(_text_blocks).strip()
+                        if _commentary:
+                            st.session_state["_usd_sod_output"] = _commentary
                         else:
-                            _data_secs.append("\n=== USD OPTIONS FLOW ===")
-                            _data_secs.append("NO SDR FLOW DATA AVAILABLE. Do NOT invent flow.")
-                        if _desk_col_usd.strip():
-                            _data_secs.append("\n=== DESK COLOUR / BROKER FLOW ===")
-                            _data_secs.append(_desk_col_usd.strip())
-                        _data_secs.append("\n=== END ===")
+                            st.warning("Empty response from API. Try again.")
+                    except _ue2.HTTPError as _he:
+                        _err_txt = _he.read().decode("utf-8", errors="replace")
+                        st.error(f"API error {_he.code}: {_err_txt[:500]}")
+                    except _ue2.URLError as _urle:
+                        st.error(f"Network error: {_urle.reason}")
+                    except Exception as _gen_e:
+                        st.error(f"Unexpected error: {_gen_e}")
+          except Exception as _outer_e:
+            st.error(f"Commentary generator error: {_outer_e}")
 
-                        _user_prompt_usd = (
-                            "Synthesise the following into a polished USD SOD commentary "
-                            "for the Tokyo open, following the structure in your instructions. "
-                            "The vol surface data is from the carry-forward estimator. "
-                            "SDR flow data is from the live DTCC database.\n\n"
-                            + "\n".join(_data_secs)
-                        )
-
-                        import urllib.request as _ur2
-                        import json as _json_usd
-                        _body_usd = _json_usd.dumps({
-                            "model": "claude-sonnet-4-6",
-                            "max_tokens": 2000,
-                            "system": _sys_prompt_usd,
-                            "messages": [{"role": "user", "content": _user_prompt_usd}],
-                        }).encode("utf-8")
-                        _req_usd = _ur2.Request(
-                            "https://api.anthropic.com/v1/messages",
-                            data=_body_usd,
-                            headers={
-                                "x-api-key": _api_key,
-                                "anthropic-version": "2023-06-01",
-                                "content-type": "application/json",
-                            }, method="POST")
-                        with st.spinner("✨ Writing USD SOD commentary..."):
-                            try:
-                                with _ur2.urlopen(_req_usd, timeout=60) as _resp_usd:
-                                    _result_usd = _json_usd.loads(_resp_usd.read().decode("utf-8"))
-                                _content_usd = _result_usd.get("content", [])
-                                _text_usd = "\n\n".join([b.get("text", "") for b in _content_usd if b.get("type") == "text"]).strip()
-                                if _text_usd:
-                                    st.session_state["_usd_sod_output"] = _text_usd
-                                    st.session_state.pop("_usd_sod_error", None)
-                                else:
-                                    st.session_state["_usd_sod_error"] = "⚠️ Empty response from API."
-                            except Exception as _api_e:
-                                st.session_state["_usd_sod_error"] = f"❌ API error: {_api_e}"
-                    except Exception as _gen_e2:
-                        st.session_state["_usd_sod_error"] = f"❌ Commentary generator error: {_gen_e2}"
-
-    # ── Display errors outside expander ──
-    _usd_sod_dbg = st.session_state.get("_usd_sod_debug")
-    if _usd_sod_dbg:
-        st.caption(f"🔍 Debug: {_usd_sod_dbg}")
-    _usd_sod_err = st.session_state.get("_usd_sod_error")
-    if _usd_sod_err:
-        st.error(_usd_sod_err)
-
-    # ── Display generated commentary ──
-    _usd_commentary = st.session_state.get("_usd_sod_output")
-    if _usd_commentary:
+    # Display generated commentary
+    _usd_cached = st.session_state.get("_usd_sod_output")
+    if _usd_cached:
         st.markdown("---")
-        _edit_usd = st.text_area("Edit commentary", value=_usd_commentary, height=400, key="_usd_sod_edit")
+        _edit_usd = st.text_area("Edit commentary", value=_usd_cached, height=400, key="_usd_sod_edit")
         st.session_state["_usd_sod_output"] = _edit_usd
 
         _dl_c1, _dl_c2 = st.columns(2)
@@ -28047,6 +28053,7 @@ def usd_sod_tab():
         with _dl_c2:
             if st.button("💾 Save to DB", key="_usd_sod_save_db"):
                 try:
+                    import json as _json_save2
                     _save_conn = get_db_connection()
                     if _save_conn:
                         _save_cur = _save_conn.cursor()
