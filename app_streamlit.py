@@ -27913,11 +27913,13 @@ def usd_sod_tab():
                                             index=1, key="_usd_sod_length")
 
             if st.button("⚡ Generate USD SOD Commentary", key="_usd_sod_gen", type="primary"):
+                st.session_state["_usd_sod_debug"] = "Button clicked"
                 _api_key = None
                 try:
                     _api_key = st.secrets.get("ANTHROPIC_API_KEY")
+                    st.session_state["_usd_sod_debug"] = f"Key from secrets: {bool(_api_key)}"
                 except Exception:
-                    pass
+                    st.session_state["_usd_sod_debug"] = "No secrets available"
                 if not _api_key:
                     _api_key = os.environ.get("ANTHROPIC_API_KEY")
                 if not _api_key:
@@ -28022,6 +28024,9 @@ def usd_sod_tab():
                         st.session_state["_usd_sod_error"] = f"❌ Commentary generator error: {_gen_e2}"
 
     # ── Display errors outside expander ──
+    _usd_sod_dbg = st.session_state.get("_usd_sod_debug")
+    if _usd_sod_dbg:
+        st.caption(f"🔍 Debug: {_usd_sod_dbg}")
     _usd_sod_err = st.session_state.get("_usd_sod_error")
     if _usd_sod_err:
         st.error(_usd_sod_err)
