@@ -27152,30 +27152,79 @@ def usd_sod_tab():
     _cur_2y = _rate_at(_curr_curve, 2.0) or 0
     _eod_10y = _rate_at(_eod_curve, 10.0) or 0
     _cur_10y = _rate_at(_curr_curve, 10.0) or 0
+    _eod_3y = _rate_at(_eod_curve, 3.0) or 0
+    _cur_3y = _rate_at(_curr_curve, 3.0) or 0
+    _eod_20y = _rate_at(_eod_curve, 20.0) or 0
+    _cur_20y = _rate_at(_curr_curve, 20.0) or 0
 
-    _d_level = (_cur_5y - _eod_5y) * 100
-    _eod_slope = (_eod_10y - _eod_2y) * 100
-    _cur_slope = (_cur_10y - _cur_2y) * 100
-    _d_slope = _cur_slope - _eod_slope
-    _eod_bfly = (2 * _eod_5y - _eod_2y - _eod_10y) * 100
-    _cur_bfly = (2 * _cur_5y - _cur_2y - _cur_10y) * 100
-    _d_curve = _cur_bfly - _eod_bfly
+    # ── Zone-specific curve factors ──
+    # GAMMA zone (≤3m): 2s5s slope, 2s3s5s fly
+    _d_slope_gamma = ((_cur_5y - _cur_2y) - (_eod_5y - _eod_2y)) * 100
+    _d_fly_gamma = ((2*_cur_3y - _cur_2y - _cur_5y) - (2*_eod_3y - _eod_2y - _eod_5y)) * 100
 
+    # MID VOL zone (>3m to 2y): 2s10s slope, 2s5s10s fly
+    _d_slope_mid = ((_cur_10y - _cur_2y) - (_eod_10y - _eod_2y)) * 100
+    _d_fly_mid = ((2*_cur_5y - _cur_2y - _cur_10y) - (2*_eod_5y - _eod_2y - _eod_10y)) * 100
+
+    # VEGA zone (>2y): 5s20s slope, 5s10s20s fly
+    _d_slope_vega = ((_cur_20y - _cur_5y) - (_eod_20y - _eod_5y)) * 100
+    _d_fly_vega = ((2*_cur_10y - _cur_5y - _cur_20y) - (2*_eod_10y - _eod_5y - _eod_20y)) * 100
+
+    # Forward rate level change per cell — approximate as par rate at (expiry + tenor/2)
+    def _fwd_level_change(exp_y, tenor_y):
+        """Δ forward rate at cell reference point (bp)."""
+        ref_t = min(exp_y + tenor_y * 0.5, 30.0)
+        eod_r = _rate_at(_eod_curve, ref_t)
+        cur_r = _rate_at(_curr_curve, ref_t)
+        if eod_r is None or cur_r is None:
+            return (_cur_5y - _eod_5y) * 100  # fallback to 5Y
+        return (cur_r - eod_r) * 100
+
+    def _get_zone(exp_y):
+        """Return zone name based on expiry."""
+        if exp_y <= 0.25:
+            return "gamma"
+        elif exp_y <= 2.0:
+            return "mid"
+        else:
+            return "vega"
+
+    def _get_zone_factors(exp_y, tenor_y):
+        """Return (d_level, d_slope, d_fly) for this cell's zone."""
+        zone = _get_zone(exp_y)
+        dl = _fwd_level_change(exp_y, tenor_y)
+        if zone == "gamma":
+            return dl, _d_slope_gamma, _d_fly_gamma
+        elif zone == "mid":
+            return dl, _d_slope_mid, _d_fly_mid
+        else:
+            return dl, _d_slope_vega, _d_fly_vega
+
+    # Display zone factors
     _fc1, _fc2, _fc3 = st.columns(3)
     with _fc1:
-        st.metric("Δ Level (5Y)", f"{_d_level:+.1f}bp",
-                  delta=f"5Y: {_eod_5y:.3f}% → {_cur_5y:.3f}%")
+        st.markdown("**Gamma** (≤3m)")
+        st.caption(f"Slope (2s5s): {_d_slope_gamma:+.1f}bp")
+        st.caption(f"Fly (2s3s5s): {_d_fly_gamma:+.1f}bp")
     with _fc2:
-        st.metric("Δ Slope (2s10s)", f"{_d_slope:+.1f}bp",
-                  delta=f"2s10s: {_eod_slope:.1f}bp → {_cur_slope:.1f}bp")
+        st.markdown("**Mid Vol** (>3m–2y)")
+        st.caption(f"Slope (2s10s): {_d_slope_mid:+.1f}bp")
+        st.caption(f"Fly (2s5s10s): {_d_fly_mid:+.1f}bp")
     with _fc3:
-        st.metric("Δ Curvature (2s5s10s)", f"{_d_curve:+.1f}bp",
-                  delta=f"Bfly: {_eod_bfly:.1f}bp → {_cur_bfly:.1f}bp")
+        st.markdown("**Vega** (>2y)")
+        st.caption(f"Slope (5s20s): {_d_slope_vega:+.1f}bp")
+        st.caption(f"Fly (5s10s20s): {_d_fly_vega:+.1f}bp")
+
+    # Summary level change at key points
+    _dl_2y = _fwd_level_change(0.0, 2.0)
+    _dl_5y = _fwd_level_change(0.0, 5.0)
+    _dl_10y = _fwd_level_change(0.0, 10.0)
+    st.caption(f"Fwd rate Δ: 2Y {_dl_2y:+.1f}bp | 5Y {_dl_5y:+.1f}bp | 10Y {_dl_10y:+.1f}bp")
 
     _typical_tokyo_move = 3.0
-    if abs(_d_level) > _typical_tokyo_move * 2:
-        st.warning(f"⚠️ Large overnight move ({_d_level:+.1f}bp). Estimate may understate actual vol adjustment.")
-    elif abs(_d_level) < 0.5:
+    if max(abs(_dl_2y), abs(_dl_5y), abs(_dl_10y)) > _typical_tokyo_move * 2:
+        st.warning(f"⚠️ Large overnight move. Estimate may understate actual vol adjustment.")
+    elif max(abs(_dl_2y), abs(_dl_5y), abs(_dl_10y)) < 0.5:
         st.info("ℹ️ Minimal overnight move. Vol matrix likely unchanged from NYC EOD.")
 
     with st.expander("📊 Curve Comparison", expanded=False):
@@ -27235,22 +27284,37 @@ def usd_sod_tab():
                    "Run calibration below to improve with empirical data.")
 
     def _beta_level(exp_y):
+        """Theoretical prior for forward rate level sensitivity."""
         base = 1.0 / max(np.sqrt(exp_y), 0.1)
-        return min(base * 0.28, 1.5)
+        return min(base * 0.20, 1.2)  # dampened vs old 0.28
 
     def _beta_slope(exp_y, tenor_y):
-        return 0.15 * min(tenor_y / 10.0, 1.5) * (0.6 + 0.4 * min(exp_y, 2.0))
+        zone = _get_zone(exp_y)
+        if zone == "gamma":
+            return 0.12 * min(tenor_y / 5.0, 1.5)
+        elif zone == "mid":
+            return 0.15 * min(tenor_y / 10.0, 1.5) * (0.6 + 0.4 * min(exp_y, 2.0))
+        else:
+            return 0.10 * min(tenor_y / 20.0, 1.0) * min(exp_y / 3.0, 1.0)
 
     def _beta_curve(exp_y, tenor_y):
-        belly = np.exp(-0.5 * ((tenor_y - 6.0) / 3.0) ** 2)
-        return 0.10 * belly * (0.5 + 0.5 * min(exp_y, 1.0))
+        zone = _get_zone(exp_y)
+        if zone == "gamma":
+            belly = np.exp(-0.5 * ((tenor_y - 3.5) / 1.5) ** 2)
+            return 0.08 * belly
+        elif zone == "mid":
+            belly = np.exp(-0.5 * ((tenor_y - 6.0) / 3.0) ** 2)
+            return 0.10 * belly * (0.5 + 0.5 * min(exp_y, 1.0))
+        else:
+            belly = np.exp(-0.5 * ((tenor_y - 12.0) / 5.0) ** 2)
+            return 0.08 * belly * min(exp_y / 3.0, 1.0)
 
     def _get_betas(exp, tenor_y):
         """Return (bl, bs, bc) — calibrated if available, else theoretical."""
         tn_str = f"{int(tenor_y)}Y"
         cal = _cal_betas.get((exp.lower(), tn_str))
         exp_y = EXP_YEARS.get(exp, 1.0)
-        if cal and cal["r2"] > 0.05:  # only use calibrated if R² > 5%
+        if cal and cal["r2"] > 0.05:
             return cal["level"], cal["slope"], cal["curve"]
         return _beta_level(exp_y), _beta_slope(exp_y, tenor_y), _beta_curve(exp_y, tenor_y)
 
@@ -27269,7 +27333,8 @@ def usd_sod_tab():
                     row_base[f"{tn}Y"] = None; row_adj[f"{tn}Y"] = None; row_delta[f"{tn}Y"] = None
                     continue
                 _bl, _bs, _bc = _get_betas(exp, float(tn))
-                _dv = _bl * _d_level + _bs * _d_slope + _bc * _d_curve
+                _dl, _ds, _dc = _get_zone_factors(exp_y, float(tn))
+                _dv = _bl * _dl + _bs * _ds + _bc * _dc
                 row_base[f"{tn}Y"] = round(_v_base, 2)
                 row_adj[f"{tn}Y"] = round(_v_base + _dv, 2)
                 row_delta[f"{tn}Y"] = round(_dv, 2)
@@ -27311,8 +27376,7 @@ def usd_sod_tab():
                         for tn in TENORS if r.get(f"{tn}Y") is not None]
         if _deltas_flat:
             st.caption(f"Avg adjustment: {np.mean(_deltas_flat):+.2f}bp  |  "
-                       f"Max adjustment: {max(_deltas_flat, key=abs):+.2f}bp  |  "
-                       f"Curve factors: level {_d_level:+.1f}bp, slope {_d_slope:+.1f}bp, bfly {_d_curve:+.1f}bp")
+                       f"Max adjustment: {max(_deltas_flat, key=abs):+.2f}bp")
 
         st.markdown("---")
         _ac1, _ac2, _ac3, _ac4 = st.columns(4)
@@ -27320,11 +27384,13 @@ def usd_sod_tab():
         def _build_adj_surface():
             _s = _base_atm_df.copy()
             for exp in EXPIRIES:
+                exp_y = EXP_YEARS.get(exp, 1.0)
                 for tn in TENORS:
                     _v = get_matrix_value(_base_atm_df, exp, float(tn))
                     if _v is None: continue
                     _bl, _bs, _bc = _get_betas(exp, float(tn))
-                    _dv = _bl * _d_level + _bs * _d_slope + _bc * _d_curve
+                    _dl, _ds, _dc = _get_zone_factors(exp_y, float(tn))
+                    _dv = _bl * _dl + _bs * _ds + _bc * _dc
                     try:
                         _s.loc[_s.iloc[:, 0].astype(str).str.lower() == exp.lower(), f"{tn}Y"] = round(_v + _dv, 2)
                     except: pass
@@ -27364,8 +27430,10 @@ def usd_sod_tab():
     # ── 5. Calibration Engine ──────────────────────────────────────────
     st.markdown("---")
     with st.expander("🔬 Beta Calibration Engine", expanded=False):
-        st.caption("Pair consecutive vol snapshots with curve moves to estimate empirical betas. "
-                   "Replaces theoretical priors with data-driven sensitivities.")
+        st.caption("Pair consecutive vol snapshots with zone-specific curve moves to estimate empirical betas.  \n"
+                   "**Gamma** (≤3m): fwd rate + 2s5s + 2s3s5s fly  |  "
+                   "**Mid** (>3m–2y): fwd rate + 2s10s + 2s5s10s fly  |  "
+                   "**Vega** (>2y): fwd rate + 5s20s + 5s10s20s fly")
 
         _cal_col1, _cal_col2 = st.columns([2, 1])
         with _cal_col1:
@@ -27462,23 +27530,43 @@ def usd_sod_tab():
                         st.caption(f"📊 Vol snapshots: {len(_vol_dates)} dates | "
                                    f"SOFR curves: {len(_rate_dates)} dates | "
                                    f"Overlap: {len(_overlap)} dates")
+
+                        def _cal_rate_at(date_str, tenor_y):
+                            return _interp_rate(date_str, tenor_y)
+
+                        def _cal_zone_factors(d0, d1, exp_y, tenor_y):
+                            """Compute zone-specific (dl, ds, dc) for a date pair."""
+                            # Forward rate level at cell reference point
+                            ref_t = min(exp_y + tenor_y * 0.5, 30.0)
+                            r0_ref = _cal_rate_at(d0, ref_t)
+                            r1_ref = _cal_rate_at(d1, ref_t)
+                            dl = ((r1_ref or 0) - (r0_ref or 0)) * 100
+
+                            # Zone-specific slope & fly
+                            r0_2 = _cal_rate_at(d0, 2.0) or 0; r1_2 = _cal_rate_at(d1, 2.0) or 0
+                            r0_3 = _cal_rate_at(d0, 3.0) or 0; r1_3 = _cal_rate_at(d1, 3.0) or 0
+                            r0_5 = _cal_rate_at(d0, 5.0) or 0; r1_5 = _cal_rate_at(d1, 5.0) or 0
+                            r0_10 = _cal_rate_at(d0, 10.0) or 0; r1_10 = _cal_rate_at(d1, 10.0) or 0
+                            r0_20 = _cal_rate_at(d0, 20.0) or 0; r1_20 = _cal_rate_at(d1, 20.0) or 0
+
+                            if exp_y <= 0.25:  # gamma
+                                ds = ((r1_5 - r1_2) - (r0_5 - r0_2)) * 100
+                                dc = ((2*r1_3 - r1_2 - r1_5) - (2*r0_3 - r0_2 - r0_5)) * 100
+                            elif exp_y <= 2.0:  # mid
+                                ds = ((r1_10 - r1_2) - (r0_10 - r0_2)) * 100
+                                dc = ((2*r1_5 - r1_2 - r1_10) - (2*r0_5 - r0_2 - r0_10)) * 100
+                            else:  # vega
+                                ds = ((r1_20 - r1_5) - (r0_20 - r0_5)) * 100
+                                dc = ((2*r1_10 - r1_5 - r1_20) - (2*r0_10 - r0_5 - r0_20)) * 100
+                            return dl, ds, dc
+
                         _pairs = []
                         for i in range(len(_vol_dates) - 1):
                             d0 = _vol_dates[i]
                             d1 = _vol_dates[i + 1]
-                            # Curve factors at both dates
-                            r0_2 = _interp_rate(d0, 2.0)
-                            r0_5 = _interp_rate(d0, 5.0)
-                            r0_10 = _interp_rate(d0, 10.0)
-                            r1_2 = _interp_rate(d1, 2.0)
-                            r1_5 = _interp_rate(d1, 5.0)
-                            r1_10 = _interp_rate(d1, 10.0)
-                            if None in (r0_2, r0_5, r0_10, r1_2, r1_5, r1_10):
+                            if d0 not in _rate_dates or d1 not in _rate_dates:
                                 continue
-                            dl = (r1_5 - r0_5) * 100  # bp
-                            ds = ((r1_10 - r1_2) - (r0_10 - r0_2)) * 100
-                            dc = ((2*r1_5 - r1_2 - r1_10) - (2*r0_5 - r0_2 - r0_10)) * 100
-                            _pairs.append((d0, d1, dl, ds, dc))
+                            _pairs.append((d0, d1))
 
                         st.info(f"Found {len(_pairs)} date pairs with both vol and curve data.")
 
@@ -27492,15 +27580,18 @@ def usd_sod_tab():
                             _cal_results = []
                             _n_good = 0
                             for exp in EXPIRIES_CAL:
+                                exp_y = EXP_YEARS.get(exp, 1.0)
                                 for tn in TENORS_CAL:
                                     key = (exp, tn)
-                                    # Build X (factors) and y (vol changes) arrays
+                                    tn_y = float(tn.replace("Y", ""))
+                                    # Build X (zone-specific factors) and y (vol changes)
                                     X_rows = []
                                     y_rows = []
-                                    for d0, d1, dl, ds, dc in _pairs:
+                                    for d0, d1 in _pairs:
                                         v0 = _vol_by_date.get(d0, {}).get(key)
                                         v1 = _vol_by_date.get(d1, {}).get(key)
                                         if v0 is not None and v1 is not None:
+                                            dl, ds, dc = _cal_zone_factors(d0, d1, exp_y, tn_y)
                                             X_rows.append([dl, ds, dc])
                                             y_rows.append(v1 - v0)
 
@@ -27526,6 +27617,7 @@ def usd_sod_tab():
                                         r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
 
                                         _cal_results.append({
+                                            "zone": _get_zone(exp_y).upper(),
                                             "expiry": exp, "tenor": tn,
                                             "beta_level": round(float(betas[0]), 6),
                                             "beta_slope": round(float(betas[1]), 6),
