@@ -5669,6 +5669,52 @@ def sdr_live_tab():
     )
     st.caption("DTCC public price dissemination — interest rate options / swaptions / caps & floors")
 
+    with st.expander("🔧 Admin — Start/Stop SDR Fetcher", expanded=False):
+        st.markdown("""
+**Render Cron Job** (production — runs every 5 min automatically):
+1. Go to [Render Dashboard](https://dashboard.render.com) → `dtcc-sdr-fetcher` cron job
+2. Check status — should show "Active". If suspended, click **Resume**.
+3. Logs tab shows last poll time and row count.
+
+**Local PowerShell** (manual backfill or testing):
+```powershell
+# Open Admin PowerShell, then:
+cd "C:\\Users\\willp\\RateEdge Swaption Pricer"
+& ".venv\\Scripts\\python.exe" dtcc_sdr_fetcher_v2.py
+```
+
+**Backfill** (if missed days):
+```powershell
+# The fetcher auto-backfills — just run it and it will catch up.
+# For specific date range, edit START_DATE in dtcc_sdr_fetcher_v2.py
+```
+
+**Check last fetch:**
+```sql
+SELECT MAX(loaded_at), COUNT(*) FROM dtcc_sdr WHERE loaded_at > NOW() - INTERVAL '24 hours';
+```
+""")
+        # Quick DB status
+        if HAS_POSTGRES:
+            try:
+                _sdr_chk = get_db_connection()
+                if _sdr_chk:
+                    _sdr_c = _sdr_chk.cursor()
+                    _sdr_c.execute("SELECT MAX(loaded_at), COUNT(*) FROM dtcc_sdr WHERE loaded_at > NOW() - INTERVAL '24 hours'")
+                    _last, _cnt = _sdr_c.fetchone()
+                    _sdr_c.execute("SELECT COUNT(*) FROM dtcc_sdr")
+                    _total = _sdr_c.fetchone()[0]
+                    _sdr_c.close(); _sdr_chk.close()
+                    if _last:
+                        _age = (pd.Timestamp.now(tz='UTC') - pd.Timestamp(_last, tz='UTC')).total_seconds() / 3600
+                        _status = "🟢 Running" if _age < 1 else "🟡 Stale" if _age < 6 else "🔴 Stopped"
+                        st.caption(f"{_status} — Last fetch: {str(_last)[:19]} ({_age:.1f}h ago) | "
+                                   f"24h trades: {_cnt:,} | Total: {_total:,}")
+                    else:
+                        st.warning(f"🔴 No trades in last 24h. Total in DB: {_total:,}. Fetcher likely stopped.")
+            except:
+                pass
+
     # ── Platform code → full name ─────────────────────────────────────────────
     PLATFORM_NAMES = {
         "BGCD": "BGC",
