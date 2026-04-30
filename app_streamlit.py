@@ -1003,6 +1003,272 @@ def load_user_config(user_id: str, config_type: str, currency: str) -> Optional[
     except Exception as e:
         return None
 
+# ═══════════════════════════════════════════════════════════════════
+# MODULE-LEVEL CACHED DB QUERIES (must NOT be nested inside tab functions)
+# ═══════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=120)
+def _sdr_status_cached():
+    try:
+        _conn = get_db_connection()
+        if _conn:
+            _c = _conn.cursor()
+            _c.execute("SELECT MAX(loaded_at), COUNT(*) FROM dtcc_sdr WHERE loaded_at > NOW() - INTERVAL '24 hours'")
+            _last, _cnt = _c.fetchone()
+            _c.execute("SELECT COUNT(*) FROM dtcc_sdr")
+            _total = _c.fetchone()[0]
+            _c.close(); _conn.close()
+            return _last, _cnt, _total
+    except:
+        pass
+    return None, 0, 0
+
+
+@st.cache_data(ttl=300)
+def _load_fwd_matrix_history_usd(_fr, _years):
+    try:
+        _conn = get_db_connection()
+        if not _conn: return {}
+        _cur = _conn.cursor()
+        _cut = (pd.Timestamp.now() - pd.DateOffset(years=_years)).strftime("%Y-%m-%d")
+        _cur.execute("""
+            SELECT date, matrix FROM fwd_matrix_history
+            WHERE currency='USD' AND floating_rate=%s AND date >= %s
+            ORDER BY date
+        """, (_fr, _cut))
+        _rows = _cur.fetchall()
+        _cur.close(); _conn.close()
+        import json as _json_fmh
+        result = {}
+        for _d, _m in _rows:
+            try:
+                _mdata = _m if isinstance(_m, dict) else _json_fmh.loads(_m)
+                result[str(_d)[:10]] = _mdata
+            except: pass
+        return result
+    except: return {}
+
+
+@st.cache_data(ttl=300)
+def _load_backfill_stats_cached(_ccy):
+    try:
+        _conn = get_db_connection()
+        if _conn:
+            _cur = _conn.cursor()
+            _cur.execute("""
+                SELECT floating_rate, COUNT(*), MIN(date), MAX(date)
+                FROM fwd_matrix_history WHERE currency=%s
+                GROUP BY floating_rate ORDER BY floating_rate
+            """, (_ccy,))
+            _rows = _cur.fetchall()
+            _cur.close(); _conn.close()
+            return _rows
+    except:
+        pass
+    return []
+
+
+@st.cache_data(ttl=300)
+def _xccy_scan_all(_exp_a, _exp_b, _tenor, _years):
+    """Scan all currency pairs for spread-of-spreads RV signals."""
+    try:
+        _conn = get_db_connection()
+        if not _conn: return [], {}
+        _cur = _conn.cursor()
+        _cur.execute("SELECT DISTINCT currency, floating_rate, COUNT(*) FROM fwd_matrix_history GROUP BY currency, floating_rate HAVING COUNT(*) > 20")
+        _avail = _cur.fetchall()
+        _cut = (pd.Timestamp.now() - pd.DateOffset(years=_years)).strftime("%Y-%m-%d")
+        _all_data = {}
+        for _ac, _afr, _cnt in _avail:
+            _cur.execute("SELECT date, matrix FROM fwd_matrix_history WHERE currency=%s AND floating_rate=%s AND date >= %s ORDER BY date",
+                         (_ac, _afr, _cut))
+            _rows = _cur.fetchall()
+            import json as _json_sc
+            _mdata = {}
+            for _d, _m in _rows:
+                try:
+                    _md = _m if isinstance(_m, dict) else _json_sc.loads(_m)
+                    _mdata[str(_d)[:10]] = _md
+                except: pass
+            if _mdata:
+                _all_data[_ac] = _mdata
+        _cur.close(); _conn.close()
+
+        _spreads = {}
+        for _cc, _data in _all_data.items():
+            dates, vals = [], []
+            for d, m in sorted(_data.items()):
+                sv = lv = None
+                for row in m.get("values", []):
+                    exp = str(row.get("Expiry", "")).lower()
+                    if exp == _exp_a.lower(): sv = row.get(_tenor)
+                    if exp == _exp_b.lower(): lv = row.get(_tenor)
+                if sv is not None and lv is not None:
+                    dates.append(pd.Timestamp(d))
+                    vals.append((float(lv) - float(sv)) * 100)
+            if len(dates) > 20:
+                _spreads[_cc] = pd.Series(vals, index=dates)
+
+        _results = []
+        _ccys = sorted(_spreads.keys())
+        for i, ca in enumerate(_ccys):
+            for cb in _ccys[i+1:]:
+                _sos = (_spreads[ca] - _spreads[cb]).dropna()
+                if len(_sos) < 20: continue
+                _mean = _sos.mean(); _std = _sos.std()
+                if _std < 0.01: continue
+                _curr = _sos.iloc[-1]
+                _z = (_curr - _mean) / _std
+                _pctl = ((_sos < _curr).sum() / len(_sos)) * 100
+                _results.append({
+                    "Pair": f"{ca}/{cb}", "CcyA": ca, "CcyB": cb,
+                    "Current": round(_curr, 1), "Mean": round(_mean, 1),
+                    "StdDev": round(_std, 1), "Z-Score": round(_z, 2),
+                    "Pctl": round(_pctl, 0), "Obs": len(_sos),
+                })
+        _results.sort(key=lambda x: abs(x["Z-Score"]), reverse=True)
+        return _results, _spreads
+    except:
+        return [], {}
+
+
+@st.cache_data(ttl=300)
+def _load_xccy_fwd_history(_ccy, _fr, _years):
+    try:
+        _conn = get_db_connection()
+        if not _conn: return {}
+        _cur = _conn.cursor()
+        _cut = (pd.Timestamp.now() - pd.DateOffset(years=_years)).strftime("%Y-%m-%d")
+        _cur.execute("""
+            SELECT date, matrix FROM fwd_matrix_history
+            WHERE currency=%s AND floating_rate=%s AND date >= %s ORDER BY date
+        """, (_ccy, _fr, _cut))
+        _rows = _cur.fetchall()
+        _cur.close(); _conn.close()
+        import json as _json_xc
+        return {str(d)[:10]: (_json_xc.loads(m) if isinstance(m, str) else m) for d, m in _rows}
+    except:
+        return {}
+
+
+@st.cache_data(ttl=600)
+def _load_cal_history_cached():
+    try:
+        _conn = get_db_connection()
+        if _conn:
+            _cur = _conn.cursor()
+            _cur.execute("""
+                SELECT calibration_date, COUNT(*), AVG(r_squared)
+                FROM vol_curve_sensitivity
+                WHERE currency='USD'
+                GROUP BY calibration_date
+                ORDER BY calibration_date DESC
+                LIMIT 5
+            """)
+            result = _cur.fetchall()
+            _conn.close()
+            return result
+    except:
+        pass
+    return []
+
+
+@st.cache_data(ttl=300)
+def _get_avail_curve_dates_cached():
+    _sofr_dates = []
+    _ff_dates = []
+    try:
+        _conn = get_db_connection()
+        if _conn:
+            _cur = _conn.cursor()
+            _cur.execute("SELECT DISTINCT date FROM swap_rates WHERE currency='USD' AND floating_rate='SOFR' ORDER BY date DESC")
+            _sofr_dates = [str(r[0]) for r in _cur.fetchall()]
+            _cur.execute("SELECT DISTINCT date FROM swap_rates WHERE currency='USD' AND floating_rate='FEDFUNDS' ORDER BY date DESC")
+            _ff_dates = [str(r[0]) for r in _cur.fetchall()]
+            _cur.close(); _conn.close()
+    except:
+        pass
+    return _sofr_dates, _ff_dates
+
+
+@st.cache_data(ttl=600)
+def _load_cal_betas_usd_cached():
+    _betas = {}
+    try:
+        _conn = get_db_connection()
+        if _conn:
+            _cur = _conn.cursor()
+            _cur.execute("""
+                SELECT expiry, tenor, beta_level, beta_slope, beta_curve, r_squared
+                FROM vol_curve_sensitivity
+                WHERE currency='USD'
+                  AND calibration_date = (SELECT MAX(calibration_date)
+                                          FROM vol_curve_sensitivity WHERE currency='USD')
+            """)
+            for _ce, _ct, _bl, _bs, _bc, _r2 in _cur.fetchall():
+                _betas[(_ce.lower(), _ct)] = {
+                    "level": float(_bl), "slope": float(_bs),
+                    "curve": float(_bc), "r2": float(_r2) if _r2 else 0
+                }
+            _conn.close()
+    except:
+        pass
+    return _betas
+
+
+@st.cache_data(ttl=300)
+def _load_usd_sdr_flow_cached():
+    _block = ""
+    try:
+        _conn = get_db_connection()
+        if _conn:
+            _cur = _conn.cursor()
+            _cur.execute("""
+                SELECT option_type_decoded, opt_tenor, swp_tenor,
+                       notional_leg1, strike_pct, premium_amount,
+                       event_type, platform_identifier
+                FROM dtcc_sdr
+                WHERE notional_ccy = 'USD'
+                  AND event_type IN ('NEWT','TERM')
+                  AND loaded_at >= NOW() - INTERVAL '24 hours'
+                ORDER BY loaded_at DESC
+                LIMIT 50
+            """)
+            _rows = _cur.fetchall()
+            _cur.close(); _conn.close()
+            if _rows:
+                _lines = [f"USD SDR flow — last 24h: {len(_rows)} trades"]
+                _lines.append("Top trades by notional:")
+                _sorted = sorted(_rows, key=lambda x: abs(float(x[3] or 0)), reverse=True)[:15]
+                for _ot, _otn, _stn, _nl, _sk, _pm, _et, _pl in _sorted:
+                    _nl_fmt = f"${float(_nl)/1e6:.0f}m" if _nl else ""
+                    _sk_fmt = f"K={float(_sk):.2f}%" if _sk else ""
+                    _lines.append(f"  {_otn}x{_stn} {_ot} {_sk_fmt} {_nl_fmt}")
+                _block = "\n".join(_lines)
+    except:
+        pass
+    return _block
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _load_sdr_data_cached(q: str, p: tuple):
+    """SDR Live tab data loader — 30s TTL for near-realtime."""
+    conn = get_db_connection()
+    if not conn:
+        return pd.DataFrame()
+    try:
+        df = pd.read_sql(q, conn, params=list(p))
+        conn.close()
+        return df
+    except Exception:
+        try: conn.close()
+        except: pass
+        return pd.DataFrame()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# END MODULE-LEVEL CACHED QUERIES
+# ═══════════════════════════════════════════════════════════════════
 
 def load_all_user_configs(user_id: str) -> dict:
     """Load all configs for a user"""
@@ -5692,27 +5958,15 @@ Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
 ```
 """)
         # Quick DB status
-        @st.cache_data(ttl=120)
-        def _sdr_status():
-            if not HAS_POSTGRES:
-                return None, 0, 0
-            try:
-                _sdr_chk = get_db_connection()
-                if _sdr_chk:
-                    _sdr_c = _sdr_chk.cursor()
-                    _sdr_c.execute("SELECT MAX(loaded_at), COUNT(*) FROM dtcc_sdr WHERE loaded_at > NOW() - INTERVAL '24 hours'")
-                    _last, _cnt = _sdr_c.fetchone()
-                    _sdr_c.execute("SELECT COUNT(*) FROM dtcc_sdr")
-                    _total = _sdr_c.fetchone()[0]
-                    _sdr_c.close(); _sdr_chk.close()
-                    return _last, _cnt, _total
-            except:
-                pass
-            return None, 0, 0
-
-        _last, _cnt, _total = _sdr_status()
+        _last, _cnt, _total = _sdr_status_cached()
         if _last:
-            _age = (pd.Timestamp.now(tz='UTC') - pd.Timestamp(_last, tz='UTC')).total_seconds() / 3600
+            try:
+                _ts = pd.Timestamp(_last)
+                if _ts.tzinfo is None:
+                    _ts = _ts.tz_localize('UTC')
+                _age = (pd.Timestamp.now(tz='UTC') - _ts).total_seconds() / 3600
+            except:
+                _age = 999
             _status = "🟢 Running" if _age < 1 else "🟡 Stale" if _age < 6 else "🔴 Stopped"
             st.caption(f"{_status} — Last fetch: {str(_last)[:19]} ({_age:.1f}h ago) | "
                        f"24h trades: {_cnt:,} | Total: {_total:,}")
@@ -6015,22 +6269,10 @@ Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
     col_refresh, col_status = st.columns([1, 5])
     with col_refresh:
         manual_refresh = st.button("🔄 Refresh", key="sdr_refresh_btn", use_container_width=True)
-    @st.cache_data(ttl=30, show_spinner=False)
-    def load_sdr_data(q: str, p: tuple):
-        conn = get_db_connection()
-        if not conn:
-            return pd.DataFrame()
-        try:
-            df = pd.read_sql(q, conn, params=list(p))
-            conn.close()
-            return df
-        except Exception as e:
-            conn.close()
-            return pd.DataFrame()
 
     if manual_refresh:
-        load_sdr_data.clear()
-    df = load_sdr_data(query, tuple(params))
+        _load_sdr_data_cached.clear()
+    df = _load_sdr_data_cached(query, tuple(params))
 
     # ── Toast alerts for new NEWT trades ─────────────────────────────────────
     if alerts_on and not df.empty:
@@ -6395,7 +6637,7 @@ Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
         _now_rf  = _time_rf.monotonic()
         if _now_rf - _last_rf >= _interval:
             st.session_state["_sdr_last_refresh"] = _now_rf
-            load_sdr_data.clear()
+            _load_sdr_data_cached.clear()
             st.rerun()
         else:
             _remaining = max(0, int(_interval - (_now_rf - _last_rf)))
@@ -9873,29 +10115,6 @@ def _fwd_analysis_tab_usd():
         with _fc2:
             _fs_show_zscore = st.checkbox("Show rolling Z-score", True, key="fwd_rv_zscore")
 
-        @st.cache_data(ttl=300)
-        def _load_fwd_matrix_history_usd(_fr, _years):
-            try:
-                _conn = get_db_connection()
-                if not _conn: return {}
-                _cur = _conn.cursor()
-                _cut = (pd.Timestamp.now() - pd.DateOffset(years=_years)).strftime("%Y-%m-%d")
-                _cur.execute("""
-                    SELECT date, matrix FROM fwd_matrix_history
-                    WHERE currency='USD' AND floating_rate=%s AND date >= %s
-                    ORDER BY date
-                """, (_fr, _cut))
-                _rows = _cur.fetchall()
-                _cur.close(); _conn.close()
-                import json as _json_fmh
-                result = {}
-                for _d, _m in _rows:
-                    try:
-                        _mdata = _m if isinstance(_m, dict) else _json_fmh.loads(_m)
-                        result[str(_d)[:10]] = _mdata
-                    except: pass
-                return result
-            except: return {}
 
         _fwd_data = _load_fwd_matrix_history_usd(_fs_fr, _fs_yr)
 
@@ -19910,25 +20129,7 @@ def rv_tab():
                     st.error(f"Backfill error: {_bfe2}")
 
             # DB stats
-            @st.cache_data(ttl=300)
-            def _load_backfill_stats(_ccy):
-                try:
-                    _st_conn = get_db_connection()
-                    if _st_conn:
-                        _st_cur = _st_conn.cursor()
-                        _st_cur.execute("""
-                            SELECT floating_rate, COUNT(*), MIN(date), MAX(date)
-                            FROM fwd_matrix_history WHERE currency=%s
-                            GROUP BY floating_rate ORDER BY floating_rate
-                        """, (_ccy,))
-                        _st_rows = _st_cur.fetchall()
-                        _st_cur.close(); _st_conn.close()
-                        return _st_rows
-                except:
-                    pass
-                return []
-
-            _st_rows = _load_backfill_stats(ccy)
+            _st_rows = _load_backfill_stats_cached(ccy)
             if _st_rows:
                 st.markdown("**Stored matrices:**")
                 for _sr in _st_rows:
@@ -19995,72 +20196,6 @@ def rv_tab():
         st.caption(f"Curve spread = **{_spread_label}** (steepness measure)")
 
         # ── AUTO-SCANNER: scan all pairs ──────────────────────────
-        @st.cache_data(ttl=300)
-        def _xccy_scan_all(_exp_a, _exp_b, _tenor, _years):
-            """Load all currencies from fwd_matrix_history, compute pairwise spread-of-spreads z-scores."""
-            try:
-                _conn = get_db_connection()
-                if not _conn: return [], {}
-                _cur = _conn.cursor()
-                # Find all currencies with data
-                _cur.execute("SELECT DISTINCT currency, floating_rate, COUNT(*) FROM fwd_matrix_history GROUP BY currency, floating_rate HAVING COUNT(*) > 20")
-                _avail = _cur.fetchall()
-                _cut = (pd.Timestamp.now() - pd.DateOffset(years=_years)).strftime("%Y-%m-%d")
-                # Load all matrices
-                _all_data = {}
-                for _ac, _afr, _cnt in _avail:
-                    _cur.execute("SELECT date, matrix FROM fwd_matrix_history WHERE currency=%s AND floating_rate=%s AND date >= %s ORDER BY date",
-                                 (_ac, _afr, _cut))
-                    _rows = _cur.fetchall()
-                    import json as _json_sc
-                    _mdata = {}
-                    for _d, _m in _rows:
-                        try:
-                            _md = _m if isinstance(_m, dict) else _json_sc.loads(_m)
-                            _mdata[str(_d)[:10]] = _md
-                        except: pass
-                    if _mdata:
-                        _all_data[_ac] = _mdata
-                _cur.close(); _conn.close()
-
-                # Extract spread series per currency
-                _spreads = {}
-                for _cc, _data in _all_data.items():
-                    dates, vals = [], []
-                    for d, m in sorted(_data.items()):
-                        sv = lv = None
-                        for row in m.get("values", []):
-                            exp = str(row.get("Expiry", "")).lower()
-                            if exp == _exp_a.lower(): sv = row.get(_tenor)
-                            if exp == _exp_b.lower(): lv = row.get(_tenor)
-                        if sv is not None and lv is not None:
-                            dates.append(pd.Timestamp(d))
-                            vals.append((float(lv) - float(sv)) * 100)
-                    if len(dates) > 20:
-                        _spreads[_cc] = pd.Series(vals, index=dates)
-
-                # Compute all pairwise spread-of-spreads
-                _results = []
-                _ccys = sorted(_spreads.keys())
-                for i, ca in enumerate(_ccys):
-                    for cb in _ccys[i+1:]:
-                        _sos = (_spreads[ca] - _spreads[cb]).dropna()
-                        if len(_sos) < 20: continue
-                        _mean = _sos.mean(); _std = _sos.std()
-                        if _std < 0.01: continue
-                        _curr = _sos.iloc[-1]
-                        _z = (_curr - _mean) / _std
-                        _pctl = ((_sos < _curr).sum() / len(_sos)) * 100
-                        _results.append({
-                            "Pair": f"{ca}/{cb}", "CcyA": ca, "CcyB": cb,
-                            "Current": round(_curr, 1), "Mean": round(_mean, 1),
-                            "StdDev": round(_std, 1), "Z-Score": round(_z, 2),
-                            "Pctl": round(_pctl, 0), "Obs": len(_sos),
-                        })
-                _results.sort(key=lambda x: abs(x["Z-Score"]), reverse=True)
-                return _results, _spreads
-            except:
-                return [], {}
 
         with st.expander("🔍 **Auto-Scan All Pairs**", expanded=True):
             _scan_yr = st.slider("Scan lookback (years)", 1, 5, 3, key="xccy_scan_yr")
@@ -20101,23 +20236,6 @@ def rv_tab():
 
         _xccy_yr = st.slider("History (years)", 1, 8, 3, key="xccy_yr")
 
-        @st.cache_data(ttl=300)
-        def _load_xccy_fwd_history(_ccy, _fr, _years):
-            try:
-                _conn = get_db_connection()
-                if not _conn: return {}
-                _cur = _conn.cursor()
-                _cut = (pd.Timestamp.now() - pd.DateOffset(years=_years)).strftime("%Y-%m-%d")
-                _cur.execute("""
-                    SELECT date, matrix FROM fwd_matrix_history
-                    WHERE currency=%s AND floating_rate=%s AND date >= %s ORDER BY date
-                """, (_ccy, _fr, _cut))
-                _rows = _cur.fetchall()
-                _cur.close(); _conn.close()
-                import json as _json_xc
-                return {str(d)[:10]: (_json_xc.loads(m) if isinstance(m, str) else m) for d, m in _rows}
-            except:
-                return {}
 
         def _xccy_extract_spread(data, exp_short, exp_long, tenor):
             """Extract curve spread time series from fwd_matrix_history data."""
@@ -24690,23 +24808,27 @@ def main():
         show_login_page()
         return
     
-    # Single session validation   —   check token still valid in DB
-    try:
-        if HAS_POSTGRES and st.session_state.get("session_token"):
-            _vconn = get_db_connection()
-            if _vconn:
-                _vcur = _vconn.cursor()
-                _vcur.execute("SELECT session_token FROM active_sessions WHERE email=%s",
-                              (st.session_state.get("user_email",""),))
-                _vrow = _vcur.fetchone()
-                _vconn.close()
-                if _vrow and _vrow[0] != st.session_state["session_token"]:
-                    st.session_state["authenticated"] = False
-                    st.session_state["session_token"] = None
-                    st.warning("Your session was ended because you logged in from another device.")
-                    st.stop()
-    except Exception:
-        pass
+    # Single session validation — throttled to every 60s, not every render
+    import time as _time_sv
+    _sv_last = st.session_state.get("_sv_last_check", 0)
+    if _time_sv.time() - _sv_last > 60:
+        try:
+            if HAS_POSTGRES and st.session_state.get("session_token"):
+                _vconn = get_db_connection()
+                if _vconn:
+                    _vcur = _vconn.cursor()
+                    _vcur.execute("SELECT session_token FROM active_sessions WHERE email=%s",
+                                  (st.session_state.get("user_email",""),))
+                    _vrow = _vcur.fetchone()
+                    _vconn.close()
+                    if _vrow and _vrow[0] != st.session_state["session_token"]:
+                        st.session_state["authenticated"] = False
+                        st.session_state["session_token"] = None
+                        st.warning("Your session was ended because you logged in from another device.")
+                        st.stop()
+                st.session_state["_sv_last_check"] = _time_sv.time()
+        except Exception:
+            pass
 
     # Only show tabs if authenticated
     _show_hidden = is_super_admin()
@@ -27150,24 +27272,7 @@ def usd_sod_tab():
     st.markdown("### 📈 Curve Move Decomposition")
 
     # ── Load available curve dates for comparison picker ──
-    @st.cache_data(ttl=300)
-    def _get_avail_curve_dates():
-        _sofr_dates = []
-        _ff_dates = []
-        try:
-            _cd_conn = get_db_connection()
-            if _cd_conn:
-                _cd_cur = _cd_conn.cursor()
-                _cd_cur.execute("SELECT DISTINCT date FROM swap_rates WHERE currency='USD' AND floating_rate='SOFR' ORDER BY date DESC")
-                _sofr_dates = [str(r[0]) for r in _cd_cur.fetchall()]
-                _cd_cur.execute("SELECT DISTINCT date FROM swap_rates WHERE currency='USD' AND floating_rate='FEDFUNDS' ORDER BY date DESC")
-                _ff_dates = [str(r[0]) for r in _cd_cur.fetchall()]
-                _cd_cur.close(); _cd_conn.close()
-        except:
-            pass
-        return _sofr_dates, _ff_dates
-
-    _avail_curve_dates, _avail_ff_dates = _get_avail_curve_dates()
+    _avail_curve_dates, _avail_ff_dates = _get_avail_curve_dates_cached()
 
     _eod_curve = _load_curve_from_db_latest("SOFR", "USD", load_date=_base_date)
 
@@ -27348,33 +27453,7 @@ def usd_sod_tab():
                  "12y": 12.0, "15y": 15.0, "20y": 20.0, "25y": 25.0, "30y": 30.0}
 
     # Load calibrated betas from DB (if available)
-    @st.cache_data(ttl=600)
-    def _load_cal_betas_usd():
-        _betas = {}
-        if not HAS_POSTGRES:
-            return _betas
-        try:
-            _cconn = get_db_connection()
-            if _cconn:
-                _ccur = _cconn.cursor()
-                _ccur.execute("""
-                    SELECT expiry, tenor, beta_level, beta_slope, beta_curve, r_squared
-                    FROM vol_curve_sensitivity
-                    WHERE currency='USD'
-                      AND calibration_date = (SELECT MAX(calibration_date)
-                                              FROM vol_curve_sensitivity WHERE currency='USD')
-                """)
-                for _ce, _ct, _bl, _bs, _bc, _r2 in _ccur.fetchall():
-                    _betas[(_ce.lower(), _ct)] = {
-                        "level": float(_bl), "slope": float(_bs),
-                        "curve": float(_bc), "r2": float(_r2) if _r2 else 0
-                    }
-                _cconn.close()
-        except:
-            pass
-        return _betas
-
-    _cal_betas = _load_cal_betas_usd()
+    _cal_betas = _load_cal_betas_usd_cached()
     _using_calibrated = bool(_cal_betas)
     if _using_calibrated:
         _avg_r2 = np.mean([v["r2"] for v in _cal_betas.values()])
@@ -27810,30 +27889,7 @@ def usd_sod_tab():
                 st.error(f"Calibration error: {_cal_err}")
 
         # Show existing calibration
-        @st.cache_data(ttl=600)
-        def _load_cal_history():
-            if not HAS_POSTGRES:
-                return []
-            try:
-                conn3 = get_db_connection()
-                if conn3:
-                    cur3 = conn3.cursor()
-                    cur3.execute("""
-                        SELECT calibration_date, COUNT(*), AVG(r_squared)
-                        FROM vol_curve_sensitivity
-                        WHERE currency='USD'
-                        GROUP BY calibration_date
-                        ORDER BY calibration_date DESC
-                        LIMIT 5
-                    """)
-                    result = cur3.fetchall()
-                    conn3.close()
-                    return result
-            except:
-                pass
-            return []
-
-        _cal_hist = _load_cal_history()
+        _cal_hist = _load_cal_history_cached()
         if _cal_hist:
             st.markdown("**Previous calibrations:**")
             for _cd, _cn, _cr2 in _cal_hist:
@@ -27874,42 +27930,7 @@ def usd_sod_tab():
         _usd_vol_block = "\n".join(_usd_vol_lines)
 
     # ── USD SDR flow block (cached) ──
-    @st.cache_data(ttl=300)
-    def _load_usd_sdr_flow():
-        _block = ""
-        if not HAS_POSTGRES:
-            return _block
-        try:
-            _sdr_conn = get_db_connection()
-            if _sdr_conn:
-                _sdr_cur = _sdr_conn.cursor()
-                _sdr_cur.execute("""
-                    SELECT option_type_decoded, opt_tenor, swp_tenor,
-                           notional_leg1, strike_pct, premium_amount,
-                           event_type, platform_identifier
-                    FROM dtcc_sdr
-                    WHERE notional_ccy = 'USD'
-                      AND event_type IN ('NEWT','TERM')
-                      AND loaded_at >= NOW() - INTERVAL '24 hours'
-                    ORDER BY loaded_at DESC
-                    LIMIT 50
-                """)
-                _sdr_rows = _sdr_cur.fetchall()
-                _sdr_cur.close(); _sdr_conn.close()
-                if _sdr_rows:
-                    _sdr_lines = [f"USD SDR flow — last 24h: {len(_sdr_rows)} trades"]
-                    _sdr_lines.append("Top trades by notional:")
-                    _sorted_sdr = sorted(_sdr_rows, key=lambda x: abs(float(x[3] or 0)), reverse=True)[:15]
-                    for _ot, _otn, _stn, _nl, _sk, _pm, _et, _pl in _sorted_sdr:
-                        _nl_fmt = f"${float(_nl)/1e6:.0f}m" if _nl else ""
-                        _sk_fmt = f"K={float(_sk):.2f}%" if _sk else ""
-                        _sdr_lines.append(f"  {_otn}x{_stn} {_ot} {_sk_fmt} {_nl_fmt}")
-                    _block = "\n".join(_sdr_lines)
-        except:
-            pass
-        return _block
-
-    _usd_sdr_block = _load_usd_sdr_flow()
+    _usd_sdr_block = _load_usd_sdr_flow_cached()
 
     # ── AI Commentary — exact AUD pattern ──
     with st.expander("🧠 AI Commentary Generator — USD SOD Tokyo", expanded=False):
