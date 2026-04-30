@@ -27231,15 +27231,41 @@ def usd_sod_tab():
         _tenors_chart = [0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30]
         _eod_rates = [_rate_at(_eod_curve, t) for t in _tenors_chart]
         _cur_rates = [_rate_at(_curr_curve, t) for t in _tenors_chart]
-        fig_crv = go.Figure()
+        _chg_bp = [(c - e) * 100 if c and e else 0 for c, e in zip(_cur_rates, _eod_rates)]
+
+        from plotly.subplots import make_subplots as _mk_sub
+        fig_crv = _mk_sub(rows=2, cols=1, shared_xaxes=True, row_heights=[0.55, 0.45],
+                           vertical_spacing=0.06,
+                           subplot_titles=[f"SOFR EOD vs {_cmp_rate_type} ({_curr_curve_date})",
+                                           "Change (bp)"])
         fig_crv.add_trace(go.Scatter(x=_tenors_chart, y=_eod_rates,
-            name=f"SOFR EOD ({_base_date})", line=dict(color="#94a3b8", width=2, dash="dot")))
+            name=f"EOD ({_base_date})", line=dict(color="#94a3b8", width=2.5, dash="dot"),
+            mode="lines+markers", marker=dict(size=5)), row=1, col=1)
         fig_crv.add_trace(go.Scatter(x=_tenors_chart, y=_cur_rates,
-            name=f"{_cmp_rate_type} ({_curr_curve_date})", line=dict(color="#3b82f6", width=2.5)))
-        fig_crv.update_layout(title=f"SOFR EOD vs {_cmp_rate_type} ({_curr_curve_date})",
-            xaxis_title="Tenor (y)", yaxis_title="Rate (%)",
-            template="plotly_dark", height=300, showlegend=True,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+            name=f"{_cmp_rate_type} ({_curr_curve_date})", line=dict(color="#00d4ff", width=3),
+            mode="lines+markers", marker=dict(size=5)), row=1, col=1)
+        # Tight y-axis around the data
+        _all_rates = [r for r in _eod_rates + _cur_rates if r is not None]
+        if _all_rates:
+            _y_min = min(_all_rates) - 0.05
+            _y_max = max(_all_rates) + 0.05
+            fig_crv.update_yaxes(range=[_y_min, _y_max], row=1, col=1, title_text="Rate (%)")
+
+        # Change bars — green positive, red negative
+        _bar_colors = ["#4ade80" if c >= 0 else "#f87171" for c in _chg_bp]
+        fig_crv.add_trace(go.Bar(x=_tenors_chart, y=_chg_bp,
+            name="Δ (bp)", marker=dict(color=_bar_colors, opacity=0.8),
+            text=[f"{c:+.1f}" for c in _chg_bp], textposition="outside",
+            textfont=dict(size=10, color="#e2e8f0")), row=2, col=1)
+        fig_crv.add_hline(y=0, line=dict(color="#64748b", width=0.8), row=2, col=1)
+        fig_crv.update_yaxes(title_text="Δ (bp)", row=2, col=1)
+
+        fig_crv.update_layout(
+            template="plotly_dark", height=500, showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(l=60, r=20, t=50, b=40),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+        fig_crv.update_xaxes(title_text="Tenor (y)", row=2, col=1)
         st.plotly_chart(fig_crv, use_container_width=True)
 
     st.markdown("---")
@@ -27346,31 +27372,57 @@ def usd_sod_tab():
         _df_adj = pd.DataFrame([r for r in _adj_rows if r["type"] == "adj"]).drop(columns=["type"])
         _df_delta = pd.DataFrame([r for r in _adj_rows if r["type"] == "delta"]).drop(columns=["type"])
 
-        _view_mode = st.radio("View", ["Side by Side", "Delta Only", "Adjusted Only"],
-                              horizontal=True, key="usd_sod_view")
+        # ── NYC EOD Base ──
+        st.markdown("**NYC EOD Base (Normal Vol bp/yr)**")
+        st.dataframe(_df_base.set_index("Expiry"), use_container_width=True)
 
-        if _view_mode == "Side by Side":
-            _sc1, _sc2 = st.columns(2)
-            with _sc1:
-                st.markdown("**NYC EOD Base (Normal Vol bp/yr)**")
-                st.dataframe(_df_base.set_index("Expiry"), use_container_width=True)
-            with _sc2:
-                st.markdown("**Estimated Open (Normal Vol bp/yr)**")
-                st.dataframe(_df_adj.set_index("Expiry"), use_container_width=True)
-        elif _view_mode == "Delta Only":
-            st.markdown("**Vol Change Estimate (Normal Vol bp/yr)**")
-            def _delta_style(val):
-                try:
-                    v = float(val)
-                    if abs(v) > 3: return "background-color: rgba(239,68,68,0.3); font-weight: bold"
-                    if abs(v) > 1: return "background-color: rgba(251,191,36,0.2)"
-                    return "background-color: rgba(34,197,94,0.1)"
-                except: return ""
-            st.dataframe(_df_delta.set_index("Expiry").style.map(_delta_style), use_container_width=True)
-            st.caption("🟢 <1bp  |  🟡 1-3bp  |  🔴 >3bp")
-        else:
-            st.markdown("**Estimated Open (Normal Vol bp/yr)**")
-            st.dataframe(_df_adj.set_index("Expiry"), use_container_width=True)
+        # ── Estimated Open with heatmap on changes ──
+        st.markdown("**Estimated Open (Normal Vol bp/yr)**")
+        _df_adj_idx = _df_adj.set_index("Expiry")
+        _df_delta_idx = _df_delta.set_index("Expiry")
+
+        # Style adj cells based on delta values
+        def _adj_heatmap(df):
+            """Return style DataFrame based on delta magnitudes."""
+            styles = pd.DataFrame("", index=df.index, columns=df.columns)
+            for exp in df.index:
+                for col in df.columns:
+                    try:
+                        dv = float(_df_delta_idx.loc[exp, col])
+                        if dv > 3:
+                            styles.loc[exp, col] = "background-color: rgba(34,197,94,0.5); color: white; font-weight: bold"
+                        elif dv > 1.5:
+                            styles.loc[exp, col] = "background-color: rgba(34,197,94,0.25)"
+                        elif dv > 0.5:
+                            styles.loc[exp, col] = "background-color: rgba(34,197,94,0.10)"
+                        elif dv < -3:
+                            styles.loc[exp, col] = "background-color: rgba(239,68,68,0.5); color: white; font-weight: bold"
+                        elif dv < -1.5:
+                            styles.loc[exp, col] = "background-color: rgba(239,68,68,0.25)"
+                        elif dv < -0.5:
+                            styles.loc[exp, col] = "background-color: rgba(239,68,68,0.10)"
+                    except:
+                        pass
+            return styles
+
+        st.dataframe(_df_adj_idx.style.apply(_adj_heatmap, axis=None), use_container_width=True)
+        st.caption("🟢 vol higher  |  🔴 vol lower  |  intensity = magnitude of change")
+
+        # ── Change matrix with heatmap ──
+        st.markdown("**Vol Change (bp)**")
+        def _delta_style(val):
+            try:
+                v = float(val)
+                if v > 3: return "background-color: rgba(34,197,94,0.5); color: white; font-weight: bold"
+                if v > 1.5: return "background-color: rgba(34,197,94,0.25); color: white"
+                if v > 0.5: return "background-color: rgba(34,197,94,0.10)"
+                if v < -3: return "background-color: rgba(239,68,68,0.5); color: white; font-weight: bold"
+                if v < -1.5: return "background-color: rgba(239,68,68,0.25); color: white"
+                if v < -0.5: return "background-color: rgba(239,68,68,0.10)"
+                return ""
+            except: return ""
+        st.dataframe(_df_delta.set_index("Expiry").style.map(_delta_style), use_container_width=True)
+        st.caption("🟢 >+0.5bp  |  🔴 <−0.5bp  |  bold >3bp")
 
         _deltas_flat = [r[f"{tn}Y"] for r in _adj_rows if r["type"] == "delta"
                         for tn in TENORS if r.get(f"{tn}Y") is not None]
