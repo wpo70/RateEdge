@@ -27923,13 +27923,12 @@ def usd_sod_tab():
                 if not _api_key:
                     _api_key = st.session_state.get("anthropic_api_key", "")
                 if not _api_key:
-                    st.error("Set Anthropic API key in Settings.")
-                elif not _raw_news_usd.strip():
-                    st.warning("Paste some raw news / macro context first.")
+                    st.session_state["_usd_sod_error"] = "❌ No Anthropic API key found. Set in Streamlit secrets or environment."
                 else:
                     try:
                         from datetime import datetime as _dt_usd2
                         _today_usd = _dt_usd2.now(ZoneInfo("Asia/Tokyo")).strftime("%A")
+                        _raw_news_final = _raw_news_usd.strip() or "No macro news provided — focus on vol surface and flow data only."
 
                         _sys_prompt_usd = (
                             f"You are a senior USD rates vol market commentator writing the "
@@ -27967,7 +27966,7 @@ def usd_sod_tab():
                             f"LENGTH PREFERENCE: {_usd_sod_length}"
                         )
 
-                        _data_secs = ["=== RAW NEWS / MACRO INPUTS ===", _raw_news_usd.strip()]
+                        _data_secs = ["=== RAW NEWS / MACRO INPUTS ===", _raw_news_final]
                         if _usd_vol_block:
                             _data_secs.append("\n=== USD VOL SURFACE DATA (carry-forward estimate) ===")
                             _data_secs.append(_usd_vol_block)
@@ -28014,12 +28013,18 @@ def usd_sod_tab():
                                 _text_usd = "\n\n".join([b.get("text", "") for b in _content_usd if b.get("type") == "text"]).strip()
                                 if _text_usd:
                                     st.session_state["_usd_sod_output"] = _text_usd
+                                    st.session_state.pop("_usd_sod_error", None)
                                 else:
-                                    st.warning("Empty response from API.")
+                                    st.session_state["_usd_sod_error"] = "⚠️ Empty response from API."
                             except Exception as _api_e:
-                                st.error(f"API error: {_api_e}")
+                                st.session_state["_usd_sod_error"] = f"❌ API error: {_api_e}"
                     except Exception as _gen_e2:
-                        st.error(f"Commentary generator error: {_gen_e2}")
+                        st.session_state["_usd_sod_error"] = f"❌ Commentary generator error: {_gen_e2}"
+
+    # ── Display errors outside expander ──
+    _usd_sod_err = st.session_state.get("_usd_sod_error")
+    if _usd_sod_err:
+        st.error(_usd_sod_err)
 
     # ── Display generated commentary ──
     _usd_commentary = st.session_state.get("_usd_sod_output")
