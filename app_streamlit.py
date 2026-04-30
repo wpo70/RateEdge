@@ -27913,7 +27913,15 @@ def usd_sod_tab():
                                             index=1, key="_usd_sod_length")
 
             if st.button("⚡ Generate USD SOD Commentary", key="_usd_sod_gen", type="primary"):
-                _api_key = st.session_state.get("anthropic_api_key", "")
+                _api_key = None
+                try:
+                    _api_key = st.secrets.get("ANTHROPIC_API_KEY")
+                except Exception:
+                    pass
+                if not _api_key:
+                    _api_key = os.environ.get("ANTHROPIC_API_KEY")
+                if not _api_key:
+                    _api_key = st.session_state.get("anthropic_api_key", "")
                 if not _api_key:
                     st.error("Set Anthropic API key in Settings.")
                 elif not _raw_news_usd.strip():
