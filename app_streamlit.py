@@ -27399,18 +27399,22 @@ def usd_sod_tab():
                 for col in df.columns:
                     try:
                         dv = float(_df_delta_idx.loc[exp, col])
-                        if dv > 3:
-                            styles.loc[exp, col] = "background-color: rgba(34,197,94,0.5); color: white; font-weight: bold"
-                        elif dv > 1.5:
-                            styles.loc[exp, col] = "background-color: rgba(34,197,94,0.25)"
+                        if dv > 2.0:
+                            styles.loc[exp, col] = "background-color: rgba(34,197,94,0.55); color: white; font-weight: bold"
+                        elif dv > 1.0:
+                            styles.loc[exp, col] = "background-color: rgba(34,197,94,0.35); color: white"
                         elif dv > 0.5:
-                            styles.loc[exp, col] = "background-color: rgba(34,197,94,0.10)"
-                        elif dv < -3:
-                            styles.loc[exp, col] = "background-color: rgba(239,68,68,0.5); color: white; font-weight: bold"
-                        elif dv < -1.5:
-                            styles.loc[exp, col] = "background-color: rgba(239,68,68,0.25)"
+                            styles.loc[exp, col] = "background-color: rgba(34,197,94,0.20)"
+                        elif dv > 0.2:
+                            styles.loc[exp, col] = "background-color: rgba(34,197,94,0.08)"
+                        elif dv < -2.0:
+                            styles.loc[exp, col] = "background-color: rgba(239,68,68,0.55); color: white; font-weight: bold"
+                        elif dv < -1.0:
+                            styles.loc[exp, col] = "background-color: rgba(239,68,68,0.35); color: white"
                         elif dv < -0.5:
-                            styles.loc[exp, col] = "background-color: rgba(239,68,68,0.10)"
+                            styles.loc[exp, col] = "background-color: rgba(239,68,68,0.20)"
+                        elif dv < -0.2:
+                            styles.loc[exp, col] = "background-color: rgba(239,68,68,0.08)"
                     except:
                         pass
             return styles
@@ -27423,16 +27427,18 @@ def usd_sod_tab():
         def _delta_style(val):
             try:
                 v = float(val)
-                if v > 3: return "background-color: rgba(34,197,94,0.5); color: white; font-weight: bold"
-                if v > 1.5: return "background-color: rgba(34,197,94,0.25); color: white"
-                if v > 0.5: return "background-color: rgba(34,197,94,0.10)"
-                if v < -3: return "background-color: rgba(239,68,68,0.5); color: white; font-weight: bold"
-                if v < -1.5: return "background-color: rgba(239,68,68,0.25); color: white"
-                if v < -0.5: return "background-color: rgba(239,68,68,0.10)"
+                if v > 2.0: return "background-color: rgba(34,197,94,0.55); color: white; font-weight: bold"
+                if v > 1.0: return "background-color: rgba(34,197,94,0.35); color: white"
+                if v > 0.5: return "background-color: rgba(34,197,94,0.20)"
+                if v > 0.2: return "background-color: rgba(34,197,94,0.08)"
+                if v < -2.0: return "background-color: rgba(239,68,68,0.55); color: white; font-weight: bold"
+                if v < -1.0: return "background-color: rgba(239,68,68,0.35); color: white"
+                if v < -0.5: return "background-color: rgba(239,68,68,0.20)"
+                if v < -0.2: return "background-color: rgba(239,68,68,0.08)"
                 return ""
             except: return ""
         st.dataframe(_df_delta.set_index("Expiry").style.map(_delta_style), use_container_width=True)
-        st.caption("🟢 >+0.5bp  |  🔴 <−0.5bp  |  bold >3bp")
+        st.caption("🟢 >+0.2bp  |  🔴 <−0.2bp  |  bold >2bp")
 
         _deltas_flat = [r[f"{tn}Y"] for r in _adj_rows if r["type"] == "delta"
                         for tn in TENORS if r.get(f"{tn}Y") is not None]
