@@ -5670,28 +5670,25 @@ def sdr_live_tab():
     st.caption("DTCC public price dissemination — interest rate options / swaptions / caps & floors")
 
     with st.expander("🔧 Admin — Start/Stop SDR Fetcher", expanded=False):
-        st.markdown("""
-**Render Cron Job** (production — runs every 5 min automatically):
-1. Go to [Render Dashboard](https://dashboard.render.com) → `dtcc-sdr-fetcher` cron job
-2. Check status — should show "Active". If suspended, click **Resume**.
-3. Logs tab shows last poll time and row count.
-
-**Local PowerShell** (manual backfill or testing):
-```powershell
-# Open Admin PowerShell, then:
+        _admin_pw = st.text_input("Admin password", type="password", key="_sdr_admin_pw")
+        if _admin_pw == "1Will-po1":
+            st.markdown("""
+**Start SDR Fetcher** — open PowerShell as **Administrator**, then:
+```
 cd "C:\\Users\\willp\\RateEdge Swaption Pricer"
-& ".venv\\Scripts\\python.exe" dtcc_sdr_fetcher_v2.py
+$env:RATEEDGE_DB_URL = 'postgresql://postgres.oxwbyotzdqccaajyaqhn:RateEdge2026!@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres'
+python dtcc_sdr_fetcher_v2.py
+```
+Leave the window open — polls every 5 min. Close window to stop.
+
+**Run as background task:**
+```
+Start-Process -NoNewWindow python -ArgumentList "dtcc_sdr_fetcher_v2.py" -WorkingDirectory "C:\\Users\\willp\\RateEdge Swaption Pricer"
 ```
 
-**Backfill** (if missed days):
-```powershell
-# The fetcher auto-backfills — just run it and it will catch up.
-# For specific date range, edit START_DATE in dtcc_sdr_fetcher_v2.py
+**Check if already running:**
 ```
-
-**Check last fetch:**
-```sql
-SELECT MAX(loaded_at), COUNT(*) FROM dtcc_sdr WHERE loaded_at > NOW() - INTERVAL '24 hours';
+Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
 ```
 """)
         # Quick DB status
