@@ -27278,10 +27278,13 @@ def usd_sod_tab():
     st.markdown("---")
     st.markdown("### 🎯 Estimated Vol Adjustment")
 
-    EXPIRIES = ["1w", "1m", "2m", "3m", "6m", "1y", "2y", "3y", "5y"]
-    TENORS = [2, 3, 5, 7, 10, 15, 20, 30]
-    EXP_YEARS = {"1w": 1/52, "1m": 1/12, "2m": 2/12, "3m": 0.25, "6m": 0.5,
-                 "1y": 1.0, "2y": 2.0, "3y": 3.0, "5y": 5.0}
+    EXPIRIES = ["1w", "1m", "2m", "3m", "6m", "9m", "1y", "18m", "2y", "3y", "4y", "5y",
+                "6y", "7y", "8y", "9y", "10y", "12y", "15y", "20y", "25y", "30y"]
+    TENORS = [1, 2, 3, 5, 7, 10, 15, 20, 30]
+    EXP_YEARS = {"1w": 1/52, "1m": 1/12, "2m": 2/12, "3m": 0.25, "6m": 0.5, "9m": 0.75,
+                 "1y": 1.0, "18m": 1.5, "2y": 2.0, "3y": 3.0, "4y": 4.0, "5y": 5.0,
+                 "6y": 6.0, "7y": 7.0, "8y": 8.0, "9y": 9.0, "10y": 10.0,
+                 "12y": 12.0, "15y": 15.0, "20y": 20.0, "25y": 25.0, "30y": 30.0}
 
     # Load calibrated betas from DB (if available)
     _cal_betas = {}  # {(expiry, tenor_str): {beta_level, beta_slope, beta_curve, r2}}
@@ -27633,8 +27636,9 @@ def usd_sod_tab():
                             st.warning(f"Need at least {_cal_min_obs} pairs. Currently {len(_pairs)}.")
                         else:
                             # 4. Regression per cell
-                            EXPIRIES_CAL = ["1w", "1m", "2m", "3m", "6m", "1y", "2y", "3y", "5y"]
-                            TENORS_CAL = ["2Y", "3Y", "5Y", "7Y", "10Y", "15Y", "20Y", "30Y"]
+                            EXPIRIES_CAL = ["1w", "1m", "2m", "3m", "6m", "9m", "1y", "18m", "2y", "3y", "4y", "5y",
+                                            "6y", "7y", "8y", "9y", "10y", "12y", "15y", "20y", "25y", "30y"]
+                            TENORS_CAL = ["1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "15Y", "20Y", "30Y"]
 
                             _cal_results = []
                             _n_good = 0
