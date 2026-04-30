@@ -24669,17 +24669,24 @@ def main():
         ("🔍 Vol Lookup",                "tab_show_vollookup", vol_lookup_tab),
         ("🔮 Exotics",                   "tab_show_exotics",   lambda: exotics_tab(vol_mode)),
         ("📏 SOD Report",                "tab_show_sod",       sod_report_tab),
-        ("💵 USD SOD",                   "tab_show_usd_sod",   usd_sod_tab),
+        ("📏 USD SOD Report",            "tab_show_usd_sod",   usd_sod_tab),
         ("✅ Vol Editor",                "tab_show_voleditor", vol_surface_editor_tab),
         ("📑 Vol Export",                "tab_show_volexport", vol_export_tab),
         ("📐 Midcurve & Curve Options",  "tab_show_midcurve",  midcurve_tab),
         ("🎫 Trade Ticket",              "tab_show_ticket",    lambda: render_ticket_tab(st.session_state)),
     ]
-    # v2904a: USD SOD tab only visible when USD selected
-    if st.session_state.get("sidebar_ccy", "AUD") != "USD":
-        st.session_state["tab_show_usd_sod"] = False
-    else:
+    # v2904a: SOD tab routing by currency
+    # AUD SOD code is LOCKED — do not modify sod_report_tab() without explicit per-session approval
+    _sidebar_ccy = st.session_state.get("sidebar_ccy", "AUD")
+    if _sidebar_ccy == "USD":
         st.session_state["tab_show_usd_sod"] = True
+        st.session_state["tab_show_sod"] = False
+    elif _sidebar_ccy == "AUD":
+        st.session_state["tab_show_usd_sod"] = False
+        st.session_state["tab_show_sod"] = True
+    else:
+        st.session_state["tab_show_usd_sod"] = False
+        st.session_state["tab_show_sod"] = False
 
     # Multi-CCY is super_admin only, added separately below
     _tab_names = [n for n, k, f in _ALL_TAB_DEFS if st.session_state.get(k, True)]
@@ -27748,6 +27755,265 @@ def usd_sod_tab():
                             st.caption(f"{_cd}: {_cn} cells, avg R²={_cr2:.3f}")
             except:
                 pass
+
+    # ═══════════════════════════════════════════════════════════════════
+    # USD SOD COMMENTARY + TRADE IDEAS (Tokyo Open)
+    # ═══════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("### 📝 USD SOD Commentary — Tokyo Open")
+
+    # ── Build vol data block from carry-forward estimator ──
+    _usd_vol_block = ""
+    if _base_atm_df is not None and _adj_rows:
+        _usd_vol_lines = ["Vol surface changes (estimated carry-forward):"]
+        for exp in EXPIRIES:
+            _parts = []
+            for tn in TENORS:
+                _delta_val = None
+                _adj_val = None
+                for r in _adj_rows:
+                    if r.get("Expiry") == exp:
+                        if r["type"] == "delta":
+                            _delta_val = r.get(f"{tn}Y")
+                        if r["type"] == "adj":
+                            _adj_val = r.get(f"{tn}Y")
+                if _delta_val is not None and _adj_val is not None and abs(_delta_val) > 0.1:
+                    _parts.append(f"{exp}x{tn}Y: {_delta_val:+.1f}bp to {_adj_val:.1f}bp")
+            if _parts:
+                _usd_vol_lines.append("  " + ", ".join(_parts))
+        _zone_summary = (
+            f"Zone factors — GAMMA: slope(2s5s) {_d_slope_gamma:+.1f}bp fly(2s3s5s) {_d_fly_gamma:+.1f}bp | "
+            f"MID: slope(2s10s) {_d_slope_mid:+.1f}bp fly(2s5s10s) {_d_fly_mid:+.1f}bp | "
+            f"VEGA: slope(5s20s) {_d_slope_vega:+.1f}bp fly(5s10s20s) {_d_fly_vega:+.1f}bp"
+        )
+        _usd_vol_lines.append(f"\n{_zone_summary}")
+        _usd_vol_lines.append(f"Fwd rate Δ: 2Y {_dl_2y:+.1f}bp | 5Y {_dl_5y:+.1f}bp | 10Y {_dl_10y:+.1f}bp")
+        _usd_vol_block = "\n".join(_usd_vol_lines)
+
+    # ── USD SDR flow block ──
+    _usd_sdr_block = ""
+    if HAS_POSTGRES:
+        try:
+            _sdr_conn = get_db_connection()
+            if _sdr_conn:
+                _sdr_cur = _sdr_conn.cursor()
+                _sdr_cur.execute("""
+                    SELECT option_type_decoded, opt_tenor, swp_tenor,
+                           notional_leg1, strike_pct, premium_amount,
+                           event_type, platform_identifier
+                    FROM dtcc_sdr
+                    WHERE notional_ccy = 'USD'
+                      AND event_type IN ('NEWT','TERM')
+                      AND loaded_at >= NOW() - INTERVAL '24 hours'
+                    ORDER BY loaded_at DESC
+                    LIMIT 50
+                """)
+                _sdr_rows = _sdr_cur.fetchall()
+                _sdr_cur.close(); _sdr_conn.close()
+                if _sdr_rows:
+                    _sdr_lines = [f"USD SDR flow — last 24h: {len(_sdr_rows)} trades"]
+                    _sdr_lines.append("Top trades by notional:")
+                    _sorted_sdr = sorted(_sdr_rows, key=lambda x: abs(float(x[3] or 0)), reverse=True)[:15]
+                    for _ot, _otn, _stn, _nl, _sk, _pm, _et, _pl in _sorted_sdr:
+                        _nl_fmt = f"${float(_nl)/1e6:.0f}m" if _nl else ""
+                        _sk_fmt = f"K={float(_sk):.2f}%" if _sk else ""
+                        _sdr_lines.append(f"  {_otn}x{_stn} {_ot} {_sk_fmt} {_nl_fmt}")
+                    _usd_sdr_block = "\n".join(_sdr_lines)
+        except:
+            pass
+
+    # ── AI Commentary Generator ──
+    with st.expander("🧠 AI Commentary Generator — USD SOD Tokyo", expanded=False):
+        _comm_mode_usd = st.radio(
+            "Input mode",
+            ["🤖 AI Generate from raw news", "📝 Manual (paste finished commentary)"],
+            index=0 if st.session_state.get("_usd_comm_mode", "ai") == "ai" else 1,
+            horizontal=True, key="_usd_comm_mode_radio")
+        _is_manual_usd = _comm_mode_usd.startswith("📝")
+        st.session_state["_usd_comm_mode"] = "manual" if _is_manual_usd else "ai"
+
+        if _is_manual_usd:
+            from datetime import datetime as _dt_usd
+            _day_usd = _dt_usd.now(ZoneInfo("Asia/Tokyo")).strftime("%A")
+            st.caption("Paste finished commentary below — goes straight to edit area.")
+            _manual_usd = st.text_area("Finished commentary", value=st.session_state.get("_usd_comm_manual", ""),
+                                        height=300, placeholder=f"{_day_usd} AM — USD SOD Tokyo Open\n\n...",
+                                        key="_usd_comm_manual_input")
+            if st.button("📋 Use This Commentary", key="_usd_comm_manual_use"):
+                st.session_state["_usd_sod_output"] = _manual_usd
+                st.session_state["_usd_comm_manual"] = _manual_usd
+                st.rerun()
+        else:
+            _raw_news_usd = st.text_area("Raw news / macro inputs",
+                value=st.session_state.get("_usd_sod_raw_news", ""),
+                height=150, placeholder="Paste Bloomberg headlines, Fed commentary, data releases...",
+                key="_usd_sod_raw_news_input")
+            st.session_state["_usd_sod_raw_news"] = _raw_news_usd
+
+            _desk_col_usd = st.text_area("Desk colour / broker flow (optional)",
+                value=st.session_state.get("_usd_sod_desk_colour", ""),
+                height=80, placeholder="e.g. 'gamma sellers in 1y10y, real$ receivers 5y...'",
+                key="_usd_sod_desk_col_input")
+            st.session_state["_usd_sod_desk_colour"] = _desk_col_usd
+
+            _usd_sod_length = st.selectbox("Length", ["Brief (4 paras)", "Standard (6 paras)", "Detailed (8 paras)"],
+                                            index=1, key="_usd_sod_length")
+
+            if st.button("⚡ Generate USD SOD Commentary", key="_usd_sod_gen", type="primary"):
+                _api_key = st.session_state.get("anthropic_api_key", "")
+                if not _api_key:
+                    st.error("Set Anthropic API key in Settings.")
+                elif not _raw_news_usd.strip():
+                    st.warning("Paste some raw news / macro context first.")
+                else:
+                    try:
+                        from datetime import datetime as _dt_usd2
+                        _today_usd = _dt_usd2.now(ZoneInfo("Asia/Tokyo")).strftime("%A")
+
+                        _sys_prompt_usd = (
+                            f"You are a senior USD rates vol market commentator writing the "
+                            f"{_today_usd}-AM Tokyo Open Start-of-Day technical briefing. "
+                            "The audience is institutional rates traders and portfolio managers "
+                            "at a USD interest rate options desk opening in Tokyo.\n\n"
+                            "CRITICAL RULES:\n"
+                            "• 3-minute read MAX. Focus on OBSERVABLE TECHNICAL vol moves.\n"
+                            "• Macro context is MINIMAL — bullet points only, no editorial.\n"
+                            "• Reference specific expiry×tenor cells with bp levels "
+                            "(e.g. '3m10y +2.1bp to 73.5bp').\n"
+                            "• Use bp units throughout for vol. Use market shorthand.\n"
+                            "• DO NOT make up numbers. Only cite what's in the data provided.\n"
+                            "• American English spelling.\n"
+                            "• DO NOT use bullet points EXCEPT in MACRO CONTEXT section.\n"
+                            "• No geopolitical commentary beyond the MACRO CONTEXT bullets.\n"
+                            "• No opinions on rate direction.\n\n"
+                            "STRUCTURE — follow exactly:\n\n"
+                            "AT A GLANCE (2-3 lines MAX)\n"
+                            "   Quick snapshot — key vol move, direction, repricing needed?\n\n"
+                            "1. MACRO CONTEXT (2-3 bullet points MAX, factual)\n"
+                            "   Example: • UST 10Y closed 4.29% (+1bp). • Fed Waller speaks 14:00 NYC.\n\n"
+                            "2. HEADLINE (one sentence — single biggest technical vol move)\n\n"
+                            "3. SURFACE (2-3 sentences on shape changes)\n"
+                            "   Describe: gamma zone (≤3m) vs mid vol (3m-2y) vs vega (2y+).\n"
+                            "   Use zone-specific factors provided.\n\n"
+                            "4. TERM STRUCTURE (1-2 sentences on front/back vol spread)\n\n"
+                            "5. FLOW (1-2 sentences on notable SDR activity)\n"
+                            "   CRITICAL: ONLY reference flow data explicitly provided.\n"
+                            "   If none provided, state flow was not available.\n\n"
+                            "6. WATCH (1 sentence — technically interesting observation)\n\n"
+                            f"TODAY IS {_today_usd}. Start with "
+                            f"'{_today_usd} AM — USD SOD Tokyo Open' as header.\n\n"
+                            "Keep UNDER 300 words total.\n\n"
+                            f"LENGTH PREFERENCE: {_usd_sod_length}"
+                        )
+
+                        _data_secs = ["=== RAW NEWS / MACRO INPUTS ===", _raw_news_usd.strip()]
+                        if _usd_vol_block:
+                            _data_secs.append("\n=== USD VOL SURFACE DATA (carry-forward estimate) ===")
+                            _data_secs.append(_usd_vol_block)
+                        if _usd_sdr_block:
+                            _data_secs.append("\n=== USD OPTIONS FLOW (DTCC SDR, last 24h) ===")
+                            _data_secs.append(_usd_sdr_block)
+                        else:
+                            _data_secs.append("\n=== USD OPTIONS FLOW ===")
+                            _data_secs.append("NO SDR FLOW DATA AVAILABLE. Do NOT invent flow.")
+                        if _desk_col_usd.strip():
+                            _data_secs.append("\n=== DESK COLOUR / BROKER FLOW ===")
+                            _data_secs.append(_desk_col_usd.strip())
+                        _data_secs.append("\n=== END ===")
+
+                        _user_prompt_usd = (
+                            "Synthesise the following into a polished USD SOD commentary "
+                            "for the Tokyo open, following the structure in your instructions. "
+                            "The vol surface data is from the carry-forward estimator. "
+                            "SDR flow data is from the live DTCC database.\n\n"
+                            + "\n".join(_data_secs)
+                        )
+
+                        import urllib.request as _ur2
+                        import json as _json_usd
+                        _body_usd = _json_usd.dumps({
+                            "model": "claude-sonnet-4-6",
+                            "max_tokens": 2000,
+                            "system": _sys_prompt_usd,
+                            "messages": [{"role": "user", "content": _user_prompt_usd}],
+                        }).encode("utf-8")
+                        _req_usd = _ur2.Request(
+                            "https://api.anthropic.com/v1/messages",
+                            data=_body_usd,
+                            headers={
+                                "x-api-key": _api_key,
+                                "anthropic-version": "2023-06-01",
+                                "content-type": "application/json",
+                            }, method="POST")
+                        with st.spinner("✨ Writing USD SOD commentary..."):
+                            try:
+                                with _ur2.urlopen(_req_usd, timeout=60) as _resp_usd:
+                                    _result_usd = _json_usd.loads(_resp_usd.read().decode("utf-8"))
+                                _content_usd = _result_usd.get("content", [])
+                                _text_usd = "\n\n".join([b.get("text", "") for b in _content_usd if b.get("type") == "text"]).strip()
+                                if _text_usd:
+                                    st.session_state["_usd_sod_output"] = _text_usd
+                                else:
+                                    st.warning("Empty response from API.")
+                            except Exception as _api_e:
+                                st.error(f"API error: {_api_e}")
+                    except Exception as _gen_e2:
+                        st.error(f"Commentary generator error: {_gen_e2}")
+
+    # ── Display generated commentary ──
+    _usd_commentary = st.session_state.get("_usd_sod_output")
+    if _usd_commentary:
+        st.markdown("---")
+        _edit_usd = st.text_area("Edit commentary", value=_usd_commentary, height=400, key="_usd_sod_edit")
+        st.session_state["_usd_sod_output"] = _edit_usd
+
+        _dl_c1, _dl_c2 = st.columns(2)
+        with _dl_c1:
+            st.download_button("📥 Download as TXT",
+                data=_edit_usd.encode("utf-8"),
+                file_name=f"RateEdge_USD_SOD_{pd.Timestamp.now(tz='Asia/Tokyo').strftime('%Y%m%d_%H%M')}.txt",
+                mime="text/plain", key="_usd_sod_dl_txt")
+        with _dl_c2:
+            if st.button("💾 Save to DB", key="_usd_sod_save_db"):
+                try:
+                    _save_conn = get_db_connection()
+                    if _save_conn:
+                        _save_cur = _save_conn.cursor()
+                        _tky_label = f"USD SOD Tokyo {pd.Timestamp.now(tz='Asia/Tokyo').strftime('%d-%b-%Y %H:%M JST')}"
+                        _save_cur.execute("""
+                            INSERT INTO sod_reports (user_id, report_date, usd_t1_label, usd_t2_label,
+                                                     commentary, data_json, created_at)
+                            VALUES (%s, CURRENT_DATE, %s, %s, %s, %s, NOW())
+                        """, (user_id, _base_snap.get("label", ""), _curr_curve_date or "",
+                              _edit_usd, '{"type": "usd_sod_tokyo"}'))
+                        _save_conn.commit()
+                        _save_cur.close(); _save_conn.close()
+                        st.success(f"✅ Saved: {_tky_label}")
+                except Exception as _save_e:
+                    st.error(f"Save error: {_save_e}")
+
+    # ── Trade Ideas from RV Engine ──
+    st.markdown("---")
+    st.markdown("### 💡 Trade Ideas")
+    _rv_ideas = st.session_state.get("_rv_ideas_cache", [])
+    if not _rv_ideas:
+        st.info("Run **Generate Trade Ideas** on the RV tab first. Ideas will appear here.")
+    else:
+        st.caption(f"{len(_rv_ideas)} ideas from RV engine — review and include in report as needed.")
+        for _idx, _idea in enumerate(_rv_ideas[:10]):
+            _score = _idea.get("Score", 0)
+            _signal = "🔴" if _score > 70 else "🟡" if _score > 50 else "⚪"
+            with st.expander(f"{_signal} {_idea.get('Label', 'Trade')} — Score: {_score:.0f}", expanded=_idx < 3):
+                _ic1, _ic2 = st.columns([2, 1])
+                with _ic1:
+                    st.markdown(f"**Direction:** {_idea.get('Direction', '—')}")
+                    st.markdown(f"**Rationale:** {_idea.get('Rationale', '—')}")
+                    if _idea.get("Risk"):
+                        st.caption(f"Risk: {_idea['Risk']}")
+                with _ic2:
+                    st.metric("Score", f"{_score:.0f}/100")
+                    st.caption(f"Type: {_idea.get('Type', '—')}")
+
 
 @st.fragment
 def sod_report_tab():
