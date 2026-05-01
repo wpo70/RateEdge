@@ -7034,10 +7034,10 @@ def vol_config_tab():
         ["SOD IRS - AUD & NZD", "SOD IRS - USD & EUR", "Manual Vol"],
         index=0,
         horizontal=True,
-        key="load_type_radio"
+        key="commit_mode_v0105"
     )
     if _commit_mode == "Manual Vol":
-        _vol_ccy = st.radio("Currency", ["AUD", "EUR", "NZD", "USD"], horizontal=True, key="manual_vol_ccy_radio")
+        _vol_ccy = st.radio("Currency", ["AUD", "EUR", "NZD", "USD"], horizontal=True, key="manual_vol_ccy_v0105")
         selected_type = f"atm_{_vol_ccy.lower()}"
         st.warning("⚠️ This will overwrite the vol surface loaded from DB with data from your Excel file.")
     else:
