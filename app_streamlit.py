@@ -5593,8 +5593,7 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
     for ccy in SUPPORTED_CURRENCIES:
         # Load ATM vols
         _load_atm = (load_type in ["atm","all"] or
-                     (load_type=="atm_aud" and ccy=="AUD") or
-                     (load_type=="atm_usd_nzd" and ccy in ["USD","NZD"]))
+                     load_type == f"atm_{ccy.lower()}")
         if _load_atm:
             atm_name = f"ATM_Vols_{ccy}"
             if atm_name in xl.sheet_names:
@@ -5638,7 +5637,10 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                 loaded["sabr"] += 1
 
         # Load curves and basis curves
-        if load_type in ["curves", "all"]:
+        _load_curves = (load_type in ["curves", "all"] or
+                        (load_type == "curves_aud_nzd" and ccy in ["AUD", "NZD"]) or
+                        (load_type == "curves_usd_eur" and ccy == "USD"))
+        if _load_curves:
             curve_df = None
 
             if ccy == "AUD":
@@ -5811,8 +5813,42 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
         if not _ois_found and ccy == "AUD":
             st.session_state[f"_ois_missing_{ccy}"] = True
     
+    # v3004s: EUR handling — not in SUPPORTED_CURRENCIES but needed for Manual Vol + SOD IRS USD & EUR
+    if load_type in ["atm_eur", "curves_usd_eur", "all"]:
+        _eur_ccy = "EUR"
+        # ATM vol
+        if load_type in ["atm_eur", "all"]:
+            _eur_atm_name = f"ATM_Vols_{_eur_ccy}"
+            if _eur_atm_name in xl.sheet_names:
+                _eur_atm_raw = pd.read_excel(xl, sheet_name=_eur_atm_name)
+                _eur_atm_df = load_atm_surface(_eur_atm_raw, _eur_atm_name)
+                _, _ea, _eb, _er, _en = get_ccy_vol_data(_eur_ccy)
+                set_ccy_vol_data(_eur_ccy, _eur_atm_df, _ea, _eb, _er, _en)
+                set_timestamp("atm", _eur_ccy)
+                loaded["atm"] += 1
+                if "vol_editor" in st.session_state:
+                    st.session_state["vol_editor"]["working"].pop(_eur_ccy, None)
+                    st.session_state["vol_editor"]["base"].pop(_eur_ccy, None)
+        # Curves
+        if load_type in ["curves_usd_eur", "all"]:
+            _eur_curve_name = f"Curves_{_eur_ccy}"
+            if _eur_curve_name in xl.sheet_names:
+                _eur_raw = pd.read_excel(xl, sheet_name=_eur_curve_name, usecols=[0, 1])
+                try:
+                    _eur_curve = load_curve_flexible(_eur_raw, _eur_curve_name)
+                except Exception:
+                    _eur_curve = load_curve(_eur_raw, _eur_curve_name)
+                if _eur_curve is not None and len(_eur_curve) > 0:
+                    from zoneinfo import ZoneInfo as _ZI_eur
+                    from datetime import datetime as _dt_eur
+                    _eur_curve["_source_date"] = _dt_eur.now(_ZI_eur("Australia/Sydney")).strftime("%Y-%m-%d")
+                    st.session_state.setdefault("curves", {})[_eur_ccy] = _eur_curve
+                    st.session_state.setdefault("config_curves", {})[_eur_ccy] = _eur_curve
+                    set_timestamp("curves", _eur_ccy)
+                    loaded["curves"] += 1
+
     # Auto-populate morning rates from BBG_Feed after all curves loaded
-    if load_type in ["curves", "all"] and "BBG_Feed" in xl.sheet_names:
+    if load_type in ["curves", "curves_aud_nzd", "curves_usd_eur", "all"] and "BBG_Feed" in xl.sheet_names:
         try:
             _mr_auto = auto_populate_morning_rates_from_bbg_feed(xl)
             if _mr_auto:
@@ -6993,24 +7029,21 @@ def vol_config_tab():
 
     # Always show commit controls — button disabled until file loaded
     st.markdown("#### Select what to commit:")
-    load_type = st.radio(
+    _commit_mode = st.radio(
         "Commit options",
-        ["SOD IRS", "AUD Vol (Manual Load)", "USD & NZD Vol (Manual Load)", "All"],
+        ["SOD IRS - AUD & NZD", "SOD IRS - USD & EUR", "Manual Vol"],
         index=0,
         horizontal=True,
         key="load_type_radio"
     )
-    if load_type in ["All", "AUD Vol (Manual Load)", "USD & NZD Vol (Manual Load)"]:
-        st.warning("⚠️ This will overwrite the vol surface loaded from DB with data from your Excel file. Use **SOD IRS** if you only want to commit curves.")
-    type_map = {
-        "All": "all",
-        "SOD IRS": "curves",
-        "AUD Vol (Manual Load)": "atm_aud",
-        "USD & NZD Vol (Manual Load)": "atm_usd_nzd"
-    }
+    if _commit_mode == "Manual Vol":
+        _vol_ccy = st.radio("Currency", ["AUD", "EUR", "NZD", "USD"], horizontal=True, key="manual_vol_ccy_radio")
+        selected_type = f"atm_{_vol_ccy.lower()}"
+        st.warning("⚠️ This will overwrite the vol surface loaded from DB with data from your Excel file.")
+    else:
+        selected_type = {"SOD IRS - AUD & NZD": "curves_aud_nzd", "SOD IRS - USD & EUR": "curves_usd_eur"}[_commit_mode]
     if st.button(" Commit Selected Data", key="commit_btn", type="primary",
                  disabled=(upload is None or not can_upload_vol())):
-        selected_type = type_map[load_type]
         upload.seek(0)  # ensure BytesIO is at start
         loaded = load_config_excel(upload, selected_type)
         
@@ -7027,7 +7060,7 @@ def vol_config_tab():
 
         # Check OIS status
         _ois_loaded = st.session_state.get("config_basis", {}).get("AUD", {}).get("ois") is not None
-        if not _ois_loaded and selected_type in ["curves", "all"]:
+        if not _ois_loaded and selected_type in ["curves", "curves_aud_nzd", "all"]:
             # Show what sheets ARE in the Excel to diagnose
             try:
                 import io as _io
