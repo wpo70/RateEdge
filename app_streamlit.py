@@ -6948,15 +6948,20 @@ def vol_config_tab():
                     _sofr_c = st.session_state.get("config_curves", {}).get("USD")
                     _ff_c = st.session_state.get("config_basis", {}).get("USD", {}).get("fedfunds_ois")
                     if _sofr_c is not None and _ff_c is not None and len(_sofr_c) > 0 and len(_ff_c) > 0:
-                        _sofr_dict = {round(float(r["MaturityY"]), 6): float(r["ZeroRatePct"])
-                                      for _, r in _sofr_c.iterrows()}
-                        _ff_dict = {round(float(r["MaturityY"]), 6): float(r["ZeroRatePct"])
-                                    for _, r in _ff_c.iterrows()}
-                        _common = sorted(set(_sofr_dict.keys()) & set(_ff_dict.keys()))
-                        if _common:
+                        _s_xs = _sofr_c["MaturityY"].to_numpy().astype(float)
+                        _s_ys = _sofr_c["ZeroRatePct"].to_numpy().astype(float)
+                        _f_xs = _ff_c["MaturityY"].to_numpy().astype(float)
+                        _f_ys = _ff_c["ZeroRatePct"].to_numpy().astype(float)
+                        _all_mats = sorted(set(round(float(x), 6) for x in _s_xs) | set(round(float(x), 6) for x in _f_xs))
+                        _min_m = max(min(_s_xs), min(_f_xs))
+                        _max_m = min(max(_s_xs), max(_f_xs))
+                        _all_mats = [m for m in _all_mats if _min_m <= m <= _max_m]
+                        if _all_mats:
+                            _s_interp = np.interp(_all_mats, _s_xs, _s_ys)
+                            _f_interp = np.interp(_all_mats, _f_xs, _f_ys)
                             _basis_df = pd.DataFrame({
-                                "MaturityY": _common,
-                                "BasisBp": [round((_ff_dict[m] - _sofr_dict[m]) * 100, 2) for m in _common]
+                                "MaturityY": _all_mats,
+                                "BasisBp": [round((_f_interp[i] - _s_interp[i]) * 100, 4) for i in range(len(_all_mats))]
                             })
                             st.session_state.setdefault("config_basis", {}).setdefault("USD", {})["sofr_ff_basis"] = _basis_df
                             loaded_count += 1
@@ -7845,13 +7850,22 @@ def curves_tab():
         # v0105b: compute basis on-the-fly if not pre-loaded but both curves available
         if _sofr_ff_bas is None and _sofr_curve is not None and _ff_ois is not None:
             try:
-                _s_dict = {round(float(r["MaturityY"]), 6): float(r["ZeroRatePct"]) for _, r in _sofr_curve.iterrows()}
-                _f_dict = {round(float(r["MaturityY"]), 6): float(r["ZeroRatePct"]) for _, r in _ff_ois.iterrows()}
-                _cm = sorted(set(_s_dict.keys()) & set(_f_dict.keys()))
-                if _cm:
+                _s_xs = _sofr_curve["MaturityY"].to_numpy().astype(float)
+                _s_ys = _sofr_curve["ZeroRatePct"].to_numpy().astype(float)
+                _f_xs = _ff_ois["MaturityY"].to_numpy().astype(float)
+                _f_ys = _ff_ois["ZeroRatePct"].to_numpy().astype(float)
+                # Use all maturities from EITHER curve, interpolate where needed
+                _all_mats = sorted(set(round(float(x), 6) for x in _s_xs) | set(round(float(x), 6) for x in _f_xs))
+                # Clip to range covered by both curves
+                _min_mat = max(min(_s_xs), min(_f_xs))
+                _max_mat = min(max(_s_xs), max(_f_xs))
+                _all_mats = [m for m in _all_mats if _min_mat <= m <= _max_mat]
+                if _all_mats:
+                    _s_interp = np.interp(_all_mats, _s_xs, _s_ys)
+                    _f_interp = np.interp(_all_mats, _f_xs, _f_ys)
                     _sofr_ff_bas = pd.DataFrame({
-                        "MaturityY": _cm,
-                        "BasisBp": [round((_f_dict[m] - _s_dict[m]) * 100, 2) for m in _cm]
+                        "MaturityY": _all_mats,
+                        "BasisBp": [round((_f_interp[i] - _s_interp[i]) * 100, 4) for i in range(len(_all_mats))]
                     })
                     st.session_state.setdefault("config_basis", {}).setdefault("USD", {})["sofr_ff_basis"] = _sofr_ff_bas
             except Exception:
@@ -7938,7 +7952,8 @@ def curves_tab():
                 with _usd_tcols[2]:
                     st.caption("SOFR-FF Basis (bp)")
                     if _sofr_ff_bas is not None and not _sofr_ff_bas.empty:
-                        st.dataframe(_relabel_maturity(_sofr_ff_bas).rename(columns={"MaturityY":"Tenor","BasisBp":"Basis(bp)"}), use_container_width=True, hide_index=True)
+                        _bas_tbl = _relabel_maturity(_sofr_ff_bas).rename(columns={"MaturityY":"Tenor","BasisBp":"Basis(bp)"})
+                        st.dataframe(_bas_tbl.style.format({"Basis(bp)": "{:.4f}"}), use_container_width=True, hide_index=True)
 
             # SOFR-FF Basis chart (bp, separate axis)
             if _sofr_ff_bas is not None and not _sofr_ff_bas.empty:
@@ -7948,12 +7963,19 @@ def curves_tab():
                     name="SOFR-FF Basis",
                     marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _sofr_ff_bas["BasisBp"]]
                 ))
+                _bas_min = min(_sofr_ff_bas["BasisBp"].min(), 0) * 1.3
+                _bas_max = max(_sofr_ff_bas["BasisBp"].max(), 0) * 1.3
+                if _bas_min == _bas_max:
+                    _bas_min, _bas_max = -1, 1
                 _bas_fig.update_layout(
-                    title="SOFR / FF Basis (bp)", height=220, margin=dict(l=40,r=20,t=40,b=40),
+                    title="SOFR / FF Basis (bp)", height=280, margin=dict(l=50,r=20,t=40,b=40),
                     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
                     font=dict(color="#94a3b8", size=11),
-                    xaxis=dict(title="Maturity (Y)", gridcolor="#1e293b"),
-                    yaxis=dict(title="Basis (bp)", gridcolor="#1e293b"),
+                    xaxis=dict(title="Maturity (Y)", gridcolor="#1e293b", dtick=5),
+                    yaxis=dict(title="Basis (bp)", gridcolor="#1e293b",
+                               range=[_bas_min, _bas_max], zeroline=True,
+                               zerolinecolor="#475569", zerolinewidth=1,
+                               tickformat=".1f"),
                 )
                 st.plotly_chart(_bas_fig, use_container_width=True)
 
