@@ -793,8 +793,8 @@ def _get_db_params():
 def get_db_connection():
     """
     Get Supabase PostgreSQL connection. Reuses a cached connection per
-    Streamlit session when possible, avoiding repeated TCP/SSL handshakes.
-    Callers that call conn.close() will release back to cache (not truly close).
+    Streamlit session, avoiding repeated TCP/SSL handshakes (200-500ms each).
+    Connection recycled every 5 minutes or on error.
     """
     if not HAS_POSTGRES:
         return None
@@ -802,25 +802,34 @@ def get_db_connection():
     if not params:
         return None
 
-    # Check for usable cached connection
+    import time as _t_db
     _cached = st.session_state.get("_db_conn_cached")
-    if _cached is not None:
+    _cached_ts = st.session_state.get("_db_conn_ts", 0)
+    _age = _t_db.time() - _cached_ts
+
+    # Reuse if alive and < 5 min old
+    if _cached is not None and _age < 300:
         try:
             if not _cached.closed:
-                _cached.rollback()  # clear any aborted txn state
-                _hc = _cached.cursor()
-                _hc.execute("SELECT 1")  # health check
-                _hc.close()
+                _cached.rollback()
                 return _DbPooledConn(_cached)
         except Exception:
-            # Connection dead — destroy and recreate
-            try:
-                _cached.close()
-            except Exception:
-                pass
+            pass
+        # Dead — clean up
+        try:
+            _cached.close()
+        except Exception:
+            pass
         st.session_state.pop("_db_conn_cached", None)
 
-    # Create fresh connection
+    # Stale or missing — create fresh
+    if _cached is not None:
+        try:
+            _cached.close()
+        except Exception:
+            pass
+        st.session_state.pop("_db_conn_cached", None)
+
     try:
         conn = psycopg2.connect(
             host=params["host"], port=params["port"],
@@ -829,16 +838,18 @@ def get_db_connection():
             connect_timeout=5,
             keepalives=1, keepalives_idle=30,
             keepalives_interval=10, keepalives_count=3,
-            options="-c statement_timeout=15000"  # 15s max per query
+            options="-c statement_timeout=15000"
         )
         st.session_state["_db_conn_cached"] = conn
+        st.session_state["_db_conn_ts"] = _t_db.time()
         return _DbPooledConn(conn)
     except Exception:
         return None
 
 
 class _DbPooledConn:
-    """Wrapper that intercepts .close() to return connection to session cache."""
+    """Wrapper that intercepts .close() to return connection to session cache.
+    If a query fails with a connection error, evicts from cache on next use."""
     def __init__(self, real):
         self._conn = real
     def cursor(self):
@@ -848,17 +859,22 @@ class _DbPooledConn:
     def rollback(self):
         self._conn.rollback()
     def close(self):
-        # Don't close — just rollback to clean state for next caller
         try:
             self._conn.rollback()
         except Exception:
-            pass
+            # Connection broken — evict from cache
+            st.session_state.pop("_db_conn_cached", None)
+            st.session_state.pop("_db_conn_ts", None)
     @property
     def closed(self):
         return self._conn.closed
     def __enter__(self):
         return self
-    def __exit__(self, *args):
+    def __exit__(self, exc_type, *args):
+        if exc_type is not None:
+            # Exception during use — evict so next caller gets fresh connection
+            st.session_state.pop("_db_conn_cached", None)
+            st.session_state.pop("_db_conn_ts", None)
         self.close()
 
 
@@ -27318,6 +27334,284 @@ def vol_lookup_tab():
         _render_copy_button(_df_to_tsv(_df_r2), "r2_mat")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# USD RV TRADE IDEAS SCANNER  (v0105g)
+# Standalone function — mirrors ALL signal types from RV / Calendar tab.
+# Called from USD SOD tab. Does NOT touch AUD code.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings, move_val):
+    """Generate ranked trade ideas for USD. Returns list of dicts sorted by Score descending.
+    atm: working ATM surface DataFrame
+    curve_df: SOFR curve DataFrame with MaturityY/ZeroRatePct
+    realised: {tenor_y: realised_vol_bp} from _compute_realised_vol_db
+    ratio_stats: from _load_vol_ratio_stats_db
+    fv_stats: from _compute_fwd_vol_surface_stats
+    meetings: {exp_label: [dates] or int}
+    move_val: MOVE index float or None
+    """
+    ideas = []
+    ccy = "USD"
+    _prem_per = _CB_MEETING_PREMIUM_BP.get(ccy, 4.5)
+
+    def _n_mtgs(exp_lbl):
+        m = meetings.get(exp_lbl, [])
+        return m if isinstance(m, int) else len(m)
+
+    def _par_rate(t):
+        if curve_df is None or curve_df.empty:
+            return None
+        xs = curve_df["MaturityY"].to_numpy().astype(float)
+        ys = curve_df["ZeroRatePct"].to_numpy().astype(float)
+        return float(np.interp(t, xs, ys))
+
+    def _fwd_rate(t1, t2):
+        r1 = _par_rate(t1)
+        r2 = _par_rate(t2)
+        if r1 is None or r2 is None or t2 <= t1:
+            return None
+        return (r2 * t2 - r1 * t1) / (t2 - t1)
+
+    # ── 1. Forward Vol RV (calendar spread z-scores) ──────────────────────
+    if fv_stats and atm is not None:
+        EXP_PAIRS = [
+            ("1m","3m",1/12,0.25), ("3m","6m",0.25,0.5),
+            ("6m","1y",0.5,1.0), ("1y","2y",1.0,2.0),
+            ("2y","3y",2.0,3.0), ("1y","3y",1.0,3.0),
+            ("2y","5y",2.0,5.0), ("3y","5y",3.0,5.0),
+            ("5y","10y",5.0,10.0),
+        ]
+        for e1, e2, T1, T2 in EXP_PAIRS:
+            dT = T2 - T1
+            for tn_str, tn_y in [("2Y",2), ("5Y",5), ("10Y",10)]:
+                v1 = get_matrix_value(atm, e1, float(tn_y))
+                v2 = get_matrix_value(atm, e2, float(tn_y))
+                if not v1 or not v2:
+                    continue
+                inner = (v2**2 * T2 - v1**2 * T1) / dT
+                if inner <= 0:
+                    continue
+                fv = math.sqrt(inner)
+                hs = fv_stats.get((e1, e2, tn_str))
+                if not hs or hs["std"] < 0.5:
+                    continue
+                z = (fv - hs["mean"]) / hs["std"]
+                if abs(z) >= 1.2:
+                    is_rich = z > 0
+                    ideas.append({
+                        "Type": "Fwd Vol RV", "Score": min(abs(z) * 15, 100),
+                        "Structure": f"σ_fwd {e1}→{e2}×{tn_str}",
+                        "Direction": "Sell fwd vol" if is_rich else "Buy fwd vol",
+                        "Trade": (f"Sell {e2}×{tn_str} / Buy {e1}×{tn_str}" if is_rich
+                                  else f"Buy {e2}×{tn_str} / Sell {e1}×{tn_str}"),
+                        "Signal": f"Z={z:+.2f} | fwd={fv:.1f}bp vs mean={hs['mean']:.1f}bp",
+                        "Rationale": (f"Fwd vol {e1}→{e2}×{tn_str} at {fv:.1f}bp — "
+                                      f"{'RICH' if is_rich else 'CHEAP'} vs {hs['mean']:.1f}bp ({z:+.1f}σ, n={hs['n']})"),
+                        "Risk": "Vol regime shift" if is_rich else "Carry negative on long fwd vol",
+                        "e1": e1, "e2": e2, "tn": tn_str, "tn_y": tn_y,
+                        "entry_fwd_vol": round(fv, 1), "entry_near_vol": round(v1, 1), "entry_far_vol": round(v2, 1),
+                    })
+
+    # ── 2. Vol Butterfly (expiry dimension) ───────────────────────────────
+    for tn in [2, 5, 10]:
+        for mid_e, lo_e, hi_e in [("3m","1m","6m"),("6m","3m","1y"),
+                                   ("1y","6m","2y"),("2y","1y","3y")]:
+            v_mid = get_matrix_value(atm, mid_e, float(tn))
+            v_lo = get_matrix_value(atm, lo_e, float(tn))
+            v_hi = get_matrix_value(atm, hi_e, float(tn))
+            if not all(x for x in (v_mid, v_lo, v_hi)):
+                continue
+            fly = v_mid - 0.5 * (v_lo + v_hi)
+            if abs(fly) > 2.5:
+                direction = "Sell belly" if fly > 0 else "Buy belly"
+                ideas.append({
+                    "Type": "Vol Butterfly", "Score": min(abs(fly) * 5, 100),
+                    "Structure": f"{mid_e}×{tn}Y fly",
+                    "Direction": direction,
+                    "Trade": (f"Sell {mid_e}×{tn}Y, buy {lo_e}+{hi_e} wings" if fly > 0
+                              else f"Buy {mid_e}×{tn}Y, sell {lo_e}+{hi_e} wings"),
+                    "Signal": f"Fly = {fly:+.1f}bp",
+                    "Rationale": f"Belly {'rich' if fly>0 else 'cheap'} vs wings by {abs(fly):.1f}bp",
+                    "Risk": "Vol mean reversion timing",
+                    "e1": mid_e, "e2": lo_e, "tn": f"{tn}Y", "tn_y": tn,
+                })
+
+    # ── 3. Calendar Spread (term structure ratio) ─────────────────────────
+    for tn in [2, 5, 10]:
+        v_short = get_matrix_value(atm, "3m", float(tn))
+        v_long = get_matrix_value(atm, "2y", float(tn))
+        if v_short and v_long and v_long > 0:
+            ratio = v_short / v_long
+            if ratio > 1.25:
+                ideas.append({
+                    "Type": "Calendar Spread", "Score": min((ratio - 1.0) * 100, 100),
+                    "Structure": f"3m/2y×{tn}Y calendar",
+                    "Direction": "Sell calendar",
+                    "Trade": f"Sell 3m×{tn}Y / Buy 2y×{tn}Y",
+                    "Signal": f"Ratio = {ratio:.3f}",
+                    "Rationale": f"3m vol {(ratio-1)*100:.0f}% above 2y — inverted ts, mean-reverts",
+                    "Risk": "Short gamma if rates move near-term",
+                    "e1": "3m", "e2": "2y", "tn": f"{tn}Y", "tn_y": tn,
+                })
+            elif ratio < 0.85:
+                ideas.append({
+                    "Type": "Calendar Spread", "Score": min((1.0 - ratio) * 100, 100),
+                    "Structure": f"3m/2y×{tn}Y calendar",
+                    "Direction": "Buy calendar",
+                    "Trade": f"Buy 3m×{tn}Y / Sell 2y×{tn}Y",
+                    "Signal": f"Ratio = {ratio:.3f}",
+                    "Rationale": f"Short-dated vol cheap vs 2Y — unusually steep, {(1-ratio)*100:.0f}% below",
+                    "Risk": "Carry negative; vol may stay low near-term",
+                    "e1": "3m", "e2": "2y", "tn": f"{tn}Y", "tn_y": tn,
+                })
+
+    # ── 4. Curve-driven directional ───────────────────────────────────────
+    if curve_df is not None and not curve_df.empty:
+        r5 = _par_rate(5)
+        r10 = _par_rate(10)
+        fwd_5y5y = _fwd_rate(5, 10)
+        if fwd_5y5y and r5:
+            spread = fwd_5y5y - r5
+            if spread > 0.20:
+                ideas.append({
+                    "Type": "Curve / Directional", "Score": min(abs(spread) * 40, 100),
+                    "Structure": "5y×5Y Payer",
+                    "Direction": "Buy payer",
+                    "Trade": "Buy 5y×5Y ATM Payer",
+                    "Signal": f"5y5y fwd {fwd_5y5y:.3f}% vs spot 5Y {r5:.3f}%",
+                    "Rationale": f"Curve pricing {spread*100:.0f}bp steepening — asymmetric if Fed easier than fwd",
+                    "Risk": "Pays premium; loses if rates fall/flat",
+                    "e1": "5y", "e2": "5y", "tn": "5Y", "tn_y": 5,
+                })
+            elif spread < -0.10:
+                ideas.append({
+                    "Type": "Curve / Directional", "Score": min(abs(spread) * 40, 100),
+                    "Structure": "5y×5Y Receiver",
+                    "Direction": "Buy receiver",
+                    "Trade": "Buy 5y×5Y ATM Receiver",
+                    "Signal": f"5y5y fwd {fwd_5y5y:.3f}% vs spot 5Y {r5:.3f}%",
+                    "Rationale": f"Inverted fwd pricing easing — receiver pays if cuts > priced",
+                    "Risk": "Premium at risk if easing less than priced",
+                    "e1": "5y", "e2": "5y", "tn": "5Y", "tn_y": 5,
+                })
+
+    # ── 5. Gamma/Theta (1m vs 1y ratio + VRP, meeting-adjusted) ──────────
+    for tn in [2, 5, 10]:
+        tn_str = f"{tn}Y"
+        v1m = get_matrix_value(atm, "1m", float(tn))
+        v1y = get_matrix_value(atm, "1y", float(tn))
+        rv_21d = realised.get(float(tn))
+        if not (v1m and v1y):
+            continue
+        curr_ratio = v1m / v1y
+        v1m_adj = v1m - _n_mtgs("1m") * _prem_per
+        rs = ratio_stats.get(tn_str)
+        if rs and rs.get("std", 0) > 0:
+            z_ratio = (curr_ratio - rs["mean"]) / rs["std"]
+        else:
+            gamma_fair = v1y / math.sqrt(12)
+            z_ratio = (v1m_adj - gamma_fair) / max(gamma_fair * 0.15, 1.0)
+        vrp_1m = round(v1m_adj / rv_21d, 2) if rv_21d and rv_21d > 0 else None
+        is_rich = z_ratio > 1.5 and (vrp_1m is None or vrp_1m > 1.25)
+        is_cheap = z_ratio < -1.5 and (vrp_1m is None or vrp_1m < 0.85)
+        if is_rich:
+            ideas.append({
+                "Type": "Gamma/Theta", "Score": min(z_ratio * 12 + (max(vrp_1m - 1, 0) * 20 if vrp_1m else 0), 100),
+                "Structure": f"1m×{tn}Y short gamma",
+                "Direction": "Sell vol",
+                "Trade": f"Sell 1m×{tn}Y straddle",
+                "Signal": f"Z={z_ratio:+.2f}" + (f" | VRP={vrp_1m:.2f}" if vrp_1m else ""),
+                "Rationale": f"1m vol {v1m:.0f}bp rich by {z_ratio:.1f}σ vs history" +
+                             (f", VRP {vrp_1m:.2f}× realised" if vrp_1m else ""),
+                "Risk": "Large near-term move; CB surprise",
+                "e1": "1m", "e2": "1y", "tn": tn_str, "tn_y": tn,
+            })
+        elif is_cheap:
+            ideas.append({
+                "Type": "Gamma/Theta", "Score": min(abs(z_ratio) * 10, 100),
+                "Structure": f"1m×{tn}Y long gamma",
+                "Direction": "Buy vol",
+                "Trade": f"Buy 1m×{tn}Y straddle",
+                "Signal": f"Z={z_ratio:+.2f}" + (f" | VRP={vrp_1m:.2f}" if vrp_1m else ""),
+                "Rationale": f"1m vol {v1m:.0f}bp cheap by {abs(z_ratio):.1f}σ" +
+                             (f", VRP only {vrp_1m:.2f}× realised" if vrp_1m else ""),
+                "Risk": "Theta decay; vol stays suppressed",
+                "e1": "1m", "e2": "1y", "tn": tn_str, "tn_y": tn,
+            })
+
+    # ── 6. VRP (implied vs realised, meeting-adjusted) ────────────────────
+    for tn in [2, 5, 10]:
+        rv = realised.get(float(tn))
+        if not rv or rv <= 0:
+            continue
+        for exp_lbl in ["3m", "6m", "1y"]:
+            iv = get_matrix_value(atm, exp_lbl, float(tn))
+            if not iv:
+                continue
+            iv_adj = iv - _n_mtgs(exp_lbl) * _prem_per
+            vrp = iv_adj / rv
+            if vrp > 1.50:
+                ideas.append({
+                    "Type": "Vol Risk Premium", "Score": min((vrp - 1.0) * 40, 100),
+                    "Structure": f"{exp_lbl}×{tn}Y sell VRP",
+                    "Direction": "Sell vol",
+                    "Trade": f"Sell {exp_lbl}×{tn}Y straddle",
+                    "Signal": f"VRP={vrp:.2f}× (adj {iv_adj:.0f}bp vs realised {rv:.0f}bp)",
+                    "Rationale": f"Meeting-adjusted implied {vrp:.2f}× realised — premium rich, theta positive",
+                    "Risk": "Gap risk; macro shock",
+                    "e1": exp_lbl, "e2": exp_lbl, "tn": f"{tn}Y", "tn_y": tn,
+                })
+            elif vrp < 0.75:
+                ideas.append({
+                    "Type": "Vol Risk Premium", "Score": min((1.0 - vrp) * 40, 100),
+                    "Structure": f"{exp_lbl}×{tn}Y buy VRP",
+                    "Direction": "Buy vol",
+                    "Trade": f"Buy {exp_lbl}×{tn}Y straddle",
+                    "Signal": f"VRP={vrp:.2f}× (adj {iv_adj:.0f}bp vs realised {rv:.0f}bp)",
+                    "Rationale": f"Implied only {vrp:.2f}× realised — vol cheap, protection underpriced",
+                    "Risk": "Vol may stay suppressed",
+                    "e1": exp_lbl, "e2": exp_lbl, "tn": f"{tn}Y", "tn_y": tn,
+                })
+
+    # ── 7. MOVE context adjustment ────────────────────────────────────────
+    if move_val and move_val > 120:
+        for idea in ideas:
+            if idea["Direction"] == "Sell vol":
+                idea["Risk"] += f" | MOVE elevated at {move_val:.0f}"
+                idea["Score"] = max(idea["Score"] * 0.7, 0)  # dampen sell signals when MOVE high
+    elif move_val and move_val < 80:
+        for idea in ideas:
+            if idea["Direction"] == "Buy vol":
+                idea["Risk"] += f" | MOVE low at {move_val:.0f}"
+                idea["Score"] = max(idea["Score"] * 0.8, 0)
+
+    # ── 8. Composite / High Conviction ────────────────────────────────────
+    _by_tenor_dir = {}
+    for idea in ideas:
+        key = (idea.get("tn", ""), idea["Direction"])
+        _by_tenor_dir.setdefault(key, []).append(idea)
+    for (tn, direction), group in _by_tenor_dir.items():
+        if len(group) >= 2:
+            types = list(set(i["Type"] for i in group))
+            if len(types) >= 2:
+                best_score = max(i["Score"] for i in group)
+                ideas.append({
+                    "Type": "HIGH CONVICTION",
+                    "Score": min(best_score * 1.3, 100),
+                    "Structure": f"Composite {tn} — {direction}",
+                    "Direction": direction,
+                    "Trade": f"Multiple signals: {', '.join(types)}",
+                    "Signal": f"{len(group)} independent signals agree on {direction} at {tn}",
+                    "Rationale": f"Convergence of {', '.join(types)} — increases conviction",
+                    "Risk": "Tail events can override all signals simultaneously",
+                    "e1": group[0].get("e1", ""), "e2": group[0].get("e2", ""),
+                    "tn": tn, "tn_y": group[0].get("tn_y", 5),
+                })
+
+    ideas.sort(key=lambda x: x.get("Score", 0), reverse=True)
+    return ideas
+
+
 
 def usd_sod_tab():
     """USD Start-of-Day — Carry-Forward Vol Estimator.
@@ -28216,27 +28510,253 @@ def usd_sod_tab():
                 except Exception as _save_e:
                     st.error(f"Save error: {_save_e}")
 
-    # ── Trade Ideas from RV Engine ──
+    # ══════════════════════════════════════════════════════════════════════
+    # USD RV DAILY REPORT — Full scanner, Top 5, Running P&L
+    # v0105g: uses _scan_rv_ideas_usd() with all signal types
+    # ══════════════════════════════════════════════════════════════════════
     st.markdown("---")
-    st.markdown("### 💡 Trade Ideas")
-    _rv_ideas = st.session_state.get("_rv_ideas_cache", [])
-    if not _rv_ideas:
-        st.info("Run **Generate Trade Ideas** on the RV tab first. Ideas will appear here.")
+    st.markdown("### 📊 USD RV Daily Report")
+
+    # Current working ATM surface
+    _usd_atm_now = get_working_atm_surface("USD")
+    if _usd_atm_now is None or _usd_atm_now.empty:
+        st.info("Load a USD vol surface first (IRS / Vol Upload tab or Reload Vols from DB).")
+        return
+
+    # ── Vol Change Grid (base EOD vs current) ──
+    with st.expander("📈 Vol Change — EOD vs Current", expanded=True):
+        _RV_EXPS = ["1m", "3m", "6m", "1y", "2y", "3y", "5y", "7y", "10y"]
+        _RV_TENS = [2, 5, 10, 15, 20, 30]
+        _chg_rows = []
+        for _exp in _RV_EXPS:
+            _row = {"Expiry": _exp}
+            for _tn in _RV_TENS:
+                _v_base = get_matrix_value(_base_atm, _exp, float(_tn))
+                _v_now = get_matrix_value(_usd_atm_now, _exp, float(_tn))
+                if _v_base is not None and _v_now is not None:
+                    _row[f"{_tn}Y"] = round(_v_now - _v_base, 2)
+                else:
+                    _row[f"{_tn}Y"] = None
+            _chg_rows.append(_row)
+        _chg_df = pd.DataFrame(_chg_rows).set_index("Expiry")
+        st.caption("Change in ATM normal vol (bp). Green = vol higher, Red = vol lower.")
+
+        def _color_chg(v):
+            if pd.isna(v): return ""
+            if v > 1.0: return "background-color: #166534; color: #4ade80"
+            if v > 0.0: return "background-color: #14532d; color: #86efac"
+            if v < -1.0: return "background-color: #7f1d1d; color: #fca5a5"
+            if v < 0.0: return "background-color: #450a0a; color: #fecaca"
+            return ""
+        st.dataframe(_chg_df.style.map(_color_chg, subset=[f"{t}Y" for t in _RV_TENS]).format("{:+.1f}", na_rep="—"),
+                     use_container_width=True)
+
+    # ── Swap Curve Change ──
+    with st.expander("📉 Swap Curve Change", expanded=False):
+        _crv_tenors = [0.5, 1, 2, 3, 5, 7, 10, 15, 20, 25, 30]
+        _crv_eod = [_rate_at(_eod_curve, t) for t in _crv_tenors]
+        _crv_cur = [_rate_at(_curr_curve, t) for t in _crv_tenors]
+        _crv_chg = [(c - e) * 100 if c and e else 0 for c, e in zip(_crv_cur, _crv_eod)]
+        _crv_df = pd.DataFrame({"Tenor": [f"{t}Y" for t in _crv_tenors],
+                                 "EOD (%)": [f"{r:.3f}" if r else "—" for r in _crv_eod],
+                                 "Current (%)": [f"{r:.3f}" if r else "—" for r in _crv_cur],
+                                 "Δ (bp)": [f"{c:+.1f}" for c in _crv_chg]})
+        st.dataframe(_crv_df, use_container_width=True, hide_index=True)
+
+    # ── Precompute all RV inputs (cached in session state) ──
+    _rv_precompute_usd = st.session_state.get("_usd_sod_rv_precompute")
+    _rv_tenors = [2.0, 5.0, 10.0, 15.0, 20.0]
+    _rv_exp_lbls = ["1m", "3m", "6m", "1y", "2y"]
+
+    if st.button("⚡ Scan RV Ideas", key="_usd_sod_scan_rv", type="primary"):
+        st.session_state.pop("_usd_sod_rv_precompute", None)
+        st.session_state.pop("_rv_ideas_cache", None)
+        _rv_precompute_usd = None
+
+    if _rv_precompute_usd is None:
+        with st.spinner("Computing realised vol, VRP, forward vol stats, CB calendar..."):
+            try:
+                _realised = {tn: _compute_realised_vol_db("USD", tn, 21) for tn in _rv_tenors}
+                _ratio_stats = _load_vol_ratio_stats_db("USD")
+                _fv_stats_usd = _compute_fwd_vol_surface_stats("USD")
+                _meetings_usd = {e: _meetings_in_window("USD", e) for e in _rv_exp_lbls}
+                _move_val = _fetch_move_index()
+                _rv_precompute_usd = {
+                    "realised": _realised, "ratio_stats": _ratio_stats,
+                    "fv_stats": _fv_stats_usd, "meetings": _meetings_usd, "move_val": _move_val,
+                }
+                st.session_state["_usd_sod_rv_precompute"] = _rv_precompute_usd
+            except Exception as _pre_err:
+                st.error(f"RV precompute error: {_pre_err}")
+                _rv_precompute_usd = None
+
+    if _rv_precompute_usd:
+        _realised = _rv_precompute_usd["realised"]
+        _ratio_stats = _rv_precompute_usd["ratio_stats"]
+        _fv_stats_usd = _rv_precompute_usd["fv_stats"]
+        _meetings_usd = _rv_precompute_usd["meetings"]
+        _move_val = _rv_precompute_usd["move_val"]
+
+        # ── VRP Context Panel ──
+        with st.expander("📊 Market Context — VRP & MOVE", expanded=False):
+            _vrp_rows = []
+            for _tn in [2.0, 5.0, 10.0]:
+                rv = _realised.get(_tn)
+                for _exp_lbl in ["1m", "3m", "6m", "1y"]:
+                    iv = get_matrix_value(_usd_atm_now, _exp_lbl, _tn)
+                    if iv is None:
+                        continue
+                    _nm = _meetings_usd.get(_exp_lbl, [])
+                    _n = _nm if isinstance(_nm, int) else len(_nm)
+                    iv_adj = iv - _n * 4.5
+                    vrp = round(iv_adj / rv, 2) if rv and rv > 0 else None
+                    _vrp_rows.append({
+                        "Expiry": _exp_lbl, "Tenor": f"{int(_tn)}Y",
+                        "Implied": round(iv, 1), "Mtgs": _n,
+                        "Adj Implied": round(iv_adj, 1),
+                        "Realised 21d": round(rv, 1) if rv else None,
+                        "VRP": vrp,
+                        "Signal": ("🔴 RICH" if vrp and vrp > 1.40 else
+                                   "🟢 CHEAP" if vrp and vrp < 0.80 else "⚪") if vrp else "—",
+                    })
+            if _vrp_rows:
+                st.dataframe(pd.DataFrame(_vrp_rows), use_container_width=True, hide_index=True)
+            if _move_val:
+                st.metric("MOVE Index", f"{_move_val:.1f}",
+                          help=">120 = elevated bond vol; swaption richness may be justified")
+
+        # ── Run the full scanner ──
+        _ideas = st.session_state.get("_rv_ideas_cache")
+        if _ideas is None:
+            _ideas = _scan_rv_ideas_usd(
+                _usd_atm_now, _curr_curve, _realised, _ratio_stats,
+                _fv_stats_usd, _meetings_usd, _move_val,
+            )
+            st.session_state["_rv_ideas_cache"] = _ideas
+
+        # ── Top 5 ──
+        st.markdown("#### 🎯 Top 5 Trade Ideas")
+        _top5 = _ideas[:5]
+        if not _top5:
+            st.info("No strong signals at current vol levels.")
+        else:
+            _t5_df = pd.DataFrame(_top5)[["Type", "Structure", "Direction", "Signal", "Score"]]
+            st.dataframe(_t5_df, use_container_width=True, hide_index=True)
+
+            for _idx, _idea in enumerate(_top5):
+                _emoji = "🔴" if _idea["Score"] > 70 else "🟡" if _idea["Score"] > 50 else "⚪"
+                with st.expander(f"{_emoji} {_idea['Structure']} — {_idea['Direction']} (Score: {_idea['Score']:.0f})", expanded=_idx < 2):
+                    st.markdown(f"**Trade:** {_idea['Trade']}")
+                    st.markdown(f"**Rationale:** {_idea['Rationale']}")
+                    st.caption(f"Risk: {_idea['Risk']}")
+                    if st.button(f"Open Position", key=f"_rv_open_{_idx}", use_container_width=True):
+                        _open = st.session_state.get("_usd_rv_open_trades", [])
+                        _open.append({
+                            "spread": _idea["Structure"],
+                            "direction": _idea["Direction"],
+                            "type": _idea["Type"],
+                            "entry_fwd_vol": _idea.get("entry_fwd_vol", 0),
+                            "entry_near_vol": _idea.get("entry_near_vol", 0),
+                            "entry_far_vol": _idea.get("entry_far_vol", 0),
+                            "signal": _idea["Signal"],
+                            "entry_score": _idea["Score"],
+                            "e1": _idea.get("e1", ""), "e2": _idea.get("e2", ""),
+                            "tn": _idea.get("tn", ""), "tn_y": _idea.get("tn_y", 5),
+                            "entry_date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
+                        })
+                        st.session_state["_usd_rv_open_trades"] = _open
+                        st.rerun()
+
+        # ── All Ideas (collapsed) ──
+        if len(_ideas) > 5:
+            with st.expander(f"📋 All {len(_ideas)} ideas", expanded=False):
+                _all_df = pd.DataFrame(_ideas)[["Type", "Structure", "Direction", "Signal", "Score"]]
+                st.dataframe(_all_df, use_container_width=True, hide_index=True)
+
+    # ── Running P&L Tracker ──
+    st.markdown("---")
+    st.markdown("#### 💰 Running P&L — Open Positions")
+    _open_trades = st.session_state.get("_usd_rv_open_trades", [])
+    if not _open_trades:
+        st.info("No open positions. Use the scanner above to open trades.")
     else:
-        st.caption(f"{len(_rv_ideas)} ideas from RV engine — review and include in report as needed.")
-        for _idx, _idea in enumerate(_rv_ideas[:10]):
-            _score = _idea.get("Score", 0)
-            _signal = "🔴" if _score > 70 else "🟡" if _score > 50 else "⚪"
-            with st.expander(f"{_signal} {_idea.get('Label', 'Trade')} — Score: {_score:.0f}", expanded=_idx < 3):
-                _ic1, _ic2 = st.columns([2, 1])
-                with _ic1:
-                    st.markdown(f"**Direction:** {_idea.get('Direction', '—')}")
-                    st.markdown(f"**Rationale:** {_idea.get('Rationale', '—')}")
-                    if _idea.get("Risk"):
-                        st.caption(f"Risk: {_idea['Risk']}")
-                with _ic2:
-                    st.metric("Score", f"{_score:.0f}/100")
-                    st.caption(f"Type: {_idea.get('Type', '—')}")
+        _fv_stats_pnl = _rv_precompute_usd.get("fv_stats", {}) if _rv_precompute_usd else {}
+        _pnl_rows = []
+        for _ti, _tr in enumerate(_open_trades):
+            _v1_now = get_matrix_value(_usd_atm_now, _tr["e1"], float(_tr["tn_y"]))
+            _v2_now = get_matrix_value(_usd_atm_now, _tr["e2"], float(_tr["tn_y"]))
+            _entry_fv = _tr.get("entry_fwd_vol", 0)
+
+            if _v1_now is None or _v2_now is None or _entry_fv == 0:
+                _pnl_rows.append({
+                    "Spread": _tr["spread"], "Type": _tr.get("type", "—"),
+                    "Dir": _tr["direction"], "Entry Vol": _entry_fv,
+                    "Curr Vol": "—", "P&L (bp)": "—",
+                    "Entry Date": _tr["entry_date"], "Status": "⚠️ No data"
+                })
+                continue
+
+            _T1 = label_to_years(_tr["e1"])
+            _T2 = label_to_years(_tr["e2"])
+            _dT = _T2 - _T1
+            if _dT > 0:
+                _inner_now = (_v2_now**2 * _T2 - _v1_now**2 * _T1) / _dT
+                _fwd_now = math.sqrt(max(_inner_now, 0.01))
+            else:
+                _fwd_now = _v1_now  # non-calendar trade, just use flat vol
+
+            if "Sell" in _tr["direction"]:
+                _vol_pnl = _entry_fv - _fwd_now
+            else:
+                _vol_pnl = _fwd_now - _entry_fv
+
+            _status = "🟢 Open"
+            if abs(_vol_pnl) > 3.0:
+                _status = "🟡 Target hit (±3bp)"
+
+            # Check z-score reversal for kick
+            _key = (_tr["e1"], _tr["e2"], _tr["tn"])
+            _hist = _fv_stats_pnl.get(_key)
+            if _hist and _hist.get("std", 0) > 0.5:
+                _z_now = (_fwd_now - _hist["mean"]) / _hist["std"]
+                if "Sell" in _tr["direction"] and _z_now < 0:
+                    _status = "🔴 KICK — z reversed"
+                elif "Buy" in _tr["direction"] and _z_now > 0:
+                    _status = "🔴 KICK — z reversed"
+            else:
+                _z_now = 0
+
+            _pnl_rows.append({
+                "Spread": _tr["spread"], "Type": _tr.get("type", "—"),
+                "Dir": _tr["direction"],
+                "Entry Vol": round(_entry_fv, 1),
+                "Curr Vol": round(_fwd_now, 1),
+                "P&L (bp)": round(_vol_pnl, 2),
+                "Z now": round(_z_now, 2),
+                "Entry Date": _tr["entry_date"],
+                "Status": _status,
+            })
+
+        _pnl_df = pd.DataFrame(_pnl_rows)
+        def _color_pnl(v):
+            if pd.isna(v) or not isinstance(v, (int, float)): return ""
+            if v > 0: return "color: #4ade80"
+            if v < 0: return "color: #f87171"
+            return ""
+        st.dataframe(_pnl_df.style.map(_color_pnl, subset=["P&L (bp)"] if "P&L (bp)" in _pnl_df.columns else []),
+                     use_container_width=True, hide_index=True)
+
+        _cc1, _cc2 = st.columns(2)
+        with _cc1:
+            if st.button("🗑 Close Kicked Positions", key="_rv_close_kicked"):
+                _open_trades = [t for i, t in enumerate(_open_trades)
+                               if i < len(_pnl_rows) and "KICK" not in _pnl_rows[i].get("Status", "")]
+                st.session_state["_usd_rv_open_trades"] = _open_trades
+                st.rerun()
+        with _cc2:
+            if st.button("🗑 Clear ALL Positions", key="_rv_clear_all"):
+                st.session_state["_usd_rv_open_trades"] = []
+                st.rerun()
 
 
 @st.fragment
