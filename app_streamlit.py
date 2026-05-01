@@ -6879,35 +6879,23 @@ def vol_config_tab():
                 except Exception:
                     pass
 
-                # USD SOFR-FF Basis from benchmark_rates
+                # USD SOFR-FF Basis — compute from the two swap curves just loaded
                 try:
-                    _bconn = get_db_connection()
-                    if _bconn:
-                        _bcur = _bconn.cursor()
-                        _bcur.execute("""
-                            SELECT rate_type, rate FROM benchmark_rates
-                            WHERE currency='USD' AND rate_type LIKE 'SOFR_FF_BASIS_%%'
-                              AND date = (SELECT MAX(date) FROM benchmark_rates
-                                          WHERE currency='USD' AND rate_type LIKE 'SOFR_FF_BASIS_%%'
-                                            AND date <= %s)
-                        """, (str(_load_date),))
-                        _brows = _bcur.fetchall()
-                        _bcur.close(); _bconn.close()
-                        if _brows:
-                            import re as _re_b
-                            _basis_pts = {}
-                            for _rt, _rv in _brows:
-                                _lbl = _rt.replace("SOFR_FF_BASIS_", "")
-                                _mb = _re_b.match(r"(\d+)(Y|M)", _lbl)
-                                if _mb:
-                                    _mv = float(_mb.group(1))
-                                    _mat = _mv if _mb.group(2) == "Y" else _mv / 12
-                                    _basis_pts[_mat] = float(_rv)
-                            if _basis_pts:
-                                _bxs = sorted(_basis_pts)
-                                _basis_df = pd.DataFrame({"MaturityY": _bxs, "BasisBp": [_basis_pts[t] for t in _bxs]})
-                                st.session_state.setdefault("config_basis", {}).setdefault("USD", {})["sofr_ff_basis"] = _basis_df
-                                loaded_count += 1
+                    _sofr_c = st.session_state.get("config_curves", {}).get("USD")
+                    _ff_c = st.session_state.get("config_basis", {}).get("USD", {}).get("fedfunds_ois")
+                    if _sofr_c is not None and _ff_c is not None and len(_sofr_c) > 0 and len(_ff_c) > 0:
+                        _sofr_dict = {round(float(r["MaturityY"]), 6): float(r["ZeroRatePct"])
+                                      for _, r in _sofr_c.iterrows()}
+                        _ff_dict = {round(float(r["MaturityY"]), 6): float(r["ZeroRatePct"])
+                                    for _, r in _ff_c.iterrows()}
+                        _common = sorted(set(_sofr_dict.keys()) & set(_ff_dict.keys()))
+                        if _common:
+                            _basis_df = pd.DataFrame({
+                                "MaturityY": _common,
+                                "BasisBp": [round((_ff_dict[m] - _sofr_dict[m]) * 100, 2) for m in _common]
+                            })
+                            st.session_state.setdefault("config_basis", {}).setdefault("USD", {})["sofr_ff_basis"] = _basis_df
+                            loaded_count += 1
                 except Exception:
                     pass
 
@@ -7789,6 +7777,21 @@ def curves_tab():
         _sofr_curve  = st.session_state.get("config_curves", {}).get("USD")
         _ff_ois      = st.session_state.get("config_basis", {}).get("USD", {}).get("fedfunds_ois")
         _sofr_ff_bas = st.session_state.get("config_basis", {}).get("USD", {}).get("sofr_ff_basis")
+
+        # v0105b: compute basis on-the-fly if not pre-loaded but both curves available
+        if _sofr_ff_bas is None and _sofr_curve is not None and _ff_ois is not None:
+            try:
+                _s_dict = {round(float(r["MaturityY"]), 6): float(r["ZeroRatePct"]) for _, r in _sofr_curve.iterrows()}
+                _f_dict = {round(float(r["MaturityY"]), 6): float(r["ZeroRatePct"]) for _, r in _ff_ois.iterrows()}
+                _cm = sorted(set(_s_dict.keys()) & set(_f_dict.keys()))
+                if _cm:
+                    _sofr_ff_bas = pd.DataFrame({
+                        "MaturityY": _cm,
+                        "BasisBp": [round((_f_dict[m] - _s_dict[m]) * 100, 2) for m in _cm]
+                    })
+                    st.session_state.setdefault("config_basis", {}).setdefault("USD", {})["sofr_ff_basis"] = _sofr_ff_bas
+            except Exception:
+                pass
 
         if _sofr_curve is None:
             st.info("No USD curves loaded. Go to IRS / Vol Upload tab and commit your config file.")
