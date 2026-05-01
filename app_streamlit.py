@@ -21521,6 +21521,13 @@ def rv_tab():
             # Sort by score
             ideas.sort(key=lambda x: x["Score"], reverse=True)
 
+            # v0105h: overwrite with shared scanner function for cross-app consistency
+            # The inline ideas above drive the display panels (fwd vol table, VRP, etc.)
+            # but the FINAL ranked list must come from _scan_rv_ideas_usd() so that
+            # the RV tab and USD SOD tab always show identical ideas.
+            if st.session_state.get(_rv_ideas_key):
+                ideas = _scan_rv_ideas_usd(atm, curve, _realised, _ratio_stats, _fv_stats, _meetings, _move_val)
+
             # Cache for SOD report
             if ideas:
                 st.session_state["_rv_ideas_cache"] = ideas
@@ -27573,7 +27580,194 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                     "e1": exp_lbl, "e2": exp_lbl, "tn": f"{tn}Y", "tn_y": tn,
                 })
 
-    # ── 7. MOVE context adjustment ────────────────────────────────────────
+    # ── 7. IRS Curve steepener/flattener ──────────────────────────────────
+    if curve_df is not None and not curve_df.empty:
+        r2 = _par_rate(2); r5 = _par_rate(5); r10 = _par_rate(10)
+        for label, slope, thresh_steep, thresh_flat in [
+            ("2s10s", (r10-r2) if r2 and r10 else None, 0.50, -0.20),
+            ("2s5s",  (r5 -r2) if r2 and r5  else None, 0.30, -0.30),
+            ("5s10s", (r10-r5) if r5 and r10 else None, 0.25, -0.25),
+        ]:
+            if slope is None:
+                continue
+            if slope > thresh_steep:
+                ideas.append({
+                    "Type": "IRS Curve", "Score": min(abs(slope) * 10, 100),
+                    "Structure": f"{label} Flattener",
+                    "Direction": "Flattener",
+                    "Trade": f"IRS {label} flattener ({slope*100:.0f}bp steep)",
+                    "Signal": f"{label} = {slope*100:+.0f}bp",
+                    "Rationale": f"{label} at {slope*100:.0f}bp — historically elevated, flattener mean-reverts",
+                    "Risk": "Carry negative in steep curve",
+                    "e1": label[:2], "e2": label[-3:], "tn": label, "tn_y": 5,
+                })
+            elif slope < thresh_flat:
+                ideas.append({
+                    "Type": "IRS Curve", "Score": min(abs(slope) * 10, 100),
+                    "Structure": f"{label} Steepener",
+                    "Direction": "Steepener",
+                    "Trade": f"IRS {label} steepener ({slope*100:.0f}bp inverted)",
+                    "Signal": f"{label} = {slope*100:+.0f}bp",
+                    "Rationale": f"{label} inverted {abs(slope)*100:.0f}bp — steepener profits on pivot/normalisation",
+                    "Risk": "Inversion can persist",
+                    "e1": label[:2], "e2": label[-3:], "tn": label, "tn_y": 5,
+                })
+
+    # ── 8. Vol Curve expression (swaption steepener/flattener) ────────────
+    if curve_df is not None and atm is not None:
+        r2 = _par_rate(2); r10 = _par_rate(10)
+        slope_2s10s = (r10 - r2) if r2 and r10 else None
+        if slope_2s10s is not None:
+            v_1y2 = get_matrix_value(atm, "1y", 2.0)
+            v_1y10 = get_matrix_value(atm, "1y", 10.0)
+            if slope_2s10s > 0.50 and v_1y2 and v_1y10:
+                ideas.append({
+                    "Type": "Vol Curve", "Score": min(abs(slope_2s10s) * 10, 100),
+                    "Structure": "2s10s Flattener via Swaptions",
+                    "Direction": "Flattener",
+                    "Trade": f"Buy 1y×2Y Receiver / Buy 1y×10Y Payer",
+                    "Signal": f"2s10s = {slope_2s10s*100:.0f}bp | vols: 2Y={v_1y2:.0f}bp, 10Y={v_1y10:.0f}bp",
+                    "Rationale": f"Express flattener via swaptions — receiver front, payer back",
+                    "Risk": "Pays two premiums; needs curve to move",
+                    "e1": "1y", "e2": "1y", "tn": "2s10s", "tn_y": 5,
+                })
+            elif slope_2s10s < -0.20 and v_1y2 and v_1y10:
+                ideas.append({
+                    "Type": "Vol Curve", "Score": min(abs(slope_2s10s) * 10, 100),
+                    "Structure": "2s10s Steepener via Swaptions",
+                    "Direction": "Steepener",
+                    "Trade": f"Buy 1y×2Y Payer / Buy 1y×10Y Receiver",
+                    "Signal": f"2s10s = {slope_2s10s*100:.0f}bp inverted | vols: 2Y={v_1y2:.0f}bp, 10Y={v_1y10:.0f}bp",
+                    "Rationale": f"Steepener via swaptions — payer 2Y (inflation), receiver 10Y (quality)",
+                    "Risk": "Two premiums; needs asymmetric rate moves",
+                    "e1": "1y", "e2": "1y", "tn": "2s10s", "tn_y": 5,
+                })
+
+    # ── 9. Calendar Vol Spreads (historical ratio) ────────────────────────
+    if atm is not None:
+        _PAIR_FAIR = {("1m","3m"): 1.03, ("3m","6m"): 1.02, ("6m","1y"): 1.01, ("1y","2y"): 1.00}
+        for tn in [2, 5, 10]:
+            for short_e, long_e in [("1m","3m"),("3m","6m"),("6m","1y"),("1y","2y")]:
+                v_short = get_matrix_value(atm, short_e, float(tn))
+                v_long = get_matrix_value(atm, long_e, float(tn))
+                if not (v_short and v_long and v_long > 0):
+                    continue
+                ratio = v_short / v_long
+                _fv_key = (short_e, long_e, f"{tn}Y")
+                _fv = fv_stats.get(_fv_key) if fv_stats else None
+                if _fv and _fv.get("n", 0) >= 10:
+                    fair_ratio = _fv["mean"]
+                    z_cal = (ratio - fair_ratio) / max(_fv.get("std", 0.03), 0.01)
+                else:
+                    fair_ratio = _PAIR_FAIR.get((short_e, long_e), 1.0)
+                    z_cal = (ratio - fair_ratio) / 0.05
+                if abs(z_cal) > 2.0:
+                    is_rich = z_cal > 0
+                    ideas.append({
+                        "Type": "Calendar Vol Spread", "Score": min(abs(z_cal) * 15, 70),
+                        "Structure": f"{'Sell' if is_rich else 'Buy'} {short_e} / {'Buy' if is_rich else 'Sell'} {long_e} ×{tn}Y",
+                        "Direction": "Sell calendar" if is_rich else "Buy calendar",
+                        "Trade": f"{'Sell' if is_rich else 'Buy'} {short_e}×{tn}Y / {'Buy' if is_rich else 'Sell'} {long_e}×{tn}Y",
+                        "Signal": f"Ratio {ratio:.3f}x vs fair {fair_ratio:.3f} (z={z_cal:+.1f}σ)",
+                        "Rationale": f"{short_e} vol {v_short:.1f}bp vs {long_e} {v_long:.1f}bp — "
+                                     f"{'rich' if is_rich else 'cheap'} by {abs(z_cal):.1f}σ",
+                        "Risk": "Short gamma risk" if is_rich else "Negative carry",
+                        "e1": short_e, "e2": long_e, "tn": f"{tn}Y", "tn_y": tn,
+                    })
+
+    # ── 10. USD-specific: FOMC Gamma, MOVE Divergence, VIX/MOVE, VIX/Swaption ─
+    try:
+        _vix_hist = _load_vix_move_history("VIX", 60)
+        _move_hist = _load_vix_move_history("MOVE", 60)
+        _vix_close = float(_vix_hist["close"].iloc[-1]) if len(_vix_hist) > 0 else None
+        _move_close = float(_move_hist["close"].iloc[-1]) if len(_move_hist) > 0 else None
+
+        # FOMC Gamma Play
+        _fomc_raw = meetings.get("1m", []) if meetings else []
+        _fomc_list = _fomc_raw if isinstance(_fomc_raw, list) else []
+        _fomc_n = len(_fomc_list) if _fomc_list else (int(_fomc_raw) if isinstance(_fomc_raw, (int, float)) and _fomc_raw > 0 else 0)
+        if _fomc_n > 0:
+            _v1m2y = get_matrix_value(atm, "1m", 2.0)
+            if _v1m2y:
+                ideas.append({
+                    "Type": "FOMC Gamma", "Score": 55 + min(_fomc_n * 10, 20),
+                    "Structure": f"1m×2Y straddle into FOMC ({_fomc_n} mtg{'s' if _fomc_n>1 else ''})",
+                    "Direction": "Buy vol",
+                    "Trade": f"Buy 1m×2Y ATM straddle at {_v1m2y:.1f}bp — gamma into Fed",
+                    "Signal": f"FOMC in 1m window" + (f" | MOVE: {_move_close:.0f}" if _move_close else ""),
+                    "Rationale": f"FOMC within 1m expiry. Historical USD vol jumps 5-15bp around FOMC.",
+                    "Risk": "Premium decay if FOMC non-event",
+                    "e1": "1m", "e2": "1m", "tn": "2Y", "tn_y": 2,
+                })
+
+        # MOVE Divergence
+        if _move_close and len(_move_hist) > 10:
+            _v3m5y = get_matrix_value(atm, "3m", 5.0)
+            if _v3m5y:
+                _move_mean = float(_move_hist["close"].mean())
+                _move_std = float(_move_hist["close"].std())
+                _sw_move_z = (_move_close - _move_mean) / max(_move_std, 1.0)
+                if abs(_sw_move_z) > 1.0:
+                    _move_rich = _sw_move_z < -1.0
+                    ideas.append({
+                        "Type": "MOVE Divergence", "Score": min(abs(_sw_move_z) * 20, 70),
+                        "Structure": f"MOVE {_move_close:.0f} vs 3m×5Y {_v3m5y:.1f}bp",
+                        "Direction": "Buy vol" if _move_rich else "Sell vol",
+                        "Trade": f"{'Buy' if _move_rich else 'Sell'} 3m×5Y straddle — MOVE {abs(_sw_move_z):.1f}σ {'below' if _move_rich else 'above'} mean",
+                        "Signal": f"MOVE z={_sw_move_z:+.1f}σ vs 60d mean {_move_mean:.0f}",
+                        "Rationale": f"MOVE at {_move_close:.0f} vs mean {_move_mean:.0f} — rates vol {'under' if _move_rich else 'over'}priced",
+                        "Risk": "MOVE and swaption vol can stay divergent",
+                        "e1": "3m", "e2": "3m", "tn": "5Y", "tn_y": 5,
+                    })
+
+        # VIX/MOVE Ratio
+        if _vix_close and _move_close and _move_close > 0:
+            _vm_ratio = _vix_close / _move_close
+            if _vm_ratio > 0.35:
+                ideas.append({
+                    "Type": "VIX/MOVE Regime", "Score": min((_vm_ratio - 0.25) * 100, 65),
+                    "Structure": f"VIX/MOVE ratio {_vm_ratio:.2f}",
+                    "Direction": "Buy vol",
+                    "Trade": f"Buy rates vol — VIX/MOVE elevated at {_vm_ratio:.2f} (equity-led stress)",
+                    "Signal": f"VIX {_vix_close:.1f} / MOVE {_move_close:.0f} = {_vm_ratio:.2f}",
+                    "Rationale": f"Equity vol elevated vs rates — rates vol tends to catch up",
+                    "Risk": "Cross-asset basis; equity stress may not transmit",
+                    "e1": "3m", "e2": "3m", "tn": "5Y", "tn_y": 5,
+                })
+            elif _vm_ratio < 0.20:
+                ideas.append({
+                    "Type": "VIX/MOVE Regime", "Score": min((0.30 - _vm_ratio) * 150, 65),
+                    "Structure": f"VIX/MOVE ratio {_vm_ratio:.2f}",
+                    "Direction": "Sell vol",
+                    "Trade": f"Sell rates vol — VIX/MOVE depressed at {_vm_ratio:.2f} (rates-led)",
+                    "Signal": f"VIX {_vix_close:.1f} / MOVE {_move_close:.0f} = {_vm_ratio:.2f}",
+                    "Rationale": f"Rates vol elevated vs equity — swaption vol likely to normalise",
+                    "Risk": "CB surprise can keep rates vol elevated",
+                    "e1": "3m", "e2": "3m", "tn": "5Y", "tn_y": 5,
+                })
+
+        # VIX/Swaption Divergence
+        if _vix_close and len(_vix_hist) > 20:
+            _v3m5y_2 = get_matrix_value(atm, "3m", 5.0)
+            if _v3m5y_2:
+                _vix_mean = float(_vix_hist["close"].mean())
+                _vix_std = float(_vix_hist["close"].std())
+                _vix_z = (_vix_close - _vix_mean) / max(_vix_std, 1.0)
+                if _vix_z > 1.5 and _v3m5y_2 < 85:
+                    ideas.append({
+                        "Type": "VIX/Swaption Divergence", "Score": min(_vix_z * 15, 65),
+                        "Structure": f"VIX spike ({_vix_close:.1f}) vs flat swptn ({_v3m5y_2:.1f}bp)",
+                        "Direction": "Buy vol",
+                        "Trade": f"Buy 1m×5Y straddle — equity stress not priced into rates vol",
+                        "Signal": f"VIX z={_vix_z:+.1f}σ | Swptn 3m×5Y {_v3m5y_2:.1f}bp not following",
+                        "Rationale": f"VIX at {_vix_close:.1f} ({_vix_z:.1f}σ above mean {_vix_mean:.1f}) but swaption vol flat",
+                        "Risk": "VIX may normalise without contagion to rates",
+                        "e1": "1m", "e2": "1m", "tn": "5Y", "tn_y": 5,
+                    })
+    except Exception:
+        pass  # Skip USD-specific if data unavailable
+
+    # ── 11. MOVE context adjustment ───────────────────────────────────────
     if move_val and move_val > 120:
         for idea in ideas:
             if idea["Direction"] == "Sell vol":
@@ -27585,7 +27779,7 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                 idea["Risk"] += f" | MOVE low at {move_val:.0f}"
                 idea["Score"] = max(idea["Score"] * 0.8, 0)
 
-    # ── 8. Composite / High Conviction ────────────────────────────────────
+    # ── 12. Composite / High Conviction ───────────────────────────────────
     _by_tenor_dir = {}
     for idea in ideas:
         key = (idea.get("tn", ""), idea["Direction"])
@@ -28640,12 +28834,13 @@ def usd_sod_tab():
         if not _top5:
             st.info("No strong signals at current vol levels.")
         else:
-            _t5_df = pd.DataFrame(_top5)[["Type", "Structure", "Direction", "Signal", "Score"]]
-            st.dataframe(_t5_df, use_container_width=True, hide_index=True)
+            _t5_df = pd.DataFrame(_top5)
+            _t5_cols = [c for c in ["Type", "Structure", "Direction", "Signal", "Score"] if c in _t5_df.columns]
+            st.dataframe(_t5_df[_t5_cols], use_container_width=True, hide_index=True)
 
             for _idx, _idea in enumerate(_top5):
                 _emoji = "🔴" if _idea["Score"] > 70 else "🟡" if _idea["Score"] > 50 else "⚪"
-                with st.expander(f"{_emoji} {_idea['Structure']} — {_idea['Direction']} (Score: {_idea['Score']:.0f})", expanded=_idx < 2):
+                with st.expander(f"{_emoji} {_idea['Structure']} — {_idea.get('Direction','—')} (Score: {_idea['Score']:.0f})", expanded=_idx < 2):
                     st.markdown(f"**Trade:** {_idea['Trade']}")
                     st.markdown(f"**Rationale:** {_idea['Rationale']}")
                     st.caption(f"Risk: {_idea['Risk']}")
@@ -28653,7 +28848,7 @@ def usd_sod_tab():
                         _open = st.session_state.get("_usd_rv_open_trades", [])
                         _open.append({
                             "spread": _idea["Structure"],
-                            "direction": _idea["Direction"],
+                            "direction": _idea.get("Direction", "—"),
                             "type": _idea["Type"],
                             "entry_fwd_vol": _idea.get("entry_fwd_vol", 0),
                             "entry_near_vol": _idea.get("entry_near_vol", 0),
@@ -28670,8 +28865,9 @@ def usd_sod_tab():
         # ── All Ideas (collapsed) ──
         if len(_ideas) > 5:
             with st.expander(f"📋 All {len(_ideas)} ideas", expanded=False):
-                _all_df = pd.DataFrame(_ideas)[["Type", "Structure", "Direction", "Signal", "Score"]]
-                st.dataframe(_all_df, use_container_width=True, hide_index=True)
+                _all_df = pd.DataFrame(_ideas)
+                _all_cols = [c for c in ["Type", "Structure", "Direction", "Signal", "Score"] if c in _all_df.columns]
+                st.dataframe(_all_df[_all_cols], use_container_width=True, hide_index=True)
 
     # ── Running P&L Tracker ──
     st.markdown("---")
