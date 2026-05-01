@@ -12969,11 +12969,17 @@ def caps_floors_tab(vol_mode: str):
                     _cf_nz = [v for v in _cf_data.values() if abs(v) > 0.001]
                     _uid_cf = st.session_state.get("username", "default")
                     if HAS_POSTGRES and len(_cf_nz) >= 3:
-                        save_user_config(_uid_cf, "cf_spreads", ccy, _cf_data)
-                        # Save under both IDs so data persists regardless of login method
-                        for _alt_uid in ["wpo@rateedge.au", "wpo70@icloud.com"]:
-                            if _alt_uid != _uid_cf:
-                                save_user_config(_alt_uid, "cf_spreads", ccy, _cf_data)
+                        # v0105c: batch all saves on single connection
+                        _batch_conn = get_db_connection()
+                        if _batch_conn:
+                            try:
+                                save_user_config(_uid_cf, "cf_spreads", ccy, _cf_data, _conn=_batch_conn)
+                                for _alt_uid in ["wpo@rateedge.au", "wpo70@icloud.com"]:
+                                    if _alt_uid != _uid_cf:
+                                        save_user_config(_alt_uid, "cf_spreads", ccy, _cf_data, _conn=_batch_conn)
+                                _batch_conn.commit()
+                            finally:
+                                _batch_conn.close()
                 except Exception:
                     pass
 
@@ -12984,19 +12990,6 @@ def caps_floors_tab(vol_mode: str):
                 # the render pipeline to splice the Active source's front end
                 # with the wedge-chain long end and PCHIP-spline the join.
                 st.session_state["_cfs_calc_requested"] = True
-                # v2504n: Auto-save wedge spreads to DB on Calculate
-                if HAS_POSTGRES:
-                    try:
-                        _cf_sp_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
-                                       "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y",
-                                       "cf_spr_12y3y","cf_spr_15v20","cf_spr_20v30"]
-                        _cf_sp_data = {k: float(st.session_state.get(k, 0)) for k in _cf_sp_keys
-                                       if k in st.session_state}
-                        if _cf_sp_data:
-                            save_user_config(st.session_state.get("username", "wpo@rateedge.au"),
-                                             "cf_spreads", ccy, _cf_sp_data)
-                    except Exception:
-                        pass
                 # v2404p: NO cache pops, NO preserve blocks, NO st.rerun().
                 # Cache sigs auto-invalidate when spreads change.
                 # _calc_requested flag triggers rebuild in the pipeline.
