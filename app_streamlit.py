@@ -808,10 +808,16 @@ def get_db_connection():
         try:
             if not _cached.closed:
                 _cached.rollback()  # clear any aborted txn state
-                # Wrap so caller's .close() returns to cache instead of destroying
+                _hc = _cached.cursor()
+                _hc.execute("SELECT 1")  # health check
+                _hc.close()
                 return _DbPooledConn(_cached)
         except Exception:
-            pass
+            # Connection dead — destroy and recreate
+            try:
+                _cached.close()
+            except Exception:
+                pass
         st.session_state.pop("_db_conn_cached", None)
 
     # Create fresh connection
