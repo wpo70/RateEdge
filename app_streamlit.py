@@ -7562,6 +7562,17 @@ def vol_config_tab():
                                     st.session_state["timestamps"][f"atm_{ccy}"] = loaded_snap['snapshot_date'].strftime('%Y-%m-%d %H:%M:%S')
                                     st.session_state["timestamps"][f"sabr_{ccy}"] = loaded_snap['snapshot_date'].strftime('%Y-%m-%d %H:%M:%S')
                                     
+                                    # v3004s: update per-ccy label and rebuild banner
+                                    st.session_state[f"_loaded_vol_label_{ccy}"] = snap['label']
+                                    _rl = [f"{_bc}:{st.session_state[f'_loaded_vol_label_{_bc}']}"
+                                           for _bc in SUPPORTED_CURRENCIES if st.session_state.get(f"_loaded_vol_label_{_bc}")]
+                                    _old_banner = st.session_state.get("_auto_load_msg", "")
+                                    _cfg_part = ""
+                                    if "| Configs:" in _old_banner:
+                                        _cfg_part = " | Configs:" + _old_banner.split("| Configs:")[1]
+                                    if _rl:
+                                        st.session_state["_auto_load_msg"] = f"✅ Vols: {', '.join(_rl)}" + _cfg_part
+
                                     st.success(f"✅ Loaded snapshot: {snap['label']}")
                                     st.rerun()
                                 else:
@@ -24335,6 +24346,7 @@ def main():
                                         _vd["alpha"]=_da
                                     except: pass
                                 _sl.append(f"{_cc2}:{_lbl}")
+                                st.session_state[f"_loaded_vol_label_{_cc2}"] = _lbl  # v3004s: track per-ccy for banner refresh
                                 st.session_state[f"_vol_loaded_{_cc2}"] = True
                                 set_timestamp("atm", _cc2)  # mark as loaded for status display
                                 _h = st.session_state.get(f"_atm_hash_{_cc2}", 0)
