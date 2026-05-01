@@ -28838,29 +28838,42 @@ def usd_sod_tab():
             _t5_cols = [c for c in ["Type", "Structure", "Direction", "Signal", "Score"] if c in _t5_df.columns]
             st.dataframe(_t5_df[_t5_cols], use_container_width=True, hide_index=True)
 
+            _usd_vega_options = {"25k": 25_000, "50k": 50_000, "100k": 100_000}
+            _vega_sel = st.radio("Vega per bp (USD)", list(_usd_vega_options.keys()),
+                                 index=0, horizontal=True, key="_usd_vega_sel_v0105")
+            _VEGA_PER_BP_USD = _usd_vega_options[_vega_sel]
+
             for _idx, _idea in enumerate(_top5):
                 _emoji = "🔴" if _idea["Score"] > 70 else "🟡" if _idea["Score"] > 50 else "⚪"
                 with st.expander(f"{_emoji} {_idea['Structure']} — {_idea.get('Direction','—')} (Score: {_idea['Score']:.0f})", expanded=_idx < 2):
                     st.markdown(f"**Trade:** {_idea['Trade']}")
                     st.markdown(f"**Rationale:** {_idea['Rationale']}")
                     st.caption(f"Risk: {_idea['Risk']}")
-                    if st.button(f"Open Position", key=f"_rv_open_{_idx}", use_container_width=True):
-                        _open = st.session_state.get("_usd_rv_open_trades", [])
-                        _open.append({
-                            "spread": _idea["Structure"],
-                            "direction": _idea.get("Direction", "—"),
-                            "type": _idea["Type"],
-                            "entry_fwd_vol": _idea.get("entry_fwd_vol", 0),
-                            "entry_near_vol": _idea.get("entry_near_vol", 0),
-                            "entry_far_vol": _idea.get("entry_far_vol", 0),
-                            "signal": _idea["Signal"],
-                            "entry_score": _idea["Score"],
-                            "e1": _idea.get("e1", ""), "e2": _idea.get("e2", ""),
-                            "tn": _idea.get("tn", ""), "tn_y": _idea.get("tn_y", 5),
-                            "entry_date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
-                        })
-                        st.session_state["_usd_rv_open_trades"] = _open
-                        st.rerun()
+                    if st.button(f"Open @ {_vega_sel}/bp", key=f"_rv_open_{_idx}", use_container_width=True):
+                        _book_key_usd = "rv_conviction_book_usd"
+                        _bk = st.session_state.get(_book_key_usd, {})
+                        _bid_norm = _idea.get("Structure", "").strip().lower()
+                        if _bid_norm not in {k.lower() for k in _bk.keys()}:
+                            _bk[_bid_norm] = {
+                                "structure": _idea.get("Structure", ""),
+                                "type": _idea.get("Type", ""),
+                                "trade": _idea.get("Trade", ""),
+                                "signal": _idea.get("Signal", ""),
+                                "direction": _idea.get("Direction", ""),
+                                "entry_date": pd.Timestamp.now(tz="US/Eastern").strftime("%Y-%m-%d"),
+                                "score": _idea.get("Score", 0),
+                                "entry_fwd_vol": _idea.get("entry_fwd_vol", 0),
+                                "entry_near_vol": _idea.get("entry_near_vol", 0),
+                                "entry_far_vol": _idea.get("entry_far_vol", 0),
+                                "e1": _idea.get("e1", ""), "e2": _idea.get("e2", ""),
+                                "tn": _idea.get("tn", ""), "tn_y": _idea.get("tn_y", 5),
+                                "vega_per_bp": _VEGA_PER_BP_USD,
+                            }
+                            st.session_state[_book_key_usd] = _bk
+                            if HAS_POSTGRES:
+                                _uid_bk = st.session_state.get("username", "wpo@rateedge.au")
+                                save_user_config(_uid_bk, _book_key_usd, "USD", _bk)
+                            st.rerun()
 
         # ── All Ideas (collapsed) ──
         if len(_ideas) > 5:
@@ -28869,90 +28882,172 @@ def usd_sod_tab():
                 _all_cols = [c for c in ["Type", "Structure", "Direction", "Signal", "Score"] if c in _all_df.columns]
                 st.dataframe(_all_df[_all_cols], use_container_width=True, hide_index=True)
 
-    # ── Running P&L Tracker ──
+    # ── USD Conviction Book — manual open, per-trade vega ──
     st.markdown("---")
-    st.markdown("#### 💰 Running P&L — Open Positions")
-    _open_trades = st.session_state.get("_usd_rv_open_trades", [])
-    if not _open_trades:
-        st.info("No open positions. Use the scanner above to open trades.")
+    st.markdown("#### 🏆 USD Conviction Book")
+
+    _book_key_usd = "rv_conviction_book_usd"
+    _closed_key_usd = "rv_conviction_closed_usd"
+
+    # Load book from DB on fresh session
+    if _book_key_usd not in st.session_state and HAS_POSTGRES:
+        _uid_bk = st.session_state.get("username", "wpo@rateedge.au")
+        _db_book = load_user_config(_uid_bk, _book_key_usd, "USD")
+        if _db_book: st.session_state[_book_key_usd] = _db_book
+    if _closed_key_usd not in st.session_state and HAS_POSTGRES:
+        _uid_bk = st.session_state.get("username", "wpo@rateedge.au")
+        _db_closed = load_user_config(_uid_bk, _closed_key_usd, "USD")
+        if _db_closed: st.session_state[_closed_key_usd] = _db_closed
+
+    _book_usd = st.session_state.get(_book_key_usd, {})
+    _closed_usd = st.session_state.get(_closed_key_usd, [])
+
+    # Closed display filter — only show last 2 days
+    def _recent_closed_usd(closed_list, days=2):
+        from datetime import date as _d, timedelta as _td, datetime as _dt
+        _cutoff = _d.today() - _td(days=days)
+        _out = []
+        for _c in (closed_list or []):
+            _cd = _c.get("close_date")
+            if _cd is None:
+                _out.append(_c); continue
+            _cd_obj = None
+            if isinstance(_cd, _d) and not isinstance(_cd, _dt):
+                _cd_obj = _cd
+            elif isinstance(_cd, _dt):
+                _cd_obj = _cd.date()
+            else:
+                try: _cd_obj = _d.fromisoformat(str(_cd)[:10])
+                except: _cd_obj = None
+            if _cd_obj is None or _cd_obj >= _cutoff:
+                _out.append(_c)
+        return _out
+    _closed_display_usd = _recent_closed_usd(_closed_usd, days=2)
+
+    # ── Display Live Book ──
+    if not _book_usd:
+        st.info("No open positions. Use the Open buttons above to add trades.")
     else:
-        _fv_stats_pnl = _rv_precompute_usd.get("fv_stats", {}) if _rv_precompute_usd else {}
-        _pnl_rows = []
-        for _ti, _tr in enumerate(_open_trades):
-            _v1_now = get_matrix_value(_usd_atm_now, _tr["e1"], float(_tr["tn_y"]))
-            _v2_now = get_matrix_value(_usd_atm_now, _tr["e2"], float(_tr["tn_y"]))
-            _entry_fv = _tr.get("entry_fwd_vol", 0)
+        _to_close = []
+        for _i, (_bid, _bpos) in enumerate(list(_book_usd.items())):
+            _ev = _bpos.get("entry_fwd_vol", 0)
+            _e1 = _bpos.get("e1", ""); _e2 = _bpos.get("e2", "")
+            _tn_y = _bpos.get("tn_y", 5)
+            _trade_vega = _bpos.get("vega_per_bp", 25_000)
+            _vega_label = f"{_trade_vega//1000:.0f}k"
+            _v1_now = get_matrix_value(_usd_atm_now, _e1, float(_tn_y)) if _e1 else None
+            _v2_now = get_matrix_value(_usd_atm_now, _e2, float(_tn_y)) if _e2 else None
 
-            if _v1_now is None or _v2_now is None or _entry_fv == 0:
-                _pnl_rows.append({
-                    "Spread": _tr["spread"], "Type": _tr.get("type", "—"),
-                    "Dir": _tr["direction"], "Entry Vol": _entry_fv,
-                    "Curr Vol": "—", "P&L (bp)": "—",
-                    "Entry Date": _tr["entry_date"], "Status": "⚠️ No data"
-                })
-                continue
+            _fwd_now = 0; _bp_pnl = 0; _usd_pnl = 0; _pnl_col = "#94a3b8"
+            if _v1_now and _v2_now and _ev:
+                _T1 = label_to_years(_e1); _T2 = label_to_years(_e2)
+                _dT = _T2 - _T1
+                if _dT > 0:
+                    _inner = (_v2_now**2 * _T2 - _v1_now**2 * _T1) / _dT
+                    _fwd_now = math.sqrt(max(_inner, 0.01))
+                else:
+                    _fwd_now = _v1_now
+                _dir = _bpos.get("direction", "")
+                if "Sell" in _dir:
+                    _bp_pnl = _ev - _fwd_now
+                else:
+                    _bp_pnl = _fwd_now - _ev
+                _usd_pnl = _bp_pnl * _trade_vega
+                _pnl_col = "#22c55e" if _usd_pnl >= 0 else "#ef4444"
 
-            _T1 = label_to_years(_tr["e1"])
-            _T2 = label_to_years(_tr["e2"])
-            _dT = _T2 - _T1
-            if _dT > 0:
-                _inner_now = (_v2_now**2 * _T2 - _v1_now**2 * _T1) / _dT
-                _fwd_now = math.sqrt(max(_inner_now, 0.01))
-            else:
-                _fwd_now = _v1_now  # non-calendar trade, just use flat vol
+            _is_new = (_bpos.get("entry_date") == str(pd.Timestamp.now(tz="US/Eastern").date()))
+            _sc_val = _bpos.get("score", 0)
+            _sc_col = "#f59e0b" if _sc_val > 60 else "#22c55e" if _sc_val > 30 else "#94a3b8"
 
-            if "Sell" in _tr["direction"]:
-                _vol_pnl = _entry_fv - _fwd_now
-            else:
-                _vol_pnl = _fwd_now - _entry_fv
+            _ca, _cb, _cc, _cd = st.columns([5, 1.5, 0.8, 0.7])
+            with _ca:
+                _new_badge = " <span style='background:#7c3aed;color:white;font-size:0.65rem;padding:1px 6px;border-radius:3px;margin-left:6px'>NEW</span>" if _is_new else ""
+                st.markdown(f"**{_i+1}. {_bpos.get('type','')} — {_bpos.get('structure','')}**{_new_badge}",
+                            unsafe_allow_html=True)
+                st.markdown(f"<span style='color:#94a3b8;font-size:0.82rem'>{_bpos.get('signal','')} &nbsp;|&nbsp; {_bpos.get('trade','')}</span>",
+                            unsafe_allow_html=True)
+                _entry_lbl = f"Entry: {_bpos.get('entry_date','')}  |  {_vega_label}/bp"
+                if _ev: _entry_lbl += f"  |  Entry: {_ev:.1f}bp"
+                if _fwd_now: _entry_lbl += f"  |  Now: {_fwd_now:.1f}bp"
+                st.caption(_entry_lbl)
+            with _cb:
+                if _ev and _fwd_now:
+                    _pnl_str = f"${abs(_usd_pnl/1000):.0f}k" if abs(_usd_pnl) >= 1000 else f"${_usd_pnl:.0f}"
+                    st.markdown(
+                        f"<div style='text-align:center;padding:6px 4px;background:#1e293b;border-radius:6px;margin-top:4px'>"
+                        f"<div style='color:{_pnl_col};font-size:1rem;font-weight:700'>{_bp_pnl:+.1f}bp</div>"
+                        f"<div style='color:{_pnl_col};font-size:0.8rem;font-weight:600'>"
+                        f"{'+'if _usd_pnl>=0 else ''}{_pnl_str}{'▲' if _usd_pnl>=0 else '▼'}</div>"
+                        f"<div style='color:#64748b;font-size:0.6rem'>MTM</div></div>",
+                        unsafe_allow_html=True)
+                else:
+                    st.markdown(
+                        f"<div style='text-align:center;padding:6px 4px;background:#1e293b;border-radius:6px;margin-top:4px'>"
+                        f"<div style='color:#64748b;font-size:0.75rem'>No data</div></div>",
+                        unsafe_allow_html=True)
+            with _cc:
+                st.markdown(
+                    f"<div style='text-align:center;padding:6px 4px;background:#1e293b;border-radius:6px;margin-top:4px'>"
+                    f"<div style='color:{_sc_col};font-size:1.1rem;font-weight:700'>{_sc_val:.0f}</div>"
+                    f"<div style='color:#64748b;font-size:0.6rem'>Score</div></div>",
+                    unsafe_allow_html=True)
+            with _cd:
+                if st.button("✕", key=f"_usd_close_{_i}", help="Close this position"):
+                    _to_close.append((_bid, _bpos, _bp_pnl, _usd_pnl, _fwd_now))
+            if _i < len(_book_usd) - 1:
+                st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
 
-            _status = "🟢 Open"
-            if abs(_vol_pnl) > 3.0:
-                _status = "🟡 Target hit (±3bp)"
+        # Process closes
+        if _to_close:
+            _today_str_usd = str(pd.Timestamp.now(tz="US/Eastern").date())
+            for _bid, _bpos, _bp_pnl, _usd_pnl, _fwd_now in _to_close:
+                _closed_usd.append({**_bpos, "close_date": _today_str_usd,
+                                     "close_vol": round(_fwd_now, 1), "bp_pnl": round(_bp_pnl, 2),
+                                     "usd_pnl": round(_usd_pnl, 0), "status": "CLOSED"})
+                del _book_usd[_bid]
+            st.session_state[_book_key_usd] = _book_usd
+            st.session_state[_closed_key_usd] = _closed_usd
+            if HAS_POSTGRES:
+                _uid_bk = st.session_state.get("username", "wpo@rateedge.au")
+                _batch_conn = get_db_connection()
+                if _batch_conn:
+                    try:
+                        save_user_config(_uid_bk, _book_key_usd, "USD", _book_usd, _conn=_batch_conn)
+                        save_user_config(_uid_bk, _closed_key_usd, "USD", _closed_usd, _conn=_batch_conn)
+                        _batch_conn.commit()
+                    finally:
+                        _batch_conn.close()
+            st.rerun()
 
-            # Check z-score reversal for kick
-            _key = (_tr["e1"], _tr["e2"], _tr["tn"])
-            _hist = _fv_stats_pnl.get(_key)
-            if _hist and _hist.get("std", 0) > 0.5:
-                _z_now = (_fwd_now - _hist["mean"]) / _hist["std"]
-                if "Sell" in _tr["direction"] and _z_now < 0:
-                    _status = "🔴 KICK — z reversed"
-                elif "Buy" in _tr["direction"] and _z_now > 0:
-                    _status = "🔴 KICK — z reversed"
-            else:
-                _z_now = 0
+    # ── Closed Trade Log ──
+    if _closed_display_usd:
+        st.markdown("##### 📋 Closed Positions")
+        st.caption("Showing positions closed in the last 2 days.")
+        for _ct in reversed(_closed_display_usd[-6:]):
+            _cpnl_col = "#22c55e" if _ct.get("bp_pnl", 0) >= 0 else "#ef4444"
+            _ct_usd = _ct.get("usd_pnl", 0)
+            _ct_vega = _ct.get("vega_per_bp", 25000)
+            _ct_pnl_str = f"${abs(_ct_usd/1000):.0f}k" if abs(_ct_usd) >= 1000 else f"${_ct_usd:.0f}"
+            st.markdown(
+                f"<div style='background:#0f172a;border-radius:6px;padding:8px 12px;margin:4px 0;border-left:3px solid #7c3aed'>"
+                f"<span style='color:#e2e8f0;font-weight:600'>{_ct.get('structure','')}</span> "
+                f"<span style='color:#64748b;font-size:0.8rem'>{_ct.get('entry_date','')} → {_ct.get('close_date','')}</span> "
+                f"<span style='float:right;color:{_cpnl_col};font-weight:700'>"
+                f"{_ct.get('bp_pnl',0):+.1f}bp  "
+                f"{'+'if _ct_usd>=0 else ''}{_ct_pnl_str} @ {_ct_vega//1000:.0f}k/bp</span>"
+                f"</div>", unsafe_allow_html=True)
 
-            _pnl_rows.append({
-                "Spread": _tr["spread"], "Type": _tr.get("type", "—"),
-                "Dir": _tr["direction"],
-                "Entry Vol": round(_entry_fv, 1),
-                "Curr Vol": round(_fwd_now, 1),
-                "P&L (bp)": round(_vol_pnl, 2),
-                "Z now": round(_z_now, 2),
-                "Entry Date": _tr["entry_date"],
-                "Status": _status,
-            })
+    # ── Book Management ──
+    with st.expander("⚙️ Book Management", expanded=False):
+        if st.button("🗑 Reset USD Conviction Book", key="_usd_rv_reset_book", type="secondary"):
+            st.session_state.pop(_book_key_usd, None)
+            st.session_state.pop(_closed_key_usd, None)
+            if HAS_POSTGRES:
+                _uid_bk = st.session_state.get("username", "wpo@rateedge.au")
+                save_user_config(_uid_bk, _book_key_usd, "USD", {})
+                save_user_config(_uid_bk, _closed_key_usd, "USD", [])
+            st.success("USD book reset."); st.rerun()
 
-        _pnl_df = pd.DataFrame(_pnl_rows)
-        def _color_pnl(v):
-            if pd.isna(v) or not isinstance(v, (int, float)): return ""
-            if v > 0: return "color: #4ade80"
-            if v < 0: return "color: #f87171"
-            return ""
-        st.dataframe(_pnl_df.style.map(_color_pnl, subset=["P&L (bp)"] if "P&L (bp)" in _pnl_df.columns else []),
-                     use_container_width=True, hide_index=True)
-
-        _cc1, _cc2 = st.columns(2)
-        with _cc1:
-            if st.button("🗑 Close Kicked Positions", key="_rv_close_kicked"):
-                _open_trades = [t for i, t in enumerate(_open_trades)
-                               if i < len(_pnl_rows) and "KICK" not in _pnl_rows[i].get("Status", "")]
-                st.session_state["_usd_rv_open_trades"] = _open_trades
-                st.rerun()
-        with _cc2:
-            if st.button("🗑 Clear ALL Positions", key="_rv_clear_all"):
-                st.session_state["_usd_rv_open_trades"] = []
-                st.rerun()
 
 
 @st.fragment
