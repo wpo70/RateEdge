@@ -792,26 +792,68 @@ def _get_db_params():
 
 def get_db_connection():
     """
-    Get Supabase PostgreSQL connection via shared pooler URL.
+    Get Supabase PostgreSQL connection. Reuses a cached connection per
+    Streamlit session when possible, avoiding repeated TCP/SSL handshakes.
+    Callers that call conn.close() will release back to cache (not truly close).
     """
     if not HAS_POSTGRES:
         return None
     params = _get_db_params()
     if not params:
         return None
+
+    # Check for usable cached connection
+    _cached = st.session_state.get("_db_conn_cached")
+    if _cached is not None:
+        try:
+            if not _cached.closed:
+                _cached.rollback()  # clear any aborted txn state
+                # Wrap so caller's .close() returns to cache instead of destroying
+                return _DbPooledConn(_cached)
+        except Exception:
+            pass
+        st.session_state.pop("_db_conn_cached", None)
+
+    # Create fresh connection
     try:
         conn = psycopg2.connect(
             host=params["host"], port=params["port"],
             dbname=params["dbname"], user=params["user"],
             password=params["password"], sslmode=params["sslmode"],
-            connect_timeout=10,
+            connect_timeout=5,
             keepalives=1, keepalives_idle=30,
             keepalives_interval=10, keepalives_count=3,
             options="-c statement_timeout=15000"  # 15s max per query
         )
-        return conn
+        st.session_state["_db_conn_cached"] = conn
+        return _DbPooledConn(conn)
     except Exception:
         return None
+
+
+class _DbPooledConn:
+    """Wrapper that intercepts .close() to return connection to session cache."""
+    def __init__(self, real):
+        self._conn = real
+    def cursor(self):
+        return self._conn.cursor()
+    def commit(self):
+        self._conn.commit()
+    def rollback(self):
+        self._conn.rollback()
+    def close(self):
+        # Don't close — just rollback to clean state for next caller
+        try:
+            self._conn.rollback()
+        except Exception:
+            pass
+    @property
+    def closed(self):
+        return self._conn.closed
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        self.close()
 
 
 def init_database():
