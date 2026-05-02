@@ -29030,7 +29030,7 @@ def usd_sod_tab():
                                 "trade": _idea.get("Trade", ""),
                                 "signal": _idea.get("Signal", ""),
                                 "direction": _idea.get("Direction", ""),
-                                "entry_date": pd.Timestamp.now(tz="US/Eastern").strftime("%Y-%m-%d"),
+                                "entry_date": pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d"),
                                 "score": _idea.get("Score", 0),
                                 "entry_fwd_vol": _idea.get("entry_fwd_vol", 0),
                                 "entry_near_vol": _idea.get("entry_near_vol", 0),
@@ -29125,7 +29125,7 @@ def usd_sod_tab():
                 _usd_pnl = _bp_pnl * _trade_vega
                 _pnl_col = "#22c55e" if _usd_pnl >= 0 else "#ef4444"
 
-            _is_new = (_bpos.get("entry_date") == str(pd.Timestamp.now(tz="US/Eastern").date()))
+            _is_new = (_bpos.get("entry_date") == str(pd.Timestamp.now(tz="America/New_York").date()))
             _sc_val = _bpos.get("score", 0)
             _sc_col = "#f59e0b" if _sc_val > 60 else "#22c55e" if _sc_val > 30 else "#94a3b8"
 
@@ -29169,7 +29169,7 @@ def usd_sod_tab():
 
         # Process closes
         if _to_close:
-            _today_str_usd = str(pd.Timestamp.now(tz="US/Eastern").date())
+            _today_str_usd = str(pd.Timestamp.now(tz="America/New_York").date())
             for _bid, _bpos, _bp_pnl, _usd_pnl, _fwd_now in _to_close:
                 _closed_usd.append({**_bpos, "close_date": _today_str_usd,
                                      "close_vol": round(_fwd_now, 1), "bp_pnl": round(_bp_pnl, 2),
