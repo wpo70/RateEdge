@@ -29153,10 +29153,10 @@ def usd_sod_tab():
                 st.caption(_entry_lbl)
             with _cb:
                 if _ev and _fwd_now:
-                    _pnl_str = f"${abs(_usd_pnl/1000):.0f}k" if abs(_usd_pnl) >= 1000 else f"${_usd_pnl:.0f}"
+                    _pnl_str = f"${abs(_usd_pnl/1000):.1f}k" if abs(_usd_pnl) >= 1000 else f"${_usd_pnl:,.0f}"
                     st.markdown(
                         f"<div style='text-align:center;padding:6px 4px;background:#1e293b;border-radius:6px;margin-top:4px'>"
-                        f"<div style='color:{_pnl_col};font-size:1rem;font-weight:700'>{_bp_pnl:+.1f}bp</div>"
+                        f"<div style='color:{_pnl_col};font-size:1rem;font-weight:700'>{_bp_pnl:+.3f}bp</div>"
                         f"<div style='color:{_pnl_col};font-size:0.8rem;font-weight:600'>"
                         f"{'+'if _usd_pnl>=0 else ''}{_pnl_str}{'▲' if _usd_pnl>=0 else '▼'}</div>"
                         f"<div style='color:#64748b;font-size:0.6rem'>MTM</div></div>",
@@ -29214,7 +29214,7 @@ def usd_sod_tab():
                 f"<span style='color:#e2e8f0;font-weight:600'>{_ct.get('structure','')}</span> "
                 f"<span style='color:#64748b;font-size:0.8rem'>{_ct.get('entry_date','')} → {_ct.get('close_date','')}</span> "
                 f"<span style='float:right;color:{_cpnl_col};font-weight:700'>"
-                f"{_ct.get('bp_pnl',0):+.1f}bp  "
+                f"{_ct.get('bp_pnl',0):+.3f}bp  "
                 f"{'+'if _ct_usd>=0 else ''}{_ct_pnl_str} @ {_ct_vega//1000:.0f}k/bp</span>"
                 f"</div>", unsafe_allow_html=True)
 
@@ -29237,11 +29237,11 @@ def usd_sod_tab():
                 _total_bp += _bp
                 _total_usd += _bp * _trade_vega
         _tot_col = "#22c55e" if _total_usd >= 0 else "#ef4444"
-        _tot_str = f"${abs(_total_usd/1000):.1f}k" if abs(_total_usd) >= 1000 else f"${_total_usd:.0f}"
+        _tot_str = f"${abs(_total_usd/1000):.1f}k" if abs(_total_usd) >= 1000 else f"${_total_usd:,.0f}"
         st.markdown(
             f"<div style='background:#0f172a;border:1px solid {_tot_col};border-radius:8px;padding:12px 20px;margin:12px 0;text-align:center'>"
             f"<span style='color:#94a3b8;font-size:0.85rem'>Net Book P&L:</span> "
-            f"<span style='color:{_tot_col};font-size:1.3rem;font-weight:700'>{_total_bp:+.1f}bp &nbsp; "
+            f"<span style='color:{_tot_col};font-size:1.3rem;font-weight:700'>{_total_bp:+.3f}bp &nbsp; "
             f"{'+'if _total_usd>=0 else ''}{_tot_str}</span> "
             f"<span style='color:#64748b;font-size:0.75rem'>({len(_book_usd)} positions)</span></div>",
             unsafe_allow_html=True)
@@ -29328,7 +29328,7 @@ def usd_sod_tab():
                 [Paragraph("<b>Tenor</b>", _sCap)] + _crv_hdr,
                 [Paragraph("EOD", _sCap)] + [Paragraph(f"{r:.3f}" if r else "-", _sB) for r in _crv_eod_pdf],
                 [Paragraph("Current", _sCap)] + [Paragraph(f"{r:.3f}" if r else "-", _sB) for r in _crv_cur_pdf],
-                [Paragraph("Chg (bp)", _sCap)] + [Paragraph(f"{c:+.1f}", _sB) for c in _crv_chg_pdf],
+                [Paragraph("Chg (bp)", _sCap)] + [Paragraph(f"{c:+.3f}", _sB) for c in _crv_chg_pdf],
             ]
             _crv_tbl = Table(_crv_data, colWidths=[1.2*cm] + [1.2*cm]*len(_crv_tenors_pdf))
             _crv_tbl.setStyle(TableStyle([
@@ -29395,7 +29395,7 @@ def usd_sod_tab():
                 _story.append(Spacer(1, 8))
                 _story.append(Paragraph("USD Conviction Book", _sH2))
                 _bk_hdr = [Paragraph(f"<b>{h}</b>", _sCap) for h in
-                           ["#", "Structure", "Direction", "Entry", "Entry Vol", "Curr Vol", "P&L (bp)", "P&L ($)", "Vega"]]
+                           ["#", "Structure", "Dir", "Entry Date", "Entry Vol", "Curr Vol", "P&L (bp)", "P&L ($)", "Vega"]]
                 _bk_rows = [_bk_hdr]
                 _tot_bp_pdf = 0; _tot_usd_pdf = 0
                 for _i, (_bid, _bpos) in enumerate(_book_usd.items()):
@@ -29415,24 +29415,24 @@ def usd_sod_tab():
                         _tot_bp_pdf += _bp; _tot_usd_pdf += _usd_p
                     _bk_rows.append([
                         Paragraph(str(_i+1), _sB),
-                        Paragraph(_bpos.get("structure","")[:30], _sB),
-                        Paragraph(_bpos.get("direction",""), _sB),
+                        Paragraph(_bpos.get("structure",""), _sB),
+                        Paragraph(_bpos.get("direction","")[:15], _sB),
                         Paragraph(_bpos.get("entry_date",""), _sB),
                         Paragraph(f"{_ev:.1f}" if _ev else "-", _sB),
                         Paragraph(f"{_fwd:.1f}" if _fwd else "-", _sB),
-                        Paragraph(f"{_bp:+.1f}", _sB),
-                        Paragraph(f"${_usd_p/1000:+.1f}k" if abs(_usd_p)>=1000 else f"${_usd_p:+.0f}", _sB),
+                        Paragraph(f"{_bp:+.3f}", _sB),
+                        Paragraph(f"${_usd_p:+,.0f}", _sB),
                         Paragraph(f"{_tv//1000:.0f}k", _sB),
                     ])
                 # Total row
                 _bk_rows.append([
                     Paragraph("", _sB), Paragraph("<b>TOTAL</b>", _sB),
                     Paragraph("", _sB), Paragraph("", _sB), Paragraph("", _sB), Paragraph("", _sB),
-                    Paragraph(f"<b>{_tot_bp_pdf:+.1f}</b>", _sB),
-                    Paragraph(f"<b>${_tot_usd_pdf/1000:+.1f}k</b>" if abs(_tot_usd_pdf)>=1000 else f"<b>${_tot_usd_pdf:+.0f}</b>", _sB),
+                    Paragraph(f"<b>{_tot_bp_pdf:+.3f}</b>", _sB),
+                    Paragraph(f"<b>${_tot_usd_pdf:+,.0f}</b>", _sB),
                     Paragraph("", _sB),
                 ])
-                _bk_tbl = Table(_bk_rows, colWidths=[0.5*cm, 4*cm, 1.5*cm, 1.5*cm, 1.3*cm, 1.3*cm, 1.3*cm, 1.5*cm, 1*cm])
+                _bk_tbl = Table(_bk_rows, colWidths=[0.6*cm, 4.5*cm, 1.6*cm, 1.6*cm, 1.2*cm, 1.2*cm, 1.4*cm, 1.6*cm, 0.8*cm])
                 _bk_tbl.setStyle(TableStyle([
                     ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#e2e8f0")),
                     ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#1e293b")),
