@@ -29018,9 +29018,16 @@ def usd_sod_tab():
                     st.markdown(f"**Trade:** {_idea['Trade']}")
                     st.markdown(f"**Rationale:** {_idea['Rationale']}")
                     st.caption(f"Risk: {_idea['Risk']}")
-                    if st.button(f"Open @ {_vega_sel}/bp", key=f"_rv_open_{_idx}", use_container_width=True):
-                        _book_key_usd = "rv_conviction_book_usd"
-                        _bk = st.session_state.get(_book_key_usd, {})
+
+            # Open buttons OUTSIDE expanders — avoids Streamlit rerun/expander bug
+            st.caption("Open positions:")
+            _open_cols = st.columns(min(len(_top5), 5))
+            _book_key_usd_btn = "rv_conviction_book_usd"
+            for _idx, _idea in enumerate(_top5):
+                with _open_cols[_idx]:
+                    _short_label = _idea.get("Structure", "")[:25]
+                    if st.button(f"Open: {_short_label}", key=f"_rv_open_{_idx}", use_container_width=True):
+                        _bk = st.session_state.get(_book_key_usd_btn, {})
                         _bid_norm = _idea.get("Structure", "").strip().lower()
                         if _bid_norm not in {k.lower() for k in _bk.keys()}:
                             _bk[_bid_norm] = {
@@ -29038,10 +29045,10 @@ def usd_sod_tab():
                                 "tn": _idea.get("tn", ""), "tn_y": _idea.get("tn_y", 5),
                                 "vega_per_bp": _VEGA_PER_BP_USD,
                             }
-                            st.session_state[_book_key_usd] = _bk
+                            st.session_state[_book_key_usd_btn] = _bk
                             if HAS_POSTGRES:
                                 _uid_bk = st.session_state.get("username", "wpo@rateedge.au")
-                                save_user_config(_uid_bk, _book_key_usd, "USD", _bk)
+                                save_user_config(_uid_bk, _book_key_usd_btn, "USD", _bk)
                             st.rerun()
 
         # ── All Ideas (collapsed) ──
