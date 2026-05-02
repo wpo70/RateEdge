@@ -19794,6 +19794,11 @@ def rv_tab():
             st.markdown("#### 📊 Cross-Asset Vol — Swaption vs VIX")
             _spx_surf_rv = st.session_state.get("spx_vol_surface", {})
             _vix_spot_rv = st.session_state.get("vix_spot")
+            # v0205u: auto-seed VIX from DB if not set
+            if _vix_spot_rv is None:
+                _vix_spot_rv = _fetch_vix_index()
+                if _vix_spot_rv:
+                    st.session_state["vix_spot"] = _vix_spot_rv
             # Use SPX front ATM or VIX spot as equity vol proxy
             _spx_front_atm = st.session_state.get("spx_vol_override")
             if not _spx_front_atm and _spx_surf_rv:
@@ -19806,7 +19811,7 @@ def rv_tab():
             with _rv_vix_col:
                 _rv_vix_input = st.number_input("VIX Spot", min_value=0.0, max_value=100.0,
                     step=0.1, format="%.2f",
-                    value=float(_eq_vol if _eq_vol else 18.0),
+                    value=float(_eq_vol if _eq_vol else (_fetch_vix_index() or 18.0)),
                     key="rv_vix_spot_input")
                 st.session_state["vix_spot"] = _rv_vix_input
                 _eq_vol = _rv_vix_input
@@ -20953,8 +20958,9 @@ def rv_tab():
 
                         _vix_col, _ = st.columns([2, 4])
                         with _vix_col:
+                            _vix_default = float(st.session_state.get("vix_spot") or _fetch_vix_index() or 18.0)
                             _vix_spot = st.number_input("VIX Spot", min_value=0.0, max_value=200.0, step=0.01, format="%.2f",
-                                                         value=float(st.session_state.get("vix_spot", 19.26)),
+                                                         value=_vix_default,
                                                          key="vix_spot_input")
                             st.session_state["vix_spot"] = _vix_spot
 
