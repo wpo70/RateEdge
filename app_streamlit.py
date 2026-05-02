@@ -18828,6 +18828,71 @@ def _load_vix_move_history(index_name: str, limit: int = 120) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _compute_vol_ratio_stats_db(ccy: str) -> dict:
+    """Compute historical vol ratios (short_exp / long_exp) from vol_history for arbitrary pairs.
+    Returns {(short_exp, long_exp, tenor): {'mean': ratio, 'std': std, 'n': n}}"""
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return {}
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT snapshot_date, atm_vols FROM vol_history
+            WHERE currency=%s AND user_id='shared'
+            ORDER BY snapshot_date DESC LIMIT 120
+        """, (ccy,))
+        rows = cur.fetchall()
+        conn.close()
+        if not rows:
+            return {}
+
+        _SHORT_EXPS = ["1m", "3m", "6m", "1y", "2y", "3y"]
+        _LONG_EXPS  = ["3m", "6m", "1y", "2y", "3y", "5y", "7y", "10y"]
+        _TENORS = ["2Y", "5Y", "10Y", "15Y", "20Y"]
+
+        ratio_series = {}  # (short, long, tenor) -> [ratios]
+
+        for _, atm_json in rows:
+            if not atm_json:
+                continue
+            try:
+                vals = atm_json.get("values", [])
+                exp_map = {}
+                for row in vals:
+                    exp = (row.get("Expiry") or row.get("expiry") or "").lower()
+                    exp_map[exp] = {k: v for k, v in row.items() if k.lower() != "expiry"}
+
+                for se in _SHORT_EXPS:
+                    for le in _LONG_EXPS:
+                        if se == le:
+                            continue
+                        se_y = label_to_years(se)
+                        le_y = label_to_years(le)
+                        if se_y >= le_y:
+                            continue
+                        for tn in _TENORS:
+                            vs = exp_map.get(se, {}).get(tn)
+                            vl = exp_map.get(le, {}).get(tn)
+                            if vs and vl and float(vl) > 0:
+                                ratio = float(vs) / float(vl)
+                                ratio_series.setdefault((se, le, tn), []).append(ratio)
+            except Exception:
+                continue
+
+        stats = {}
+        for key, ratios in ratio_series.items():
+            if len(ratios) >= 5:
+                stats[key] = {
+                    "mean": float(np.mean(ratios)),
+                    "std":  float(np.std(ratios)) if len(ratios) > 1 else 0.05,
+                    "n":    len(ratios),
+                }
+        return stats
+    except Exception:
+        return {}
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def _compute_fwd_vol_surface_stats(ccy: str) -> dict:
     """Compute implied forward vol pairs from vol_history and return mean/std.
@@ -21554,7 +21619,8 @@ def rv_tab():
             # but the FINAL ranked list must come from _scan_rv_ideas_usd() so that
             # the RV tab and USD SOD tab always show identical ideas.
             if st.session_state.get(_rv_ideas_key):
-                ideas = _scan_rv_ideas_usd(atm, curve, _realised, _ratio_stats, _fv_stats, _meetings, _move_val)
+                _vrs = _compute_vol_ratio_stats_db(ccy) if ccy == "USD" else {}
+                ideas = _scan_rv_ideas_usd(atm, curve, _realised, _ratio_stats, _fv_stats, _meetings, _move_val, _vrs)
 
             # Cache for SOD report
             if ideas:
@@ -27375,7 +27441,7 @@ def vol_lookup_tab():
 # Called from USD SOD tab. Does NOT touch AUD code.
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings, move_val):
+def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings, move_val, vol_ratio_stats=None):
     """Generate ranked trade ideas for USD. Returns list of dicts sorted by Score descending.
     atm: working ATM surface DataFrame
     curve_df: SOFR curve DataFrame with MaturityY/ZeroRatePct
@@ -27671,34 +27737,36 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                     "e1": "1y", "e2": "1y", "tn": "2s10s", "tn_y": 5,
                 })
 
-    # ── 9. Calendar Vol Spreads (historical ratio) ────────────────────────
+    # ── 9. Calendar Vol Spreads (historical ratio from vol_history) ────────
     if atm is not None:
-        _PAIR_FAIR = {("1m","3m"): 1.03, ("3m","6m"): 1.02, ("6m","1y"): 1.01, ("1y","2y"): 1.00}
-        for tn in [2, 5, 10]:
-            for short_e, long_e in [("1m","3m"),("3m","6m"),("6m","1y"),("1y","2y")]:
+        _CAL_PAIRS = [("1m","3m"),("1m","6m"),("3m","6m"),("3m","1y"),("6m","1y"),
+                      ("6m","2y"),("1y","2y"),("1y","3y"),("2y","3y"),("2y","5y"),("3y","5y")]
+        _CAL_TENORS = [2, 5, 10]
+        for tn in _CAL_TENORS:
+            for short_e, long_e in _CAL_PAIRS:
                 v_short = get_matrix_value(atm, short_e, float(tn))
                 v_long = get_matrix_value(atm, long_e, float(tn))
                 if not (v_short and v_long and v_long > 0):
                     continue
                 ratio = v_short / v_long
-                _fv_key = (short_e, long_e, f"{tn}Y")
-                _fv = fv_stats.get(_fv_key) if fv_stats else None
-                if _fv and _fv.get("n", 0) >= 10:
-                    fair_ratio = _fv["mean"]
-                    z_cal = (ratio - fair_ratio) / max(_fv.get("std", 0.03), 0.01)
+                _rk = (short_e, long_e, f"{tn}Y")
+                _rs = vol_ratio_stats.get(_rk) if vol_ratio_stats else None
+                if _rs and _rs.get("n", 0) >= 10 and _rs.get("std", 0) > 0.005:
+                    fair_ratio = _rs["mean"]
+                    z_cal = (ratio - fair_ratio) / _rs["std"]
+                    _n_hist = _rs["n"]
                 else:
-                    fair_ratio = _PAIR_FAIR.get((short_e, long_e), 1.0)
-                    z_cal = (ratio - fair_ratio) / 0.05
+                    continue  # skip if no historical data — don't guess
                 if abs(z_cal) > 2.0:
                     is_rich = z_cal > 0
                     ideas.append({
-                        "Type": "Calendar Vol Spread", "Score": min(abs(z_cal) * 15, 70),
+                        "Type": "Calendar Vol Spread", "Score": min(abs(z_cal) * 8, 70),
                         "Structure": f"{'Sell' if is_rich else 'Buy'} {short_e} / {'Buy' if is_rich else 'Sell'} {long_e} ×{tn}Y",
                         "Direction": "Sell calendar" if is_rich else "Buy calendar",
                         "Trade": f"{'Sell' if is_rich else 'Buy'} {short_e}×{tn}Y / {'Buy' if is_rich else 'Sell'} {long_e}×{tn}Y",
-                        "Signal": f"Ratio {ratio:.3f}x vs fair {fair_ratio:.3f} (z={z_cal:+.1f}σ)",
+                        "Signal": f"Ratio {ratio:.3f}x vs fair {fair_ratio:.3f} (z={z_cal:+.1f}σ, n={_n_hist})",
                         "Rationale": f"{short_e} vol {v_short:.1f}bp vs {long_e} {v_long:.1f}bp — "
-                                     f"{'rich' if is_rich else 'cheap'} by {abs(z_cal):.1f}σ",
+                                     f"{'rich' if is_rich else 'cheap'} by {abs(z_cal):.1f}σ vs {_n_hist}-day history",
                         "Risk": "Short gamma risk" if is_rich else "Negative carry",
                         "e1": short_e, "e2": long_e, "tn": f"{tn}Y", "tn_y": tn,
                     })
@@ -28801,11 +28869,13 @@ def usd_sod_tab():
                 _realised = {tn: _compute_realised_vol_db("USD", tn, 21) for tn in _rv_tenors}
                 _ratio_stats = _load_vol_ratio_stats_db("USD")
                 _fv_stats_usd = _compute_fwd_vol_surface_stats("USD")
+                _vol_ratio_stats_usd = _compute_vol_ratio_stats_db("USD")
                 _meetings_usd = {e: _meetings_in_window("USD", e) for e in _rv_exp_lbls}
                 _move_val = _fetch_move_index()
                 _rv_precompute_usd = {
                     "realised": _realised, "ratio_stats": _ratio_stats,
-                    "fv_stats": _fv_stats_usd, "meetings": _meetings_usd, "move_val": _move_val,
+                    "fv_stats": _fv_stats_usd, "vol_ratio_stats": _vol_ratio_stats_usd,
+                    "meetings": _meetings_usd, "move_val": _move_val,
                 }
                 st.session_state["_usd_sod_rv_precompute"] = _rv_precompute_usd
             except Exception as _pre_err:
@@ -28816,6 +28886,7 @@ def usd_sod_tab():
         _realised = _rv_precompute_usd["realised"]
         _ratio_stats = _rv_precompute_usd["ratio_stats"]
         _fv_stats_usd = _rv_precompute_usd["fv_stats"]
+        _vol_ratio_stats_usd = _rv_precompute_usd.get("vol_ratio_stats", {})
         _meetings_usd = _rv_precompute_usd["meetings"]
         _move_val = _rv_precompute_usd["move_val"]
 
@@ -28852,7 +28923,7 @@ def usd_sod_tab():
         if _ideas is None:
             _ideas = _scan_rv_ideas_usd(
                 _usd_atm_now, _curr_curve, _realised, _ratio_stats,
-                _fv_stats_usd, _meetings_usd, _move_val,
+                _fv_stats_usd, _meetings_usd, _move_val, _vol_ratio_stats_usd,
             )
             st.session_state["_rv_ideas_cache"] = _ideas
 
