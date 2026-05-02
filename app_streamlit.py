@@ -29008,11 +29008,8 @@ def usd_sod_tab():
             st.dataframe(_t5_df[_t5_cols], use_container_width=True, hide_index=True)
 
             _usd_vega_options = {"25k": 25_000, "50k": 50_000, "100k": 100_000}
-            _vega_keys = list(_usd_vega_options.keys())
-            _prev_vega = st.session_state.get("_usd_vega_sel_v0205", "25k")
-            _vega_idx = _vega_keys.index(_prev_vega) if _prev_vega in _vega_keys else 0
-            _vega_sel = st.radio("Vega per bp (USD)", _vega_keys,
-                                 index=_vega_idx, horizontal=True, key="_usd_vega_sel_v0205")
+            _vega_sel = st.radio("Vega per bp (USD)", list(_usd_vega_options.keys()),
+                                 horizontal=True, key="_usd_vega_sel_v0205")
             _VEGA_PER_BP_USD = _usd_vega_options[_vega_sel]
 
             def _open_trade_cb(idea_dict, vega):
@@ -29222,6 +29219,33 @@ def usd_sod_tab():
                 f"</div>", unsafe_allow_html=True)
 
     # ── Book Management ──
+    # Total running P&L
+    if _book_usd:
+        _total_bp = 0; _total_usd = 0
+        for _bid, _bpos in _book_usd.items():
+            _ev = _bpos.get("entry_fwd_vol", 0)
+            _e1 = _bpos.get("e1", ""); _e2 = _bpos.get("e2", "")
+            _tn_y = _bpos.get("tn_y", 5)
+            _trade_vega = _bpos.get("vega_per_bp", 25_000)
+            _v1 = get_matrix_value(_usd_atm_now, _e1, float(_tn_y)) if _e1 else None
+            _v2 = get_matrix_value(_usd_atm_now, _e2, float(_tn_y)) if _e2 else None
+            if _v1 and _v2 and _ev:
+                _T1 = label_to_years(_e1); _T2 = label_to_years(_e2)
+                _dT = _T2 - _T1
+                _fwd = math.sqrt(max((_v2**2*_T2 - _v1**2*_T1)/_dT, 0.01)) if _dT > 0 else _v1
+                _bp = (_ev - _fwd) if "Sell" in _bpos.get("direction","") else (_fwd - _ev)
+                _total_bp += _bp
+                _total_usd += _bp * _trade_vega
+        _tot_col = "#22c55e" if _total_usd >= 0 else "#ef4444"
+        _tot_str = f"${abs(_total_usd/1000):.1f}k" if abs(_total_usd) >= 1000 else f"${_total_usd:.0f}"
+        st.markdown(
+            f"<div style='background:#0f172a;border:1px solid {_tot_col};border-radius:8px;padding:12px 20px;margin:12px 0;text-align:center'>"
+            f"<span style='color:#94a3b8;font-size:0.85rem'>Net Book P&L:</span> "
+            f"<span style='color:{_tot_col};font-size:1.3rem;font-weight:700'>{_total_bp:+.1f}bp &nbsp; "
+            f"{'+'if _total_usd>=0 else ''}{_tot_str}</span> "
+            f"<span style='color:#64748b;font-size:0.75rem'>({len(_book_usd)} positions)</span></div>",
+            unsafe_allow_html=True)
+
     with st.expander("⚙️ Book Management", expanded=False):
         if st.button("🗑 Reset USD Conviction Book", key="_usd_rv_reset_book", type="secondary"):
             st.session_state.pop(_book_key_usd, None)
@@ -29231,6 +29255,217 @@ def usd_sod_tab():
                 save_user_config(_uid_bk, _book_key_usd, "USD", {})
                 save_user_config(_uid_bk, _closed_key_usd, "USD", [])
             st.success("USD book reset."); st.rerun()
+
+    # ── PDF Report Generation ──
+    st.markdown("---")
+    st.markdown("#### 📄 USD SOD Report — PDF")
+    if st.button("📄 Generate PDF Report", key="_usd_sod_pdf_btn", type="primary"):
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.units import cm
+            from reportlab.lib import colors
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, KeepTogether
+            from reportlab.platypus import Image as _RLImg
+            import io as _pdf_io, base64 as _b64_pdf
+
+            _pdf_buf = _pdf_io.BytesIO()
+            _pdf_doc = SimpleDocTemplate(_pdf_buf, pagesize=A4,
+                                         leftMargin=2*cm, rightMargin=2*cm,
+                                         topMargin=2*cm, bottomMargin=2*cm)
+            _ss = getSampleStyleSheet()
+            _sT = ParagraphStyle("usT", parent=_ss["Title"], fontSize=15,
+                                 textColor=colors.HexColor("#0f172a"), spaceAfter=4)
+            _sSub = ParagraphStyle("usSub", parent=_ss["Normal"], fontSize=8,
+                                   textColor=colors.HexColor("#64748b"), spaceAfter=8)
+            _sH2 = ParagraphStyle("usH2", parent=_ss["Heading2"], fontSize=11,
+                                  textColor=colors.HexColor("#1e3a5f"), spaceBefore=10, spaceAfter=4)
+            _sB = ParagraphStyle("usB", parent=_ss["Normal"], fontSize=8, leading=12, spaceAfter=6)
+            _sCap = ParagraphStyle("usCap", parent=_ss["Normal"], fontSize=7,
+                                   textColor=colors.HexColor("#94a3b8"), spaceAfter=10)
+
+            _story = []
+            _ts_pdf = pd.Timestamp.now(tz='America/New_York').strftime('%Y-%m-%d %H:%M')
+
+            # Header with logo
+            _logo_bytes_pdf = _b64_pdf.b64decode(_RATEEDGE_LOGO_B64)
+            _logo_img_pdf = _RLImg(_pdf_io.BytesIO(_logo_bytes_pdf), width=3.8*cm, height=1.15*cm)
+            _sTR = ParagraphStyle("usTR", parent=_ss["Normal"], fontSize=17,
+                                  textColor=colors.HexColor("#0f172a"),
+                                  fontName="Helvetica-Bold", alignment=2, spaceAfter=0)
+            _hdr_data = [[_logo_img_pdf, Paragraph("USD SOD Report", _sTR)]]
+            _hdr_tbl = Table(_hdr_data, colWidths=[4.5*cm, None])
+            _hdr_tbl.setStyle(TableStyle([
+                ("VALIGN", (0,0), (-1,-1), "BOTTOM"),
+                ("ALIGN", (1,0), (1,0), "RIGHT"),
+                ("TOPPADDING", (0,0), (-1,-1), 0),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+                ("LEFTPADDING", (0,0), (-1,-1), 0),
+                ("RIGHTPADDING", (0,0), (-1,-1), 0),
+            ]))
+            _story.append(_hdr_tbl)
+            _story.append(HRFlowable(width="100%", thickness=2.5,
+                                      color=colors.HexColor("#1e3a5f"), spaceAfter=4))
+            _sTsL = ParagraphStyle("usTsL", parent=_ss["Normal"], fontSize=8,
+                                    textColor=colors.HexColor("#64748b"), alignment=1, spaceAfter=4)
+            _story.append(Paragraph(f"{_ts_pdf} ET", _sTsL))
+            _story.append(HRFlowable(width="100%", thickness=0.5,
+                                      color=colors.HexColor("#cbd5e1"), spaceAfter=8))
+
+            # ── Curve summary ──
+            _story.append(Paragraph("SOFR Swap Curve Change", _sH2))
+            _eod_dt = st.session_state.get("_usd_sod_eod_curve_date", "")
+            _cmp_dt = st.session_state.get("_usd_sod_cmp_curve_date", "")
+            _story.append(Paragraph(f"EOD: {_eod_dt}  vs  Compare: {_cmp_dt}", _sCap))
+
+            _crv_tenors_pdf = [0.5, 1, 2, 3, 5, 7, 10, 15, 20, 25, 30]
+            _crv_hdr = [Paragraph(f"<b>{t}Y</b>", _sCap) for t in _crv_tenors_pdf]
+            _crv_eod_pdf = [_rate_at(_eod_curve, t) for t in _crv_tenors_pdf]
+            _crv_cur_pdf = [_rate_at(_curr_curve, t) for t in _crv_tenors_pdf]
+            _crv_chg_pdf = [(c - e) * 100 if c and e else 0 for c, e in zip(_crv_cur_pdf, _crv_eod_pdf)]
+
+            _crv_data = [
+                [Paragraph("<b>Tenor</b>", _sCap)] + _crv_hdr,
+                [Paragraph("EOD", _sCap)] + [Paragraph(f"{r:.3f}" if r else "-", _sB) for r in _crv_eod_pdf],
+                [Paragraph("Current", _sCap)] + [Paragraph(f"{r:.3f}" if r else "-", _sB) for r in _crv_cur_pdf],
+                [Paragraph("Chg (bp)", _sCap)] + [Paragraph(f"{c:+.1f}", _sB) for c in _crv_chg_pdf],
+            ]
+            _crv_tbl = Table(_crv_data, colWidths=[1.2*cm] + [1.2*cm]*len(_crv_tenors_pdf))
+            _crv_tbl.setStyle(TableStyle([
+                ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#e2e8f0")),
+                ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#1e293b")),
+                ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+                ("FONTSIZE", (0,0), (-1,-1), 7),
+                ("ALIGN", (1,0), (-1,-1), "RIGHT"),
+                ("TOPPADDING", (0,0), (-1,-1), 2),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 2),
+            ]))
+            _story.append(_crv_tbl)
+            _story.append(Spacer(1, 12))
+
+            # ── Vol change ──
+            _stored_delta_pdf = st.session_state.get("_usd_sod_delta_df")
+            if _stored_delta_pdf is not None and not _stored_delta_pdf.empty:
+                _story.append(Paragraph("Vol Change (bp) - EOD vs Estimated Open", _sH2))
+                _vchg_cols = [c for c in _stored_delta_pdf.columns if c != "Expiry"]
+                _vchg_hdr = [Paragraph("<b>Exp</b>", _sCap)] + [Paragraph(f"<b>{c}</b>", _sCap) for c in _vchg_cols]
+                _vchg_rows = [_vchg_hdr]
+                _delta_idx = _stored_delta_pdf.set_index("Expiry") if "Expiry" in _stored_delta_pdf.columns else _stored_delta_pdf
+                for _exp in _delta_idx.index:
+                    _row = [Paragraph(str(_exp), _sB)]
+                    for _col in _vchg_cols:
+                        try:
+                            _v = float(_delta_idx.loc[_exp, _col])
+                            _row.append(Paragraph(f"{_v:+.1f}", _sB))
+                        except:
+                            _row.append(Paragraph("-", _sB))
+                    _vchg_rows.append(_row)
+                _vchg_tbl = Table(_vchg_rows)
+                _vchg_tbl.setStyle(TableStyle([
+                    ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#e2e8f0")),
+                    ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#1e293b")),
+                    ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+                    ("FONTSIZE", (0,0), (-1,-1), 7),
+                    ("ALIGN", (1,0), (-1,-1), "RIGHT"),
+                    ("TOPPADDING", (0,0), (-1,-1), 2),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 2),
+                ]))
+                _story.append(_vchg_tbl)
+                _story.append(Spacer(1, 12))
+
+            # ── Trade Ideas ──
+            _ideas_pdf = st.session_state.get("_rv_ideas_cache", [])
+            if _ideas_pdf:
+                _story.append(Paragraph(f"Top Trade Ideas ({len(_ideas_pdf)} total)", _sH2))
+                for _i, _idea in enumerate(_ideas_pdf[:5]):
+                    _dir = _idea.get("Direction", "")
+                    _struct = _idea.get("Structure", "")
+                    _sig = _idea.get("Signal", "")
+                    _score = _idea.get("Score", 0)
+                    _rationale = _idea.get("Rationale", "")
+                    _story.append(Paragraph(
+                        f"<b>{_i+1}. {_struct}</b> - {_dir} (Score: {_score:.0f})", _sB))
+                    _story.append(Paragraph(f"Signal: {_sig}", _sCap))
+                    if _rationale:
+                        _story.append(Paragraph(f"Rationale: {_rationale}", _sCap))
+                    _story.append(Spacer(1, 4))
+
+            # ── Conviction Book ──
+            if _book_usd:
+                _story.append(Spacer(1, 8))
+                _story.append(Paragraph("USD Conviction Book", _sH2))
+                _bk_hdr = [Paragraph(f"<b>{h}</b>", _sCap) for h in
+                           ["#", "Structure", "Direction", "Entry", "Entry Vol", "Curr Vol", "P&L (bp)", "P&L ($)", "Vega"]]
+                _bk_rows = [_bk_hdr]
+                _tot_bp_pdf = 0; _tot_usd_pdf = 0
+                for _i, (_bid, _bpos) in enumerate(_book_usd.items()):
+                    _ev = _bpos.get("entry_fwd_vol", 0)
+                    _e1 = _bpos.get("e1",""); _e2 = _bpos.get("e2","")
+                    _tn_y = _bpos.get("tn_y", 5)
+                    _tv = _bpos.get("vega_per_bp", 25000)
+                    _v1 = get_matrix_value(_usd_atm_now, _e1, float(_tn_y)) if _e1 else None
+                    _v2 = get_matrix_value(_usd_atm_now, _e2, float(_tn_y)) if _e2 else None
+                    _fwd = 0; _bp = 0; _usd_p = 0
+                    if _v1 and _v2 and _ev:
+                        _T1 = label_to_years(_e1); _T2 = label_to_years(_e2)
+                        _dT = _T2 - _T1
+                        _fwd = math.sqrt(max((_v2**2*_T2-_v1**2*_T1)/_dT, 0.01)) if _dT > 0 else _v1
+                        _bp = (_ev - _fwd) if "Sell" in _bpos.get("direction","") else (_fwd - _ev)
+                        _usd_p = _bp * _tv
+                        _tot_bp_pdf += _bp; _tot_usd_pdf += _usd_p
+                    _bk_rows.append([
+                        Paragraph(str(_i+1), _sB),
+                        Paragraph(_bpos.get("structure","")[:30], _sB),
+                        Paragraph(_bpos.get("direction",""), _sB),
+                        Paragraph(_bpos.get("entry_date",""), _sB),
+                        Paragraph(f"{_ev:.1f}" if _ev else "-", _sB),
+                        Paragraph(f"{_fwd:.1f}" if _fwd else "-", _sB),
+                        Paragraph(f"{_bp:+.1f}", _sB),
+                        Paragraph(f"${_usd_p/1000:+.1f}k" if abs(_usd_p)>=1000 else f"${_usd_p:+.0f}", _sB),
+                        Paragraph(f"{_tv//1000:.0f}k", _sB),
+                    ])
+                # Total row
+                _bk_rows.append([
+                    Paragraph("", _sB), Paragraph("<b>TOTAL</b>", _sB),
+                    Paragraph("", _sB), Paragraph("", _sB), Paragraph("", _sB), Paragraph("", _sB),
+                    Paragraph(f"<b>{_tot_bp_pdf:+.1f}</b>", _sB),
+                    Paragraph(f"<b>${_tot_usd_pdf/1000:+.1f}k</b>" if abs(_tot_usd_pdf)>=1000 else f"<b>${_tot_usd_pdf:+.0f}</b>", _sB),
+                    Paragraph("", _sB),
+                ])
+                _bk_tbl = Table(_bk_rows, colWidths=[0.5*cm, 4*cm, 1.5*cm, 1.5*cm, 1.3*cm, 1.3*cm, 1.3*cm, 1.5*cm, 1*cm])
+                _bk_tbl.setStyle(TableStyle([
+                    ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#e2e8f0")),
+                    ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#1e293b")),
+                    ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+                    ("BACKGROUND", (0,-1), (-1,-1), colors.HexColor("#f1f5f9")),
+                    ("FONTSIZE", (0,0), (-1,-1), 7),
+                    ("ALIGN", (4,0), (-1,-1), "RIGHT"),
+                    ("TOPPADDING", (0,0), (-1,-1), 2),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 2),
+                ]))
+                _story.append(_bk_tbl)
+
+            # ── Footer ──
+            _story.append(Spacer(1, 20))
+            _story.append(HRFlowable(width="100%", thickness=0.5,
+                                      color=colors.HexColor("#cbd5e1"), spaceAfter=4))
+            _story.append(Paragraph(
+                "RateEdge Pty Ltd | Confidential | For professional use only | Not financial advice",
+                _sCap))
+
+            _pdf_doc.build(_story)
+            _pdf_bytes = _pdf_buf.getvalue()
+            _pdf_buf.close()
+            st.session_state["_usd_sod_pdf_bytes"] = _pdf_bytes
+            st.session_state["_usd_sod_pdf_fname"] = f"RateEdge_USD_SOD_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.pdf"
+            st.success("PDF generated!")
+        except Exception as _pdf_err:
+            st.error(f"PDF generation failed: {_pdf_err}")
+
+    if st.session_state.get("_usd_sod_pdf_bytes"):
+        st.download_button("⬇️ Download PDF", st.session_state["_usd_sod_pdf_bytes"],
+                           st.session_state.get("_usd_sod_pdf_fname", "USD_SOD.pdf"),
+                           "application/pdf", key="_usd_sod_pdf_dl")
 
 
 
