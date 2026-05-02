@@ -27987,8 +27987,9 @@ def usd_sod_tab():
 
     def _rate_at(curve_df, tenor_y):
         try:
-            xs = curve_df["MaturityY"].to_numpy().astype(float)
-            ys = curve_df["ZeroRatePct"].to_numpy().astype(float)
+            _sorted = curve_df.sort_values("MaturityY")
+            xs = _sorted["MaturityY"].to_numpy().astype(float)
+            ys = _sorted["ZeroRatePct"].to_numpy().astype(float)
             return float(np.interp(tenor_y, xs, ys))
         except:
             return None
@@ -28105,11 +28106,15 @@ def usd_sod_tab():
             text=[f"{c:+.1f}" for c in _chg_bp], textposition="outside",
             textfont=dict(size=10, color="#e2e8f0")), row=2, col=1)
         fig_crv.add_hline(y=0, line=dict(color="#64748b", width=0.8), row=2, col=1)
-        fig_crv.update_yaxes(title_text="Δ (bp)", row=2, col=1)
+        _chg_abs_max = max(abs(c) for c in _chg_bp) if _chg_bp else 1
+        _chg_pad = max(_chg_abs_max * 1.4, 0.5)
+        fig_crv.update_yaxes(title_text="Δ (bp)", range=[-_chg_pad, _chg_pad], row=2, col=1)
 
         fig_crv.update_layout(
             template="plotly_dark", height=500, showlegend=True,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                        font=dict(color="#e2e8f0", size=12),
+                        bgcolor="rgba(15,23,42,0.8)", bordercolor="#334155", borderwidth=1),
             margin=dict(l=60, r=20, t=50, b=40),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         fig_crv.update_xaxes(title_text="Tenor (y)", row=2, col=1)
