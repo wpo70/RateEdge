@@ -28225,7 +28225,6 @@ def usd_sod_tab():
         # v0205g: persist estimated open + deltas for RV report section
         st.session_state["_usd_sod_estimated_open_df"] = _df_adj
         st.session_state["_usd_sod_delta_df"] = _df_delta
-        st.session_state["_usd_sod_adj_surface"] = _build_adj_surface()
         st.session_state["_usd_sod_eod_curve_date"] = _base_date
         st.session_state["_usd_sod_cmp_curve_date"] = str(_curr_curve_date)
 
@@ -28310,6 +28309,9 @@ def usd_sod_tab():
                         _s.loc[_s.iloc[:, 0].astype(str).str.lower() == exp.lower(), f"{tn}Y"] = round(_v + _dv, 2)
                     except: pass
             return _s
+
+        # v0205h: persist estimated open for RV report section
+        st.session_state["_usd_sod_adj_surface"] = _build_adj_surface()
 
         with _ac1:
             if st.button("💾 Save IND TOKYO OPEN", key="usd_sod_save_tky", type="primary"):
