@@ -29008,8 +29008,11 @@ def usd_sod_tab():
             st.dataframe(_t5_df[_t5_cols], use_container_width=True, hide_index=True)
 
             _usd_vega_options = {"25k": 25_000, "50k": 50_000, "100k": 100_000}
-            _vega_sel = st.radio("Vega per bp (USD)", list(_usd_vega_options.keys()),
-                                 index=0, horizontal=True, key="_usd_vega_sel_v0105")
+            _vega_keys = list(_usd_vega_options.keys())
+            _prev_vega = st.session_state.get("_usd_vega_sel_v0205", "25k")
+            _vega_idx = _vega_keys.index(_prev_vega) if _prev_vega in _vega_keys else 0
+            _vega_sel = st.radio("Vega per bp (USD)", _vega_keys,
+                                 index=_vega_idx, horizontal=True, key="_usd_vega_sel_v0205")
             _VEGA_PER_BP_USD = _usd_vega_options[_vega_sel]
 
             def _open_trade_cb(idea_dict, vega):
