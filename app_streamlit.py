@@ -18655,10 +18655,10 @@ _CB_MEETINGS_BASE = {
         date(2027, 5, 18), date(2027, 7, 6),  date(2027, 8, 10),
         date(2027, 10, 5), date(2027, 11, 2),
     ],
-    "USD": [  # FOMC — 8 meetings/year
-        date(2026, 1, 29), date(2026, 3, 18), date(2026, 5, 7),
+    "USD": [  # FOMC — 8 meetings/year (decision day = last day of 2-day meeting)
+        date(2026, 1, 28), date(2026, 3, 18), date(2026, 4, 29),
         date(2026, 6, 17), date(2026, 7, 29), date(2026, 9, 16),
-        date(2026, 10, 28),date(2026, 12, 16),
+        date(2026, 10, 28),date(2026, 12, 9),
         date(2027, 1, 27), date(2027, 3, 17), date(2027, 5, 5),
         date(2027, 6, 16), date(2027, 7, 28), date(2027, 9, 15),
         date(2027, 10, 27),date(2027, 12, 15),
