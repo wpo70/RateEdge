@@ -18788,18 +18788,35 @@ def _load_vol_ratio_stats_db(ccy: str) -> dict:
 
 @st.cache_data(ttl=600, show_spinner=False)
 def _fetch_move_index() -> Optional[float]:
-    """Fetch ICE BofA MOVE index level from Yahoo Finance (^MOVE). Returns float or None."""
+    """Fetch latest MOVE index close from vix_move_history DB."""
     try:
-        import urllib.request, json as _json
-        url = "https://query1.finance.yahoo.com/v8/finance/chart/%5EMOVE?interval=1d&range=5d"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = _json.loads(resp.read())
-        closes = data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
-        closes = [c for c in closes if c is not None]
-        return round(float(closes[-1]), 2) if closes else None
+        conn = get_db_connection()
+        if conn:
+            cur = conn.cursor()
+            cur.execute("SELECT close_price FROM vix_move_history WHERE index_name='MOVE' ORDER BY date DESC LIMIT 1")
+            row = cur.fetchone()
+            conn.close()
+            if row:
+                return round(float(row[0]), 2)
     except Exception:
-        return None
+        pass
+    return None
+
+
+def _fetch_vix_index() -> Optional[float]:
+    """Fetch latest VIX close from vix_move_history DB."""
+    try:
+        conn = get_db_connection()
+        if conn:
+            cur = conn.cursor()
+            cur.execute("SELECT close_price FROM vix_move_history WHERE index_name='VIX' ORDER BY date DESC LIMIT 1")
+            row = cur.fetchone()
+            conn.close()
+            if row:
+                return round(float(row[0]), 2)
+    except Exception:
+        pass
+    return None
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
