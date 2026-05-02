@@ -7962,9 +7962,10 @@ def curves_tab():
 
             # SOFR-FF Basis chart (bp, separate axis)
             if _sofr_ff_bas is not None and not _sofr_ff_bas.empty:
+                _bas_labels = _relabel_maturity(_sofr_ff_bas)["MaturityY"].tolist()
                 _bas_fig = go.Figure()
                 _bas_fig.add_trace(go.Bar(
-                    x=_sofr_ff_bas["MaturityY"], y=_sofr_ff_bas["BasisBp"],
+                    x=_bas_labels, y=_sofr_ff_bas["BasisBp"].tolist(),
                     name="SOFR-FF Basis",
                     marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _sofr_ff_bas["BasisBp"]]
                 ))
@@ -7976,7 +7977,7 @@ def curves_tab():
                     title="SOFR / FF Basis (bp)", height=280, margin=dict(l=50,r=20,t=40,b=40),
                     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
                     font=dict(color="#94a3b8", size=11),
-                    xaxis=dict(title="Maturity (Y)", gridcolor="#1e293b", dtick=5),
+                    xaxis=dict(title="Tenor", gridcolor="#1e293b", type="category"),
                     yaxis=dict(title="Basis (bp)", gridcolor="#1e293b",
                                range=[_bas_min, _bas_max], zeroline=True,
                                zerolinecolor="#475569", zerolinewidth=1,
