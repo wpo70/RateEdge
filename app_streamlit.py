@@ -811,7 +811,6 @@ def get_db_connection():
     if _cached is not None and _age < 300:
         try:
             if not _cached.closed:
-                _cached.rollback()
                 return _DbPooledConn(_cached)
         except Exception:
             pass
@@ -22720,16 +22719,21 @@ def rv_tab():
             # ── 7. VOL CONE PERCENTILE ────────────────────────────────
             if HAS_POSTGRES:
                 try:
-                    conn = get_db_connection()
-                    if conn:
-                        cur = conn.cursor()
-                        cur.execute("""
-                            SELECT atm_vols FROM vol_history
-                            WHERE currency=%s AND user_id IN ('wpo@rateedge.au','wpo70@icloud.com','shared')
-                            ORDER BY snapshot_date DESC LIMIT 60
-                        """, (ccy,))
-                        _vh_rows = cur.fetchall()
-                        conn.close()
+                    # v0205i: cache vol cone data in session state
+                    _vc_key = f"_vol_cone_cache_{ccy}"
+                    _vh_rows = st.session_state.get(_vc_key)
+                    if _vh_rows is None:
+                        conn = get_db_connection()
+                        if conn:
+                            cur = conn.cursor()
+                            cur.execute("""
+                                SELECT atm_vols FROM vol_history
+                                WHERE currency=%s AND user_id IN ('wpo@rateedge.au','wpo70@icloud.com','shared')
+                                ORDER BY snapshot_date DESC LIMIT 60
+                            """, (ccy,))
+                            _vh_rows = cur.fetchall()
+                            conn.close()
+                            st.session_state[_vc_key] = _vh_rows
 
                         if _vh_rows and len(_vh_rows) >= 10:
                             # Build vol history for each tenor
@@ -26965,10 +26969,16 @@ def vol_lookup_tab():
     _t1_surface = None
     if HAS_POSTGRES:
         try:
-            _conn_vl = get_db_connection()
-            if _conn_vl:
-                _cur_vl = _conn_vl.cursor()
-                _cur_vl.execute("""
+            # v0205i: cache in session state
+            _vl_cache_key = f"_vol_lookup_hist_{ccy}"
+            _vl_cached = st.session_state.get(_vl_cache_key)
+            if _vl_cached is not None:
+                _vl_rows = _vl_cached
+            else:
+                _conn_vl = get_db_connection()
+                if _conn_vl:
+                    _cur_vl = _conn_vl.cursor()
+                    _cur_vl.execute("""
                     SELECT snapshot_date, atm_vols FROM (
                       SELECT DISTINCT ON (snapshot_date::date)
                              snapshot_date, atm_vols, created_at, label
@@ -26980,15 +26990,18 @@ def vol_lookup_tab():
                     ORDER BY snapshot_date DESC
                     LIMIT 8
                 """, (_vl_ccy,))
-                _rows_vl = _cur_vl.fetchall()
+                _vl_rows = _cur_vl.fetchall()
                 _cur_vl.close()
                 _conn_vl.close()
-                for _i_vl, (_sd, _av) in enumerate(_rows_vl):
-                    if not _av or "values" not in _av:
-                        continue
-                    _history_surfaces.append((_sd, _av["values"]))
-                    if _i_vl == 1:  # second-most-recent EOD = T-1
-                        _t1_surface = _av["values"]
+                st.session_state[_vl_cache_key] = _vl_rows
+            if _vl_cached is not None:
+                _vl_rows = _vl_cached
+            for _i_vl, (_sd, _av) in enumerate(_vl_rows):
+                if not _av or "values" not in _av:
+                    continue
+                _history_surfaces.append((_sd, _av["values"]))
+                if _i_vl == 1:  # second-most-recent EOD = T-1
+                    _t1_surface = _av["values"]
         except Exception as _e_vl:
             st.caption(f"⚠ Couldn't load vol history: {_e_vl}")
 
@@ -28310,8 +28323,11 @@ def usd_sod_tab():
                     except: pass
             return _s
 
-        # v0205h: persist estimated open for RV report section
-        st.session_state["_usd_sod_adj_surface"] = _build_adj_surface()
+        # v0205i: persist estimated open for RV report section — only rebuild if inputs changed
+        _adj_sig = (str(_base_date), str(_curr_curve_date), round(_dl_2y, 2), round(_dl_5y, 2), round(_dl_10y, 2))
+        if st.session_state.get("_usd_sod_adj_sig") != _adj_sig:
+            st.session_state["_usd_sod_adj_surface"] = _build_adj_surface()
+            st.session_state["_usd_sod_adj_sig"] = _adj_sig
 
         with _ac1:
             if st.button("💾 Save IND TOKYO OPEN", key="usd_sod_save_tky", type="primary"):
