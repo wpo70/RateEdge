@@ -21379,14 +21379,8 @@ def rv_tab():
                     })
 
             # ── Calendar Vol Spreads ──────────────────────────────────
-            # v2804l: sqrt(T) fair ratio was WRONG for normal vol. Normal
-            # vol (bp/annum) is roughly flat across expiry — fair ratio ≈ 1.0.
-            # sqrt(T) is a PREMIUM relationship, not vol. Using it made every
-            # surface look 60%+ rich on the front. Now uses:
-            # 1. Historical ratio from vol_history (if available, via _fv_stats)
-            # 2. Empirical fair ratio: slight inversion is normal (front > back
-            #    from event risk / gamma decay), so fair ≈ 1.02-1.05 for
-            #    1m/3m, tapering to 1.0 for longer pairs.
+            # v0205c: uses _compute_vol_ratio_stats_db for historical ratios.
+            # fv_stats returns forward vol (bp) — NEVER use as "fair ratio".
             if atm is not None:
                 _PAIR_FAIR = {
                     ("1m","3m"):  1.03,  # front typically 3% above 3m
@@ -21394,6 +21388,7 @@ def rv_tab():
                     ("6m","1y"):  1.01,
                     ("1y","2y"):  1.00,  # longer pairs roughly flat
                 }
+                _vrs_inline = _compute_vol_ratio_stats_db(ccy)
                 for tn in [2, 5, 10]:
                     for short_e, long_e in [("1m","3m"),("3m","6m"),("6m","1y"),("1y","2y")]:
                         v_short = get_matrix_value(atm, short_e, float(tn))
@@ -21401,17 +21396,16 @@ def rv_tab():
                         if v_short and v_long and v_long > 0:
                             ratio = v_short / v_long
 
-                            # Try historical fair from fwd vol stats
-                            _fv_key = (short_e, long_e, f"{tn}Y")
-                            _fv = _fv_stats.get(_fv_key) if _fv_stats else None
-                            if _fv and _fv.get("n", 0) >= 10:
-                                fair_ratio = _fv["mean"]
-                                _fair_std = _fv.get("std", 0.03)
-                                z_cal = (ratio - fair_ratio) / max(_fair_std, 0.01)
-                                fair_desc = f"hist mean {fair_ratio:.3f} (n={_fv['n']})"
+                            # Try historical ratio stats
+                            _rk = (short_e, long_e, f"{tn}Y")
+                            _rs = _vrs_inline.get(_rk)
+                            if _rs and _rs.get("n", 0) >= 5 and _rs.get("std", 0) > 0.005:
+                                fair_ratio = _rs["mean"]
+                                z_cal = (ratio - fair_ratio) / _rs["std"]
+                                fair_desc = f"hist mean {fair_ratio:.3f} (n={_rs['n']})"
                             else:
                                 fair_ratio = _PAIR_FAIR.get((short_e, long_e), 1.0)
-                                z_cal = (ratio - fair_ratio) / 0.05  # assume 5% normal std
+                                z_cal = (ratio - fair_ratio) / 0.04
                                 fair_desc = f"empirical fair {fair_ratio:.2f}x"
 
                             # Only flag if >2σ from fair
@@ -21425,7 +21419,7 @@ def rv_tab():
                                                  f"ratio {ratio:.3f}x is {z_cal:.1f}σ rich vs {fair_desc}. "
                                                  f"Sell expensive near-dated gamma, buy cheap vega.",
                                     "Risk": "Short near-term gamma; large move hurts",
-                                    "Score": min(z_cal * 15, 70),
+                                    "Score": min(z_cal * 12, 70),
                                 })
                             elif z_cal < -2.0:
                                 ideas.append({
@@ -21437,7 +21431,7 @@ def rv_tab():
                                                  f"ratio {ratio:.3f}x is {abs(z_cal):.1f}σ cheap vs {fair_desc}. "
                                                  f"Buy cheap near-dated gamma vs expensive long-dated vol.",
                                     "Risk": "Negative carry on long-dated short",
-                                    "Score": min(abs(z_cal) * 15, 70),
+                                    "Score": min(abs(z_cal) * 12, 70),
                                 })
 
             # ── USD-SPECIFIC IDEAS ──────────────────────────────────────
@@ -27742,6 +27736,9 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
         _CAL_PAIRS = [("1m","3m"),("1m","6m"),("3m","6m"),("3m","1y"),("6m","1y"),
                       ("6m","2y"),("1y","2y"),("1y","3y"),("2y","3y"),("2y","5y"),("3y","5y")]
         _CAL_TENORS = [2, 5, 10]
+        _CAL_FAIR = {("1m","3m"):1.03, ("1m","6m"):1.05, ("3m","6m"):1.02, ("3m","1y"):1.03,
+                     ("6m","1y"):1.01, ("6m","2y"):1.02, ("1y","2y"):1.00, ("1y","3y"):1.00,
+                     ("2y","3y"):1.00, ("2y","5y"):1.00, ("3y","5y"):1.00}
         for tn in _CAL_TENORS:
             for short_e, long_e in _CAL_PAIRS:
                 v_short = get_matrix_value(atm, short_e, float(tn))
@@ -27751,22 +27748,26 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                 ratio = v_short / v_long
                 _rk = (short_e, long_e, f"{tn}Y")
                 _rs = vol_ratio_stats.get(_rk) if vol_ratio_stats else None
-                if _rs and _rs.get("n", 0) >= 10 and _rs.get("std", 0) > 0.005:
+                if _rs and _rs.get("n", 0) >= 5 and _rs.get("std", 0) > 0.005:
                     fair_ratio = _rs["mean"]
                     z_cal = (ratio - fair_ratio) / _rs["std"]
                     _n_hist = _rs["n"]
+                    _fair_desc = f"hist {fair_ratio:.3f} (n={_n_hist})"
                 else:
-                    continue  # skip if no historical data — don't guess
+                    fair_ratio = _CAL_FAIR.get((short_e, long_e), 1.0)
+                    z_cal = (ratio - fair_ratio) / 0.04
+                    _n_hist = 0
+                    _fair_desc = f"empirical {fair_ratio:.2f}x"
                 if abs(z_cal) > 2.0:
                     is_rich = z_cal > 0
                     ideas.append({
-                        "Type": "Calendar Vol Spread", "Score": min(abs(z_cal) * 8, 70),
+                        "Type": "Calendar Vol Spread", "Score": min(abs(z_cal) * 12, 70),
                         "Structure": f"{'Sell' if is_rich else 'Buy'} {short_e} / {'Buy' if is_rich else 'Sell'} {long_e} ×{tn}Y",
                         "Direction": "Sell calendar" if is_rich else "Buy calendar",
                         "Trade": f"{'Sell' if is_rich else 'Buy'} {short_e}×{tn}Y / {'Buy' if is_rich else 'Sell'} {long_e}×{tn}Y",
-                        "Signal": f"Ratio {ratio:.3f}x vs fair {fair_ratio:.3f} (z={z_cal:+.1f}σ, n={_n_hist})",
+                        "Signal": f"Ratio {ratio:.3f}x vs {_fair_desc} (z={z_cal:+.1f}σ)",
                         "Rationale": f"{short_e} vol {v_short:.1f}bp vs {long_e} {v_long:.1f}bp — "
-                                     f"{'rich' if is_rich else 'cheap'} by {abs(z_cal):.1f}σ vs {_n_hist}-day history",
+                                     f"{'rich' if is_rich else 'cheap'} by {abs(z_cal):.1f}σ",
                         "Risk": "Short gamma risk" if is_rich else "Negative carry",
                         "e1": short_e, "e2": long_e, "tn": f"{tn}Y", "tn_y": tn,
                     })
