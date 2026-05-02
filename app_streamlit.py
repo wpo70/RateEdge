@@ -29021,35 +29021,43 @@ def usd_sod_tab():
 
             # Open buttons OUTSIDE expanders — avoids Streamlit rerun/expander bug
             st.caption("Open positions:")
+            # Open buttons with on_click callback — fires before page re-renders
+            st.caption("Open positions:")
+
+            def _open_trade_cb(idea_dict, vega):
+                _bk = st.session_state.get("rv_conviction_book_usd", {})
+                _bid = idea_dict.get("Structure", "").strip().lower()
+                if _bid and _bid not in {k.lower() for k in _bk.keys()}:
+                    _bk[_bid] = {
+                        "structure": idea_dict.get("Structure", ""),
+                        "type": idea_dict.get("Type", ""),
+                        "trade": idea_dict.get("Trade", ""),
+                        "signal": idea_dict.get("Signal", ""),
+                        "direction": idea_dict.get("Direction", ""),
+                        "entry_date": str(pd.Timestamp.now().date()),
+                        "score": idea_dict.get("Score", 0),
+                        "entry_fwd_vol": idea_dict.get("entry_fwd_vol", 0),
+                        "entry_near_vol": idea_dict.get("entry_near_vol", 0),
+                        "entry_far_vol": idea_dict.get("entry_far_vol", 0),
+                        "e1": idea_dict.get("e1", ""), "e2": idea_dict.get("e2", ""),
+                        "tn": idea_dict.get("tn", ""), "tn_y": idea_dict.get("tn_y", 5),
+                        "vega_per_bp": vega,
+                    }
+                    st.session_state["rv_conviction_book_usd"] = _bk
+                    if HAS_POSTGRES:
+                        try:
+                            _uid = st.session_state.get("username", "wpo@rateedge.au")
+                            save_user_config(_uid, "rv_conviction_book_usd", "USD", _bk)
+                        except Exception:
+                            pass
+
             _open_cols = st.columns(min(len(_top5), 5))
-            _book_key_usd_btn = "rv_conviction_book_usd"
             for _idx, _idea in enumerate(_top5):
                 with _open_cols[_idx]:
                     _short_label = _idea.get("Structure", "")[:25]
-                    if st.button(f"Open: {_short_label}", key=f"_rv_open_{_idx}", use_container_width=True):
-                        _bk = st.session_state.get(_book_key_usd_btn, {})
-                        _bid_norm = _idea.get("Structure", "").strip().lower()
-                        if _bid_norm not in {k.lower() for k in _bk.keys()}:
-                            _bk[_bid_norm] = {
-                                "structure": _idea.get("Structure", ""),
-                                "type": _idea.get("Type", ""),
-                                "trade": _idea.get("Trade", ""),
-                                "signal": _idea.get("Signal", ""),
-                                "direction": _idea.get("Direction", ""),
-                                "entry_date": pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d"),
-                                "score": _idea.get("Score", 0),
-                                "entry_fwd_vol": _idea.get("entry_fwd_vol", 0),
-                                "entry_near_vol": _idea.get("entry_near_vol", 0),
-                                "entry_far_vol": _idea.get("entry_far_vol", 0),
-                                "e1": _idea.get("e1", ""), "e2": _idea.get("e2", ""),
-                                "tn": _idea.get("tn", ""), "tn_y": _idea.get("tn_y", 5),
-                                "vega_per_bp": _VEGA_PER_BP_USD,
-                            }
-                            st.session_state[_book_key_usd_btn] = _bk
-                            if HAS_POSTGRES:
-                                _uid_bk = st.session_state.get("username", "wpo@rateedge.au")
-                                save_user_config(_uid_bk, _book_key_usd_btn, "USD", _bk)
-                            st.rerun()
+                    st.button(f"Open: {_short_label}", key=f"_rv_open_{_idx}",
+                              use_container_width=True,
+                              on_click=_open_trade_cb, args=(_idea, _VEGA_PER_BP_USD))
 
         # ── All Ideas (collapsed) ──
         if len(_ideas) > 5:
