@@ -26970,8 +26970,9 @@ def vol_lookup_tab():
     if HAS_POSTGRES:
         try:
             # v0205i: cache in session state
-            _vl_cache_key = f"_vol_lookup_hist_{ccy}"
+            _vl_cache_key = f"_vol_lookup_hist_{_vl_ccy}"
             _vl_cached = st.session_state.get(_vl_cache_key)
+            _vl_rows = []
             if _vl_cached is not None:
                 _vl_rows = _vl_cached
             else:
@@ -26994,8 +26995,6 @@ def vol_lookup_tab():
                 _cur_vl.close()
                 _conn_vl.close()
                 st.session_state[_vl_cache_key] = _vl_rows
-            if _vl_cached is not None:
-                _vl_rows = _vl_cached
             for _i_vl, (_sd, _av) in enumerate(_vl_rows):
                 if not _av or "values" not in _av:
                     continue
