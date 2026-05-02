@@ -6948,10 +6948,12 @@ def vol_config_tab():
                     _sofr_c = st.session_state.get("config_curves", {}).get("USD")
                     _ff_c = st.session_state.get("config_basis", {}).get("USD", {}).get("fedfunds_ois")
                     if _sofr_c is not None and _ff_c is not None and len(_sofr_c) > 0 and len(_ff_c) > 0:
-                        _s_xs = _sofr_c["MaturityY"].to_numpy().astype(float)
-                        _s_ys = _sofr_c["ZeroRatePct"].to_numpy().astype(float)
-                        _f_xs = _ff_c["MaturityY"].to_numpy().astype(float)
-                        _f_ys = _ff_c["ZeroRatePct"].to_numpy().astype(float)
+                        _sc_sorted = _sofr_c.sort_values("MaturityY")
+                        _fc_sorted = _ff_c.sort_values("MaturityY")
+                        _s_xs = _sc_sorted["MaturityY"].to_numpy().astype(float)
+                        _s_ys = _sc_sorted["ZeroRatePct"].to_numpy().astype(float)
+                        _f_xs = _fc_sorted["MaturityY"].to_numpy().astype(float)
+                        _f_ys = _fc_sorted["ZeroRatePct"].to_numpy().astype(float)
                         _all_mats = sorted(set(round(float(x), 6) for x in _s_xs) | set(round(float(x), 6) for x in _f_xs))
                         _min_m = max(min(_s_xs), min(_f_xs))
                         _max_m = min(max(_s_xs), max(_f_xs))
@@ -7847,13 +7849,16 @@ def curves_tab():
         _ff_ois      = st.session_state.get("config_basis", {}).get("USD", {}).get("fedfunds_ois")
         _sofr_ff_bas = st.session_state.get("config_basis", {}).get("USD", {}).get("sofr_ff_basis")
 
-        # v0105b: compute basis on-the-fly if not pre-loaded but both curves available
-        if _sofr_ff_bas is None and _sofr_curve is not None and _ff_ois is not None:
+        # v0105l: always recompute basis from current curves (don't use stale cache)
+        if _sofr_curve is not None and _ff_ois is not None:
             try:
-                _s_xs = _sofr_curve["MaturityY"].to_numpy().astype(float)
-                _s_ys = _sofr_curve["ZeroRatePct"].to_numpy().astype(float)
-                _f_xs = _ff_ois["MaturityY"].to_numpy().astype(float)
-                _f_ys = _ff_ois["ZeroRatePct"].to_numpy().astype(float)
+                # Sort both curves by maturity — np.interp requires sorted xp
+                _s_sorted = _sofr_curve.sort_values("MaturityY")
+                _f_sorted = _ff_ois.sort_values("MaturityY")
+                _s_xs = _s_sorted["MaturityY"].to_numpy().astype(float)
+                _s_ys = _s_sorted["ZeroRatePct"].to_numpy().astype(float)
+                _f_xs = _f_sorted["MaturityY"].to_numpy().astype(float)
+                _f_ys = _f_sorted["ZeroRatePct"].to_numpy().astype(float)
                 # Use all maturities from EITHER curve, interpolate where needed
                 _all_mats = sorted(set(round(float(x), 6) for x in _s_xs) | set(round(float(x), 6) for x in _f_xs))
                 # Clip to range covered by both curves
