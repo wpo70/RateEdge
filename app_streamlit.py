@@ -29012,18 +29012,6 @@ def usd_sod_tab():
                                  index=0, horizontal=True, key="_usd_vega_sel_v0105")
             _VEGA_PER_BP_USD = _usd_vega_options[_vega_sel]
 
-            for _idx, _idea in enumerate(_top5):
-                _emoji = "🔴" if _idea["Score"] > 70 else "🟡" if _idea["Score"] > 50 else "⚪"
-                with st.expander(f"{_emoji} {_idea['Structure']} — {_idea.get('Direction','—')} (Score: {_idea['Score']:.0f})", expanded=_idx < 2):
-                    st.markdown(f"**Trade:** {_idea['Trade']}")
-                    st.markdown(f"**Rationale:** {_idea['Rationale']}")
-                    st.caption(f"Risk: {_idea['Risk']}")
-
-            # Open buttons OUTSIDE expanders — avoids Streamlit rerun/expander bug
-            st.caption("Open positions:")
-            # Open buttons with on_click callback — fires before page re-renders
-            st.caption("Open positions:")
-
             def _open_trade_cb(idea_dict, vega):
                 _bk = st.session_state.get("rv_conviction_book_usd", {})
                 _bid = idea_dict.get("Structure", "").strip().lower()
@@ -29051,13 +29039,22 @@ def usd_sod_tab():
                         except Exception:
                             pass
 
-            _open_cols = st.columns(min(len(_top5), 5))
             for _idx, _idea in enumerate(_top5):
-                with _open_cols[_idx]:
-                    _short_label = _idea.get("Structure", "")[:25]
-                    st.button(f"Open: {_short_label}", key=f"_rv_open_{_idx}",
-                              use_container_width=True,
-                              on_click=_open_trade_cb, args=(_idea, _VEGA_PER_BP_USD))
+                _emoji = "🔴" if _idea["Score"] > 70 else "🟡" if _idea["Score"] > 50 else "⚪"
+                _ia, _ib = st.columns([6, 1.2])
+                with _ia:
+                    with st.expander(f"{_emoji} {_idea['Structure']} — {_idea.get('Direction','—')} (Score: {_idea['Score']:.0f})", expanded=_idx < 2):
+                        st.markdown(f"**Trade:** {_idea['Trade']}")
+                        st.markdown(f"**Rationale:** {_idea['Rationale']}")
+                        st.caption(f"Risk: {_idea['Risk']}")
+                with _ib:
+                    _already_open = _idea.get("Structure", "").strip().lower() in {k.lower() for k in st.session_state.get("rv_conviction_book_usd", {}).keys()}
+                    if _already_open:
+                        st.markdown("<div style='text-align:center;padding:8px 0;color:#22c55e;font-size:0.8rem;font-weight:600'>✓ Open</div>", unsafe_allow_html=True)
+                    else:
+                        st.button(f"Open @ {_vega_sel}", key=f"_rv_open_{_idx}",
+                                  use_container_width=True,
+                                  on_click=_open_trade_cb, args=(_idea, _VEGA_PER_BP_USD))
 
         # ── All Ideas (collapsed) ──
         if len(_ideas) > 5:
