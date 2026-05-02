@@ -21771,23 +21771,35 @@ def rv_tab():
                 # ── Helper: parse expiry + tenor from idea Structure string ─
                 import re as _re_pnl
                 def _parse_structure(struct: str):
-                    """Extract (expiry_str, tenor_y) from strings like '1m≈10Y fly', '5y≈5Y', '2s10s Flattener'."""
-                    # Pattern: XeYY e.g. 1m≈10Y, 3m≈5Y
-                    m = _re_pnl.search(r"(\d+(?:\.\d+)?)(m|y|w)\s*[≈x*/]\s*(\d+(?:\.\d+)?)Y", struct, _re_pnl.IGNORECASE)
+                    """Extract (expiry_y, tenor_y) from structure strings."""
+                    # σ_fwd patterns: "σ_fwd 2y→3y×2Y", "σ_fwd 1y→3y×10Y"
+                    m0 = _re_pnl.search(r"σ_fwd\s+(\d+(?:\.\d+)?)(m|y)\s*[→\->]+\s*(\d+(?:\.\d+)?)(m|y)\s*[×x]\s*(\d+(?:\.\d+)?)Y", struct, _re_pnl.IGNORECASE)
+                    if m0:
+                        e1_qty, e1_u = float(m0.group(1)), m0.group(2).lower()
+                        e1_y = e1_qty / 12 if e1_u == "m" else e1_qty
+                        tenor = float(m0.group(5))
+                        return e1_y, tenor
+                    # "Buy/Sell Xm / Buy/Sell Ym ×NY" — calendar spread
+                    m_cal = _re_pnl.search(r"(\d+(?:\.\d+)?)(m|y)\s*/\s*(?:Buy|Sell)\s+(\d+(?:\.\d+)?)(m|y)\s*[×x]\s*(\d+(?:\.\d+)?)Y", struct, _re_pnl.IGNORECASE)
+                    if m_cal:
+                        e_qty, e_u = float(m_cal.group(1)), m_cal.group(2).lower()
+                        exp_y = e_qty / 12 if e_u == "m" else e_qty
+                        tenor = float(m_cal.group(5))
+                        return exp_y, tenor
+                    # Pattern: Xm/y×NY e.g. "1m×10Y fly", "5y×5Y Payer", "1m×2Y straddle"
+                    m = _re_pnl.search(r"(\d+(?:\.\d+)?)(m|y|w)\s*[≈×x*/]\s*(\d+(?:\.\d+)?)Y", struct, _re_pnl.IGNORECASE)
                     if m:
                         qty, unit, tenor = m.group(1), m.group(2).lower(), float(m.group(3))
                         exp_y = float(qty)/12 if unit == "m" else float(qty)/52 if unit == "w" else float(qty)
                         return exp_y, tenor
-                    # Pattern: NsMs e.g. 2s10s → expiry=1y, tenor=10Y (curve spread)
+                    # Pattern: NsMs e.g. "2s10s Flattener" → expiry=1y, tenor=long end
                     m2 = _re_pnl.search(r"(\d+)s(\d+)s", struct)
                     if m2:
-                        short_t = float(m2.group(1))
-                        long_t  = float(m2.group(2))
-                        return 1.0, long_t  # use 1y expiry, long-end tenor for DV01
-                    # Pattern: Ny≈NY e.g. 5y≈5Y, 2y≈10Y
-                    m3 = _re_pnl.search(r"(\d+)y\s*[≈x*/]\s*(\d+)Y", struct, _re_pnl.IGNORECASE)
-                    if m3:
-                        return float(m3.group(1)), float(m3.group(2))
+                        return 1.0, float(m2.group(2))
+                    # "Composite NY" e.g. "Composite 5Y — Sell vol"
+                    m_comp = _re_pnl.search(r"Composite\s+(\d+)Y", struct, _re_pnl.IGNORECASE)
+                    if m_comp:
+                        return 1.0, float(m_comp.group(1))
                     return 1.0, 5.0  # fallback
 
                 # ── Helper: AFMA modified-following year-fraction ───────────
@@ -21931,10 +21943,11 @@ def rv_tab():
                                         marker=dict(size=7), name=f"Fwd curve {_val_date}"))
                                     # Also show today's curve for comparison
                                     _today_rows = [_matrix_rate_at(0.0, t) for t in _matrix_tenors]
-                                    if any(r is not None for r in _today_rows):
+                                    _today_pairs = [(t, r) for t, r in zip(_matrix_tenors, _today_rows) if r is not None]
+                                    if _today_pairs:
                                         _fig_fc.add_trace(go.Scatter(
-                                            x=_matrix_tenors,
-                                            y=[r for r in _today_rows if r is not None],
+                                            x=[p[0] for p in _today_pairs],
+                                            y=[p[1] for p in _today_pairs],
                                             mode="lines", line=dict(color="#94a3b8", width=1.5, dash="dot"),
                                             name="Today"))
                                     _fig_fc.update_layout(
