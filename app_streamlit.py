@@ -18922,7 +18922,7 @@ def _compute_fwd_vol_surface_stats(ccy: str) -> dict:
             ("3y", "5y",  3.0,  5.0),
             ("5y", "10y", 5.0, 10.0),
         ]
-        TENORS = [("2Y", 2), ("5Y", 5), ("10Y", 10)]
+        TENORS = [("2Y", 2), ("3Y", 3), ("5Y", 5), ("10Y", 10), ("15Y", 15), ("20Y", 20)]
 
         fwd_series = {}  # (e1, e2, tn) -> list of fwd vols
 
@@ -27478,7 +27478,7 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
         ]
         for e1, e2, T1, T2 in EXP_PAIRS:
             dT = T2 - T1
-            for tn_str, tn_y in [("2Y",2), ("5Y",5), ("10Y",10)]:
+            for tn_str, tn_y in [("2Y",2), ("3Y",3), ("5Y",5), ("10Y",10), ("15Y",15), ("20Y",20)]:
                 v1 = get_matrix_value(atm, e1, float(tn_y))
                 v2 = get_matrix_value(atm, e2, float(tn_y))
                 if not v1 or not v2:
