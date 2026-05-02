@@ -27972,10 +27972,13 @@ def usd_sod_tab():
         _date_list = _avail_curve_dates if _cmp_rate_type == "SOFR" else _avail_ff_dates
         _date_options = ["Most Recent"] + _date_list
         if _date_options:
-            _cmp_date_idx = st.selectbox("Compare date", range(len(_date_options)),
-                                          format_func=lambda i: _date_options[i],
-                                          key="usd_sod_cmp_date", index=0)
-            _curr_curve_date = _date_options[_cmp_date_idx] if _cmp_date_idx > 0 else None
+            # Use string options directly — integer indices are fragile across reruns
+            _prev_sel = st.session_state.get("_usd_sod_cmp_date_str", "Most Recent")
+            _default_idx = _date_options.index(_prev_sel) if _prev_sel in _date_options else 0
+            _cmp_date_sel = st.selectbox("Compare date", _date_options,
+                                          key="usd_sod_cmp_date_v2", index=_default_idx)
+            st.session_state["_usd_sod_cmp_date_str"] = _cmp_date_sel
+            _curr_curve_date = _cmp_date_sel if _cmp_date_sel != "Most Recent" else None
         else:
             _curr_curve_date = None
             st.warning(f"No {_cmp_rate_type} curve dates found in DB.")
@@ -28218,6 +28221,13 @@ def usd_sod_tab():
         _df_base = pd.DataFrame([r for r in _adj_rows if r["type"] == "base"]).drop(columns=["type"])
         _df_adj = pd.DataFrame([r for r in _adj_rows if r["type"] == "adj"]).drop(columns=["type"])
         _df_delta = pd.DataFrame([r for r in _adj_rows if r["type"] == "delta"]).drop(columns=["type"])
+
+        # v0205g: persist estimated open + deltas for RV report section
+        st.session_state["_usd_sod_estimated_open_df"] = _df_adj
+        st.session_state["_usd_sod_delta_df"] = _df_delta
+        st.session_state["_usd_sod_adj_surface"] = _build_adj_surface()
+        st.session_state["_usd_sod_eod_curve_date"] = _base_date
+        st.session_state["_usd_sod_cmp_curve_date"] = str(_curr_curve_date)
 
         # ── NYC EOD Base ──
         st.markdown("**NYC EOD Base (Normal Vol bp/yr)**")
@@ -28826,28 +28836,52 @@ def usd_sod_tab():
     st.markdown("---")
     st.markdown("### 📊 USD RV Daily Report")
 
-    # Current working ATM surface
-    _usd_atm_now = get_working_atm_surface("USD")
-    if _usd_atm_now is None or _usd_atm_now.empty:
+    # Current working ATM surface — prefer estimated open if available
+    _usd_adj_surface = st.session_state.get("_usd_sod_adj_surface")
+    _usd_atm_now = _usd_adj_surface if _usd_adj_surface is not None else get_working_atm_surface("USD")
+    if _usd_atm_now is None or (_usd_atm_now.empty if isinstance(_usd_atm_now, pd.DataFrame) else True):
         st.info("Load a USD vol surface first (IRS / Vol Upload tab or Reload Vols from DB).")
         return
 
-    # ── Vol Change Grid (base EOD vs current) ──
-    with st.expander("📈 Vol Change — EOD vs Current", expanded=True):
-        _RV_EXPS = ["1m", "3m", "6m", "1y", "2y", "3y", "5y", "7y", "10y"]
-        _RV_TENS = [2, 5, 10, 15, 20, 30]
-        _chg_rows = []
-        for _exp in _RV_EXPS:
-            _row = {"Expiry": _exp}
-            for _tn in _RV_TENS:
-                _v_base = get_matrix_value(_base_atm, _exp, float(_tn))
-                _v_now = get_matrix_value(_usd_atm_now, _exp, float(_tn))
-                if _v_base is not None and _v_now is not None:
-                    _row[f"{_tn}Y"] = round(_v_now - _v_base, 2)
-                else:
-                    _row[f"{_tn}Y"] = None
-            _chg_rows.append(_row)
-        _chg_df = pd.DataFrame(_chg_rows).set_index("Expiry")
+    # ── Vol Change Grid (EOD vs Estimated Open) ──
+    _stored_delta = st.session_state.get("_usd_sod_delta_df")
+    _eod_date = st.session_state.get("_usd_sod_eod_curve_date", "")
+    _cmp_date = st.session_state.get("_usd_sod_cmp_curve_date", "")
+    with st.expander(f"📈 Vol Change — EOD ({_eod_date}) vs Estimated Open ({_cmp_date})", expanded=True):
+        if _stored_delta is not None and not _stored_delta.empty:
+            # Use the pre-computed delta from the carry-forward estimation
+            _RV_TENS = [2, 5, 10, 15, 20, 30]
+            _delta_idx = _stored_delta.set_index("Expiry") if "Expiry" in _stored_delta.columns else _stored_delta
+            _chg_rows = []
+            for _exp in _delta_idx.index:
+                _row = {"Expiry": _exp}
+                for _tn in _RV_TENS:
+                    col = f"{_tn}Y"
+                    if col in _delta_idx.columns:
+                        try:
+                            _row[col] = round(float(_delta_idx.loc[_exp, col]), 2)
+                        except:
+                            _row[col] = None
+                    else:
+                        _row[col] = None
+                _chg_rows.append(_row)
+            _chg_df = pd.DataFrame(_chg_rows).set_index("Expiry")
+        else:
+            # Fallback: compare base vs working surface
+            _RV_EXPS = ["1m", "3m", "6m", "1y", "2y", "3y", "5y", "7y", "10y"]
+            _RV_TENS = [2, 5, 10, 15, 20, 30]
+            _chg_rows = []
+            for _exp in _RV_EXPS:
+                _row = {"Expiry": _exp}
+                for _tn in _RV_TENS:
+                    _v_base = get_matrix_value(_base_atm, _exp, float(_tn))
+                    _v_now = get_matrix_value(_usd_atm_now, _exp, float(_tn))
+                    if _v_base is not None and _v_now is not None:
+                        _row[f"{_tn}Y"] = round(_v_now - _v_base, 2)
+                    else:
+                        _row[f"{_tn}Y"] = None
+                _chg_rows.append(_row)
+            _chg_df = pd.DataFrame(_chg_rows).set_index("Expiry")
         st.caption("Change in ATM normal vol (bp). Green = vol higher, Red = vol lower.")
 
         def _color_chg(v):
