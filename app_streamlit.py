@@ -21209,8 +21209,10 @@ def rv_tab():
                     v1m_adj = v1m - _n_m1m * _prem_per  # strip meeting premium
 
                     # Z-score vs history if available; else fall back to sqrt(T) ratio
-                    if rs and rs["std"] > 0:
-                        z_ratio = (curr_ratio - rs["mean"]) / rs["std"]
+                    if rs and rs.get("std", 0) > 0.01:
+                        _rs_std_clamped = max(rs["std"], 0.02)  # floor std at 2% to avoid absurd z-scores from quiet periods
+                        z_ratio = (curr_ratio - rs["mean"]) / _rs_std_clamped
+                        z_ratio = max(min(z_ratio, 5.0), -5.0)  # cap at ±5σ
                         fair_desc = f"hist mean {rs['mean']:.3f} (n={rs['n']})"
                         gamma_ratio = 1.0 + z_ratio / 3.0  # normalise z to ratio scale
                         use_hist = True
@@ -27649,8 +27651,10 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
         curr_ratio = v1m / v1y
         v1m_adj = v1m - _n_mtgs("1m") * _prem_per
         rs = ratio_stats.get(tn_str)
-        if rs and rs.get("std", 0) > 0:
-            z_ratio = (curr_ratio - rs["mean"]) / rs["std"]
+        if rs and rs.get("std", 0) > 0.01:
+            _rs_std_f = max(rs["std"], 0.02)
+            z_ratio = (curr_ratio - rs["mean"]) / _rs_std_f
+            z_ratio = max(min(z_ratio, 5.0), -5.0)
         else:
             gamma_fair = v1y / math.sqrt(12)
             z_ratio = (v1m_adj - gamma_fair) / max(gamma_fair * 0.15, 1.0)
