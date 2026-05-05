@@ -15489,10 +15489,9 @@ def caps_floors_tab(vol_mode: str):
 def exotics_tab(vol_mode: str):
     st.subheader("Exotics / Structured Rates")
 
-    # Currency selector
-    col_ccy, col_spacer = st.columns([1, 3])
-    with col_ccy:
-        ccy_select = st.selectbox("📎 Currency", ALL_CURRENCIES, index=ALL_CURRENCIES.index(st.session_state.get("sidebar_ccy","AUD")) if st.session_state.get("sidebar_ccy","AUD") in ALL_CURRENCIES else 0, key="ex_ccy")
+    # Currency from sidebar (v0505h)
+    ccy_select = st.session_state.get("sidebar_ccy", "AUD")
+    if ccy_select not in ALL_CURRENCIES: ccy_select = "AUD"
     ccy = ccy_select.split(" ")[0]
     if "PENDING" in ccy_select:
         st.warning(f"├ö├àÔöé {ccy} pricing coming soon. Currently supported: AUD, NZD, USD")
@@ -26723,7 +26722,9 @@ def midcurve_tab():
         "2y10y": (2,   10),
     }
 
-    ccy = st.selectbox("Currency", ["AUD","USD","NZD"], key="mc_ccy")
+    # Currency from sidebar (v0505h)
+    ccy = st.session_state.get("sidebar_ccy", "AUD")
+    if ccy not in ["AUD", "USD", "NZD"]: ccy = "AUD"
 
     # Get vol surface and curve
     _vol_data = st.session_state.get("vol_data", {}).get(ccy, {})
@@ -26892,10 +26893,15 @@ def midcurve_tab():
         co_view = st.radio("View", ["ATM Spread (bp)", "Spread Vol (bp)", "Straddle Prem (bp)", "Vega ($/1bp 1mm)"],
                            key="co_view")
     with _cc2:
-        co_corr = st.slider("Correlation (ρ)", min_value=0.50, max_value=0.99,
-                            value=0.85, step=0.01, key="co_corr",
-                            help="Assumed correlation between the two swap rate legs")
         co_heatmap = st.checkbox("Heatmap", value=True, key="co_heatmap")
+    with _cc3:
+        # Show per-pair correlations from config matrix (editable in Exotics tab)
+        _pair_rhos = {}
+        for _cpn, (_ts_, _tl_) in CURVE_PAIRS.items():
+            _t1k = f"{_ts_}Y"; _t2k = f"{_tl_}Y"
+            _pair_rhos[_cpn] = get_correlation(_t1k, _t2k)
+        _rho_str = " | ".join(f"{k}: ρ={v:.3f}" for k, v in _pair_rhos.items())
+        st.caption(f"Correlations from config matrix (edit in Exotics ⚙️): {_rho_str}")
 
     # ── Build matrices ─────────────────────────────────────────────────
     co_spread_mat = pd.DataFrame(index=CURVE_EXPIRIES, columns=list(CURVE_PAIRS.keys()), dtype=float)
@@ -26914,8 +26920,9 @@ def midcurve_tab():
             if _vs is None or _vl is None:
                 continue
 
-            # Spread vol (bp)
-            _rho = co_corr
+            # Spread vol (bp) — per-pair correlation from config (v0505h)
+            _t1k = f"{_ts}Y"; _t2k = f"{_tl}Y"
+            _rho = get_correlation(_t1k, _t2k)
             _v_spread = _cmath.sqrt(max(_vl**2 + _vs**2 - 2*_rho*_vl*_vs, 0.0))
             co_vol_mat.at[_cexp, _cpair] = round(_v_spread, 2)
 
@@ -26966,7 +26973,7 @@ def midcurve_tab():
         co_fmt  = "{:.2f}"
 
     # ── Display ────────────────────────────────────────────────────────
-    st.markdown(f"#### {ccy} Curve Options — {co_view}  (ρ = {co_corr:.2f})")
+    st.markdown(f"#### {ccy} Curve Options — {co_view}  (per-pair ρ from config)")
     st.caption("Rows = option expiry | Columns = curve spread | Vols from ATM surface at option expiry")
 
     co_disp_num = co_disp.copy()
