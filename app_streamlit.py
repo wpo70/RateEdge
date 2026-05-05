@@ -26901,13 +26901,14 @@ def midcurve_tab():
                             disabled=co_use_config)
         co_heatmap = st.checkbox("Heatmap", value=True, key="co_heatmap")
     if co_use_config:
-        with _cc3:
-            _pair_rhos = {}
-            for _cpn, (_ts_, _tl_) in CURVE_PAIRS.items():
-                _t1k = f"{_ts_}Y"; _t2k = f"{_tl_}Y"
-                _pair_rhos[_cpn] = get_correlation(_t1k, _t2k)
-            _rho_str = " | ".join(f"{k}: {v:.3f}" for k, v in _pair_rhos.items())
-            st.caption(f"Config ρ: {_rho_str}")
+        pass  # slider already disabled above
+    with _cc3:
+        _pair_rhos = {}
+        for _cpn, (_ts_, _tl_) in CURVE_PAIRS.items():
+            _t1k = f"{_ts_}Y"; _t2k = f"{_tl_}Y"
+            _pair_rhos[_cpn] = get_correlation(_t1k, _t2k)
+        _rho_str = " | ".join(f"{k}: {v:.3f}" for k, v in _pair_rhos.items())
+        st.caption(f"Config ρ: {_rho_str}")
 
     # ── Build matrices ─────────────────────────────────────────────────
     co_spread_mat = pd.DataFrame(index=CURVE_EXPIRIES, columns=list(CURVE_PAIRS.keys()), dtype=float)
