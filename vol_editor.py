@@ -74,22 +74,27 @@ def premium_to_vol(prem_bp: float, T: float, tenor_years: float = 10.0) -> float
 
 
 def surface_vol_to_premium(df: pd.DataFrame, ccy: str = None) -> pd.DataFrame:
-    """Convert vol surface to premium. Uses real prem_matrix from pricer if available,
-    otherwise falls back to the simplified formula."""
+    """Convert vol surface to premium. Uses real prem_matrix from pricer and scales
+    by vol ratio so edited vols produce correct premiums matching the Curves tab.
+    Premium ∝ vol (linear in Bachelier), so new_prem = old_prem × (new_vol / old_vol)
+    preserves real annuity and df(expiry) corrections exactly."""
     import streamlit as st
     if ccy is not None:
-        # atm_prem_matrix[ccy]["prem"] is the correct key in the main app
-        _atm_pm = st.session_state.get("atm_prem_matrix", {})
-        prem_store = {c: v.get("prem") for c, v in _atm_pm.items() if isinstance(v, dict) and v.get("prem") is not None}
-        if ccy in prem_store and prem_store[ccy] is not None:
-            p = prem_store[ccy].copy()
+        _atm_pm = st.session_state.get("atm_prem_matrix", {}).get(ccy, {})
+        if isinstance(_atm_pm, dict) and _atm_pm.get("prem") is not None and _atm_pm.get("vol") is not None:
+            p = _atm_pm["prem"].copy()
+            v_orig = _atm_pm["vol"].copy()
             exp_col = df.columns[0]
+            # Normalise prem matrix
             if "Expiry" in p.columns:
                 p = p.set_index("Expiry")
-            # Build case-insensitive lookup for expiry labels
             p.index = p.index.str.lower()
-            # Normalise tenor columns too
             p.columns = [str(c).upper() for c in p.columns]
+            # Normalise original vol matrix
+            if "Expiry" in v_orig.columns:
+                v_orig = v_orig.set_index("Expiry")
+            v_orig.index = v_orig.index.str.lower()
+            v_orig.columns = [str(c).upper() for c in v_orig.columns]
             result = df.copy()
             tcols = df.columns[1:].tolist()
             for i, row in df.iterrows():
@@ -97,13 +102,19 @@ def surface_vol_to_premium(df: pd.DataFrame, ccy: str = None) -> pd.DataFrame:
                 for c in tcols:
                     c_norm = str(c).upper()
                     try:
-                        result.at[i, c] = round(float(p.loc[exp_lbl, c_norm]), 2)
+                        old_prem = float(p.loc[exp_lbl, c_norm])
+                        old_vol = float(v_orig.loc[exp_lbl, c_norm])
+                        new_vol = float(row[c])
+                        if old_vol > 0.01:
+                            result.at[i, c] = round(old_prem * (new_vol / old_vol), 2)
+                        else:
+                            result.at[i, c] = round(old_prem, 2)
                     except Exception:
                         T = label_to_years(exp_lbl)
                         _ty = label_to_years(c)
                         result.at[i, c] = round(vol_to_premium(float(row[c]), T, _ty), 2)
             return result
-    # fallback: simplified formula
+    # fallback: simplified formula (no curve available)
     result = df.copy()
     exp_col = df.columns[0]
     tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
@@ -118,19 +129,79 @@ def surface_vol_to_premium(df: pd.DataFrame, ccy: str = None) -> pd.DataFrame:
     return result
 
 
-def surface_premium_to_vol(df: pd.DataFrame) -> pd.DataFrame:
+def surface_premium_to_vol(df: pd.DataFrame, ccy: str = None) -> pd.DataFrame:
+    """Convert premium surface back to vol. Uses real prem_matrix ratio when available:
+    new_vol = old_vol × (new_prem / old_prem) — exact inverse of surface_vol_to_premium."""
+    import streamlit as st
     result = df.copy()
     exp_col = df.columns[0]
     tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
+    # Try ratio approach
+    _atm_pm = st.session_state.get("atm_prem_matrix", {}).get(ccy, {}) if ccy else {}
+    _has_ratio = isinstance(_atm_pm, dict) and _atm_pm.get("prem") is not None and _atm_pm.get("vol") is not None
+    if _has_ratio:
+        p = _atm_pm["prem"].copy()
+        v_orig = _atm_pm["vol"].copy()
+        if "Expiry" in p.columns: p = p.set_index("Expiry")
+        p.index = p.index.str.lower()
+        p.columns = [str(c).upper() for c in p.columns]
+        if "Expiry" in v_orig.columns: v_orig = v_orig.set_index("Expiry")
+        v_orig.index = v_orig.index.str.lower()
+        v_orig.columns = [str(c).upper() for c in v_orig.columns]
     for i, row in df.iterrows():
-        T = label_to_years(str(row[exp_col]))
+        exp_lbl = str(row[exp_col]).lower()
+        T = label_to_years(exp_lbl)
         for c in tcols:
             try:
+                new_prem = float(row[c])
+                if _has_ratio:
+                    c_norm = str(c).upper()
+                    old_prem = float(p.loc[exp_lbl, c_norm])
+                    old_vol = float(v_orig.loc[exp_lbl, c_norm])
+                    if old_prem > 0.01:
+                        result.at[i, c] = round(old_vol * (new_prem / old_prem), 2)
+                        continue
                 tenor_years = label_to_years(c)
-                result.at[i, c] = round(premium_to_vol(float(row[c]), T, tenor_years), 2)
+                result.at[i, c] = round(premium_to_vol(new_prem, T, tenor_years), 2)
             except Exception:
                 pass
     return result
+
+
+def _prem_to_vol_cell(prem_val: float, exp_lbl: str, tenor_col: str, ccy: str) -> float:
+    """Convert a single premium value to vol using ratio approach when available."""
+    import streamlit as st
+    _atm_pm = st.session_state.get("atm_prem_matrix", {}).get(ccy, {})
+    if isinstance(_atm_pm, dict) and _atm_pm.get("prem") is not None and _atm_pm.get("vol") is not None:
+        p = _atm_pm["prem"]
+        v_orig = _atm_pm["vol"]
+        try:
+            # Normalise keys
+            _exp = exp_lbl.lower()
+            _tn = str(tenor_col).upper()
+            # Find in prem matrix
+            if "Expiry" in p.columns:
+                _pi = p.set_index("Expiry")
+            else:
+                _pi = p.copy()
+            _pi.index = _pi.index.str.lower()
+            _pi.columns = [str(c).upper() for c in _pi.columns]
+            if "Expiry" in v_orig.columns:
+                _vi = v_orig.set_index("Expiry")
+            else:
+                _vi = v_orig.copy()
+            _vi.index = _vi.index.str.lower()
+            _vi.columns = [str(c).upper() for c in _vi.columns]
+            old_prem = float(_pi.loc[_exp, _tn])
+            old_vol = float(_vi.loc[_exp, _tn])
+            if old_prem > 0.01:
+                return round(old_vol * (prem_val / old_prem), 2)
+        except Exception:
+            pass
+    # Fallback: simplified formula
+    T = label_to_years(exp_lbl)
+    tenor_y = label_to_years(tenor_col)
+    return round(premium_to_vol(prem_val, T, tenor_y), 2)
 
 
 def _init_state(ccy: str, surface: pd.DataFrame) -> None:
@@ -654,10 +725,8 @@ def render_vol_surface_editor(ccy: str, atm_surface: pd.DataFrame, curve: pd.Dat
             rebuilt = atm_surface.copy()
             if mode == "fwd_premium":
                 for i, row in enumerate(updated):
-                    T = label_to_years(str(expiries[i]))
                     for j, v in enumerate(row):
-                        tenor_y = label_to_years(tcols[j])
-                        rebuilt.iloc[i, j+1] = round(premium_to_vol(v, T, tenor_y), 2)
+                        rebuilt.iloc[i, j+1] = _prem_to_vol_cell(v, str(expiries[i]), tcols[j], ccy)
             else:
                 for i, row in enumerate(updated):
                     for j, v in enumerate(row):
@@ -729,6 +798,12 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
     with cols[5]:
         show_chg = st.checkbox("Show Δ", value=has_changes, key=f"sd_{ccy}")
     
+    # Warn if premium mode but no real prem_matrix
+    if view_mode == "fwd_premium":
+        _atm_pm_check = st.session_state.get("atm_prem_matrix", {}).get(ccy, {})
+        if not (isinstance(_atm_pm_check, dict) and _atm_pm_check.get("prem") is not None):
+            st.warning("⚠️ Generate ATM Matrix on the Curves tab first for accurate premiums. Currently using simplified formula.")
+    
     st.markdown("---")
     
     with st.expander("⚙️ Smoothing", expanded=False):
@@ -793,10 +868,8 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
             if mode == "fwd_premium":
                 for i, row in enumerate(updated):
                     if i >= len(expiries): break
-                    T = label_to_years(str(expiries[i]))
                     for j, v in enumerate(row[:len(tcols)]):
-                        tenor_y = label_to_years(tcols[j])
-                        _work_ccy.iloc[i, j+1] = round(premium_to_vol(float(v), T, tenor_y), 2)
+                        _work_ccy.iloc[i, j+1] = _prem_to_vol_cell(float(v), str(expiries[i]), tcols[j], payload_ccy)
             else:
                 for i, row in enumerate(updated):
                     if i >= len(expiries): break
@@ -900,7 +973,7 @@ input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-f
     
     if edited is not None:
         if view_mode == "fwd_premium":
-            as_vol = surface_premium_to_vol(edited)
+            as_vol = surface_premium_to_vol(edited, ccy)
             if not as_vol.equals(working):
                 _push_history(ccy)
                 ed["working"][ccy] = as_vol
