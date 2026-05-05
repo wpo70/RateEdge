@@ -811,6 +811,10 @@ def get_db_connection():
     if _cached is not None and _age < 300:
         try:
             if not _cached.closed:
+                try:
+                    _cached.rollback()  # clear any stale aborted transaction
+                except Exception:
+                    pass
                 return _DbPooledConn(_cached)
         except Exception:
             pass
@@ -1814,6 +1818,8 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
         return snapshot_id
         
     except Exception as e:
+        try: conn.rollback()
+        except Exception: pass
         st.error(f"Failed to save snapshot: {e}")
         return False
 
