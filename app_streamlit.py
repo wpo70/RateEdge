@@ -6044,13 +6044,30 @@ def sdr_live_tab():
         _admin_pw = st.text_input("Admin password", type="password", key="_sdr_admin_pw")
         if _admin_pw == "1Will-po1":
             st.markdown("""
-**Start SDR Fetcher** — open PowerShell as **Administrator**, then:
+**Start SDR Fetcher** — open PowerShell, then:
 ```
 cd "C:\\Users\\willp\\RateEdge Swaption Pricer"
 $env:RATEEDGE_DB_URL = 'postgresql://postgres.oxwbyotzdqccaajyaqhn:RateEdge2026!@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres'
 python dtcc_sdr_fetcher_v2.py
 ```
 Leave the window open — polls every 5 min. Close window to stop.
+
+**Backfill a specific date** (e.g. if fetcher stopped):
+```
+cd "C:\\Users\\willp\\RateEdge Swaption Pricer"
+$env:RATEEDGE_DB_URL = 'postgresql://postgres.oxwbyotzdqccaajyaqhn:RateEdge2026!@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres'
+python dtcc_sdr_fetcher_v2.py --date 2026-05-05
+```
+
+**Backfill last N days:**
+```
+python dtcc_sdr_fetcher_v2.py --backfill 5
+```
+
+**Backfill date range:**
+```
+python dtcc_sdr_fetcher_v2.py --date-from 2026-05-01 --date-to 2026-05-05
+```
 
 **Run as background task:**
 ```
@@ -6061,8 +6078,13 @@ Start-Process -NoNewWindow python -ArgumentList "dtcc_sdr_fetcher_v2.py" -Workin
 ```
 Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
 ```
+
+**Set .env so URL persists** (run once):
+```
+Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=postgresql://postgres.oxwbyotzdqccaajyaqhn:RateEdge2026!@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres"
+```
 """)
-        # Quick DB status
+        # Quick DB status (inside admin)
         _last, _cnt, _total = _sdr_status_cached()
         if _last:
             try:
@@ -6077,6 +6099,22 @@ Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
                        f"24h trades: {_cnt:,} | Total: {_total:,}")
         elif _total:
             st.warning(f"🔴 No trades in last 24h. Total in DB: {_total:,}. Fetcher likely stopped.")
+
+    # ── SDR Fetcher status alert (always visible) ────────────────────────────
+    _last_a, _cnt_a, _total_a = _sdr_status_cached()
+    if _last_a:
+        try:
+            _ts_a = pd.Timestamp(_last_a)
+            if _ts_a.tzinfo is None:
+                _ts_a = _ts_a.tz_localize('UTC')
+            _age_a = (pd.Timestamp.now(tz='UTC') - _ts_a).total_seconds() / 3600
+        except:
+            _age_a = 999
+        if _age_a > 1:
+            st.error(f"⚠️ SDR fetcher appears stopped — last trade {_age_a:.1f}h ago. "
+                     f"Open Admin section below for backfill instructions.")
+    elif _total_a == 0:
+        st.error("⚠️ No SDR data in database. Open Admin section to set up the fetcher.")
 
     # ── Platform code → full name ─────────────────────────────────────────────
     PLATFORM_NAMES = {
@@ -25005,6 +25043,23 @@ def main():
         
         st.markdown("###  Settings")
         
+        # ── SDR Fetcher status (always visible) ─────────────────────
+        try:
+            _sdr_last, _sdr_cnt, _sdr_total = _sdr_status_cached()
+            if _sdr_last:
+                _sdr_ts = pd.Timestamp(_sdr_last)
+                if _sdr_ts.tzinfo is None:
+                    _sdr_ts = _sdr_ts.tz_localize('UTC')
+                _sdr_age = (pd.Timestamp.now(tz='UTC') - _sdr_ts).total_seconds() / 3600
+                if _sdr_age > 1:
+                    st.error(f"🔴 SDR stopped ({_sdr_age:.0f}h ago)")
+                else:
+                    st.caption(f"🟢 SDR live — {_sdr_cnt:,} trades/24h")
+            elif _sdr_total and _sdr_total > 0:
+                st.error("🔴 SDR stopped")
+        except Exception:
+            pass
+        
         # Theme
         theme_choice = st.selectbox(
             " Theme",
@@ -25370,6 +25425,56 @@ def main():
     if st.session_state.get("tab_show_multiccy", True):
         _tab_names += ["📍 Multi-CCY"]
         _tab_funcs += [lambda: multi_ccy_tab(vol_mode)]
+
+    # ── SDR Trade Alerts (global — fires on any tab) ───────────────────
+    # Check for new swaption/options trades every 30s, toast when found
+    try:
+        _sdr_alert_last = st.session_state.get("_sdr_alert_ts")
+        _sdr_now = pd.Timestamp.now(tz='UTC')
+        _sdr_check_interval = 30  # seconds
+        _do_sdr_check = False
+        if _sdr_alert_last is None:
+            st.session_state["_sdr_alert_ts"] = _sdr_now
+            _do_sdr_check = False  # skip first render
+        elif (_sdr_now - _sdr_alert_last).total_seconds() > _sdr_check_interval:
+            _do_sdr_check = True
+
+        if _do_sdr_check and HAS_POSTGRES:
+            _alert_lookback = st.session_state["_sdr_alert_ts"]
+            st.session_state["_sdr_alert_ts"] = _sdr_now
+            try:
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT currency, COALESCE(opt_tenor,'') as opt_tenor,
+                           COALESCE(swp_tenor,'') as swp_tenor,
+                           COALESCE(strike_price,0) as strike,
+                           COALESCE(notional_amount,0) as notional,
+                           COALESCE(option_type,'') as opt_type,
+                           execution_timestamp
+                    FROM dtcc_sdr
+                    WHERE action_type = 'NEWT'
+                      AND execution_timestamp > %s
+                      AND (opt_tenor IS NOT NULL OR option_type IS NOT NULL)
+                    ORDER BY execution_timestamp DESC
+                    LIMIT 10
+                """, (_alert_lookback,))
+                _new_trades = cur.fetchall()
+                cur.close()
+                conn.close()
+                for _tr in _new_trades:
+                    _ccy_t, _opt_t, _swp_t, _strike_t, _not_t, _otype_t, _ts_t = _tr
+                    _not_mm = _not_t / 1e6 if _not_t else 0
+                    _desc = f"{_ccy_t} {_opt_t}×{_swp_t}" if _swp_t else f"{_ccy_t} {_opt_t}"
+                    _side = _otype_t.upper() if _otype_t else ""
+                    st.toast(
+                        f"📡 {_side} {_desc} K={_strike_t:.2f}% ${_not_mm:.0f}mm",
+                        icon="📡"
+                    )
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     # Tab navigation — visual tabs, single dispatch per render
     tabs = st.tabs(_tab_names)
