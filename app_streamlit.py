@@ -6795,17 +6795,29 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             if _newt_all.empty:
                 st.info("No NEWT trades in current filter.")
             else:
-                # Convert timestamps to NYC time
-                import pytz as _pytz_a
-                _nyc_tz = _pytz_a.timezone("America/New_York")
+                # Convert timestamps to local time based on sidebar currency
+                from zoneinfo import ZoneInfo as _ZI_sdr
+                _CCY_TIMEZONE = {
+                    "AUD": ("Australia/Sydney", "SYD"),
+                    "USD": ("America/New_York", "NYC"),
+                    "EUR": ("Europe/London", "LDN"),
+                    "GBP": ("Europe/London", "LDN"),
+                    "NZD": ("Pacific/Auckland", "AKL"),
+                    "JPY": ("Asia/Tokyo", "TKY"),
+                    "CAD": ("America/New_York", "NYC"),
+                }
+                _sdr_ccy = st.session_state.get("sidebar_ccy", "USD")
+                _tz_name, _tz_label = _CCY_TIMEZONE.get(_sdr_ccy, ("America/New_York", "NYC"))
+                _local_tz = _ZI_sdr(_tz_name)
+                _time_col = f"Time ({_tz_label})"
 
-                def _to_nyc(ts_):
+                def _to_local(ts_):
                     ts_ = pd.to_datetime(ts_, errors="coerce")
                     if ts_ is pd.NaT:
                         return pd.NaT
                     if ts_.tzinfo is None:
                         ts_ = ts_.tz_localize("UTC")
-                    return ts_.astimezone(_nyc_tz)
+                    return ts_.astimezone(_local_tz)
 
                 # Classify options: CALL=Payer/Cap, PUT=Receiver/Floor
                 _payers_a = _newt_all[_newt_all["option_type_decoded"] == "CALL"].copy()
@@ -6851,7 +6863,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _comb_bp = round(_comb_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
                                     _p_bp = round(_p_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
                                     _r_bp = round(_r_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
-                                    _nyc_time = _to_nyc(_time_p)
+                                    _local_time = _to_local(_time_p)
 
                                     # Classify: same strike = straddle, diff strike with swp_tenor = strangle, no swp_tenor = collar
                                     _same_strike = abs(_s_p - _s_r) < 0.01
@@ -6875,7 +6887,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                                     _paired_rows.append({
                                         "Type": _ptype,
-                                        "Time (NYC)": _nyc_time.strftime("%H:%M:%S") if _nyc_time is not pd.NaT else "—",
+                                        _time_col: _local_time.strftime("%H:%M:%S") if _local_time is not pd.NaT else "—",
                                         "CCY": _ccy_p,
                                         "Opt Expiry": _e_p,
                                         "Swp Tenor": _t_p if _t_p and _t_p not in ("—","NA","None","") else "—",
@@ -6900,7 +6912,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _s_prem = float(_s_row.get("premium_amount") or 0)
                     _s_not = float(_s_row.get("notional_leg1") or 0)
                     _s_bp = round(_s_prem / _s_not * 10000, 2) if _s_not > 0 else 0
-                    _s_time = _to_nyc(_s_row.get("event_timestamp"))
+                    _s_time = _to_local(_s_row.get("event_timestamp"))
                     _pc_label = "🟢 Payer" if _ot == "CALL" else "🔴 Receiver" if _ot == "PUT" else f"⚪ {_ot}"
                     _s_swp = str(_s_row.get("swp_tenor", "") or "").strip()
                     _s_opt = str(_s_row.get("opt_tenor", "") or "").strip()
@@ -6911,7 +6923,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _pc_label = "🟥 Floor"
                     _single_rows.append({
                         "Type": _pc_label,
-                        "Time (NYC)": _s_time.strftime("%H:%M:%S") if _s_time is not pd.NaT else "—",
+                        _time_col: _s_time.strftime("%H:%M:%S") if _s_time is not pd.NaT else "—",
                         "CCY": str(_s_row.get("notional_ccy", "")),
                         "Opt Expiry": str(_s_row.get("opt_tenor", "—")),
                         "Swp Tenor": _s_swp if _s_swp and _s_swp not in ("—","NA","None","") else "—",
@@ -6935,10 +6947,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _e_prem = float(_e_row.get("premium_amount") or 0)
                     _e_not = float(_e_row.get("notional_leg1") or 0)
                     _e_bp = round(_e_prem / _e_not * 10000, 2) if _e_not > 0 else 0
-                    _e_time = _to_nyc(_e_row.get("event_timestamp"))
+                    _e_time = _to_local(_e_row.get("event_timestamp"))
                     _exo_rows.append({
                         "Type": f"🟡 {_ot}",
-                        "Time (NYC)": _e_time.strftime("%H:%M:%S") if _e_time is not pd.NaT else "—",
+                        _time_col: _e_time.strftime("%H:%M:%S") if _e_time is not pd.NaT else "—",
                         "CCY": str(_e_row.get("notional_ccy", "")),
                         "Opt Expiry": str(_e_row.get("opt_tenor", "—")),
                         "Swp Tenor": str(_e_row.get("swp_tenor", "—")),
@@ -6967,7 +6979,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 _all_trades = _paired_rows + _single_rows + _exo_rows
                 if _all_trades:
                     _all_df = pd.DataFrame(_all_trades)
-                    _all_df = _all_df.sort_values("Time (NYC)", ascending=False).reset_index(drop=True)
+                    _all_df = _all_df.sort_values(_time_col, ascending=False).reset_index(drop=True)
                     st.dataframe(_all_df, use_container_width=True, hide_index=True,
                                  height=min(60 + len(_all_df) * 35, 700))
 
@@ -7851,7 +7863,7 @@ def vol_config_tab():
                 
                 for snap in snapshots:
                     try:
-                        import pytz as _pytz_s; _syd_s = _pytz_s.timezone('Australia/Sydney')
+                        from zoneinfo import ZoneInfo as _ZI_s; _syd_s = _ZI_s('Australia/Sydney')
                         _cat_s = snap['created_at'].replace(tzinfo=__import__('datetime').timezone.utc).astimezone(_syd_s)
                         _snap_time_lbl = _cat_s.strftime('%Y-%m-%d %H:%M AEST')
                     except:
