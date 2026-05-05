@@ -6532,6 +6532,13 @@ Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
             strike = f"{r['strike_pct']:.5f}%" if pd.notna(r.get("strike_pct")) else "—"
             prem   = _fmt_premium(r.get("premium_amount")) if pd.notna(r.get("premium_amount")) else "—"
             not1   = _fmt_notional(r.get("notional_leg1"))
+            _prem_raw = r.get("premium_amount")
+            _not1_raw = r.get("notional_leg1")
+            if pd.notna(_prem_raw) and pd.notna(_not1_raw) and _not1_raw and float(_not1_raw) > 0:
+                _prem_bp = round(float(_prem_raw) / float(_not1_raw) * 10000, 2)
+                _prem_bp_str = f"{_prem_bp:.2f}"
+            else:
+                _prem_bp_str = "—"
             und    = (r.get("upi_underlier_name") or "—").replace("NA/Swap ","").replace(" Compound","")
             rows_html.append({
                 "Time":       _ts_fmt_tz(r.get("event_timestamp"), user_tz),
@@ -6543,6 +6550,7 @@ Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
                 "Underlying": _clean_underlying(r.get("upi_underlier_name",""), r.get("upi_fisn","")),
                 "Strike %":   strike,
                 "Premium":    prem,
+                "Prem BP":    _prem_bp_str,
                 "Notional":   not1,
                 "Cleared":    r.get("cleared","—"),
                 "Platform":   PLATFORM_NAMES.get(r.get("platform_identifier",""), r.get("platform_identifier","—")),
@@ -6565,6 +6573,7 @@ Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
                 "Underlying": st.column_config.TextColumn("Underlying", width="medium"),
                 "Strike %":   st.column_config.TextColumn("Strike %",   width="small"),
                 "Premium":    st.column_config.TextColumn("Premium",    width="small"),
+                "Prem BP":    st.column_config.TextColumn("Prem BP",    width="small"),
                 "Notional":   st.column_config.TextColumn("Notional",   width="small"),
                 "Cleared":    st.column_config.TextColumn("Clrd",       width="small"),
                 "Platform":   st.column_config.TextColumn("Platform",   width="small"),
