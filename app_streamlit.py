@@ -28086,6 +28086,8 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
 
     # ── 13. Tenor Butterfly (tenor dimension) ─────────────────────────────
     # Most common vol RV trade: 2Y/5Y/10Y fly, 2Y/5Y/20Y fly at each expiry
+    # Recalibrated v0505g: threshold 1.5→5bp, multiplier ×8→×4, cap 80→65
+    # Redundancy filter: if two flies share the same belly (exp+mid tenor), keep widest only
     if atm is not None:
         _TENOR_FLY_STRUCTS = [
             (2, 5, 10, "2/5/10"),
@@ -28094,6 +28096,7 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
             (5, 10, 30, "5/10/30"),
             (2, 10, 30, "2/10/30"),
         ]
+        _tfly_candidates = {}  # key=(exp_lbl, t_mid) → best candidate
         for exp_lbl in ["1m", "3m", "6m", "1y", "2y", "5y"]:
             for t_short, t_mid, t_long, fly_label in _TENOR_FLY_STRUCTS:
                 v_s = get_matrix_value(atm, exp_lbl, float(t_short))
@@ -28105,11 +28108,11 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                 w_short = (t_long - t_mid) / (t_long - t_short)
                 w_long = (t_mid - t_short) / (t_long - t_short)
                 fly = v_m - (w_short * v_s + w_long * v_l)
-                if abs(fly) > 1.5:
+                if abs(fly) > 5.0:
                     direction = "Sell belly" if fly > 0 else "Buy belly"
-                    ideas.append({
+                    candidate = {
                         "Type": "Tenor Butterfly",
-                        "Score": min(abs(fly) * 8, 80),
+                        "Score": min(abs(fly) * 4, 65),
                         "Structure": f"{exp_lbl}×{fly_label}Y fly",
                         "Direction": direction,
                         "Trade": (f"{'Sell' if fly>0 else 'Buy'} {exp_lbl}×{t_mid}Y, "
@@ -28119,7 +28122,16 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                                       f"wings by {abs(fly):.1f}bp — weighted butterfly."),
                         "Risk": "Tenor curve can stay dislocated; carry depends on rate moves",
                         "e1": exp_lbl, "e2": exp_lbl, "tn": f"{t_mid}Y", "tn_y": t_mid,
-                    })
+                        "_fly_abs": abs(fly),
+                    }
+                    belly_key = (exp_lbl, t_mid)
+                    existing = _tfly_candidates.get(belly_key)
+                    if existing is None or abs(fly) > existing["_fly_abs"]:
+                        _tfly_candidates[belly_key] = candidate
+        # Emit only the best fly per belly
+        for cand in _tfly_candidates.values():
+            cand.pop("_fly_abs", None)
+            ideas.append(cand)
 
     # ── 14. Historical Percentile Ranking ─────────────────────────────────
     # Where is current vol vs its range over last N snapshots?
@@ -28534,8 +28546,19 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                     "tn": tn, "tn_y": group[0].get("tn_y", 5),
                 })
 
-    ideas.sort(key=lambda x: x.get("Score", 0), reverse=True)
-    return ideas
+    # ── Per-type diversity cap (v0505g) ─────────────────────────────────
+    # Keep only top 3 ideas per signal type to ensure mixed output
+    _MAX_PER_TYPE = 3
+    _by_type = {}
+    for idea in ideas:
+        _by_type.setdefault(idea["Type"], []).append(idea)
+    ideas_capped = []
+    for _type, _group in _by_type.items():
+        _group.sort(key=lambda x: x.get("Score", 0), reverse=True)
+        ideas_capped.extend(_group[:_MAX_PER_TYPE])
+
+    ideas_capped.sort(key=lambda x: x.get("Score", 0), reverse=True)
+    return ideas_capped
 
 
 
