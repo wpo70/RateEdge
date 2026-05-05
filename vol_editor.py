@@ -502,8 +502,17 @@ return new THREE.Color().setHSL(h,s,l);
 
 // Change color (green/red)
 function getChgCol(v,b){{
-const d=v-b,m=Math.max((D.zMax-D.zMin)*0.05,5);
-const t=Math.max(-1,Math.min(1,d/m));
+const d=v-b;
+// Premium mode: use percentage change so small-value cells light up correctly
+// Vol mode: use absolute change scaled by range (original behaviour)
+let t;
+if(D.viewMode==='fwd_premium'){{
+  const pct=b>0.1?(d/b):0;
+  t=Math.max(-1,Math.min(1,pct/0.08));// ±8% = full color
+}}else{{
+  const m=Math.max((D.zMax-D.zMin)*0.05,5);
+  t=Math.max(-1,Math.min(1,d/m));
+}}
 if(Math.abs(t)<0.02)return null;
 return t>0?new THREE.Color(0.2,0.5+0.4*t,0.2):new THREE.Color(0.5+0.4*Math.abs(t),0.2,0.2);
 }}
@@ -654,7 +663,8 @@ const{{i,j}}=pt.userData,d=vals[i][j]-baseVals[i][j];
 tip.style.display='block';
 tip.style.left=(e.clientX-r.left+15)+'px';
 tip.style.top=(e.clientY-r.top-10)+'px';
-const chgStr=Math.abs(d)>0.1?(d>=0?`<span style="color:#22c55e">+${{d.toFixed(1)}}</span>`:`<span style="color:#dc2626">${{d.toFixed(1)}}</span>`):'<span style="color:#64748b">no change</span>';
+const pctStr=D.viewMode==='fwd_premium'&&baseVals[i][j]>0.1?` (${{(d/baseVals[i][j]*100).toFixed(1)}}%)`:'';
+const chgStr=Math.abs(d)>0.1?(d>=0?`<span style="color:#22c55e">+${{d.toFixed(1)}}${{pctStr}}</span>`:`<span style="color:#dc2626">${{d.toFixed(1)}}${{pctStr}}</span>`):'<span style="color:#64748b">no change</span>';
 tip.innerHTML=`<b>${{D.expiries[i]}} × ${{D.tenors[j]}}</b><br>${{vals[i][j].toFixed(1)}} ${{D.zLabel}}<br>${{chgStr}}`;
 }}else tip.style.display='none';
 }};
