@@ -16178,7 +16178,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     if _ex_active == 2:
         st.markdown("### Bermudan Swaption / Callable Swap")
-        st.caption("Hull-White 1F trinomial tree, calibrated to co-terminal swaptions from ATM surface.")
+        st.caption("Hull-White 1F trinomial tree (200+ steps), calibrated to co-terminal swaptions from ATM surface.")
 
         berm_type = st.radio("Structure",
             ["Bermudan Payer", "Bermudan Receiver", "Callable Swap (pay-fixed)"],
@@ -16218,7 +16218,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
             ex_dates.append(round(t, 4))
             t += berm_freq
         if not ex_dates:
-            st.warning("No valid exercise dates   —   check First Call ≤ Final Maturity  →  Swap Tenor.")
+            st.warning("No valid exercise dates — check First Call <= Final Maturity - Swap Tenor.")
             st.stop()
 
         st.caption(f"Exercise dates: {', '.join(f'{t}y' for t in ex_dates)} "
@@ -16234,280 +16234,366 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
                                round(fwd_b * 100, 3), step=0.01,
                                format="%.4f", key="berm_strike") / 100.0
 
-        # ── Hull-White 1F trinomial tree ─────────────────────────────
-        if st.button("⚙️ Price Bermudan (HW1F Tree)", key="berm_price"):
-            with st.spinner("Calibrating HW1F to co-terminal swaptions and running trinomial tree├ö├ç┬¬"):
+        # ── Price Button ─────────────────────────────────────────────
+        if st.button("Price Bermudan (HW1F Tree)", key="berm_price", type="primary"):
+            with st.spinner("Calibrating HW1F and running trinomial tree..."):
                 try:
-                    # Calibrate ┬ñ├ó to co-terminal swaptions
-                    # Co-terminal: for each ex date T_i, calibrate to swaption expiring T_i into (T_final - T_i) swap
-                    def hw_swaption_price(sigma_hw, a, T_exp, T_sw, curve_df, ois_df):
-                        """Analytic HW1F swaption price (Jamshidian decomposition)."""
-                        if curve_df is None:
-                            return 0.0
-                        # Bond prices P(0,T)
-                        def P(t):
-                            if ois_df is not None:
-                                xs = ois_df["MaturityY"].to_numpy().astype(float)
-                                ys = ois_df["ZeroRatePct"].to_numpy().astype(float) / 100.0
-                            else:
-                                xs = curve_df["MaturityY"].to_numpy().astype(float)
-                                ys = curve_df["ZeroRatePct"].to_numpy().astype(float) / 100.0
-                            r = float(np.interp(t, xs, ys))
-                            return math.exp(-r * t)
-                        # HW B function
-                        def B(s, t):
-                            return (1 - math.exp(-a * (t - s))) / a if a > 1e-8 else (t - s)
-                        # HW sigma of ln P(T_exp, T_pay)
-                        def sigma_P(T_exp_, T_pay_):
-                            return sigma_hw * B(T_exp_, T_pay_) * math.sqrt(
-                                (1 - math.exp(-2*a*T_exp_)) / (2*a)) if a > 1e-8 else \
-                                sigma_hw * (T_pay_ - T_exp_) * math.sqrt(T_exp_)
-                        # Coupon swap schedule
-                        freq_sw = 0.25 if T_sw <= 3 else 0.5
-                        pay_times = []
-                        tt = T_exp + freq_sw
-                        while tt <= T_exp + T_sw + 1e-6:
-                            pay_times.append(round(tt, 6))
-                            tt += freq_sw
-                        if not pay_times:
-                            return 0.0
-                        # Coupon = forward swap rate
-                        fwd_sw, ann_sw, _ = forward_and_annuity_from_curve(
-                            curve_df, ccy, T_exp, T_sw, ois_df)
-                        c = fwd_sw  # strike = ATM for calibration
-                        # Jamshidian: find r* such that > c_i P(T_exp, T_i; r*) = 1
-                        def swap_val_at_r(r_star):
-                            total = 0.0
-                            for i, T_i in enumerate(pay_times):
-                                accrual = T_i - (pay_times[i-1] if i > 0 else T_exp)
-                                coupon = K_b * accrual + (1.0 if i == len(pay_times)-1 else 0.0)
-                                # P(T_exp, T_i | r*) in HW
-                                Pb = P(T_i) / P(T_exp) * math.exp(
-                                    -B(T_exp, T_i) * r_star -
-                                    0.5 * sigma_hw**2 * B(T_exp, T_i)**2 *
-                                    (1 - math.exp(-2*a*T_exp)) / (2*a))
-                                total += coupon * Pb
-                            return total - 1.0
-                        try:
-                            r_star = scipy.optimize.brentq(swap_val_at_r, -0.5, 0.5, xtol=1e-8)
-                        except Exception:
-                            r_star = 0.0
-                        # Sum of bond puts
-                        from statistics import NormalDist as _nd_j
-                        _ndj = _nd_j()
-                        total_pv_hw = 0.0
-                        for i, T_i in enumerate(pay_times):
-                            accrual = T_i - (pay_times[i-1] if i > 0 else T_exp)
-                            X_i = (K_b * accrual + (1.0 if i == len(pay_times)-1 else 0.0))
-                            # K* for this bond
-                            Pb_star = P(T_i) / P(T_exp) * math.exp(
-                                -B(T_exp, T_i) * r_star -
-                                0.5 * sigma_hw**2 * B(T_exp, T_i)**2 *
-                                (1 - math.exp(-2*a*T_exp)) / (2*a))
-                            K_star_i = X_i * Pb_star
-                            sig_i = sigma_P(T_exp, T_i)
-                            if sig_i < 1e-10:
-                                continue
-                            d1_j = math.log(P(T_i) / (K_star_i * P(T_exp))) / sig_i + sig_i / 2
-                            d2_j = d1_j - sig_i
-                            total_pv_hw += X_i * (
-                                P(T_exp) * K_star_i * _ndj.cdf(-d2_j) - P(T_i) * _ndj.cdf(-d1_j))
-                        return total_pv_hw
+                    import numpy as _np2
 
-                    # Get market ATM vols for co-terminal swaptions
+                    # ── OIS zero curve accessor ──────────────────────
+                    def _ois_zero(t_):
+                        if ois_curve is not None:
+                            xs = ois_curve["MaturityY"].to_numpy().astype(float)
+                            ys = ois_curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
+                        elif curve is not None:
+                            xs = curve["MaturityY"].to_numpy().astype(float)
+                            ys = curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
+                        else:
+                            return 0.04
+                        return float(np.interp(max(t_, 0.001), xs, ys))
+
+                    def _P0(t_):
+                        """Market discount factor P(0, t)."""
+                        return math.exp(-_ois_zero(t_) * t_) if t_ > 0 else 1.0
+
+                    def _f0(t_):
+                        """Instantaneous forward rate f(0, t)."""
+                        dt_ = 0.0005
+                        return -( math.log(_P0(t_ + dt_)) - math.log(_P0(t_)) ) / dt_
+
+                    # ── HW1F bond price P(t, T | r) ─────────────────
+                    def _B_hw(t_, T_):
+                        return (1.0 - math.exp(-hw_mr * (T_ - t_))) / hw_mr if hw_mr > 1e-8 else (T_ - t_)
+
+                    def _lnA_hw(t_, T_, sigma_hw_):
+                        B_ = _B_hw(t_, T_)
+                        lnA = math.log(_P0(T_) / _P0(t_)) + B_ * _f0(t_) - \
+                              (sigma_hw_**2 / (4.0 * hw_mr)) * (1.0 - math.exp(-2.0 * hw_mr * t_)) * B_**2
+                        return lnA
+
+                    def _P_hw(t_, T_, r_, sigma_hw_):
+                        """HW1F bond price at time t given short rate r."""
+                        if T_ <= t_ + 1e-8:
+                            return 1.0
+                        return math.exp(_lnA_hw(t_, T_, sigma_hw_) - _B_hw(t_, T_) * r_)
+
+                    # ── Swap value at exercise node using HW bond prices ──
+                    def _swap_value_at_node(T_ex_, r_, sigma_hw_, is_payer_):
+                        """Proper swap PV using HW-shifted discount factors."""
+                        T_rem_ = T_final - T_ex_
+                        if T_rem_ < 0.1:
+                            return 0.0
+                        # Build payment schedule for underlying swap
+                        cpn_freq_ = 0.25 if T_rem_ <= 3 else 0.5
+                        pay_times_ = []
+                        tt_ = T_ex_ + cpn_freq_
+                        while tt_ <= T_ex_ + T_rem_ + 1e-6:
+                            pay_times_.append(round(tt_, 6))
+                            tt_ += cpn_freq_
+                        if not pay_times_:
+                            return 0.0
+                        T_end_ = pay_times_[-1]
+                        # Annuity and floating leg from HW bond prices
+                        annuity_ = 0.0
+                        for k_, T_k in enumerate(pay_times_):
+                            tau_ = T_k - (pay_times_[k_-1] if k_ > 0 else T_ex_)
+                            annuity_ += tau_ * _P_hw(T_ex_, T_k, r_, sigma_hw_)
+                        P_end_ = _P_hw(T_ex_, T_end_, r_, sigma_hw_)
+                        floating_ = 1.0 - P_end_
+                        # Swap rate implied at this node
+                        S_ = floating_ / annuity_ if annuity_ > 1e-12 else 0.0
+                        if is_payer_:
+                            return max((S_ - K_b) * annuity_ * berm_notional * 1e6, 0.0)
+                        else:
+                            return max((K_b - S_) * annuity_ * berm_notional * 1e6, 0.0)
+
+                    # ── Co-terminal vol lookup ───────────────────────
                     def _co_vol(T_exp_, T_sw_):
-                        if atm is None: return 35.0
-                        exp_lbl_ = None
+                        if atm is None:
+                            return 35.0
                         for lbl_ in ["3m","6m","9m","1y","18m","2y","3y","4y","5y","7y","10y","12y","15y","20y"]:
                             if abs(label_to_years(lbl_) - T_exp_) < 0.2:
-                                exp_lbl_ = lbl_
-                                break
-                        if exp_lbl_ is None: return 35.0
-                        v_ = get_matrix_value(atm, exp_lbl_, T_sw_)
-                        return v_ if v_ else 35.0
+                                v_ = get_matrix_value(atm, lbl_, T_sw_)
+                                if v_:
+                                    return v_
+                        return 35.0
 
-                    # Calibrate one ┬ñ├ó_HW per exercise date (piecewise constant)
+                    # ── Calibrate sigma_HW to co-terminal swaptions ──
                     sigmas_hw = []
                     for T_ex in ex_dates:
                         T_remaining = T_final - T_ex
                         mkt_vol_bp = _co_vol(T_ex, T_remaining)
-                        # Bachelier market price for this co-terminal swaption
-                        fwd_co, ann_co, _ = forward_and_annuity_from_curve(
-                            curve, ccy, T_ex, T_remaining, ois_curve) if curve is not None \
-                            else (0.043, T_remaining, None)
-                        if ois_curve is not None:
-                            xs = ois_curve["MaturityY"].to_numpy().astype(float)
-                            ys = ois_curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
-                            df_co = math.exp(-float(np.interp(T_ex, xs, ys)) * T_ex)
+                        # Market European swaption price (Bachelier)
+                        if curve is not None:
+                            fwd_co, ann_co, _ = forward_and_annuity_from_curve(
+                                curve, ccy, T_ex, T_remaining, ois_curve)
                         else:
-                            df_co = math.exp(-0.043 * T_ex)
-                        sigma_n = mkt_vol_bp / 10000.0
-                        mkt_prem = df_co * (0.3989 * sigma_n * math.sqrt(T_ex) * ann_co)
+                            fwd_co, ann_co = 0.043, T_remaining
+                        sigma_n_ = mkt_vol_bp / 10000.0
+                        sqrt_T_ = math.sqrt(max(T_ex, 0.001))
+                        df_co_ = _P0(T_ex)
+                        mkt_prem_ = df_co_ * ann_co * 0.3989 * sigma_n_ * sqrt_T_  # ATM straddle/2
 
-                        # Find ┬ñ├ó_HW that matches market
-                        def obj_hw(sig_):
-                            hw_p = hw_swaption_price(sig_[0], hw_mr, T_ex, T_remaining, curve, ois_curve)
-                            return [(hw_p * berm_notional * 1e6 - mkt_prem * berm_notional * 1e6)]
+                        # Analytic HW1F European swaption price
+                        def _hw_euro_price(sig_hw_):
+                            # Use Jamshidian decomposition for ATM co-terminal
+                            cpn_freq_c = 0.25 if T_remaining <= 3 else 0.5
+                            pts_ = []
+                            tc_ = T_ex + cpn_freq_c
+                            while tc_ <= T_ex + T_remaining + 1e-6:
+                                pts_.append(round(tc_, 6))
+                                tc_ += cpn_freq_c
+                            if not pts_:
+                                return 0.0
+                            # Simplified: use the HW analytic formula for receiver swaption
+                            # sigma_p = sig_hw * B(T_ex, T_i) * sqrt((1-exp(-2a*T_ex))/(2a))
+                            total_ = 0.0
+                            for k_, T_k in enumerate(pts_):
+                                B_k = _B_hw(T_ex, T_k)
+                                var_p = sig_hw_**2 * B_k**2 * (1.0 - math.exp(-2*hw_mr*T_ex)) / (2*hw_mr) \
+                                        if hw_mr > 1e-8 else sig_hw_**2 * B_k**2 * T_ex
+                                sigma_p_k = math.sqrt(max(var_p, 1e-16))
+                                tau_ = T_k - (pts_[k_-1] if k_ > 0 else T_ex)
+                                w_ = fwd_co * tau_  # coupon weight
+                                if k_ == len(pts_) - 1:
+                                    w_ += 1.0  # principal
+                                # Bond option contribution
+                                total_ += w_ * _P0(T_k) * 0.3989 * sigma_p_k / _P0(T_ex) * 2
+                            return total_ * berm_notional * 1e6 * _P0(T_ex)
+
+                        # Find sigma_HW that matches market
                         try:
-                            sol = scipy.optimize.fsolve(obj_hw, [0.01], full_output=True)
-                            sig_cal = abs(sol[0][0])
+                            def _obj(sig_):
+                                return _hw_euro_price(sig_[0]) - mkt_prem_ * berm_notional * 1e6
+                            sol_ = scipy.optimize.fsolve(_obj, [0.01], full_output=True)
+                            sig_cal_ = abs(sol_[0][0])
                         except Exception:
-                            sig_cal = 0.01
-                        sigmas_hw.append(max(sig_cal, 0.0001))
+                            sig_cal_ = 0.01
+                        sigmas_hw.append(max(sig_cal_, 0.0001))
 
-                    # ── Trinomial tree backward induction ──────────────
-                    # Build tree on [0, T_final] with steps every berm_freq/4
-                    dt = min(berm_freq / 4.0, 0.25 / 4.0)
-                    N_steps = max(int(T_final / dt) + 1, 20)
+                    # Use average calibrated sigma for tree
+                    sigma_hw_tree = sum(sigmas_hw) / len(sigmas_hw)
+
+                    # ── Build trinomial tree ──────────────────────────
+                    N_steps = max(int(T_final * 50), 200)
                     dt = T_final / N_steps
-                    # Grid width: ~M nodes, M = 3 (covers ~3 std devs)
-                    M = 3
-                    dr = math.sqrt(3 * sigmas_hw[-1]**2 * dt) if sigmas_hw else 0.001
+                    dx = sigma_hw_tree * math.sqrt(3.0 * dt)
+                    j_max = 25  # ~50 nodes wide
 
-                    # Get OIS zero curve for discount
-                    def ois_zero(t_):
-                        if ois_curve is not None:
-                            xs = ois_curve["MaturityY"].to_numpy().astype(float)
-                            ys = ois_curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
-                            return float(np.interp(t_, xs, ys))
-                        elif curve is not None:
-                            xs = curve["MaturityY"].to_numpy().astype(float)
-                            ys = curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
-                            return float(np.interp(t_, xs, ys))
-                        return 0.043
+                    is_payer = "Payer" in berm_type or "pay-fixed" in berm_type
 
-                    # Theta for HW: ensures fit to initial discount curve
-                    # ±(t) ├ö├½├¬ ├ö├¬├®f/├ö├¬├®t + a≈f(t) + ┬ñ├ó~/(2a)(1-exp(-2at))
-                    def hw_theta(t_):
-                        dt_s = 0.001
-                        f0 = ois_zero(t_)
-                        f1 = ois_zero(t_ + dt_s)
-                        dfdt = (f1 - f0) / dt_s
-                        return dfdt + hw_mr * f0 + sigmas_hw[-1]**2 / (2*hw_mr) * \
-                               (1 - math.exp(-2*hw_mr*t_)) if hw_mr > 1e-8 else dfdt
+                    # Alpha: calibrated to fit initial term structure
+                    # alpha(t_i) = f(0, t_i) + sigma^2/(2a^2)*(1-exp(-a*t_i))^2
+                    def _alpha(t_):
+                        return _f0(t_) + sigma_hw_tree**2 / (2*hw_mr**2) * \
+                               (1 - math.exp(-hw_mr * t_))**2 if hw_mr > 1e-8 else _f0(t_)
 
-                    # Node short rates: r(i,j) = f(0,t_i) + x(j) + alpha(t_i)
-                    # x(j) = j * dr, alpha calibrated to fit discount curve
-                    # For simplicity: use r(i,j) = ois_zero(t_i) + j*dr
-                    n_nodes = 2 * M + 1
-                    # Initialise: terminal swap values
-                    t_grid = [i * dt for i in range(N_steps + 1)]
+                    # V[j] = option value at node j (-j_max to +j_max)
+                    n_nodes = 2 * j_max + 1
+                    V = _np2.zeros(n_nodes)
 
-                    # Option value at each node   —   backward induction
-                    # V[j] = value at node j at current time step
-                    # j ranges from -M to +M
-                    import numpy as _np2
-
-                    def swap_value_at_node(t_ex_, r_node_):
-                        """PV of underlying swap at an exercise date node."""
-                        if curve is None:
-                            return (fwd_b - K_b) * ann_b * berm_notional * 1e6
-                        # Forward swap rate from node (approx: shift OIS zero by r_node)
-                        # Simplified: use flat rate shift
-                        T_rem_ = T_final - t_ex_
-                        fwd_, ann_, _ = forward_and_annuity_from_curve(
-                            curve, ccy, t_ex_, T_rem_, ois_curve)
-                        # Rate shift: fwd moves roughly 1:1 with short rate shock
-                        fwd_shifted = fwd_ + r_node_
-                        if "Payer" in berm_type or "pay-fixed" in berm_type:
-                            return (fwd_shifted - K_b) * ann_ * berm_notional * 1e6
-                        else:
-                            return (K_b - fwd_shifted) * ann_ * berm_notional * 1e6
-
-                    # Build value array at final maturity (swap has expired)
-                    V = _np2.zeros(2 * M + 1)
-
-                    # Backward from T_final to t=0
+                    # Backward induction from T_final to t=0
                     for i in range(N_steps - 1, -1, -1):
-                        t_i = t_grid[i]
-                        t_next = t_grid[i + 1]
-                        sigma_i = sigmas_hw[min(
-                            sum(1 for te in ex_dates if te <= t_i), len(sigmas_hw)-1)]
-                        dr_i = math.sqrt(3 * sigma_i**2 * dt)
-                        V_new = _np2.zeros(2 * M + 1)
-                        for j in range(-M, M + 1):
-                            r_j = ois_zero(t_i) + j * dr_i
+                        t_i = i * dt
+                        V_new = _np2.zeros(n_nodes)
+                        for j in range(-j_max, j_max + 1):
+                            r_j = _alpha(t_i) + j * dx
                             df_step = math.exp(-r_j * dt)
+
                             # Branching probabilities (standard HW trinomial)
-                            eta = hw_mr * (ois_zero(t_i) - r_j) * dt / dr_i \
-                                  if dr_i > 1e-10 else 0.0
-                            eta = max(min(eta, M - 1), -(M - 1))
-                            k = round(eta)
-                            p_u = (1/6 + (eta - k)**2/2 + (eta - k)/2)
-                            p_m = (2/3 - (eta - k)**2)
-                            p_d = (1/6 + (eta - k)**2/2 - (eta - k)/2)
-                            p_u = max(p_u, 0); p_m = max(p_m, 0); p_d = max(p_d, 0)
-                            s = p_u + p_m + p_d
-                            if s > 0: p_u, p_m, p_d = p_u/s, p_m/s, p_d/s
+                            jdt_a = j * hw_mr * dt if hw_mr > 1e-8 else 0.0
+                            p_u = max(1.0/6.0 + 0.5 * (j**2 * hw_mr**2 * dt**2 - jdt_a * dt / dt), 0.0)
+                            p_m = max(2.0/3.0 - j**2 * hw_mr**2 * dt**2, 0.0)
+                            p_d = max(1.0/6.0 + 0.5 * (j**2 * hw_mr**2 * dt**2 + jdt_a * dt / dt), 0.0)
+
+                            # Simplified: standard probabilities
+                            eta = hw_mr * j * dx * dt / dx if dx > 1e-10 else 0.0
+                            p_u = 1.0/6.0 + (j**2 * hw_mr**2 * dt - j * hw_mr * dt) / 2.0
+                            p_m = 2.0/3.0 - j**2 * hw_mr**2 * dt
+                            p_d = 1.0/6.0 + (j**2 * hw_mr**2 * dt + j * hw_mr * dt) / 2.0
+                            p_u = max(p_u, 0.0); p_m = max(p_m, 0.0); p_d = max(p_d, 0.0)
+                            s_ = p_u + p_m + p_d
+                            if s_ > 0:
+                                p_u /= s_; p_m /= s_; p_d /= s_
+
+                            # Successor nodes (clamped to grid)
+                            j_u = min(j + 1, j_max)
+                            j_m = j
+                            j_d = max(j - 1, -j_max)
+
                             # Continuation value
-                            j_u = min(j + k + 1, M); j_m = min(j + k, M); j_d = max(j + k - 1, -M)
-                            j_u = max(j_u, -M); j_d = min(j_d, M)
-                            cont = df_step * (p_u * V[j_u + M] + p_m * V[j_m + M] + p_d * V[j_d + M])
-                            # Exercise check
-                            if any(abs(t_i - te) < dt / 2 for te in ex_dates):
-                                exercise = max(swap_value_at_node(t_i, j * dr_i), 0.0)
-                                V_new[j + M] = max(cont, exercise)
+                            cont = df_step * (p_u * V[j_u + j_max] + p_m * V[j_m + j_max] + p_d * V[j_d + j_max])
+
+                            # Exercise check: is this an exercise date?
+                            is_ex = any(abs(t_i - te) < dt / 2.0 for te in ex_dates)
+                            if is_ex:
+                                exercise = _swap_value_at_node(t_i, r_j, sigma_hw_tree, is_payer)
+                                V_new[j + j_max] = max(cont, exercise)
                             else:
-                                V_new[j + M] = cont
+                                V_new[j + j_max] = cont
                         V = V_new
 
-                    # Price = V[M] (j=0 node at t=0)
-                    berm_pv = V[M]
+                    berm_pv = V[j_max]  # j=0 node at t=0
                     berm_pv_bp = berm_pv / (berm_notional * 1e6) * 10000.0
 
-                    # European swaption for comparison (first exercise date)
+                    # ── European comparison using swaptions pricer ────
                     if curve is not None:
                         fwd_e, ann_e, _ = forward_and_annuity_from_curve(
                             curve, ccy, ex_dates[0], T_swap, ois_curve)
                     else:
                         fwd_e, ann_e = fwd_b, ann_b
-                    mkt_vol_e = _co_vol(ex_dates[0], T_swap) / 10000.0
-                    if ois_curve is not None:
-                        xs = ois_curve["MaturityY"].to_numpy().astype(float)
-                        ys = ois_curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
-                        df_e = math.exp(-float(np.interp(ex_dates[0], xs, ys)) * ex_dates[0])
-                    else:
-                        df_e = math.exp(-0.043 * ex_dates[0])
-                    from statistics import NormalDist as _nd_b
-                    _ndb = _nd_b()
-                    sqrt_e = math.sqrt(ex_dates[0])
-                    if "Payer" in berm_type or "pay-fixed" in berm_type:
-                        euro_pv = df_e * berm_notional * 1e6 * (
-                            (fwd_e - K_b) * _ndb.cdf((fwd_e - K_b)/(mkt_vol_e*sqrt_e) if mkt_vol_e*sqrt_e > 0 else 0) +
-                            mkt_vol_e * sqrt_e * _ndb.pdf((fwd_e - K_b)/(mkt_vol_e*sqrt_e) if mkt_vol_e*sqrt_e > 0 else 0)
-                        ) * ann_e
-                    else:
-                        euro_pv = df_e * berm_notional * 1e6 * (
-                            (K_b - fwd_e) * _ndb.cdf((K_b - fwd_e)/(mkt_vol_e*sqrt_e) if mkt_vol_e*sqrt_e > 0 else 0) +
-                            mkt_vol_e * sqrt_e * _ndb.pdf((fwd_e - K_b)/(mkt_vol_e*sqrt_e) if mkt_vol_e*sqrt_e > 0 else 0)
-                        ) * ann_e
+                    mkt_vol_e = _co_vol(ex_dates[0], T_swap)
+                    r_disc_e = _ois_zero(ex_dates[0])
+
+                    euro_ticket = SwaptionTicket()
+                    euro_ticket.side = "payer" if is_payer else "receiver"
+                    euro_ticket.payoff_type = "vanilla"
+                    euro_ticket.notional = berm_notional * 1e6
+                    euro_ticket.currency = ccy
+                    euro_ticket.expiry_years = ex_dates[0]
+                    euro_ticket.swap_tenor_years = T_swap
+                    euro_ticket.forward = fwd_e
+                    euro_ticket.strike = K_b
+                    euro_ticket.vol = mkt_vol_e / 10000.0
+                    euro_ticket.discount_rate = r_disc_e
+                    euro_ticket.annuity = ann_e
+                    euro_ticket.model = "Normal"
+                    euro_result = bachelier_swaption_vanilla(euro_ticket)
+                    euro_pv = euro_result["pv"]
                     euro_bp = euro_pv / (berm_notional * 1e6) * 10000.0
 
+                    # ── Greeks via bump-and-reprice ────────────────────
+                    # Delta: bump all rates +1bp, reprice
+                    bump_bp = 0.0001  # 1bp
+                    def _reprice_with_bump(rate_bump_, vol_bump_bp_=0.0):
+                        """Reprice Bermudan with parallel rate and vol bumps."""
+                        def _P0_b(t_b):
+                            return math.exp(-(_ois_zero(t_b) + rate_bump_) * t_b) if t_b > 0 else 1.0
+                        def _f0_b(t_b):
+                            dt_b = 0.0005
+                            return -(math.log(_P0_b(t_b + dt_b)) - math.log(_P0_b(t_b))) / dt_b
+                        def _alpha_b(t_b):
+                            return _f0_b(t_b) + sigma_hw_tree**2 / (2*hw_mr**2) * \
+                                   (1 - math.exp(-hw_mr * t_b))**2 if hw_mr > 1e-8 else _f0_b(t_b)
+                        def _P_hw_b(t_b, T_b, r_b):
+                            if T_b <= t_b + 1e-8: return 1.0
+                            B_b = _B_hw(t_b, T_b)
+                            lnA_b = math.log(_P0_b(T_b) / _P0_b(t_b)) + B_b * _f0_b(t_b) - \
+                                    (sigma_hw_tree**2 / (4.0 * hw_mr)) * (1.0 - math.exp(-2*hw_mr*t_b)) * B_b**2
+                            return math.exp(lnA_b - B_b * r_b)
+                        def _sv_b(T_ex_b, r_b):
+                            T_rem_b = T_final - T_ex_b
+                            if T_rem_b < 0.1: return 0.0
+                            cpn_freq_b = 0.25 if T_rem_b <= 3 else 0.5
+                            pts_b = []
+                            tc_b = T_ex_b + cpn_freq_b
+                            while tc_b <= T_ex_b + T_rem_b + 1e-6:
+                                pts_b.append(round(tc_b, 6)); tc_b += cpn_freq_b
+                            if not pts_b: return 0.0
+                            ann_b_ = sum((pts_b[k]-( pts_b[k-1] if k>0 else T_ex_b)) *
+                                          _P_hw_b(T_ex_b, pts_b[k], r_b) for k in range(len(pts_b)))
+                            P_end_b = _P_hw_b(T_ex_b, pts_b[-1], r_b)
+                            S_b = (1.0 - P_end_b) / ann_b_ if ann_b_ > 1e-12 else 0.0
+                            if is_payer:
+                                return max((S_b - K_b) * ann_b_ * berm_notional * 1e6, 0.0)
+                            else:
+                                return max((K_b - S_b) * ann_b_ * berm_notional * 1e6, 0.0)
+                        Vb = _np2.zeros(n_nodes)
+                        for i_b in range(N_steps - 1, -1, -1):
+                            t_ib = i_b * dt
+                            Vb_new = _np2.zeros(n_nodes)
+                            for j_b in range(-j_max, j_max + 1):
+                                r_jb = _alpha_b(t_ib) + j_b * dx
+                                df_b = math.exp(-r_jb * dt)
+                                p_ub = 1.0/6 + (j_b**2*hw_mr**2*dt - j_b*hw_mr*dt)/2
+                                p_mb = 2.0/3 - j_b**2*hw_mr**2*dt
+                                p_db = 1.0/6 + (j_b**2*hw_mr**2*dt + j_b*hw_mr*dt)/2
+                                p_ub=max(p_ub,0);p_mb=max(p_mb,0);p_db=max(p_db,0)
+                                sb_=p_ub+p_mb+p_db
+                                if sb_>0: p_ub/=sb_;p_mb/=sb_;p_db/=sb_
+                                j_ub=min(j_b+1,j_max);j_db=max(j_b-1,-j_max)
+                                cont_b=df_b*(p_ub*Vb[j_ub+j_max]+p_mb*Vb[j_b+j_max]+p_db*Vb[j_db+j_max])
+                                is_ex_b=any(abs(t_ib-te)<dt/2 for te in ex_dates)
+                                if is_ex_b:
+                                    Vb_new[j_b+j_max]=max(cont_b, _sv_b(t_ib, r_jb))
+                                else:
+                                    Vb_new[j_b+j_max]=cont_b
+                            Vb = Vb_new
+                        return Vb[j_max]
+
+                    pv_up = _reprice_with_bump(bump_bp)
+                    pv_dn = _reprice_with_bump(-bump_bp)
+                    delta_dollar = (pv_up - pv_dn) / 2.0  # $ change per 1bp parallel shift
+                    gamma_dollar = (pv_up - 2*berm_pv + pv_dn) / (bump_bp**2) * 0.0001  # convexity
+
+                    # Vega: bump all co-terminal vols +1bp, reprice (simplified: scale PV)
+                    # Since Bermudan ~ f(sigma), vega ~ d(PV)/d(sigma) * 1bp
+                    # Approximate: use European vega as proxy (Bermudan vega ~ 1.0-1.3x European)
+                    euro_vega = euro_result.get("vega", 0.0)
+                    berm_vega_approx = euro_vega * (berm_pv / euro_pv if euro_pv > 0 else 1.0)
+
+                    # ── Results display ────────────────────────────────
                     st.markdown("---")
                     br1, br2, br3, br4 = st.columns(4)
-                    br1.metric("Bermudan PV (AUD)", f"${berm_pv:,.0f}")
+                    br1.metric(f"Bermudan PV ({ccy})", f"${berm_pv:,.0f}")
                     br2.metric("Bermudan PV (bp)", f"{berm_pv_bp:.2f}bp")
-                    br3.metric("European PV (first call)", f"${euro_pv:,.0f}")
+                    br3.metric("European PV (1st call)", f"${euro_pv:,.0f}")
                     br4.metric("Bermudan Premium", f"${berm_pv - euro_pv:,.0f}",
                                delta=f"{berm_pv_bp - euro_bp:.2f}bp over European")
 
-                    with st.expander("📅 HW1F Calibration   —   Co-terminal ┬ñ├ó"):
+                    # Greeks row
+                    gr1, gr2, gr3, gr4 = st.columns(4)
+                    gr1.metric("Delta ($/1bp)", f"${delta_dollar:,.0f}")
+                    gr2.metric("Gamma ($/1bp^2)", f"${gamma_dollar:,.0f}")
+                    gr3.metric("Vega ($/1bp vol)", f"${berm_vega_approx:,.0f}")
+                    gr4.metric("Berm/Euro Ratio", f"{berm_pv/euro_pv:.3f}x" if euro_pv > 0 else "N/A")
+
+                    # ── Callable Swap Economics ────────────────────────
+                    if "Callable" in berm_type:
+                        st.markdown("---")
+                        st.markdown("#### Callable Swap Economics")
+                        # Underlying swap PV (pay fixed K, receive floating, to T_final)
+                        if curve is not None:
+                            fwd_full, ann_full, _ = forward_and_annuity_from_curve(
+                                curve, ccy, 0.0, T_final, ois_curve)
+                        else:
+                            fwd_full, ann_full = 0.043, T_final
+                        swap_pv = (fwd_full - K_b) * ann_full * berm_notional * 1e6
+                        swap_pv_bp = swap_pv / (berm_notional * 1e6) * 10000.0
+                        callable_pv = swap_pv - berm_pv  # issuer's callable = swap - option
+                        callable_bp = callable_pv / (berm_notional * 1e6) * 10000.0
+
+                        cs1, cs2, cs3 = st.columns(3)
+                        cs1.metric("Underlying Swap PV", f"${swap_pv:,.0f}",
+                                   delta=f"{swap_pv_bp:.2f}bp")
+                        cs2.metric("Optionality Cost", f"${berm_pv:,.0f}",
+                                   delta=f"{berm_pv_bp:.2f}bp")
+                        cs3.metric("Callable Swap PV", f"${callable_pv:,.0f}",
+                                   delta=f"{callable_bp:.2f}bp")
+                        st.caption(f"Callable = Swap PV ({swap_pv_bp:.2f}bp) minus "
+                                   f"Bermudan option ({berm_pv_bp:.2f}bp) = {callable_bp:.2f}bp. "
+                                   f"Issuer pays fixed {K_b*100:.4f}% to {berm_final_sel}, "
+                                   f"callable from {berm_first_call} ({berm_freq_sel}).")
+
+                    # ── Calibration detail ─────────────────────────────
+                    with st.expander("HW1F Calibration — Co-terminal sigma"):
                         df_cal = pd.DataFrame([{
                             "Exercise Date": f"{te:.2f}y",
                             "Co-terminal Swap": f"{T_final-te:.1f}Y",
                             "Mkt Vol (bp)": f"{_co_vol(te, T_final-te):.1f}",
-                            "HW ┬ñ├ó (%)": f"{sigmas_hw[i]*100:.4f}",
-                        } for i, te in enumerate(ex_dates)])
+                            "HW sigma (%)": f"{sigmas_hw[idx]*100:.4f}",
+                        } for idx, te in enumerate(ex_dates)])
                         st.dataframe(df_cal, use_container_width=True, hide_index=True)
-                        st.caption(f"Mean reversion a = {hw_mr*100:.2f}%  |  "
-                                   f"Tree: {N_steps} steps, dt={dt:.4f}y, dr={dr_i:.6f}, M=~{M}")
+                        st.caption(f"Mean reversion a = {hw_mr*100:.2f}% | "
+                                   f"Tree sigma = {sigma_hw_tree*100:.4f}% (avg calibrated) | "
+                                   f"Tree: {N_steps} steps, dt={dt:.5f}y, dx={dx:.6f}, "
+                                   f"j_max={j_max} ({n_nodes} nodes wide)")
 
                 except Exception as e:
                     st.error(f"Pricing error: {e}")
                     import traceback
                     st.code(traceback.format_exc())
 
-    # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     # TAB 4   —   DIGITAL LADDER (existing)
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     if _ex_active == 3:
