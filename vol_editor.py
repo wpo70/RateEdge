@@ -1,891 +1,1144 @@
 """
-RateEdge Vol Surface Editor
-===========================
-A hybrid 2D/3D volatility surface editor for interest rate derivatives.
-
-Features:
-- Interactive 3D Plotly surface (rotatable, zoomable - read-only)
-- Editable 2D data grid with real-time 3D sync
-- Undo/redo functionality
-- Publish to pricing engine
-- RateEdge brand styling (Navy/Blue/Red on dark theme)
-
-Usage:
-    from vol_editor import render_vol_surface_editor
-    
-    updated_surface = render_vol_surface_editor(
-        ccy="AUD",
-        atm_surface=my_vol_dataframe
-    )
+RateEdge Vol Surface Editor - Full Version
+Features: 3D drag with smoothing, change colors (green/red), Vol/Premium toggle, Plasma heatmap
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from typing import Optional, Tuple, List
-from dataclasses import dataclass
-from copy import deepcopy
+from typing import Optional, Dict
 import json
 
-# =============================================================================
-# RATEEDGE BRAND CONSTANTS
-# =============================================================================
+try:
+    from streamlit_js_eval import streamlit_js_eval
+    HAS_JS_EVAL = True
+except ImportError:
+    HAS_JS_EVAL = False
 
-BRAND = {
-    "navy": "#1e3a5f",
-    "blue": "#2563eb", 
-    "red": "#dc2626",
-    "slate_bg": "#0f172a",
-    "slate_800": "#1e293b",
-    "slate_700": "#334155",
-    "slate_600": "#475569",
-    "slate_400": "#94a3b8",
-    "slate_300": "#cbd5e1",
-    "white": "#ffffff",
-    "green": "#22c55e",
-    "amber": "#f59e0b",
-}
-
-# Plotly colorscale matching RateEdge brand
-RATEEDGE_COLORSCALE = [
-    [0.0, "#1e3a5f"],      # Navy (low vols)
-    [0.25, "#2563eb"],     # Blue
-    [0.5, "#6366f1"],      # Indigo transition
-    [0.75, "#f59e0b"],     # Amber (mid-high)
-    [1.0, "#dc2626"],      # Red (high vols)
+HEATMAP_COLORSCALE = [
+    [0.00, "#0d0887"], [0.15, "#46039f"], [0.30, "#7201a8"], [0.45, "#9c179e"],
+    [0.60, "#bd3786"], [0.75, "#ed7953"], [0.90, "#fca636"], [1.00, "#f0f921"],
 ]
 
-# =============================================================================
-# SESSION STATE MANAGEMENT
-# =============================================================================
+EXPIRY_YEARS = {
+    "1W": 1/52, "2W": 2/52, "1M": 1/12, "2M": 2/12, "3M": 0.25, "6M": 0.5,
+    "9M": 0.75, "1Y": 1.0, "18M": 1.5, "2Y": 2.0, "3Y": 3.0, "4Y": 4.0,
+    "5Y": 5.0, "7Y": 7.0, "10Y": 10.0, "15Y": 15.0, "20Y": 20.0, "30Y": 30.0,
+}
 
-def _init_editor_state(ccy: str, atm_surface: pd.DataFrame) -> None:
-    """Initialize session state for the vol editor."""
+DEFAULT_SMOOTHING = {"enabled": True, "radius": 1, "falloff": 0.5}
+
+
+_lty_cache = {}
+def label_to_years(label: str) -> float:
+    orig = str(label)
+    if orig in _lty_cache: return _lty_cache[orig]
+    s = orig.upper().strip()
+    if s in EXPIRY_YEARS:
+        _lty_cache[orig] = EXPIRY_YEARS[s]
+        return _lty_cache[orig]
+    if s.endswith("M"):
+        _lty_cache[orig] = float(s[:-1]) / 12
+        return _lty_cache[orig]
+    if s.endswith("Y"):
+        _lty_cache[orig] = float(s[:-1])
+        return _lty_cache[orig]
+    _lty_cache[orig] = 1.0
+    return 1.0
+
+
+def vol_to_premium(vol_bp: float, T: float, tenor_years: float = 10.0) -> float:
+    """
+    Normal vol (bp) -> ATM straddle FORWARD premium (bp running).
+    Formula: Fwd Premium = 2 × 0.3989 × σ(bp) × √T × annuity_approx
+    annuity_approx = tenor × 0.85 (simplified; real pricer uses full curve annuity)
+    """
+    if T <= 0:
+        return 0.0
+    annuity_approx = tenor_years * 0.85
+    fwd_premium = 2 * 0.3989 * vol_bp * np.sqrt(T) * annuity_approx
+    return fwd_premium
+
+
+def premium_to_vol(prem_bp: float, T: float, tenor_years: float = 10.0) -> float:
+    """ATM straddle forward premium (bp) -> Normal vol (bp)."""
+    if T <= 0:
+        return 0.0
+    annuity_approx = tenor_years * 0.85
+    if annuity_approx <= 0:
+        return 0.0
+    vol_bp = prem_bp / (2 * 0.3989 * np.sqrt(T) * annuity_approx)
+    return vol_bp
+
+
+def surface_vol_to_premium(df: pd.DataFrame, ccy: str = None) -> pd.DataFrame:
+    """Convert vol surface to premium. Uses real prem_matrix from pricer if available,
+    otherwise falls back to the simplified formula."""
+    import streamlit as st
+    if ccy is not None:
+        # atm_prem_matrix[ccy]["prem"] is the correct key in the main app
+        _atm_pm = st.session_state.get("atm_prem_matrix", {})
+        prem_store = {c: v.get("prem") for c, v in _atm_pm.items() if isinstance(v, dict) and v.get("prem") is not None}
+        if ccy in prem_store and prem_store[ccy] is not None:
+            p = prem_store[ccy].copy()
+            exp_col = df.columns[0]
+            if "Expiry" in p.columns:
+                p = p.set_index("Expiry")
+            # Build case-insensitive lookup for expiry labels
+            p.index = p.index.str.lower()
+            # Normalise tenor columns too
+            p.columns = [str(c).upper() for c in p.columns]
+            result = df.copy()
+            tcols = df.columns[1:].tolist()
+            for i, row in df.iterrows():
+                exp_lbl = str(row[exp_col]).lower()
+                for c in tcols:
+                    c_norm = str(c).upper()
+                    try:
+                        result.at[i, c] = round(float(p.loc[exp_lbl, c_norm]), 2)
+                    except Exception:
+                        T = label_to_years(exp_lbl)
+                        _ty = label_to_years(c)
+                        result.at[i, c] = round(vol_to_premium(float(row[c]), T, _ty), 2)
+            return result
+    # fallback: simplified formula
+    result = df.copy()
+    exp_col = df.columns[0]
+    tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
+    for i, row in df.iterrows():
+        T = label_to_years(str(row[exp_col]))
+        for c in tcols:
+            try:
+                _ty = label_to_years(c)
+                result.at[i, c] = round(vol_to_premium(float(row[c]), T, _ty), 2)
+            except Exception:
+                pass
+    return result
+
+
+def surface_premium_to_vol(df: pd.DataFrame) -> pd.DataFrame:
+    result = df.copy()
+    exp_col = df.columns[0]
+    tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
+    for i, row in df.iterrows():
+        T = label_to_years(str(row[exp_col]))
+        for c in tcols:
+            try:
+                tenor_years = label_to_years(c)
+                result.at[i, c] = round(premium_to_vol(float(row[c]), T, tenor_years), 2)
+            except Exception:
+                pass
+    return result
+
+
+def _init_state(ccy: str, surface: pd.DataFrame) -> None:
     if "vol_editor" not in st.session_state:
-        st.session_state["vol_editor"] = {
-            "working": {},
-            "base": {},
-            "history": {},
-            "redo_stack": {},
-            "selected_cell": {},
-        }
-    
-    editor = st.session_state["vol_editor"]
-    
-    # Initialize for this currency if needed
-    if ccy not in editor["working"]:
-        editor["working"][ccy] = atm_surface.copy()
-        editor["base"][ccy] = atm_surface.copy()
-        editor["history"][ccy] = []
-        editor["redo_stack"][ccy] = []
-        editor["selected_cell"][ccy] = None
+        st.session_state["vol_editor"] = {}
+    ed = st.session_state["vol_editor"]
+    for k in ["working", "base", "history", "redo_stack", "view_mode", "smoothing", "paste_data"]:
+        if k not in ed:
+            ed[k] = {}
+
+    # Always update base to the current committed surface
+    # This ensures the editor always starts from the correct loaded surface
+    current_base = ed["base"].get(ccy)
+    _sod_active = ed.get("sod_loaded", {}).get(ccy, False)
+    if current_base is None or not current_base.equals(surface):
+        # Surface has changed — reset base, but preserve working if SOD was loaded
+        ed["base"][ccy] = surface.copy()
+        if not _sod_active:
+            ed["working"][ccy] = surface.copy()
+        ed["history"][ccy] = []
+        ed["redo_stack"][ccy] = []
+        if "view_mode" not in ed or ccy not in ed.get("view_mode", {}):
+            ed.setdefault("view_mode", {})[ccy] = "vol"
+        ed.setdefault("smoothing", {})[ccy] = DEFAULT_SMOOTHING.copy()
+        ed.setdefault("paste_data", {})[ccy] = ""
+    elif ccy not in ed["working"]:
+        ed["working"][ccy] = surface.copy()
+        ed["history"][ccy] = []
+        ed["redo_stack"][ccy] = []
+        ed["view_mode"][ccy] = "vol"
+        ed["smoothing"][ccy] = DEFAULT_SMOOTHING.copy()
+        ed["paste_data"][ccy] = ""
 
 
 def _push_history(ccy: str) -> None:
-    """Save current state to history for undo."""
-    editor = st.session_state["vol_editor"]
-    current = editor["working"][ccy].copy()
-    editor["history"][ccy].append(current)
-    # Clear redo stack when new edit is made
-    editor["redo_stack"][ccy] = []
-    # Limit history to 50 entries
-    if len(editor["history"][ccy]) > 50:
-        editor["history"][ccy] = editor["history"][ccy][-50:]
+    ed = st.session_state["vol_editor"]
+    if ccy not in ed.get("working", {}): return  # surface not yet initialised
+    if ccy not in ed.get("history", {}): ed.setdefault("history", {})[ccy] = []
+    if ccy not in ed.get("redo_stack", {}): ed.setdefault("redo_stack", {})[ccy] = []
+    ed["history"][ccy].append(ed["working"][ccy].copy())
+    ed["redo_stack"][ccy] = []
+    if len(ed["history"][ccy]) > 50:
+        ed["history"][ccy] = ed["history"][ccy][-50:]
 
 
 def _undo(ccy: str) -> bool:
-    """Undo last edit. Returns True if successful."""
-    editor = st.session_state["vol_editor"]
-    if editor["history"][ccy]:
-        # Save current to redo stack
-        editor["redo_stack"][ccy].append(editor["working"][ccy].copy())
-        # Restore from history
-        editor["working"][ccy] = editor["history"][ccy].pop()
+    ed = st.session_state["vol_editor"]
+    if ed["history"].get(ccy):
+        ed["redo_stack"][ccy].append(ed["working"][ccy].copy())
+        ed["working"][ccy] = ed["history"][ccy].pop()
         return True
     return False
 
 
 def _redo(ccy: str) -> bool:
-    """Redo last undone edit. Returns True if successful."""
-    editor = st.session_state["vol_editor"]
-    if editor["redo_stack"][ccy]:
-        # Save current to history
-        editor["history"][ccy].append(editor["working"][ccy].copy())
-        # Restore from redo stack
-        editor["working"][ccy] = editor["redo_stack"][ccy].pop()
+    ed = st.session_state["vol_editor"]
+    if ed["redo_stack"].get(ccy):
+        ed["history"][ccy].append(ed["working"][ccy].copy())
+        ed["working"][ccy] = ed["redo_stack"][ccy].pop()
         return True
     return False
 
 
 def _has_changes(ccy: str) -> bool:
-    """Check if working surface differs from base."""
-    editor = st.session_state["vol_editor"]
-    working = editor["working"][ccy]
-    base = editor["base"][ccy]
-    return not working.equals(base)
+    ed = st.session_state["vol_editor"]
+    w, b = ed["working"].get(ccy), ed["base"].get(ccy)
+    return w is not None and b is not None and not w.equals(b)
 
 
 def _publish(ccy: str) -> pd.DataFrame:
-    """Publish working surface to pricing engine."""
-    editor = st.session_state["vol_editor"]
-    editor["base"][ccy] = editor["working"][ccy].copy()
-    editor["history"][ccy] = []
-    editor["redo_stack"][ccy] = []
-    
-    # Update the pricing engine state if it exists
+    ed = st.session_state["vol_editor"]
+    ed["base"][ccy] = ed["working"][ccy].copy()
+    ed["history"][ccy] = []
+    ed["redo_stack"][ccy] = []
     if "vol_data" in st.session_state and ccy in st.session_state["vol_data"]:
-        st.session_state["vol_data"][ccy]["atm"] = editor["working"][ccy].copy()
-    
-    return editor["working"][ccy].copy()
+        st.session_state["vol_data"][ccy]["atm"] = ed["working"][ccy].copy()
+    return ed["working"][ccy].copy()
 
 
-def _reset_to_base(ccy: str) -> None:
-    """Reset working surface to last published base."""
-    editor = st.session_state["vol_editor"]
+def _reset(ccy: str) -> None:
+    ed = st.session_state["vol_editor"]
     _push_history(ccy)
-    editor["working"][ccy] = editor["base"][ccy].copy()
+    ed["working"][ccy] = ed["base"][ccy].copy()
 
 
-# =============================================================================
-# 3D SURFACE VISUALIZATION
-# =============================================================================
-
-def _create_3d_surface(
-    df: pd.DataFrame,
-    ccy: str,
-    show_diff: bool = False,
-    base_df: Optional[pd.DataFrame] = None
-) -> go.Figure:
-    """Create an interactive 3D vol surface plot."""
+def _create_plotly_surface(df: pd.DataFrame, ccy: str, view_mode: str, changes=None) -> go.Figure:
+    exp_col = df.columns[0]
+    tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
+    expiries = df[exp_col].tolist()
+    display_df = surface_vol_to_premium(df, ccy) if view_mode == "fwd_premium" else df
+    z_label = "Fwd Premium (bp)" if view_mode == "fwd_premium" else "Vol (bp)"
+    z_vals = display_df[tcols].values.astype(float)
     
-    # Extract numeric columns (tenors) and expiry labels
-    expiry_col = df.columns[0]  # Usually "Expiry"
-    tenor_cols = df.columns[1:].tolist()
-    expiries = df[expiry_col].tolist()
+    # Auto-scale Z axis to data with padding
+    z_min_val, z_max_val = z_vals.min(), z_vals.max()
+    z_range = z_max_val - z_min_val
+    _z_floor_raw2 = np.floor((z_min_val - z_range * 0.05) / 5) * 5
+    if view_mode == "fwd_premium":
+        z_min = max(float(_z_floor_raw2), 10.0)
+    else:
+        z_min = max(float(_z_floor_raw2), -5.0)
+    z_max = np.ceil((z_max_val + z_range * 0.05) / 5) * 5
     
-    # Create numeric grids for plotting
-    x_vals = np.arange(len(tenor_cols))  # Tenor axis
-    y_vals = np.arange(len(expiries))     # Expiry axis
-    z_vals = df[tenor_cols].values.astype(float)
+    # Don't reverse - keep natural order: X=tenor (1Y to 30Y), Y=expiry (1M to 20Y)
+    X, Y = np.meshgrid(np.arange(len(tcols)), np.arange(len(expiries)))
     
-    # Create meshgrid
-    X, Y = np.meshgrid(x_vals, y_vals)
+    if changes is not None:
+        cv = changes[tcols].values.astype(float)
+        mc = max(abs(cv.min()), abs(cv.max()), 0.1)
+        surfacecolor = cv / mc
+        colorscale = [[0,"rgb(180,40,40)"],[0.4,"rgb(100,100,150)"],[0.6,"rgb(100,100,150)"],[1,"rgb(40,160,40)"]]
+        cbar_title = "Change"
+    else:
+        surfacecolor = z_vals
+        colorscale = HEATMAP_COLORSCALE
+        cbar_title = z_label
     
-    # Hover text with full details
-    hover_text = []
-    for i, exp in enumerate(expiries):
-        row_text = []
-        for j, tenor in enumerate(tenor_cols):
-            val = z_vals[i, j]
-            text = f"Expiry: {exp}<br>Tenor: {tenor}<br>Vol: {val:.1f} bp"
-            if show_diff and base_df is not None:
-                base_val = base_df[tenor_cols].values[i, j]
-                diff = val - base_val
-                text += f"<br>Δ: {diff:+.1f} bp"
-            row_text.append(text)
-        hover_text.append(row_text)
+    fig = go.Figure(data=[go.Surface(
+        x=X, y=Y, z=z_vals, surfacecolor=surfacecolor, colorscale=colorscale, opacity=0.92,
+        colorbar=dict(title=dict(text=cbar_title, font=dict(color="white")), tickfont=dict(color="white"), len=0.6),
+        hovertemplate="<b>%{customdata[0]}</b> × <b>%{customdata[1]}</b><br>"+f"{z_label}: %{{z:.2f}}<extra></extra>",
+        customdata=[[[expiries[i], tcols[j]] for j in range(len(tcols))] for i in range(len(expiries))],
+    )])
     
-    fig = go.Figure()
-    
-    # Main surface
-    fig.add_trace(go.Surface(
-        x=X,
-        y=Y,
-        z=z_vals,
-        colorscale=RATEEDGE_COLORSCALE,
-        hoverinfo="text",
-        text=hover_text,
-        showscale=True,
-        colorbar=dict(
-            title=dict(text="Vol (bp)", font=dict(color=BRAND["slate_300"])),
-            tickfont=dict(color=BRAND["slate_400"]),
-            bgcolor=BRAND["slate_800"],
-            bordercolor=BRAND["slate_700"],
-            borderwidth=1,
-            len=0.7,
-        ),
-        contours=dict(
-            z=dict(
-                show=True,
-                usecolormap=True,
-                highlightcolor=BRAND["white"],
-                project_z=True,
-            )
-        ),
-        opacity=0.95,
-    ))
-    
-    # Add wireframe for better depth perception
-    fig.add_trace(go.Surface(
-        x=X,
-        y=Y,
-        z=z_vals,
-        showscale=False,
-        opacity=0.3,
-        colorscale=[[0, BRAND["slate_400"]], [1, BRAND["slate_400"]]],
-        hidesurface=True,
-        contours=dict(
-            x=dict(show=True, color=BRAND["slate_600"], width=1),
-            y=dict(show=True, color=BRAND["slate_600"], width=1),
-        ),
-        hoverinfo="skip",
-    ))
-    
-    # Layout with RateEdge styling
     fig.update_layout(
-        title=dict(
-            text=f"<b>{ccy} ATM Vol Surface</b>",
-            font=dict(size=16, color=BRAND["slate_300"], family="system-ui"),
-            x=0.5,
-            xanchor="center",
-        ),
+        title=dict(text=f"<b>ATM Vol Surface (Live)</b>", font=dict(color="white"), x=0.5),
         scene=dict(
+            # X-axis = Tenor (1Y to 30Y)
             xaxis=dict(
-                title="Tenor",
-                ticktext=tenor_cols,
-                tickvals=list(range(len(tenor_cols))),
-                tickfont=dict(size=10, color=BRAND["slate_400"]),
-                titlefont=dict(size=12, color=BRAND["slate_300"]),
-                gridcolor=BRAND["slate_700"],
-                showbackground=True,
-                backgroundcolor=BRAND["slate_bg"],
-                linecolor=BRAND["slate_600"],
+                title=dict(text="Tenor", font=dict(color="white", size=12)),
+                ticktext=tcols, tickvals=list(range(len(tcols))),
+                backgroundcolor="rgba(20,40,80,0.8)", 
+                gridcolor="rgba(255,255,255,0.15)",
+                tickfont=dict(color="#cbd5e1", size=10),
+                tickangle=0,
             ),
+            # Y-axis = Expiry (1M to 20Y)
             yaxis=dict(
-                title="Expiry",
-                ticktext=expiries,
-                tickvals=list(range(len(expiries))),
-                tickfont=dict(size=10, color=BRAND["slate_400"]),
-                titlefont=dict(size=12, color=BRAND["slate_300"]),
-                gridcolor=BRAND["slate_700"],
-                showbackground=True,
-                backgroundcolor=BRAND["slate_bg"],
-                linecolor=BRAND["slate_600"],
+                title=dict(text="Expiry", font=dict(color="white", size=12)),
+                ticktext=expiries, tickvals=list(range(len(expiries))),
+                backgroundcolor="rgba(20,40,80,0.8)",
+                gridcolor="rgba(255,255,255,0.15)",
+                tickfont=dict(color="#cbd5e1", size=10),
+                tickangle=0,
             ),
+            # Z-axis = Vol/Premium (auto-scaled)
             zaxis=dict(
-                title="Vol (bp)",
-                tickfont=dict(size=10, color=BRAND["slate_400"]),
-                titlefont=dict(size=12, color=BRAND["slate_300"]),
-                gridcolor=BRAND["slate_700"],
-                showbackground=True,
-                backgroundcolor=BRAND["slate_bg"],
-                linecolor=BRAND["slate_600"],
+                title=dict(text=z_label, font=dict(color="white", size=12)),
+                range=[z_min, z_max],
+                backgroundcolor="rgba(40,60,100,0.8)",
+                gridcolor="rgba(255,255,255,0.15)",
+                tickfont=dict(color="#cbd5e1", size=10),
             ),
+            bgcolor="rgb(15,25,50)",
+            # Camera matching 3D editor orientation
             camera=dict(
-                eye=dict(x=1.5, y=1.5, z=1.2),
+                eye=dict(x=-1.8, y=-1.8, z=1.0),
                 up=dict(x=0, y=0, z=1),
             ),
-            aspectmode="manual",
-            aspectratio=dict(x=1.2, y=1, z=0.6),
+            aspectratio=dict(x=1.2, y=1.4, z=0.7),
         ),
-        paper_bgcolor=BRAND["slate_bg"],
-        plot_bgcolor=BRAND["slate_bg"],
-        margin=dict(l=0, r=0, t=40, b=0),
-        height=450,
+        paper_bgcolor="rgb(15,23,42)", 
+        margin=dict(l=0, r=0, t=50, b=0), 
+        height=550,
     )
-    
     return fig
 
 
-# =============================================================================
-# DIFF VISUALIZATION
-# =============================================================================
+def _render_3d_editor(df, ccy, view_mode, smoothing, base_df, height=580):
+    exp_col = df.columns[0]
+    expiries = df[exp_col].tolist()
+    tcols = [c for c in df.columns[1:] if c.lower() != "expiry"]
+    ey = [label_to_years(str(e)) for e in expiries]
+    display_df = surface_vol_to_premium(df, ccy) if view_mode == "fwd_premium" else df
+    base_display = surface_vol_to_premium(base_df, ccy) if view_mode == "fwd_premium" else base_df
+    z_label = "Fwd Premium (bp)" if view_mode == "fwd_premium" else "Vol (bp)"
+    z_values = display_df[tcols].values.astype(float).tolist()
+    base_vals = base_display[tcols].values.astype(float).tolist()
+    zf = display_df[tcols].values.flatten()
+    z_min_val, z_max_val = float(zf.min()), float(zf.max())
+    z_range = z_max_val - z_min_val
+    _z_floor_raw = float(np.floor((z_min_val - z_range * 0.05) / 10) * 10)
+    if view_mode == "fwd_premium":
+        # Premium is never negative — floor at 10bp
+        z_min = max(_z_floor_raw, 10.0)
+    else:
+        # Vol can have small negative values for display headroom — floor at -5bp
+        z_min = max(_z_floor_raw, -5.0)
+    z_max = float(np.ceil((z_max_val + z_range * 0.05) / 10) * 10)
+    
+    import time as _time
+    _render_ts = int(_time.time() * 1000)
+    data = json.dumps({"expiries": expiries, "tenors": tcols, "values": z_values, "baseValues": base_vals, "zMin": z_min, "zMax": z_max, "zLabel": z_label, "viewMode": view_mode, "expiryYears": ey, "ccy": ccy, "smoothing": smoothing, "_ts": _render_ts})
+    
+    html = f'''<!DOCTYPE html><html data-mode="{view_mode}" data-zmin="{z_min}" data-zmax="{z_max}"><head><style>
+*{{margin:0;padding:0;box-sizing:border-box}}body{{background:#0a1628;font-family:system-ui;overflow:hidden}}
+#c{{width:100%;height:{height}px;position:relative}}canvas{{width:100%;height:100%}}
+#info{{position:absolute;top:10px;left:10px;color:#94a3b8;font-size:11px;background:rgba(15,23,42,0.9);padding:8px 12px;border-radius:6px;border:1px solid #334155}}
+#tip{{position:absolute;display:none;background:rgba(30,41,59,0.95);color:#fff;padding:10px 14px;border-radius:6px;font-size:12px;pointer-events:none;border:1px solid #3b82f6;z-index:100}}
+#st{{position:absolute;bottom:10px;left:10px;font-size:11px;background:rgba(15,23,42,0.9);padding:8px 12px;border-radius:6px;border:1px solid #334155}}
+.rdy{{color:#22c55e}}.edt{{color:#f59e0b}}.chg{{color:#3b82f6}}.rot{{color:#a855f7}}
+#btn{{position:absolute;bottom:10px;right:10px;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;border:none;padding:10px 24px;border-radius:6px;font-weight:600;cursor:pointer;display:none;font-size:13px;min-width:100px}}
+#btn.show{{display:block}}
+#lockBtn{{position:absolute;bottom:10px;right:150px;background:#334155;color:#fff;border:none;padding:10px 16px;border-radius:6px;font-weight:500;cursor:pointer;font-size:12px;min-width:140px}}
+#lockBtn.locked{{background:#7c3aed;color:#fff}}
+#legend{{position:absolute;top:10px;right:10px;background:rgba(15,23,42,0.9);padding:8px 12px;border-radius:6px;border:1px solid #334155;font-size:10px;color:#94a3b8}}
+.li{{display:flex;align-items:center;gap:5px;margin:2px 0}}.lb{{width:12px;height:12px;border-radius:2px}}
+.lu{{background:#22c55e}}.ld{{background:#dc2626}}.ln{{background:#3b82f6}}
+#title{{position:absolute;top:10px;left:50%;transform:translateX(-50%);color:#fff;font-size:13px;font-weight:600;background:rgba(30,58,95,0.8);padding:5px 14px;border-radius:5px}}
+</style></head><body><div id="c_{view_mode}_{_render_ts}"><canvas id="cv"></canvas>
+<div id="title">ATM Vol Editor</div>
+<div id="info">🖱️ <b>Left-drag</b> points to edit<br>🔄 <b>Right-drag</b> to rotate<br>🔍 <b>Scroll</b> to zoom</div>
+<div id="legend"><b>Changes</b><div class="li"><div class="lb lu"></div>Up</div><div class="li"><div class="lb ld"></div>Down</div><div class="li"><div class="lb ln"></div>No change</div></div>
+<div id="tip"></div><div id="st" class="rdy">✓ Ready - Rotate to position, then edit</div>
+<button id="lockBtn" onclick="toggleLock()">🔓 Rotation ON</button>
+<button id="btn" onclick="apply()">✓ Apply</button>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){{
+const D={data};
 
-def _create_diff_heatmap(
-    working: pd.DataFrame,
-    base: pd.DataFrame
-) -> go.Figure:
-    """Create a heatmap showing differences from base surface."""
-    
-    expiry_col = working.columns[0]
-    tenor_cols = working.columns[1:].tolist()
-    expiries = working[expiry_col].tolist()
-    
-    # Calculate differences
-    diff_vals = working[tenor_cols].values - base[tenor_cols].values
-    
-    # Create hover text
-    hover_text = []
-    for i, exp in enumerate(expiries):
-        row_text = []
-        for j, tenor in enumerate(tenor_cols):
-            diff = diff_vals[i, j]
-            curr = working[tenor_cols].values[i, j]
-            prev = base[tenor_cols].values[i, j]
-            row_text.append(
-                f"Expiry: {exp}<br>Tenor: {tenor}<br>"
-                f"Current: {curr:.1f}<br>Base: {prev:.1f}<br>"
-                f"<b>Change: {diff:+.1f} bp</b>"
-            )
-        hover_text.append(row_text)
-    
-    # Symmetric colorscale around 0
-    max_abs_diff = max(abs(diff_vals.min()), abs(diff_vals.max()), 1)
-    
-    fig = go.Figure(data=go.Heatmap(
-        z=diff_vals,
-        x=tenor_cols,
-        y=expiries,
-        text=hover_text,
-        hoverinfo="text",
-        colorscale=[
-            [0, BRAND["blue"]],      # Negative (vol down)
-            [0.5, BRAND["slate_700"]],  # Zero
-            [1, BRAND["red"]],       # Positive (vol up)
-        ],
-        zmin=-max_abs_diff,
-        zmax=max_abs_diff,
-        colorbar=dict(
-            title="Δ Vol (bp)",
-            titlefont=dict(color=BRAND["slate_300"]),
-            tickfont=dict(color=BRAND["slate_400"]),
-        ),
-    ))
-    
-    fig.update_layout(
-        title=dict(
-            text="<b>Changes from Published Surface</b>",
-            font=dict(size=14, color=BRAND["slate_300"]),
-            x=0.5,
-        ),
-        xaxis=dict(
-            title="Tenor",
-            tickfont=dict(color=BRAND["slate_400"]),
-            titlefont=dict(color=BRAND["slate_300"]),
-        ),
-        yaxis=dict(
-            title="Expiry",
-            tickfont=dict(color=BRAND["slate_400"]),
-            titlefont=dict(color=BRAND["slate_300"]),
-            autorange="reversed",
-        ),
-        paper_bgcolor=BRAND["slate_bg"],
-        plot_bgcolor=BRAND["slate_800"],
-        height=350,
-        margin=dict(l=60, r=20, t=40, b=60),
-    )
-    
-    return fig
+const cn=document.querySelector('div[id^="c_"]'),cv=document.querySelector('canvas'),tip=document.getElementById('tip'),st=document.getElementById('st'),btn=document.getElementById('btn'),lockBtn=document.getElementById('lockBtn');
+let changed=false,rotLocked=false;
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x0a1628);
+const _W=()=>cn.offsetWidth||cn.parentElement?.offsetWidth||800;
+const _H=()=>cn.offsetHeight||500;
+const cam=new THREE.PerspectiveCamera(45,_W()/_H(),0.1,1000);
+const ren=new THREE.WebGLRenderer({{canvas:cv,antialias:true}});
+ren.setSize(_W(),_H());
+ren.setPixelRatio(Math.min(devicePixelRatio,2));
+
+// Lighting
+scene.add(new THREE.AmbientLight(0xffffff,0.5));
+const dl=new THREE.DirectionalLight(0xffffff,0.6);dl.position.set(-8,15,8);scene.add(dl);
+const dl2=new THREE.DirectionalLight(0x6080b0,0.3);dl2.position.set(8,8,-8);scene.add(dl2);
+
+// Grid on floor
+const gridH=new THREE.GridHelper(18,16,0x2a3a5a,0x151f30);gridH.position.y=-4.5;scene.add(gridH);
+
+// Data setup
+const vals=JSON.parse(JSON.stringify(D.values)),baseVals=JSON.parse(JSON.stringify(D.baseValues));
+const nE=D.expiries.length,nT=D.tenors.length;
+const xSp=14/Math.max(nT-1,1),zSp=14/Math.max(nE-1,1);
+const ySc=6.5/(D.zMax-D.zMin),yOf=D.zMin;
+const v2y=v=>(v-yOf)*ySc-3.8;
+
+// Axis labels using sprites
+function makeLabel(text,pos,color){{
+const canvas=document.createElement('canvas');
+const ctx=canvas.getContext('2d');
+canvas.width=128;canvas.height=32;
+ctx.fillStyle=color||'#94a3b8';
+ctx.font='bold 20px system-ui';
+ctx.textAlign='center';
+ctx.fillText(text,64,22);
+const tex=new THREE.CanvasTexture(canvas);
+const mat=new THREE.SpriteMaterial({{map:tex,transparent:true}});
+const sprite=new THREE.Sprite(mat);
+sprite.position.set(pos.x,pos.y,pos.z);
+sprite.scale.set(2,0.5,1);
+return sprite;}}
+
+// Tenor labels (X axis) - left to right
+for(let j=0;j<nT;j+=Math.max(1,Math.floor(nT/8))){{
+const x=j*xSp-7;
+scene.add(makeLabel(D.tenors[j],{{x,y:-4.5,z:-8}},'#60a5fa'));
+}}
+scene.add(makeLabel('Tenor →',{{x:0,y:-4.5,z:-9}},'#3b82f6'));
+
+// Expiry labels (Z axis) - front to back  
+for(let i=0;i<nE;i+=Math.max(1,Math.floor(nE/6))){{
+const z=i*zSp-7;
+scene.add(makeLabel(D.expiries[i],{{x:-9,y:-4.5,z}},'#f59e0b'));
+}}
+scene.add(makeLabel('← Expiry',{{x:-10,y:-4.5,z:0}},'#f59e0b'));
+
+// Y-axis (Vol/Premium) labels - at BACK corner (positive z)
+const ySteps=5;
+for(let k=0;k<=ySteps;k++){{
+const yVal=D.zMin+(D.zMax-D.zMin)*k/ySteps;
+const y=v2y(yVal);
+scene.add(makeLabel(yVal.toFixed(0),{{x:-9,y,z:8}},'#22c55e'));
+}}
+scene.add(makeLabel(D.zLabel,{{x:-9,y:2,z:9}},'#22c55e'));
+
+// Heatmap color
+function getHeatCol(v){{
+const t=Math.max(0,Math.min(1,(v-D.zMin)/(D.zMax-D.zMin)));
+// Plasma-like: purple -> pink -> orange -> yellow
+const h=0.85-t*0.75;
+const s=0.6+t*0.3;
+const l=0.35+t*0.35;
+return new THREE.Color().setHSL(h,s,l);
+}}
+
+// Change color (green/red)
+function getChgCol(v,b){{
+const d=v-b,m=Math.max((D.zMax-D.zMin)*0.05,5);
+const t=Math.max(-1,Math.min(1,d/m));
+if(Math.abs(t)<0.02)return null;
+return t>0?new THREE.Color(0.2,0.5+0.4*t,0.2):new THREE.Color(0.5+0.4*Math.abs(t),0.2,0.2);
+}}
+
+const pts=[],sg=new THREE.SphereGeometry(0.15,16,16);
+for(let i=0;i<nE;i++)for(let j=0;j<nT;j++){{
+const x=j*xSp-7,z=i*zSp-7,y=v2y(vals[i][j]);
+const chg=getChgCol(vals[i][j],baseVals[i][j]);
+const col=chg||getHeatCol(vals[i][j]);
+const mat=new THREE.MeshPhongMaterial({{color:col,emissive:col,emissiveIntensity:0.2,shininess:40}});
+const sp=new THREE.Mesh(sg,mat);
+sp.position.set(x,y,z);sp.userData={{i,j}};
+scene.add(sp);pts.push(sp);
+}}
+
+let surf=null;
+function updSurf(){{
+if(surf){{scene.remove(surf);surf.geometry.dispose();surf.material.dispose();}}
+const geo=new THREE.BufferGeometry(),verts=[],cols=[],idx=[];
+for(let i=0;i<nE;i++)for(let j=0;j<nT;j++){{
+const x=j*xSp-7,z=i*zSp-7,y=v2y(vals[i][j]);
+verts.push(x,y,z);
+const chg=getChgCol(vals[i][j],baseVals[i][j]);
+const c=chg||getHeatCol(vals[i][j]);
+cols.push(c.r,c.g,c.b);
+}}
+for(let i=0;i<nE-1;i++)for(let j=0;j<nT-1;j++){{
+const a=i*nT+j;idx.push(a,a+1,a+nT,a+1,a+nT+1,a+nT);
+}}
+geo.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));
+geo.setAttribute('color',new THREE.Float32BufferAttribute(cols,3));
+geo.setIndex(idx);geo.computeVertexNormals();
+surf=new THREE.Mesh(geo,new THREE.MeshPhongMaterial({{vertexColors:true,side:THREE.DoubleSide,transparent:true,opacity:0.85,shininess:20}}));
+scene.add(surf);
+}}
+
+function updCols(){{
+pts.forEach((sp,idx)=>{{
+const i=Math.floor(idx/nT),j=idx%nT;
+const chg=getChgCol(vals[i][j],baseVals[i][j]);
+const col=chg||getHeatCol(vals[i][j]);
+sp.material.color=col;sp.material.emissive=col;
+}});
+}}
+updSurf();
+
+// Camera - view from front-left
+let sph={{r:26,p:Math.PI/2.8,t:-Math.PI/4.5}};
+function updCam(){{
+cam.position.set(sph.r*Math.sin(sph.p)*Math.cos(sph.t),sph.r*Math.cos(sph.p),sph.r*Math.sin(sph.p)*Math.sin(sph.t));
+cam.lookAt(0,-1.5,0);
+}}
+updCam();
+
+// Lock toggle
+window.toggleLock=function(){{
+rotLocked=!rotLocked;
+lockBtn.textContent=rotLocked?'🔒 Rotation OFF':'🔓 Rotation ON';
+lockBtn.className=rotLocked?'locked':'';
+cv.style.cursor=rotLocked?'crosshair':'grab';
+st.textContent=rotLocked?'✓ Locked - Click points to edit':'✓ Unlocked - Rotate view';
+st.className=rotLocked?'rdy':'rot';
+}};
+
+function smooth(i,j,d){{
+if(!D.smoothing.enabled){{vals[i][j]+=d;return;}}
+const r=D.smoothing.radius||1,f=D.smoothing.falloff||0.5;
+vals[i][j]+=d;
+for(let di=-r;di<=r;di++)for(let dj=-r;dj<=r;dj++){{
+if(di===0&&dj===0)continue;
+const ni=i+di,nj=j+dj;
+if(ni>=0&&ni<nE&&nj>=0&&nj<nT){{
+const dist=Math.sqrt(di*di+dj*dj);
+const w=f*Math.exp(-dist*dist/(2*Math.pow(r/2,2)));
+vals[ni][nj]+=d*w;
+pts[ni*nT+nj].position.y=v2y(vals[ni][nj]);
+}}
+}}
+updCols();
+}}
+
+const rc=new THREE.Raycaster(),ms=new THREE.Vector2();
+let sel=null,drag=false,rot=false,ly=0;
+
+cv.onmousedown=e=>{{
+const r=cv.getBoundingClientRect();
+ms.x=((e.clientX-r.left)/r.width)*2-1;
+ms.y=-((e.clientY-r.top)/r.height)*2+1;
+
+// Right click always rotates (unless locked)
+if((e.button===2||e.button===1)&&!rotLocked){{rot=true;cv.style.cursor='grabbing';return;}}
+
+rc.setFromCamera(ms,cam);
+const h=rc.intersectObjects(pts);
+if(h.length){{
+sel=h[0].object;
+sel.material.emissiveIntensity=0.6;
+sel.scale.setScalar(2);
+drag=true;ly=e.clientY;
+const{{i,j}}=sel.userData,d=vals[i][j]-baseVals[i][j];
+st.textContent=`Editing: ${{D.expiries[i]}} × ${{D.tenors[j]}} = ${{vals[i][j].toFixed(1)}} (${{d>=0?'+':''}}${{d.toFixed(1)}})`;
+st.className='edt';
+}}
+}};
+
+cv.onmousemove=e=>{{
+const r=cv.getBoundingClientRect();
+ms.x=((e.clientX-r.left)/r.width)*2-1;
+ms.y=-((e.clientY-r.top)/r.height)*2+1;
+
+if(rot&&!rotLocked){{
+sph.t-=e.movementX*0.008;
+sph.p=Math.max(0.15,Math.min(Math.PI*0.75,sph.p+e.movementY*0.008));
+updCam();return;
+}}
+
+if(drag&&sel){{
+// Scale drag sensitivity based on data range
+const range = D.zMax - D.zMin;
+const {{i,j}}=sel.userData;
+let dragScale = range / 500;
+// Premium mode: proportional sensitivity — each pixel of drag moves the cell
+// by the same PERCENTAGE regardless of its level. A 5bp cell and 500bp cell
+// feel equally editable. Factor 0.004 = ~0.4% per pixel.
+if(D.viewMode==='fwd_premium'){{
+  const cellVal = Math.max(0.5, vals[i][j]);
+  dragScale = cellVal * 0.004;
+}}
+const dy=(ly-e.clientY)*dragScale;ly=e.clientY;
+smooth(i,j,dy);
+sel.position.y=v2y(vals[i][j]);
+updSurf();
+const d=vals[i][j]-baseVals[i][j];
+st.textContent=`${{D.expiries[i]}} × ${{D.tenors[j]}} = ${{vals[i][j].toFixed(1)}} (${{d>=0?'+':''}}${{d.toFixed(1)}})`;
+if(!changed){{changed=true;btn.classList.add('show');}}
+return;
+}}
+
+// Hover
+rc.setFromCamera(ms,cam);
+const h=rc.intersectObjects(pts);
+pts.forEach(p=>{{if(p!==sel){{p.scale.setScalar(1);p.material.emissiveIntensity=0.2;}}}});
+if(h.length&&!drag){{
+const pt=h[0].object;
+pt.scale.setScalar(1.5);
+pt.material.emissiveIntensity=0.4;
+const{{i,j}}=pt.userData,d=vals[i][j]-baseVals[i][j];
+tip.style.display='block';
+tip.style.left=(e.clientX-r.left+15)+'px';
+tip.style.top=(e.clientY-r.top-10)+'px';
+const chgStr=Math.abs(d)>0.1?(d>=0?`<span style="color:#22c55e">+${{d.toFixed(1)}}</span>`:`<span style="color:#dc2626">${{d.toFixed(1)}}</span>`):'<span style="color:#64748b">no change</span>';
+tip.innerHTML=`<b>${{D.expiries[i]}} × ${{D.tenors[j]}}</b><br>${{vals[i][j].toFixed(1)}} ${{D.zLabel}}<br>${{chgStr}}`;
+}}else tip.style.display='none';
+}};
+
+cv.onmouseup=()=>{{
+if(sel){{sel.scale.setScalar(1);sel.material.emissiveIntensity=0.2;}}
+sel=null;drag=false;rot=false;
+cv.style.cursor=rotLocked?'crosshair':'grab';
+if(!changed)st.textContent=rotLocked?'✓ Locked - Click points to edit':'✓ Ready - Right-drag to rotate';
+else st.textContent='● Changes pending';
+st.className=changed?'chg':'rdy';
+}};
+
+cv.onmouseleave=()=>{{
+if(sel){{sel.scale.setScalar(1);sel.material.emissiveIntensity=0.2;}}
+sel=null;drag=false;rot=false;tip.style.display='none';
+}};
+
+cv.onwheel=e=>{{e.preventDefault();sph.r=Math.max(12,Math.min(60,sph.r+e.deltaY*0.02));updCam();}};
+cv.oncontextmenu=e=>e.preventDefault();
+
+window.apply=function(){{
+try{{
+const payload = btoa(JSON.stringify({{
+  ccy: D.ccy,
+  vals: vals,
+  mode: D.viewMode,
+  ts: Date.now()
+}}));
+// Copy to clipboard
+if(navigator.clipboard){{
+  navigator.clipboard.writeText(payload).then(()=>{{
+    btn.textContent='✓ Copied! Paste below';
+    btn.style.background='#22c55e';
+    st.textContent='Paste in box below & click CONFIRM';
+    st.style.color='#22c55e';
+  }}).catch(()=>{{
+    prompt('Copy this (Ctrl+A, Ctrl+C):', payload);
+  }});
+}}else{{
+  prompt('Copy this (Ctrl+A, Ctrl+C):', payload);
+}}
+}}catch(e){{alert('Error: '+e);}}
+}};
+
+(function anim(){{requestAnimationFrame(anim);ren.render(scene,cam);}})();
+window.onresize=()=>{{cam.aspect=_W()/_H();cam.updateProjectionMatrix();ren.setSize(_W(),_H());}};
+setTimeout(()=>{{cam.aspect=_W()/_H();cam.updateProjectionMatrix();ren.setSize(_W(),_H());}},200);
+setTimeout(()=>{{cam.aspect=_W()/_H();cam.updateProjectionMatrix();ren.setSize(_W(),_H());}},800);
+}})();
+</script></body></html>'''
+    components.html(html, height=height+100, scrolling=False)
 
 
-# =============================================================================
-# CUSTOM CSS FOR DATA EDITOR
-# =============================================================================
-
-def _inject_editor_css() -> None:
-    """Inject custom CSS for the vol editor styling."""
-    st.markdown(f"""
-    <style>
-    /* Vol Editor Container */
-    .vol-editor-container {{
-        background: {BRAND["slate_800"]};
-        border: 1px solid {BRAND["slate_700"]};
-        border-radius: 8px;
-        padding: 1rem;
-    }}
+def render_vol_surface_editor(ccy: str, atm_surface: pd.DataFrame, curve: pd.DataFrame = None, ois_curve: pd.DataFrame = None) -> pd.DataFrame:
+    # Check for v3d_data in URL params BEFORE init
+    force_update = False
     
-    /* Section headers */
-    .vol-editor-header {{
-        color: {BRAND["slate_300"]};
-        font-size: 0.875rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        margin-bottom: 0.5rem;
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-    }}
+    try:
+        params = st.query_params
+        if params.get('v3d_ccy') == ccy and 'v3d_data' in params:
+            import base64
+            updated = json.loads(base64.b64decode(params['v3d_data']).decode())
+            mode = params.get('v3d_mode', 'vol')
+            tcols = atm_surface.columns[1:].tolist()
+            expiries = atm_surface[atm_surface.columns[0]].tolist()
+            
+            rebuilt = atm_surface.copy()
+            if mode == "fwd_premium":
+                for i, row in enumerate(updated):
+                    T = label_to_years(str(expiries[i]))
+                    for j, v in enumerate(row):
+                        tenor_y = label_to_years(tcols[j])
+                        rebuilt.iloc[i, j+1] = round(premium_to_vol(v, T, tenor_y), 2)
+            else:
+                for i, row in enumerate(updated):
+                    for j, v in enumerate(row):
+                        rebuilt.iloc[i, j+1] = round(v, 2)
+            
+            # Push history for undo before updating
+            _push_history(ccy)
+            
+            atm_surface = rebuilt
+            force_update = True
+            
+            # Clear URL params
+            for k in ['v3d_ccy', 'v3d_data', 'v3d_mode', 'v3d_ts']:
+                if k in params:
+                    del st.query_params[k]
+    except Exception as e:
+        pass
     
-    .vol-editor-header .indicator {{
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: {BRAND["green"]};
-    }}
+    _init_state(ccy, atm_surface)
     
-    .vol-editor-header .indicator.modified {{
-        background: {BRAND["amber"]};
-        animation: pulse 2s infinite;
-    }}
-    
-    @keyframes pulse {{
-        0%, 100% {{ opacity: 1; }}
-        50% {{ opacity: 0.5; }}
-    }}
-    
-    /* Button styling */
-    .stButton > button {{
-        background: {BRAND["slate_700"]} !important;
-        color: {BRAND["slate_300"]} !important;
-        border: 1px solid {BRAND["slate_600"]} !important;
-        font-weight: 500 !important;
-        transition: all 0.15s ease !important;
-    }}
-    
-    .stButton > button:hover {{
-        background: {BRAND["slate_600"]} !important;
-        border-color: {BRAND["slate_400"]} !important;
-    }}
-    
-    /* Primary button (Publish) */
-    .publish-btn > button {{
-        background: {BRAND["blue"]} !important;
-        border-color: {BRAND["blue"]} !important;
-        color: white !important;
-    }}
-    
-    .publish-btn > button:hover {{
-        background: #1d4ed8 !important;
-        border-color: #1d4ed8 !important;
-    }}
-    
-    /* Danger button (Reset) */
-    .reset-btn > button {{
-        background: transparent !important;
-        border-color: {BRAND["red"]} !important;
-        color: {BRAND["red"]} !important;
-    }}
-    
-    .reset-btn > button:hover {{
-        background: {BRAND["red"]} !important;
-        color: white !important;
-    }}
-    
-    /* Data editor styling */
-    [data-testid="stDataEditor"] {{
-        background: {BRAND["slate_800"]} !important;
-        border-radius: 6px;
-    }}
-    
-    [data-testid="stDataEditor"] div[role="gridcell"] {{
-        background: {BRAND["slate_800"]} !important;
-        color: {BRAND["slate_300"]} !important;
-        font-family: 'JetBrains Mono', 'SF Mono', monospace !important;
-        font-size: 0.8125rem !important;
-    }}
-    
-    [data-testid="stDataEditor"] div[role="columnheader"] {{
-        background: {BRAND["navy"]} !important;
-        color: {BRAND["slate_300"]} !important;
-        font-weight: 600 !important;
-    }}
-    
-    /* Stats card */
-    .vol-stats {{
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 0.75rem;
-        margin-top: 0.75rem;
-    }}
-    
-    .vol-stat {{
-        background: {BRAND["slate_800"]};
-        border: 1px solid {BRAND["slate_700"]};
-        border-radius: 6px;
-        padding: 0.75rem;
-        text-align: center;
-    }}
-    
-    .vol-stat-label {{
-        color: {BRAND["slate_400"]};
-        font-size: 0.6875rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }}
-    
-    .vol-stat-value {{
-        color: {BRAND["slate_300"]};
-        font-size: 1.25rem;
-        font-weight: 600;
-        font-family: 'JetBrains Mono', monospace;
-    }}
-    
-    /* Keyboard shortcuts tooltip */
-    .shortcuts-info {{
-        background: {BRAND["slate_800"]};
-        border: 1px solid {BRAND["slate_700"]};
-        border-radius: 6px;
-        padding: 0.5rem 0.75rem;
-        font-size: 0.75rem;
-        color: {BRAND["slate_400"]};
-    }}
-    
-    .shortcut-key {{
-        background: {BRAND["slate_700"]};
-        border-radius: 3px;
-        padding: 0.125rem 0.375rem;
-        font-family: monospace;
-        color: {BRAND["slate_300"]};
-    }}
-    </style>
-    """, unsafe_allow_html=True)
-
-
-# =============================================================================
-# STATISTICS DISPLAY
-# =============================================================================
-
-def _render_surface_stats(df: pd.DataFrame, label: str = "Surface") -> None:
-    """Render statistics about the vol surface."""
-    tenor_cols = df.columns[1:].tolist()
-    vals = df[tenor_cols].values.astype(float)
-    
-    st.markdown(f"""
-    <div class="vol-stats">
-        <div class="vol-stat">
-            <div class="vol-stat-label">Min Vol</div>
-            <div class="vol-stat-value">{vals.min():.1f}</div>
-        </div>
-        <div class="vol-stat">
-            <div class="vol-stat-label">Max Vol</div>
-            <div class="vol-stat-value">{vals.max():.1f}</div>
-        </div>
-        <div class="vol-stat">
-            <div class="vol-stat-label">Mean Vol</div>
-            <div class="vol-stat-value">{vals.mean():.1f}</div>
-        </div>
-        <div class="vol-stat">
-            <div class="vol-stat-label">Std Dev</div>
-            <div class="vol-stat-value">{vals.std():.1f}</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-# =============================================================================
-# MAIN EDITOR FUNCTION
-# =============================================================================
-
-def render_vol_surface_editor(
-    ccy: str,
-    atm_surface: pd.DataFrame,
-    show_diff_view: bool = True,
-    editor_height: int = 400,
-) -> pd.DataFrame:
-    """
-    Render a hybrid 2D/3D volatility surface editor.
-    
-    Args:
-        ccy: Currency code (e.g., "AUD", "NZD", "USD")
-        atm_surface: DataFrame with vol surface data
-            Columns: Expiry, 1Y, 2Y, 3Y, 5Y, 7Y, 10Y, 15Y, 20Y, 30Y
-            Values: Normal vol in basis points
-        show_diff_view: Whether to show the diff heatmap when changes exist
-        editor_height: Height of the data editor in pixels
-    
-    Returns:
-        Updated DataFrame after user edits (or original if no changes)
-    """
-    
-    # Initialize state
-    _init_editor_state(ccy, atm_surface)
-    editor = st.session_state["vol_editor"]
-    
-    # Inject custom CSS
-    _inject_editor_css()
-    
-    # Get current working surface
-    working_df = editor["working"][ccy]
-    base_df = editor["base"][ccy]
+    # Force update working surface if we rebuilt from v3d_data
+    if force_update:
+        st.session_state["vol_editor"]["working"][ccy] = atm_surface.copy()
+    ed = st.session_state["vol_editor"]
+    working, base = ed["working"][ccy], ed["base"][ccy]
+    view_mode = ed["view_mode"].get(ccy, "vol")
+    smoothing = ed["smoothing"].get(ccy, DEFAULT_SMOOTHING)
     has_changes = _has_changes(ccy)
     
-    # Header with status indicator
-    status_class = "modified" if has_changes else ""
-    st.markdown(f"""
-    <div class="vol-editor-header">
-        <span class="indicator {status_class}"></span>
-        <span>{ccy} Vol Surface Editor</span>
-        {' <span style="color: ' + BRAND["amber"] + '; font-size: 0.75rem;">(unsaved changes)</span>' if has_changes else ''}
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("""<style>
+div.stButton>button{font-weight:600!important}
+div.stButton>button[kind="primary"]{background:linear-gradient(135deg,#22c55e,#16a34a)!important}
+div[data-testid="stRadio"] label span{color:#ffffff!important;-webkit-text-fill-color:#ffffff!important}
+div[data-testid="stRadio"] label{color:#ffffff!important}
+input[aria-label="Paste data here:"]{background:#1e293b!important;color:#ffffff!important;border:2px solid #3b82f6!important;padding:14px!important;font-size:16px!important;font-family:monospace!important;letter-spacing:0.5px!important;font-weight:500!important}
+input[aria-label="Paste data here:"]::placeholder{color:#64748b!important;font-family:monospace!important}
+</style>""", unsafe_allow_html=True)
     
-    # Control buttons row
-    col1, col2, col3, col4, col5, col6 = st.columns([1, 1, 1, 1, 2, 2])
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.markdown(f"### ATM Vol Editor")
+    with c2:
+        if has_changes:
+            st.error("⚠️ Unsaved")
     
-    with col1:
-        if st.button("↶ Undo", key=f"undo_{ccy}", disabled=not editor["history"][ccy]):
-            _undo(ccy)
+    cols = st.columns([2.5, 1, 1, 1, 2, 1.5])
+    with cols[0]:
+        if st.button("✅ PUBLISH", key=f"pub_{ccy}", type="primary", disabled=not has_changes, use_container_width=True):
+            _publish(ccy)
+            # Flag paste box to clear on next rerun
+            st.session_state[f"_clear_paste_{ccy}"] = True
+            st.success("Published!")
             st.rerun()
-    
-    with col2:
-        if st.button("↷ Redo", key=f"redo_{ccy}", disabled=not editor["redo_stack"][ccy]):
+    # Undo removed — use Reset to revert all changes
+    with cols[2]:
+        if st.button("↪️ Redo", key=f"redo_{ccy}", disabled=not ed["redo_stack"].get(ccy), use_container_width=True):
             _redo(ccy)
             st.rerun()
-    
-    with col3:
-        with st.container():
-            st.markdown('<div class="reset-btn">', unsafe_allow_html=True)
-            if st.button("⟲ Reset", key=f"reset_{ccy}", disabled=not has_changes):
-                _reset_to_base(ccy)
-                st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-    
-    with col4:
-        # History count
-        hist_len = len(editor["history"][ccy])
-        st.markdown(f"""
-        <div style="color: {BRAND['slate_400']}; font-size: 0.75rem; padding-top: 0.5rem;">
-            History: {hist_len}/50
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col6:
-        with st.container():
-            st.markdown('<div class="publish-btn">', unsafe_allow_html=True)
-            if st.button("✓ Publish to Pricing Engine", key=f"publish_{ccy}", disabled=not has_changes):
-                _publish(ccy)
-                st.success(f"Published {ccy} vol surface to pricing engine", icon="✓")
-                st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Main layout: 3D surface on top, 2D grid below
-    st.markdown("---")
-    
-    # 3D Surface (read-only visualization)
-    with st.container():
-        fig = _create_3d_surface(working_df, ccy, show_diff=has_changes, base_df=base_df)
-        st.plotly_chart(fig, use_container_width=True, key=f"surface_3d_{ccy}")
-    
-    # Optional diff heatmap when changes exist
-    if show_diff_view and has_changes:
-        with st.expander("📊 View Changes from Published Surface", expanded=False):
-            diff_fig = _create_diff_heatmap(working_df, base_df)
-            st.plotly_chart(diff_fig, use_container_width=True, key=f"diff_heatmap_{ccy}")
+    with cols[3]:
+        if st.button("🔄 Reset", key=f"reset_{ccy}", disabled=not has_changes, use_container_width=True):
+            _reset(ccy)
+            st.rerun()
+    with cols[4]:
+        new_mode = st.radio("View", ["Vol (bp)", "Fwd Premium (bp)"], index=0 if view_mode == "vol" else 1, horizontal=True, key=f"vm_{ccy}", label_visibility="collapsed")
+        new_mode = "vol" if "Vol" in new_mode else "fwd_premium"
+        if new_mode != view_mode:
+            ed["view_mode"][ccy] = new_mode
+            st.rerun()
+    with cols[5]:
+        show_chg = st.checkbox("Show Δ", value=has_changes, key=f"sd_{ccy}")
     
     st.markdown("---")
     
-    # 2D Editable Grid
-    st.markdown(f"""
-    <div class="vol-editor-header">
-        <span>Edit Vol Points (bp)</span>
-    </div>
-    """, unsafe_allow_html=True)
+    with st.expander("⚙️ Smoothing", expanded=False):
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            smoothing["enabled"] = st.checkbox("Enable", value=smoothing.get("enabled", True), key=f"se_{ccy}")
+        with sc2:
+            smoothing["radius"] = st.slider("Radius", 1, 3, smoothing.get("radius", 1), key=f"sr_{ccy}")
+        with sc3:
+            smoothing["falloff"] = st.slider("Falloff", 0.1, 0.9, smoothing.get("falloff", 0.5), key=f"sf_{ccy}")
+        ed["smoothing"][ccy] = smoothing
     
-    # Prepare column config for the data editor
-    expiry_col = working_df.columns[0]
-    tenor_cols = working_df.columns[1:].tolist()
+    st.markdown("#### 🎯 ATM Vol Editor")
+    st.caption("Drag points • Green=up, Red=down • Click Apply, paste below, CONFIRM")
+    _render_3d_editor(working, ccy, view_mode, smoothing, base, height=700)
     
-    column_config = {
-        expiry_col: st.column_config.TextColumn(
-            expiry_col,
-            disabled=True,
-            width="small",
+    # Paste and CONFIRM section
+    st.markdown("---")
+    st.markdown("#### 📋 Step 2: Paste & Confirm")
+    st.caption("After clicking Apply above, paste the data here (Ctrl+V)")
+    
+    # Initialize paste data if not exists
+    _paste_key = f"paste_{ccy}"
+    # Apply pending clear before widget renders
+    if st.session_state.pop(f"_clear_paste_{ccy}", False):
+        st.session_state[_paste_key] = ""
+    # Only seed the paste widget if it has never been set
+    if _paste_key not in st.session_state:
+        st.session_state[_paste_key] = ""
+    
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        paste_data = st.text_input(
+            "Paste data here:",
+            key=_paste_key,
+            placeholder="Paste here (Ctrl+V)",
+            label_visibility="collapsed"
         )
-    }
+    with col2:
+        st.markdown("<div style='padding-top:8px;'></div>", unsafe_allow_html=True)
+        confirm_btn = st.button("✅ CONFIRM", key=f"confirm_btn_{ccy}", type="primary", use_container_width=True)
     
-    for tenor in tenor_cols:
-        column_config[tenor] = st.column_config.NumberColumn(
-            tenor,
-            min_value=0.0,
-            max_value=500.0,
-            step=0.1,
-            format="%.1f",
-            width="small",
-        )
+    if confirm_btn and paste_data:
+        try:
+            import base64
+            payload = json.loads(base64.b64decode(paste_data).decode())
+            # Use currency from payload, not selectbox — avoids mismatch after page reload
+            payload_ccy = payload.get('ccy', ccy)
+            updated = payload['vals']
+            mode = payload.get('mode', 'vol')
+            # Use working surface for payload currency
+            _work_ccy = ed.get("working", {}).get(payload_ccy)
+            if _work_ccy is None:
+                _work_ccy = working
+            if _work_ccy is None:
+                st.warning("Load a vol surface first before confirming edits.")
+                st.stop()
+            tcols = [c for c in _work_ccy.columns[1:] if c.lower() != "expiry" and str(c).upper() not in ("AUD","USD","NZD","EUR","GBP","JPY")]
+            expiries = _work_ccy[_work_ccy.columns[0]].tolist()
+            
+            _push_history(payload_ccy)
+            if mode == "fwd_premium":
+                for i, row in enumerate(updated):
+                    if i >= len(expiries): break
+                    T = label_to_years(str(expiries[i]))
+                    for j, v in enumerate(row[:len(tcols)]):
+                        tenor_y = label_to_years(tcols[j])
+                        _work_ccy.iloc[i, j+1] = round(premium_to_vol(float(v), T, tenor_y), 2)
+            else:
+                for i, row in enumerate(updated):
+                    if i >= len(expiries): break
+                    _col_offset = 0
+                    for j2, v2 in enumerate(row):
+                        if _col_offset >= len(tcols): break
+                        try:
+                            _work_ccy.iloc[i, _col_offset+1] = round(float(v2), 2)
+                            _col_offset += 1
+                        except (ValueError, TypeError):
+                            pass  # skip non-numeric (e.g. 'AUD' currency col)
+            ed["working"][payload_ccy] = _work_ccy
+            # Clear paste data after successful confirmation
+            # Flag paste box to clear on next rerun
+            st.session_state[f"_clear_paste_{payload_ccy}"] = True
+            st.success("✅ Changes applied!")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Invalid data: {e}. Use the Apply button above the 3D chart to generate pasteable data, then paste here.")
+    elif confirm_btn:
+        st.warning("Paste the data first")
     
-    # Render editable data editor
-    edited_df = st.data_editor(
-        working_df,
-        column_config=column_config,
-        hide_index=True,
-        use_container_width=True,
-        height=editor_height,
-        key=f"vol_grid_{ccy}",
-        num_rows="fixed",
+    with st.expander("📊 ATM Vol Surface (Live)", expanded=False):
+        changes = None
+        if show_chg and has_changes:
+            changes = working.copy()
+            for c in working.columns[1:]:
+                try:
+                    if c in base.columns:
+                        changes[c] = pd.to_numeric(working[c], errors="coerce") - pd.to_numeric(base[c], errors="coerce")
+                except Exception:
+                    pass
+        st.plotly_chart(_create_plotly_surface(working, ccy, view_mode, changes), use_container_width=True)
+    
+    st.markdown("---")
+    st.markdown("#### 📋 Edit Grid")
+    
+    # Prepare display data
+    display = surface_vol_to_premium(working, ccy) if view_mode == "fwd_premium" else working.copy()
+    base_display = surface_vol_to_premium(base, ccy) if view_mode == "fwd_premium" else base.copy()
+    
+    # Calculate changes for styling
+    tcols = [c for c in working.columns[1:] if c.lower() != "expiry"]
+    
+    # Create styled dataframe showing changes as heatmap
+    if has_changes and show_chg:
+        st.caption("🟢 Green = increased | 🔴 Red = decreased | Intensity shows magnitude")
+        
+        # Build change matrix
+        change_vals = display[tcols].values.astype(float) - base_display[tcols].values.astype(float)
+        max_change = max(abs(change_vals.min()), abs(change_vals.max()), 0.1)
+        
+        def style_cell(val, row_idx, col_idx):
+            """Return CSS style based on change value."""
+            try:
+                change = change_vals[row_idx, col_idx]
+                intensity = min(abs(change) / max_change, 1.0)
+                if change > 0.01:
+                    # Green gradient
+                    g = int(80 + 120 * intensity)
+                    return f'background-color: rgba(34, 197, 94, {0.2 + 0.6 * intensity}); color: white; font-weight: 600'
+                elif change < -0.01:
+                    # Red gradient
+                    r = int(80 + 120 * intensity)
+                    return f'background-color: rgba(220, 38, 38, {0.2 + 0.6 * intensity}); color: white; font-weight: 600'
+                else:
+                    return 'background-color: rgba(59, 130, 246, 0.1)'
+            except:
+                return ''
+        
+        def apply_heatmap_style(df):
+            """Apply heatmap styling to dataframe."""
+            styles = pd.DataFrame('', index=df.index, columns=df.columns)
+            for i in range(len(df)):
+                for j, col in enumerate(tcols):
+                    styles.iloc[i, j+1] = style_cell(df.iloc[i, j+1], i, j)
+            # Style expiry column
+            styles.iloc[:, 0] = 'background-color: #1e293b; color: #94a3b8; font-weight: 600'
+            return styles
+        
+        styled_df = display.style.apply(lambda _: apply_heatmap_style(display), axis=None)
+        st.dataframe(styled_df, use_container_width=True, height=400)
+        
+        # Separate editable grid below
+        st.markdown("##### ✏️ Edit Values")
+    
+    # Strip duplicate expiry column from display before showing in grid
+    _display_cols = [c for c in display.columns if not (c.lower() == "expiry" and c != display.columns[0])]
+    _display_clean = display[_display_cols]
+    _tcols_clean = [c for c in _display_cols if c != _display_cols[0]]
+    edited = st.data_editor(
+        _display_clean,
+        use_container_width=True, 
+        num_rows="fixed", 
+        key=f"grid_{ccy}_{view_mode}",
+        column_config={
+            _display_cols[0]: st.column_config.TextColumn("Expiry", disabled=True),
+            **{col: st.column_config.NumberColumn(col, format="%.2f") for col in _tcols_clean}
+        }
     )
     
-    # Check if edits were made
-    if not edited_df.equals(working_df):
-        _push_history(ccy)
-        editor["working"][ccy] = edited_df.copy()
-        st.rerun()
+    if edited is not None:
+        if view_mode == "fwd_premium":
+            as_vol = surface_premium_to_vol(edited)
+            if not as_vol.equals(working):
+                _push_history(ccy)
+                ed["working"][ccy] = as_vol
+                st.rerun()
+        elif not edited.equals(working):
+            _push_history(ccy)
+            ed["working"][ccy] = edited
+            st.rerun()
     
-    # Surface statistics
-    st.markdown("---")
-    _render_surface_stats(edited_df, "Working Surface")
-    
-    # Keyboard shortcuts info
-    st.markdown(f"""
-    <div class="shortcuts-info" style="margin-top: 1rem;">
-        <strong>Tips:</strong> Click any cell to edit • Tab to move between cells • 
-        Enter to confirm • All changes tracked with undo history
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Return the current working surface
-    return editor["working"][ccy].copy()
+    return ed["working"][ccy].copy()
 
-
-# =============================================================================
-# QUICK ADJUSTMENT TOOLS
-# =============================================================================
 
 def render_bulk_adjustment_tools(ccy: str) -> None:
-    """
-    Render bulk adjustment tools for the vol surface.
-    Allows parallel shift, twist, and curvature adjustments.
-    """
-    
     if "vol_editor" not in st.session_state or ccy not in st.session_state["vol_editor"]["working"]:
-        st.warning("No vol surface loaded for adjustment")
         return
+    ed = st.session_state["vol_editor"]
+    w, tcols = ed["working"][ccy], ed["working"][ccy].columns[1:].tolist()
     
-    editor = st.session_state["vol_editor"]
-    working_df = editor["working"][ccy]
-    expiry_col = working_df.columns[0]
-    tenor_cols = working_df.columns[1:].tolist()
-    
-    st.markdown(f"""
-    <div class="vol-editor-header" style="margin-top: 1rem;">
-        <span>Quick Adjustments</span>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.markdown(f"<div style='color: {BRAND['slate_400']}; font-size: 0.75rem;'>Parallel Shift (bp)</div>", unsafe_allow_html=True)
-        shift = st.number_input(
-            "Shift",
-            min_value=-50.0,
-            max_value=50.0,
-            value=0.0,
-            step=0.5,
-            key=f"parallel_shift_{ccy}",
-            label_visibility="collapsed",
-        )
-        if st.button("Apply Shift", key=f"apply_shift_{ccy}"):
-            if shift != 0:
-                _push_history(ccy)
-                new_df = working_df.copy()
-                new_df[tenor_cols] = new_df[tenor_cols] + shift
-                editor["working"][ccy] = new_df
-                st.rerun()
-    
-    with col2:
-        st.markdown(f"<div style='color: {BRAND['slate_400']}; font-size: 0.75rem;'>Scale (%)</div>", unsafe_allow_html=True)
-        scale = st.number_input(
-            "Scale",
-            min_value=-50.0,
-            max_value=50.0,
-            value=0.0,
-            step=1.0,
-            key=f"scale_{ccy}",
-            label_visibility="collapsed",
-        )
-        if st.button("Apply Scale", key=f"apply_scale_{ccy}"):
-            if scale != 0:
-                _push_history(ccy)
-                new_df = working_df.copy()
-                new_df[tenor_cols] = new_df[tenor_cols] * (1 + scale / 100)
-                editor["working"][ccy] = new_df
-                st.rerun()
-    
-    with col3:
-        st.markdown(f"<div style='color: {BRAND['slate_400']}; font-size: 0.75rem;'>Expiry Tilt (bp/row)</div>", unsafe_allow_html=True)
-        tilt = st.number_input(
-            "Tilt",
-            min_value=-5.0,
-            max_value=5.0,
-            value=0.0,
-            step=0.1,
-            key=f"tilt_{ccy}",
-            label_visibility="collapsed",
-        )
-        if st.button("Apply Tilt", key=f"apply_tilt_{ccy}"):
-            if tilt != 0:
-                _push_history(ccy)
-                new_df = working_df.copy()
-                n_rows = len(new_df)
-                for i in range(n_rows):
-                    new_df.iloc[i, 1:] = new_df.iloc[i, 1:] + (tilt * i)
-                editor["working"][ccy] = new_df
-                st.rerun()
+    st.markdown("#### ⚡ Quick Adjustments")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown("**Shift**")
+        shift = st.number_input("bp", -50.0, 50.0, 0.0, 0.5, key=f"sh_{ccy}")
+        if st.button("Apply", key=f"dosh_{ccy}") and shift != 0:
+            _push_history(ccy)
+            w[tcols] = w[tcols] + shift
+            ed["working"][ccy] = w
+            st.rerun()
+    with c2:
+        st.markdown("**Scale**")
+        scale = st.number_input("%", -50.0, 50.0, 0.0, 1.0, key=f"sc_{ccy}")
+        if st.button("Apply", key=f"dosc_{ccy}") and scale != 0:
+            _push_history(ccy)
+            w[tcols] = w[tcols] * (1 + scale/100)
+            ed["working"][ccy] = w
+            st.rerun()
+    with c3:
+        st.markdown("**Exp Tilt**")
+        tilt = st.number_input("bp/row", -10.0, 10.0, 0.0, 0.25, key=f"ti_{ccy}")
+        if st.button("Apply", key=f"doti_{ccy}") and tilt != 0:
+            _push_history(ccy)
+            for i in range(len(w)):
+                w.iloc[i, 1:] = w.iloc[i, 1:] + tilt * i
+            ed["working"][ccy] = w
+            st.rerun()
+    with c4:
+        st.markdown("**Tenor Tilt**")
+        tt = st.number_input("bp/col", -10.0, 10.0, 0.0, 0.25, key=f"tt_{ccy}")
+        if st.button("Apply", key=f"dott_{ccy}") and tt != 0:
+            _push_history(ccy)
+            for j, col in enumerate(tcols):
+                w[col] = w[col] + tt * j
+            ed["working"][ccy] = w
+            st.rerun()
+
+    st.markdown("---")
+    st.markdown("**🔧 2D Surface Smooth**")
+    _sm1, _sm2, _sm3 = st.columns([1, 1, 2])
+    with _sm1:
+        _sm_passes = st.number_input("Passes", 1, 5, 2, 1, key=f"sm_passes_{ccy}")
+    with _sm2:
+        _exp_col_sm = "Expiry" if "Expiry" in w.columns else next((c for c in w.columns if c.lower()=="expiry"), w.columns[0])
+        _exp_opts_sm = w[_exp_col_sm].tolist()
+        _sm_rows = st.multiselect("Pin rows (no smooth)", _exp_opts_sm,
+                                   default=[e for e in ["1w","2w"] if e in _exp_opts_sm],
+                                   key=f"sm_pin_{ccy}")
+    with _sm3:
+        st.caption("Weighted average across expiry neighbours. Pin rows to preserve them unchanged (e.g. 1w/2w short-end extrapolated rows).")
+    if st.button("🔧 Apply Smooth", key=f"dosm_{ccy}", type="secondary"):
+        _push_history(ccy)
+        import numpy as _np
+        _arr = w[tcols].values.astype(float).copy()
+        _pinned = [i for i, e in enumerate(w[_exp_col_sm].tolist()) if str(e) in _sm_rows]
+        for _pass in range(int(_sm_passes)):
+            _new = _arr.copy()
+            for i in range(len(_arr)):
+                if i in _pinned:
+                    continue
+                _neighbors = []
+                if i > 0 and (i-1) not in _pinned: _neighbors.append((0.5, _arr[i-1]))
+                _neighbors.append((1.0, _arr[i]))
+                if i < len(_arr)-1 and (i+1) not in _pinned: _neighbors.append((0.5, _arr[i+1]))
+                _w_sum = sum(wt for wt,_ in _neighbors)
+                _new[i] = sum(wt*v for wt,v in _neighbors) / _w_sum if _w_sum > 0 else _arr[i]
+            _arr = _new
+        _ws = w.copy()
+        _ws[tcols] = _np.round(_arr, 2)
+        ed["working"][ccy] = _ws
+        st.rerun()
+
+
+render_vol_surface_editor_unified = render_vol_surface_editor
+render_vol_surface_editor_3d = render_vol_surface_editor
 
 
 # =============================================================================
-# DEMO / STANDALONE USAGE
+# CONVENTIONS TAB
 # =============================================================================
 
-def create_sample_surface() -> pd.DataFrame:
-    """Create a sample ATM vol surface for demo purposes."""
-    
-    expiries = ["1m", "3m", "6m", "9m", "1y", "18m", "2y", "3y", "5y", "7y", "10y"]
-    tenors = ["1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "15Y", "20Y", "30Y"]
-    
-    # Generate realistic ATM normal vols (in bp)
-    # Base vol around 60-80 bp, increasing with expiry, humped by tenor
-    np.random.seed(42)
-    
-    data = {"Expiry": expiries}
-    
-    for j, tenor in enumerate(tenors):
-        # Tenor effect: peaks around 5-10Y
-        tenor_factor = 1 + 0.15 * np.sin(np.pi * j / len(tenors))
-        
-        vols = []
-        for i, exp in enumerate(expiries):
-            # Base vol
-            base = 65
-            # Expiry effect: increasing with expiry
-            exp_factor = 1 + 0.02 * i
-            # Add some noise
-            noise = np.random.normal(0, 2)
-            
-            vol = base * exp_factor * tenor_factor + noise
-            vols.append(round(max(40, min(120, vol)), 1))
-        
-        data[tenor] = vols
-    
-    return pd.DataFrame(data)
+AUD_CONVENTIONS = {
+    "source": "AFMA Interest Rate Options Conventions - June 2025",
+    "currency": "AUD",
+    "business_day": "Any day which is not a 'bank close day' under the law of New South Wales",
+    "premium_quotation": "Basis points of notional (price only)",
+    "premium_example": "If notional = $10m and premium = $10,000, quote = 10bp",
+    "atm_reference": "At-the-money rate = swap rate for the underlying structure",
+    "option_style": "European (unless American style requested)",
+    "day_count": "Actual/365",
+    "swaption_freq_short": "Quarterly (maturities ≤ 3Y)",
+    "swaption_freq_long": "Semi-annual (maturities ≥ 4Y)",
+    "cap_floor_freq": "Quarterly",
+    "settlement_index": "BBSW",
+    "premium_payment_spot": "T+2 business days (or by agreement)",
+    "premium_payment_fwd_cash": "Day after expiry (cash settled)",
+    "premium_payment_fwd_phys": "Day of expiry (physically settled)",
+    "exercise_time": "10:00am AEST on expiry date",
+    "fallback_exercise": "Automatic if ITM by ≥ 10bp (physically settled, on-the-run)",
+    "physical_settlement": "Swap commences 1 business day after exercise",
+    "cash_settlement_method": "Zero coupon methodology",
+    "cash_settlement_payment": "1 business day following exercise date",
+}
+
+AUD_MARKET_PARCELS = {
+    "expiries": ["1m", "3m", "6m", "9m", "1y", "2y", "3y", "4y", "5y", "7y", "10y", "15y", "20y"],
+    "tenors": ["1y", "2y", "3y", "4y", "5y", "7y", "10y", "15y", "20y", "30y"],
+    "parcels": [
+        [250, 200, 100, 75, 75, 50, 35, 25, 20, 15],
+        [200, 200, 100, 75, 75, 50, 35, 25, 15, 10],
+        [200, 175, 100, 75, 75, 50, 35, 25, 15, 10],
+        [200, 150, 100, 75, 75, 50, 35, 25, 15, 10],
+        [200, 150, 100, 75, 75, 50, 35, 25, 15, 10],
+        [150, 100, 90, 65, 65, 40, 30, 20, 10, 10],
+        [125, 100, 75, 50, 50, 40, 30, 15, 10, 7.5],
+        [125, 75, 60, 50, 50, 40, 25, 15, 10, 7.5],
+        [100, 75, 60, 50, 50, 40, 25, 15, 10, 7.5],
+        [75, 50, 50, 40, 40, 30, 25, 15, 10, 7.5],
+        [75, 40, 30, 30, 30, 25, 25, 15, 10, 7.5],
+        [50, 25, 20, 20, 20, 20, 15, 10, 10, 7.5],
+        [50, 25, 20, 15, 15, 15, 10, 10, 10, 7.5],
+    ]
+}
+
+ALL_CONVENTIONS = {
+    "AUD": AUD_CONVENTIONS,
+    "USD": {"source": "To be added", "currency": "USD"},
+    "EUR": {"source": "To be added", "currency": "EUR"},
+    "GBP": {"source": "To be added", "currency": "GBP"},
+    "JPY": {"source": "To be added", "currency": "JPY"},
+    "NZD": {"source": "To be added", "currency": "NZD"},
+    "CAD": {"source": "To be added", "currency": "CAD"},
+}
 
 
-def main():
-    """Demo entry point for standalone testing."""
+def render_conventions_tab(selected_ccy: str = "AUD"):
+    """Render the conventions tab for the pricer."""
     
-    st.set_page_config(
-        page_title="RateEdge Vol Editor Demo",
-        page_icon="📈",
-        layout="wide",
-        initial_sidebar_state="collapsed",
+    st.markdown("### 📋 Interest Rate Options Conventions")
+    
+    ccy = st.selectbox(
+        "Select Currency",
+        options=list(ALL_CONVENTIONS.keys()),
+        index=list(ALL_CONVENTIONS.keys()).index(selected_ccy) if selected_ccy in ALL_CONVENTIONS else 0,
+        key="conventions_ccy_select"
     )
     
-    # Dark theme via CSS
-    st.markdown(f"""
-    <style>
-    .stApp {{
-        background-color: {BRAND["slate_bg"]};
-    }}
-    [data-testid="stHeader"] {{
-        background-color: {BRAND["slate_bg"]};
-    }}
-    </style>
-    """, unsafe_allow_html=True)
+    conv = ALL_CONVENTIONS.get(ccy, {})
     
-    st.title("🎛️ RateEdge Vol Surface Editor")
-    st.caption("Hybrid 2D/3D volatility surface editor demo")
+    if conv.get("source") == "To be added":
+        st.warning(f"⚠️ {ccy} conventions not yet available.")
+        st.info("Currently available: **AUD** (AFMA June 2025)")
+        return
     
-    # Currency selector
-    ccy = st.selectbox("Currency", ["AUD", "NZD", "USD"], key="demo_ccy")
+    st.caption(f"*Source: {conv.get('source', 'N/A')}*")
+    st.divider()
     
-    # Create sample surface if not exists
-    if f"demo_surface_{ccy}" not in st.session_state:
-        st.session_state[f"demo_surface_{ccy}"] = create_sample_surface()
+    # Quotation & Dealing
+    with st.expander("💰 Quotation & Dealing", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Premium Quotation**")
+            st.markdown(f"- {conv.get('premium_quotation', 'N/A')}")
+            st.markdown(f"- *Example: {conv.get('premium_example', 'N/A')}*")
+            st.markdown("**ATM Reference**")
+            st.markdown(f"- {conv.get('atm_reference', 'N/A')}")
+            st.markdown("**Option Style**")
+            st.markdown(f"- {conv.get('option_style', 'N/A')}")
+        with col2:
+            st.markdown("**Day Count Basis**")
+            st.markdown(f"- {conv.get('day_count', 'N/A')}")
+            st.markdown("**Swaption Frequency**")
+            st.markdown(f"- {conv.get('swaption_freq_short', 'N/A')}")
+            st.markdown(f"- {conv.get('swaption_freq_long', 'N/A')}")
+            st.markdown("**Cap/Floor Frequency**")
+            st.markdown(f"- {conv.get('cap_floor_freq', 'N/A')}")
     
-    sample_surface = st.session_state[f"demo_surface_{ccy}"]
+    # Premium Payment
+    with st.expander("📅 Premium Payment", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Spot Premium**")
+            st.markdown(f"- {conv.get('premium_payment_spot', 'N/A')}")
+        with col2:
+            st.markdown("**Forward Premium**")
+            st.markdown(f"- Cash settled: {conv.get('premium_payment_fwd_cash', 'N/A')}")
+            st.markdown(f"- Physically settled: {conv.get('premium_payment_fwd_phys', 'N/A')}")
     
-    # Render the editor
-    updated_surface = render_vol_surface_editor(ccy, sample_surface)
+    # Exercise & Settlement
+    with st.expander("⚡ Exercise & Settlement", expanded=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Exercise**")
+            st.markdown(f"- Expiry time: {conv.get('exercise_time', 'N/A')}")
+            st.markdown(f"- Fallback: {conv.get('fallback_exercise', 'N/A')}")
+        with col2:
+            st.markdown("**Settlement**")
+            st.markdown(f"- Index: {conv.get('settlement_index', 'N/A')}")
+            st.markdown(f"- Physical: {conv.get('physical_settlement', 'N/A')}")
+            st.markdown(f"- Cash method: {conv.get('cash_settlement_method', 'N/A')}")
     
-    # Render bulk adjustment tools
-    render_bulk_adjustment_tools(ccy)
+    # Market Parcels (AUD only for now)
+    if ccy == "AUD":
+        with st.expander("📦 Customary Market Parcels (AUD millions)", expanded=False):
+            st.markdown("**Swaption Straddles**")
+            parcels_df = pd.DataFrame(
+                AUD_MARKET_PARCELS["parcels"],
+                index=AUD_MARKET_PARCELS["expiries"],
+                columns=AUD_MARKET_PARCELS["tenors"]
+            )
+            parcels_df.index.name = "Expiry"
+            st.dataframe(
+                parcels_df.style.background_gradient(cmap="Blues", axis=None),
+                use_container_width=True,
+                height=500
+            )
+            st.caption("*Bermuda Swaption customary market parcel: AUD 10 million*")
     
-    # Show the returned data
-    with st.expander("📋 View Raw Data", expanded=False):
-        st.dataframe(updated_surface, use_container_width=True)
+    # Business Day
+    with st.expander("🏢 Business Day Definition", expanded=False):
+        st.markdown(f"**{ccy} Business Day:** {conv.get('business_day', 'N/A')}")
 
-
-if __name__ == "__main__":
-    main()
+# v0904-build
