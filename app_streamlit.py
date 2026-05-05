@@ -6733,7 +6733,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _strd_not = float(_p.get("notional_leg1") or 0)
                                 _strd_prem_bp = round(_strd_prem / _strd_not * 10000, 2) if _strd_not > 0 else 0
                                 _straddles.append({
-                                    "Time": _time_p.strftime("%H:%M:%S") if _time_p else "—",
+                                    "Time": _time_p.strftime("%d-%b %H:%M") if _time_p else "—",
                                     "CCY": _ccy_p,
                                     "Opt Expiry": _e_p,
                                     "Swp Tenor": _t_p,
@@ -6890,7 +6890,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                                     _paired_rows.append({
                                         "Type": _ptype,
-                                        _time_col: _local_time.strftime("%H:%M:%S") if _local_time is not pd.NaT else "—",
+                                        _time_col: _local_time.strftime("%d-%b %H:%M") if _local_time is not pd.NaT else "—",
                                         "CCY": _ccy_p,
                                         "Opt Expiry": _e_p,
                                         "Swp Tenor": _t_p if _t_p and _t_p not in ("—","NA","None","") else "—",
@@ -6926,7 +6926,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _pc_label = "🟥 Floor"
                     _single_rows.append({
                         "Type": _pc_label,
-                        _time_col: _s_time.strftime("%H:%M:%S") if _s_time is not pd.NaT else "—",
+                        _time_col: _s_time.strftime("%d-%b %H:%M") if _s_time is not pd.NaT else "—",
                         "CCY": str(_s_row.get("notional_ccy", "")),
                         "Opt Expiry": str(_s_row.get("opt_tenor", "—")),
                         "Swp Tenor": _s_swp if _s_swp and _s_swp not in ("—","NA","None","") else "—",
@@ -6953,7 +6953,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _e_time = _to_local(_e_row.get("event_timestamp"))
                     _exo_rows.append({
                         "Type": f"🟡 {_ot}",
-                        _time_col: _e_time.strftime("%H:%M:%S") if _e_time is not pd.NaT else "—",
+                        _time_col: _e_time.strftime("%d-%b %H:%M") if _e_time is not pd.NaT else "—",
                         "CCY": str(_e_row.get("notional_ccy", "")),
                         "Opt Expiry": str(_e_row.get("opt_tenor", "—")),
                         "Swp Tenor": str(_e_row.get("swp_tenor", "—")),
