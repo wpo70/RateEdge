@@ -28227,6 +28227,278 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                         "e1": long_e, "e2": long_e, "tn": f"{tn}Y", "tn_y": tn,
                     })
 
+    # ── 16. Swap Spread / SOFR-FF Basis as Vol Predictor ──────────────────
+    # Widening SOFR-FF basis = dealer balance sheet stress = vol should reprice higher
+    if curve_df is not None:
+        try:
+            _basis_data = st.session_state.get("config_basis", {}).get("USD", {}).get("sofr_ff_basis")
+            if _basis_data is not None and not _basis_data.empty:
+                # Use 5Y and 10Y basis as bellwethers
+                for _bm_y in [5.0, 10.0]:
+                    _bm_row = _basis_data[(_basis_data["MaturityY"] - _bm_y).abs() < 0.5]
+                    if not _bm_row.empty:
+                        _basis_bp = float(_bm_row.iloc[0]["BasisBp"])
+                        # More negative = more stress (SOFR > FF = dealer funding pressure)
+                        if _basis_bp < -6.0:
+                            ideas.append({
+                                "Type": "Swap Spread Stress",
+                                "Score": min(abs(_basis_bp) * 5, 60),
+                                "Structure": f"SOFR-FF basis {int(_bm_y)}Y at {_basis_bp:.1f}bp",
+                                "Direction": "Buy vol",
+                                "Trade": f"Buy 3m×{int(_bm_y)}Y straddle — dealer stress elevated",
+                                "Signal": f"SOFR-FF {int(_bm_y)}Y basis = {_basis_bp:.2f}bp (wide)",
+                                "Rationale": f"SOFR-FF basis at {_basis_bp:.1f}bp signals dealer balance sheet "
+                                             f"stress — vol tends to reprice higher in stress regimes.",
+                                "Risk": "Basis can stay wide without vol repricing; structural vs cyclical",
+                                "e1": "3m", "e2": "3m", "tn": f"{int(_bm_y)}Y", "tn_y": _bm_y,
+                            })
+                        elif _basis_bp > -1.0:
+                            ideas.append({
+                                "Type": "Swap Spread Calm",
+                                "Score": min((2.0 + _basis_bp) * 10, 40),
+                                "Structure": f"SOFR-FF basis {int(_bm_y)}Y at {_basis_bp:.1f}bp (tight)",
+                                "Direction": "Sell vol",
+                                "Trade": f"Sell 3m×{int(_bm_y)}Y — basis tight, dealer stress low",
+                                "Signal": f"SOFR-FF {int(_bm_y)}Y basis = {_basis_bp:.2f}bp (tight)",
+                                "Rationale": f"Tight SOFR-FF basis signals benign dealer funding — "
+                                             f"vol premium may be excessive.",
+                                "Risk": "Sudden stress event can widen basis rapidly",
+                                "e1": "3m", "e2": "3m", "tn": f"{int(_bm_y)}Y", "tn_y": _bm_y,
+                            })
+        except Exception:
+            pass
+
+    # ── 17. Conditional Vol (rate-level dependent) ────────────────────────
+    # Vol should be higher when rates are at extremes. Regress vol vs rate level from history.
+    # If current vol is below the regression line, it's cheap conditional on rates.
+    if atm is not None and curve_df is not None:
+        try:
+            conn_cv = get_db_connection()
+            if conn_cv:
+                cur_cv = conn_cv.cursor()
+                # Load last 120 vol snapshots
+                cur_cv.execute("""
+                    SELECT snapshot_date, atm_vols FROM vol_history
+                    WHERE currency='USD' AND user_id='shared'
+                    ORDER BY snapshot_date DESC LIMIT 120
+                """)
+                _cv_rows = cur_cv.fetchall()
+
+                # Batch load all SOFR rates for relevant tenors and dates
+                _cv_dates = [str(r[0])[:10] for r in _cv_rows if r[1]]
+                _cv_tenor_map = {"2Y": 2.0, "5Y": 5.0, "10Y": 10.0}
+                _cv_rates_db = {}  # (date, tenor) -> rate
+                if _cv_dates:
+                    cur_cv.execute("""
+                        SELECT date::text, tenor, rate FROM swap_rates
+                        WHERE currency='USD' AND floating_rate='SOFR'
+                          AND tenor IN ('2Y','5Y','10Y')
+                          AND date >= %s AND date <= %s
+                    """, (min(_cv_dates), max(_cv_dates)))
+                    for _d, _t, _r in cur_cv.fetchall():
+                        _cv_rates_db[(str(_d), _t)] = float(_r)
+                conn_cv.close()
+
+                if _cv_rows and len(_cv_rows) >= 20:
+                    for _cv_exp, _cv_tn, _cv_tn_y in [("3m","5Y",5.0), ("1y","10Y",10.0), ("3m","2Y",2.0)]:
+                        _cv_pairs = []
+                        for _cv_date, _cv_atm in _cv_rows:
+                            if not _cv_atm:
+                                continue
+                            _cv_vol = None
+                            for _cv_r in _cv_atm.get("values", []):
+                                if (_cv_r.get("Expiry","").lower() == _cv_exp):
+                                    _cv_vol = _cv_r.get(_cv_tn)
+                                    break
+                            if _cv_vol is None:
+                                continue
+                            _cv_rate = _cv_rates_db.get((str(_cv_date)[:10], _cv_tn))
+                            if _cv_rate:
+                                _cv_pairs.append((_cv_rate, float(_cv_vol)))
+
+                        if len(_cv_pairs) >= 15:
+                            _cv_rates = np.array([p[0] for p in _cv_pairs])
+                            _cv_vols = np.array([p[1] for p in _cv_pairs])
+                            _cv_mean_r = _cv_rates.mean()
+                            _cv_mean_v = _cv_vols.mean()
+                            _cv_cov = (((_cv_rates - _cv_mean_r) * (_cv_vols - _cv_mean_v)).sum())
+                            _cv_var = ((_cv_rates - _cv_mean_r)**2).sum()
+                            if _cv_var > 0:
+                                _cv_b = _cv_cov / _cv_var
+                                _cv_a = _cv_mean_v - _cv_b * _cv_mean_r
+                                _cv_resid = _cv_vols - (_cv_a + _cv_b * _cv_rates)
+                                _cv_std = float(np.std(_cv_resid))
+
+                                _cv_curr_vol = get_matrix_value(atm, _cv_exp, _cv_tn_y)
+                                _sorted_c = curve_df.sort_values("MaturityY")
+                                _cv_curr_rate = float(np.interp(_cv_tn_y,
+                                    _sorted_c["MaturityY"].to_numpy().astype(float),
+                                    _sorted_c["ZeroRatePct"].to_numpy().astype(float)))
+
+                                if _cv_curr_vol and _cv_std > 0.5:
+                                    _cv_fair = _cv_a + _cv_b * _cv_curr_rate
+                                    _cv_z = (_cv_curr_vol - _cv_fair) / _cv_std
+                                    if _cv_z < -1.5:
+                                        ideas.append({
+                                            "Type": "Conditional Vol",
+                                            "Score": min(abs(_cv_z) * 12, 65),
+                                            "Structure": f"{_cv_exp}×{_cv_tn} cheap given rate level",
+                                            "Direction": "Buy vol",
+                                            "Trade": f"Buy {_cv_exp}×{_cv_tn} — vol below rate-conditional fair",
+                                            "Signal": f"Vol {_cv_curr_vol:.1f}bp vs fair {_cv_fair:.1f}bp at rate {_cv_curr_rate:.3f}% (z={_cv_z:+.1f}σ)",
+                                            "Rationale": f"Given SOFR {_cv_tn} at {_cv_curr_rate:.3f}%, historical regression "
+                                                         f"implies fair vol of {_cv_fair:.1f}bp. Current {_cv_curr_vol:.1f}bp is "
+                                                         f"{abs(_cv_z):.1f}σ below — vol cheap conditional on rate level.",
+                                            "Risk": "Regression may not hold in regime changes; limited history",
+                                            "e1": _cv_exp, "e2": _cv_exp, "tn": _cv_tn, "tn_y": _cv_tn_y,
+                                        })
+                                    elif _cv_z > 1.5:
+                                        ideas.append({
+                                            "Type": "Conditional Vol",
+                                            "Score": min(abs(_cv_z) * 12, 65),
+                                            "Structure": f"{_cv_exp}×{_cv_tn} rich given rate level",
+                                            "Direction": "Sell vol",
+                                            "Trade": f"Sell {_cv_exp}×{_cv_tn} — vol above rate-conditional fair",
+                                            "Signal": f"Vol {_cv_curr_vol:.1f}bp vs fair {_cv_fair:.1f}bp at rate {_cv_curr_rate:.3f}% (z={_cv_z:+.1f}σ)",
+                                            "Rationale": f"Given SOFR {_cv_tn} at {_cv_curr_rate:.3f}%, historical regression "
+                                                         f"implies fair vol of {_cv_fair:.1f}bp. Current {_cv_curr_vol:.1f}bp is "
+                                                         f"{abs(_cv_z):.1f}σ above — vol rich conditional on rate level.",
+                                            "Risk": "Vol may be pricing event risk not captured by regression",
+                                            "e1": _cv_exp, "e2": _cv_exp, "tn": _cv_tn, "tn_y": _cv_tn_y,
+                                        })
+        except Exception:
+            pass
+
+    # ── 21. SDR Flow as Vol Predictor ─────────────────────────────────────
+    # Heavy directional flow in DTCC → vol should move
+    # Heavy straddle flow → demand for vol → near-term vol spike
+    try:
+        conn_sdr = get_db_connection()
+        if conn_sdr:
+            cur_sdr = conn_sdr.cursor()
+            cur_sdr.execute("""
+                SELECT option_type_decoded, COUNT(*) as cnt,
+                       SUM(COALESCE(notional_leg1, 0)) as total_not
+                FROM dtcc_sdr
+                WHERE action_type='NEWT'
+                  AND asset_class='IR'
+                  AND execution_timestamp >= NOW() - INTERVAL '24 hours'
+                GROUP BY option_type_decoded
+            """)
+            _sdr_flow = {row[0]: {"count": row[1], "notional": float(row[2] or 0)}
+                         for row in cur_sdr.fetchall()}
+            conn_sdr.close()
+
+            _payer_not = _sdr_flow.get("CALL", {}).get("notional", 0)
+            _rcvr_not = _sdr_flow.get("PUT", {}).get("notional", 0)
+            _total_not = _payer_not + _rcvr_not
+            if _total_not > 0:
+                _payer_pct = _payer_not / _total_not * 100
+                _flow_skew = _payer_pct - 50  # positive = payer-heavy
+
+                if abs(_flow_skew) > 20:
+                    _heavy_side = "Payer" if _flow_skew > 0 else "Receiver"
+                    ideas.append({
+                        "Type": "SDR Flow Signal",
+                        "Score": min(abs(_flow_skew) * 1.5, 55),
+                        "Structure": f"24h flow skew: {_heavy_side} heavy ({_payer_pct:.0f}%P)",
+                        "Direction": "Buy vol",
+                        "Trade": f"Buy short-dated vol — heavy {_heavy_side} flow suggests directional pressure",
+                        "Signal": f"P/R split: {_payer_pct:.0f}/{100-_payer_pct:.0f} | "
+                                  f"${_payer_not/1e9:.1f}bn P / ${_rcvr_not/1e9:.1f}bn R",
+                        "Rationale": f"Last 24h SDR flow is {abs(_flow_skew):.0f}pp skewed to {_heavy_side}s — "
+                                     f"directional positioning usually precedes vol expansion. "
+                                     f"Total flow: ${_total_not/1e9:.1f}bn.",
+                        "Risk": "Flow may be hedging, not directional; one-day sample noisy",
+                        "e1": "1m", "e2": "1m", "tn": "5Y", "tn_y": 5,
+                    })
+
+                # Straddle detection: count of matched P+R pairs (rough proxy)
+                _payer_cnt = _sdr_flow.get("CALL", {}).get("count", 0)
+                _rcvr_cnt = _sdr_flow.get("PUT", {}).get("count", 0)
+                _total_cnt = _payer_cnt + _rcvr_cnt
+                if _total_cnt > 50 and abs(_payer_cnt - _rcvr_cnt) < _total_cnt * 0.15:
+                    # Balanced P/R count = lots of straddle activity
+                    ideas.append({
+                        "Type": "SDR Straddle Flow",
+                        "Score": min(_total_cnt / 3, 45),
+                        "Structure": f"Heavy straddle activity ({_total_cnt} trades, balanced P/R)",
+                        "Direction": "Buy vol",
+                        "Trade": "Buy short-dated vol — elevated straddle demand signals vol buyers",
+                        "Signal": f"{_total_cnt} trades in 24h | P={_payer_cnt} R={_rcvr_cnt} (balanced = straddle proxy)",
+                        "Rationale": f"Balanced payer/receiver flow ({_payer_cnt}P/{_rcvr_cnt}R) with high "
+                                     f"total volume suggests straddle buying — market expects a move.",
+                        "Risk": "Could be hedging activity, not new risk positions",
+                        "e1": "1m", "e2": "1m", "tn": "5Y", "tn_y": 5,
+                    })
+    except Exception:
+        pass
+
+    # ── 27. Vol-of-Vol (rates vol momentum) ───────────────────────────────
+    # How much is swaption vol itself moving day-to-day?
+    # High vol-of-vol = vol expanding, momentum → buy gamma
+    # Low vol-of-vol = vol compressing, mean-reverting → sell gamma
+    try:
+        conn_vv = get_db_connection()
+        if conn_vv:
+            cur_vv = conn_vv.cursor()
+            cur_vv.execute("""
+                SELECT snapshot_date, atm_vols FROM vol_history
+                WHERE currency='USD' AND user_id='shared'
+                ORDER BY snapshot_date DESC LIMIT 30
+            """)
+            _vv_rows = cur_vv.fetchall()
+            conn_vv.close()
+
+            if _vv_rows and len(_vv_rows) >= 10:
+                # Track daily changes in key ATM vol points
+                for _vv_exp, _vv_tn in [("3m", "5Y"), ("1y", "10Y")]:
+                    _vv_series = []
+                    for _, _vv_atm in _vv_rows:
+                        if not _vv_atm:
+                            continue
+                        for _vv_r in _vv_atm.get("values", []):
+                            if (_vv_r.get("Expiry","").lower() == _vv_exp):
+                                _vv_v = _vv_r.get(_vv_tn)
+                                if _vv_v:
+                                    _vv_series.append(float(_vv_v))
+                                break
+
+                    if len(_vv_series) >= 10:
+                        _vv_changes = [abs(_vv_series[i] - _vv_series[i+1]) for i in range(len(_vv_series)-1)]
+                        _vv_recent = np.mean(_vv_changes[:5])   # last 5 days
+                        _vv_longer = np.mean(_vv_changes[5:])   # prior days
+                        _vv_ratio = _vv_recent / max(_vv_longer, 0.1)
+
+                        if _vv_ratio > 2.0:
+                            ideas.append({
+                                "Type": "Vol-of-Vol High",
+                                "Score": min((_vv_ratio - 1.0) * 20, 55),
+                                "Structure": f"{_vv_exp}×{_vv_tn} vol moving {_vv_ratio:.1f}× faster than normal",
+                                "Direction": "Buy vol",
+                                "Trade": f"Buy {_vv_exp}×{_vv_tn} — vol-of-vol elevated, momentum higher",
+                                "Signal": f"5d avg |Δvol| = {_vv_recent:.2f}bp vs prior {_vv_longer:.2f}bp (ratio {_vv_ratio:.1f}×)",
+                                "Rationale": f"{_vv_exp}×{_vv_tn} vol is moving {_vv_ratio:.1f}× faster than its recent "
+                                             f"average — vol momentum suggests further expansion.",
+                                "Risk": "Vol-of-vol can spike and revert quickly; may be event-driven",
+                                "e1": _vv_exp, "e2": _vv_exp, "tn": _vv_tn, "tn_y": float(_vv_tn.replace("Y","")),
+                            })
+                        elif _vv_ratio < 0.4 and _vv_longer > 0.5:
+                            ideas.append({
+                                "Type": "Vol-of-Vol Low",
+                                "Score": min((1.0 - _vv_ratio) * 15, 40),
+                                "Structure": f"{_vv_exp}×{_vv_tn} vol barely moving ({_vv_ratio:.1f}× normal)",
+                                "Direction": "Sell vol",
+                                "Trade": f"Sell {_vv_exp}×{_vv_tn} — vol-of-vol compressed, theta stable",
+                                "Signal": f"5d avg |Δvol| = {_vv_recent:.2f}bp vs prior {_vv_longer:.2f}bp (ratio {_vv_ratio:.1f}×)",
+                                "Rationale": f"{_vv_exp}×{_vv_tn} vol is barely moving — {_vv_ratio:.1f}× normal pace. "
+                                             f"Compressed vol-of-vol = theta accrual stable, sell premium.",
+                                "Risk": "Calm before storm; sudden event can break compression",
+                                "e1": _vv_exp, "e2": _vv_exp, "tn": _vv_tn, "tn_y": float(_vv_tn.replace("Y","")),
+                            })
+    except Exception:
+        pass
+
     # ── 11. MOVE context adjustment ───────────────────────────────────────
     if move_val and move_val > 120:
         for idea in ideas:
