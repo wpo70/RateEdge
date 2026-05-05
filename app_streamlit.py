@@ -6806,7 +6806,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     "JPY": ("Asia/Tokyo", "TKY"),
                     "CAD": ("America/New_York", "NYC"),
                 }
-                _sdr_ccy = st.session_state.get("sidebar_ccy", "USD")
+                _sdr_ccy = st.session_state.get("sidebar_ccy", "USD").split(" ")[0]
                 _tz_name, _tz_label = _CCY_TIMEZONE.get(_sdr_ccy, ("America/New_York", "NYC"))
                 _local_tz = _ZI_sdr(_tz_name)
                 _time_col = f"Time ({_tz_label})"
@@ -25137,10 +25137,10 @@ def main():
         st.session_state["theme_name"] = theme_choice
         
         # Currency — default to USD
-        _ccy_idx = SUPPORTED_CURRENCIES.index(st.session_state.get("sidebar_ccy", "USD")) if st.session_state.get("sidebar_ccy", "USD") in SUPPORTED_CURRENCIES else SUPPORTED_CURRENCIES.index("USD")
+        _ccy_idx = ALL_CURRENCIES.index(st.session_state.get("sidebar_ccy", "USD")) if st.session_state.get("sidebar_ccy", "USD") in ALL_CURRENCIES else ALL_CURRENCIES.index("USD")
         ccy = st.selectbox(
             " Currency",
-            SUPPORTED_CURRENCIES,
+            ALL_CURRENCIES,
             index=_ccy_idx,
             key="sidebar_ccy",
         )
