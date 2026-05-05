@@ -6788,18 +6788,31 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     st.caption("Notional in $M · Payer % = Payer / (Payer + Receiver) by swap tenor")
 
         with _atab4:
-            # ── Full Trade Analytics — straddles, singles, exotics ──────────
-            st.caption("All NEWT trades classified: Straddles (matched P+R pairs), single legs (unmatched P or R), and exotics (non-standard).")
+            # ── Full Trade Analytics — straddles, strangles, collars, singles, exotics ──
+            st.caption("All NEWT trades classified: Straddles (matched P+R same strike), "
+                       "Strangles (P+R different strikes), Collars (Cap+Floor), singles, exotics.")
             _newt_all = df[df["action_type"] == "NEWT"].copy()
             if _newt_all.empty:
                 st.info("No NEWT trades in current filter.")
             else:
-                # Re-detect straddles (matched payer+receiver pairs)
+                # Convert timestamps to NYC time
+                import pytz as _pytz_a
+                _nyc_tz = _pytz_a.timezone("America/New_York")
+
+                def _to_nyc(ts_):
+                    ts_ = pd.to_datetime(ts_, errors="coerce")
+                    if ts_ is pd.NaT:
+                        return pd.NaT
+                    if ts_.tzinfo is None:
+                        ts_ = ts_.tz_localize("UTC")
+                    return ts_.astimezone(_nyc_tz)
+
+                # Classify options: CALL=Payer/Cap, PUT=Receiver/Floor
                 _payers_a = _newt_all[_newt_all["option_type_decoded"] == "CALL"].copy()
                 _rcvrs_a  = _newt_all[_newt_all["option_type_decoded"] == "PUT"].copy()
                 _matched_p_ids = set()
                 _matched_r_ids = set()
-                _strd_rows = []
+                _paired_rows = []
                 _exo_types = ["STR", "EC", "EXOTIC", "BARRIER", "BERMUDAN", "ASIAN", "DIGITAL", "RANGE"]
 
                 if not _payers_a.empty and not _rcvrs_a.empty and "strike_pct" in _newt_all.columns:
@@ -6807,39 +6820,71 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         if _pi in _matched_p_ids:
                             continue
                         _s_p = round(float(_p.get("strike_pct") or 0), 2)
-                        _t_p = str(_p.get("swp_tenor",""))
-                        _e_p = str(_p.get("opt_tenor",""))
+                        _t_p = str(_p.get("swp_tenor","") or "").strip()
+                        _e_p = str(_p.get("opt_tenor","") or "").strip()
                         _ccy_p = str(_p.get("notional_ccy",""))
                         _time_p = pd.to_datetime(_p.get("event_timestamp"), errors="coerce")
 
+                        # Match: same expiry, same ccy, within 2 min
                         _match = _rcvrs_a[
                             (~_rcvrs_a.index.isin(_matched_r_ids)) &
-                            (_rcvrs_a["swp_tenor"] == _t_p) &
                             (_rcvrs_a["opt_tenor"] == _e_p) &
-                            (_rcvrs_a["notional_ccy"] == _ccy_p) &
-                            (_rcvrs_a["strike_pct"].apply(lambda x: abs(float(x or 0) - _s_p) < 0.01))
+                            (_rcvrs_a["notional_ccy"] == _ccy_p)
                         ]
+                        # Also require same swp_tenor (or both empty for caps/floors)
+                        if _t_p and _t_p not in ("—","NA","None",""):
+                            _match = _match[_match["swp_tenor"] == _t_p]
+                        else:
+                            _match = _match[_match["swp_tenor"].isin(["","—","NA","None",None]) | _match["swp_tenor"].isna()]
+
                         if not _match.empty and _time_p is not pd.NaT:
                             for _ri, _r in _match.iterrows():
                                 _time_r = pd.to_datetime(_r.get("event_timestamp"), errors="coerce")
                                 if _time_r is not pd.NaT and abs((_time_p - _time_r).total_seconds()) <= 120:
                                     _matched_p_ids.add(_pi)
                                     _matched_r_ids.add(_ri)
-                                    _p_prem_a = float(_p.get("premium_amount") or 0)
-                                    _r_prem_a = float(_r.get("premium_amount") or 0)
-                                    _comb_prem = _p_prem_a + _r_prem_a
+                                    _s_r = round(float(_r.get("strike_pct") or 0), 2)
+                                    _p_prem = float(_p.get("premium_amount") or 0)
+                                    _r_prem = float(_r.get("premium_amount") or 0)
+                                    _comb_prem = _p_prem + _r_prem
                                     _comb_not = float(_p.get("notional_leg1") or 0)
                                     _comb_bp = round(_comb_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
-                                    _strd_rows.append({
-                                        "Type": "🟣 Collar" if (not _t_p or _t_p in ("—","NA","None","")) else "🔵 Straddle",
-                                        "Time": _time_p.strftime("%H:%M:%S"),
+                                    _p_bp = round(_p_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
+                                    _r_bp = round(_r_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
+                                    _nyc_time = _to_nyc(_time_p)
+
+                                    # Classify: same strike = straddle, diff strike with swp_tenor = strangle, no swp_tenor = collar
+                                    _same_strike = abs(_s_p - _s_r) < 0.01
+                                    _has_swp = bool(_t_p and _t_p not in ("—","NA","None",""))
+                                    if _same_strike and _has_swp:
+                                        _ptype = "🔵 Straddle"
+                                        _strike_disp = f"{_s_p:.2f}%"
+                                        _prem_disp = f"{_fmt_premium(_comb_prem)}" if _comb_prem else "—"
+                                    elif not _same_strike and _has_swp:
+                                        _ptype = "🟠 Strangle"
+                                        _strike_disp = f"P:{_s_p:.2f}% / R:{_s_r:.2f}%"
+                                        _prem_disp = f"P:{_fmt_premium(_p_prem)} + R:{_fmt_premium(_r_prem)} = {_fmt_premium(_comb_prem)}" if _comb_prem else "—"
+                                    elif not _has_swp:
+                                        _ptype = "🟣 Collar"
+                                        _strike_disp = f"Cap:{_s_p:.2f}% / Flr:{_s_r:.2f}%"
+                                        _prem_disp = f"Cap:{_fmt_premium(_p_prem)} + Flr:{_fmt_premium(_r_prem)} = {_fmt_premium(_comb_prem)}" if _comb_prem else "—"
+                                    else:
+                                        _ptype = "🔵 Straddle"
+                                        _strike_disp = f"{_s_p:.2f}%"
+                                        _prem_disp = f"{_fmt_premium(_comb_prem)}" if _comb_prem else "—"
+
+                                    _paired_rows.append({
+                                        "Type": _ptype,
+                                        "Time (NYC)": _nyc_time.strftime("%H:%M:%S") if _nyc_time is not pd.NaT else "—",
                                         "CCY": _ccy_p,
                                         "Opt Expiry": _e_p,
-                                        "Swp Tenor": _t_p,
-                                        "Strike": f"{_s_p:.2f}%",
+                                        "Swp Tenor": _t_p if _t_p and _t_p not in ("—","NA","None","") else "—",
+                                        "Strike": _strike_disp,
                                         "Notional": _fmt_notional(_comb_not),
-                                        "Premium": _fmt_premium(_comb_prem) if _comb_prem else "—",
+                                        "Premium": _prem_disp,
                                         "Prem BP": f"{_comb_bp:.2f}" if _comb_bp else "—",
+                                        "P Prem BP": f"{_p_bp:.2f}" if _p_bp else "—",
+                                        "R Prem BP": f"{_r_bp:.2f}" if _r_bp else "—",
                                         "Platform": PLATFORM_NAMES.get(str(_p.get("platform_identifier","")), str(_p.get("platform_identifier",""))),
                                     })
                                     break
@@ -6850,14 +6895,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _ot = _s_row.get("option_type_decoded", "")
                     if _si in _matched_p_ids or _si in _matched_r_ids:
                         continue
-                    if _ot.upper() in _exo_types:
+                    if str(_ot).upper() in _exo_types:
                         continue
                     _s_prem = float(_s_row.get("premium_amount") or 0)
                     _s_not = float(_s_row.get("notional_leg1") or 0)
                     _s_bp = round(_s_prem / _s_not * 10000, 2) if _s_not > 0 else 0
-                    _s_time = pd.to_datetime(_s_row.get("event_timestamp"), errors="coerce")
+                    _s_time = _to_nyc(_s_row.get("event_timestamp"))
                     _pc_label = "🟢 Payer" if _ot == "CALL" else "🔴 Receiver" if _ot == "PUT" else f"⚪ {_ot}"
-                    # Cap/Floor: has opt_tenor but no swp_tenor
                     _s_swp = str(_s_row.get("swp_tenor", "") or "").strip()
                     _s_opt = str(_s_row.get("opt_tenor", "") or "").strip()
                     if (not _s_swp or _s_swp in ("—", "NA", "None", "")) and _s_opt:
@@ -6867,14 +6911,16 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _pc_label = "🟥 Floor"
                     _single_rows.append({
                         "Type": _pc_label,
-                        "Time": _s_time.strftime("%H:%M:%S") if _s_time is not pd.NaT else "—",
+                        "Time (NYC)": _s_time.strftime("%H:%M:%S") if _s_time is not pd.NaT else "—",
                         "CCY": str(_s_row.get("notional_ccy", "")),
                         "Opt Expiry": str(_s_row.get("opt_tenor", "—")),
-                        "Swp Tenor": str(_s_row.get("swp_tenor", "—")),
+                        "Swp Tenor": _s_swp if _s_swp and _s_swp not in ("—","NA","None","") else "—",
                         "Strike": f"{float(_s_row.get('strike_pct') or 0):.2f}%" if pd.notna(_s_row.get("strike_pct")) else "—",
                         "Notional": _fmt_notional(_s_not),
                         "Premium": _fmt_premium(_s_prem) if _s_prem else "—",
                         "Prem BP": f"{_s_bp:.2f}" if _s_bp else "—",
+                        "P Prem BP": "—",
+                        "R Prem BP": "—",
                         "Platform": PLATFORM_NAMES.get(str(_s_row.get("platform_identifier","")), str(_s_row.get("platform_identifier",""))),
                     })
 
@@ -6889,10 +6935,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _e_prem = float(_e_row.get("premium_amount") or 0)
                     _e_not = float(_e_row.get("notional_leg1") or 0)
                     _e_bp = round(_e_prem / _e_not * 10000, 2) if _e_not > 0 else 0
-                    _e_time = pd.to_datetime(_e_row.get("event_timestamp"), errors="coerce")
+                    _e_time = _to_nyc(_e_row.get("event_timestamp"))
                     _exo_rows.append({
                         "Type": f"🟡 {_ot}",
-                        "Time": _e_time.strftime("%H:%M:%S") if _e_time is not pd.NaT else "—",
+                        "Time (NYC)": _e_time.strftime("%H:%M:%S") if _e_time is not pd.NaT else "—",
                         "CCY": str(_e_row.get("notional_ccy", "")),
                         "Opt Expiry": str(_e_row.get("opt_tenor", "—")),
                         "Swp Tenor": str(_e_row.get("swp_tenor", "—")),
@@ -6900,31 +6946,37 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         "Notional": _fmt_notional(_e_not),
                         "Premium": _fmt_premium(_e_prem) if _e_prem else "—",
                         "Prem BP": f"{_e_bp:.2f}" if _e_bp else "—",
+                        "P Prem BP": "—",
+                        "R Prem BP": "—",
                         "Platform": PLATFORM_NAMES.get(str(_e_row.get("platform_identifier","")), str(_e_row.get("platform_identifier",""))),
                     })
 
                 # Summary
-                _sc1, _sc2, _sc3, _sc4 = st.columns(4)
+                _n_straddles = len([r for r in _paired_rows if "Straddle" in r["Type"]])
+                _n_strangles = len([r for r in _paired_rows if "Strangle" in r["Type"]])
+                _n_collars = len([r for r in _paired_rows if "Collar" in r["Type"]])
+                _sc1, _sc2, _sc3, _sc4, _sc5, _sc6 = st.columns(6)
                 _sc1.metric("Total NEWT", len(_newt_all))
-                _sc2.metric("Straddles", len(_strd_rows))
-                _sc3.metric("Single Legs", len(_single_rows))
-                _sc4.metric("Exotics", len(_exo_rows))
+                _sc2.metric("Straddles", _n_straddles)
+                _sc3.metric("Strangles", _n_strangles)
+                _sc4.metric("Collars", _n_collars)
+                _sc5.metric("Single Legs", len(_single_rows))
+                _sc6.metric("Exotics", len(_exo_rows))
 
                 # Combined display
-                _all_trades = _strd_rows + _single_rows + _exo_rows
+                _all_trades = _paired_rows + _single_rows + _exo_rows
                 if _all_trades:
-                    # Sort by time descending
                     _all_df = pd.DataFrame(_all_trades)
-                    _all_df = _all_df.sort_values("Time", ascending=False).reset_index(drop=True)
+                    _all_df = _all_df.sort_values("Time (NYC)", ascending=False).reset_index(drop=True)
                     st.dataframe(_all_df, use_container_width=True, hide_index=True,
                                  height=min(60 + len(_all_df) * 35, 700))
 
-                    # Breakdown by type
-                    with st.expander("📊 Notional by Product Type", expanded=False):
+                    with st.expander("Notional by Product Type", expanded=False):
                         _type_summary = []
                         for _lbl, _rows in [
-                            ("Straddles", [r for r in _strd_rows if "Straddle" in r["Type"]]),
-                            ("Collars", [r for r in _strd_rows if "Collar" in r["Type"]]),
+                            ("Straddles", [r for r in _paired_rows if "Straddle" in r["Type"]]),
+                            ("Strangles", [r for r in _paired_rows if "Strangle" in r["Type"]]),
+                            ("Collars", [r for r in _paired_rows if "Collar" in r["Type"]]),
                             ("Single Payers", [r for r in _single_rows if "Payer" in r["Type"]]),
                             ("Single Receivers", [r for r in _single_rows if "Receiver" in r["Type"]]),
                             ("Caps", [r for r in _single_rows if "Cap" in r["Type"]]),
