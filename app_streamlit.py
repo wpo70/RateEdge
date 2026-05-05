@@ -26893,15 +26893,21 @@ def midcurve_tab():
         co_view = st.radio("View", ["ATM Spread (bp)", "Spread Vol (bp)", "Straddle Prem (bp)", "Vega ($/1bp 1mm)"],
                            key="co_view")
     with _cc2:
+        co_use_config = st.checkbox("Use per-pair ρ from config", value=False, key="co_use_config",
+                                     help="When checked, each spread pair uses its own correlation from the Exotics config matrix")
+        co_corr = st.slider("Correlation (ρ)", min_value=0.50, max_value=0.99,
+                            value=0.85, step=0.01, key="co_corr",
+                            help="Uniform correlation for all pairs (overridden when per-pair is checked)",
+                            disabled=co_use_config)
         co_heatmap = st.checkbox("Heatmap", value=True, key="co_heatmap")
-    with _cc3:
-        # Show per-pair correlations from config matrix (editable in Exotics tab)
-        _pair_rhos = {}
-        for _cpn, (_ts_, _tl_) in CURVE_PAIRS.items():
-            _t1k = f"{_ts_}Y"; _t2k = f"{_tl_}Y"
-            _pair_rhos[_cpn] = get_correlation(_t1k, _t2k)
-        _rho_str = " | ".join(f"{k}: ρ={v:.3f}" for k, v in _pair_rhos.items())
-        st.caption(f"Correlations from config matrix (edit in Exotics ⚙️): {_rho_str}")
+    if co_use_config:
+        with _cc3:
+            _pair_rhos = {}
+            for _cpn, (_ts_, _tl_) in CURVE_PAIRS.items():
+                _t1k = f"{_ts_}Y"; _t2k = f"{_tl_}Y"
+                _pair_rhos[_cpn] = get_correlation(_t1k, _t2k)
+            _rho_str = " | ".join(f"{k}: {v:.3f}" for k, v in _pair_rhos.items())
+            st.caption(f"Config ρ: {_rho_str}")
 
     # ── Build matrices ─────────────────────────────────────────────────
     co_spread_mat = pd.DataFrame(index=CURVE_EXPIRIES, columns=list(CURVE_PAIRS.keys()), dtype=float)
@@ -26920,9 +26926,9 @@ def midcurve_tab():
             if _vs is None or _vl is None:
                 continue
 
-            # Spread vol (bp) — per-pair correlation from config (v0505h)
+            # Spread vol (bp) — per-pair or uniform correlation (v0505i)
             _t1k = f"{_ts}Y"; _t2k = f"{_tl}Y"
-            _rho = get_correlation(_t1k, _t2k)
+            _rho = get_correlation(_t1k, _t2k) if co_use_config else co_corr
             _v_spread = _cmath.sqrt(max(_vl**2 + _vs**2 - 2*_rho*_vl*_vs, 0.0))
             co_vol_mat.at[_cexp, _cpair] = round(_v_spread, 2)
 
@@ -26973,7 +26979,8 @@ def midcurve_tab():
         co_fmt  = "{:.2f}"
 
     # ── Display ────────────────────────────────────────────────────────
-    st.markdown(f"#### {ccy} Curve Options — {co_view}  (per-pair ρ from config)")
+    _rho_display = "per-pair ρ from config" if co_use_config else f"ρ = {co_corr:.2f}"
+    st.markdown(f"#### {ccy} Curve Options — {co_view}  ({_rho_display})")
     st.caption("Rows = option expiry | Columns = curve spread | Vols from ATM surface at option expiry")
 
     co_disp_num = co_disp.copy()
