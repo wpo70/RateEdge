@@ -6587,7 +6587,7 @@ Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
     if not df.empty:
         st.markdown("---")
         st.markdown("#### 📊 Analytics")
-        _atab1, _atab2, _atab3 = st.tabs(["Strike Heatmap", "Straddle Detection", "P/R Ratio"])
+        _atab1, _atab2, _atab3, _atab4 = st.tabs(["Strike Heatmap", "Straddle Detection", "P/R Ratio", "Full Trade Analytics"])
 
         with _atab1:
             # ── Strike Heatmap ──────────────────────────────────────────────
@@ -6683,13 +6683,20 @@ Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
                         for _, _r in _match.iterrows():
                             _time_r = pd.to_datetime(_r.get("event_timestamp"), errors="coerce")
                             if _time_r is not pd.NaT and abs((_time_p - _time_r).total_seconds()) <= 120:
+                                _p_prem = float(_p.get("premium_amount") or 0)
+                                _r_prem = float(_r.get("premium_amount") or 0)
+                                _strd_prem = _p_prem + _r_prem
+                                _strd_not = float(_p.get("notional_leg1") or 0)
+                                _strd_prem_bp = round(_strd_prem / _strd_not * 10000, 2) if _strd_not > 0 else 0
                                 _straddles.append({
                                     "Time": _time_p.strftime("%H:%M:%S") if _time_p else "—",
                                     "CCY": _ccy_p,
                                     "Opt Expiry": _e_p,
                                     "Swp Tenor": _t_p,
                                     "Strike": f"{_s_p:.2f}%",
-                                    "Notional": _fmt_notional(float(_p.get("notional_leg1") or 0)),
+                                    "Notional": _fmt_notional(_strd_not),
+                                    "Premium": _fmt_premium(_strd_prem) if _strd_prem else "—",
+                                    "Prem BP": f"{_strd_prem_bp:.2f}" if _strd_prem_bp else "—",
                                     "Platform": PLATFORM_NAMES.get(str(_p.get("platform_identifier","")), str(_p.get("platform_identifier",""))),
                                 })
                             break  # one match per payer
@@ -6735,6 +6742,140 @@ Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
                     _pr_tenor = _pr_tenor[["Payer $M","Receiver $M","Payer %"]].rename_axis("Swap Tenor")
                     st.dataframe(_pr_tenor, use_container_width=True)
                     st.caption("Notional in $M · Payer % = Payer / (Payer + Receiver) by swap tenor")
+
+        with _atab4:
+            # ── Full Trade Analytics — straddles, singles, exotics ──────────
+            st.caption("All NEWT trades classified: Straddles (matched P+R pairs), single legs (unmatched P or R), and exotics (non-standard).")
+            _newt_all = df[df["action_type"] == "NEWT"].copy()
+            if _newt_all.empty:
+                st.info("No NEWT trades in current filter.")
+            else:
+                # Re-detect straddles (matched payer+receiver pairs)
+                _payers_a = _newt_all[_newt_all["option_type_decoded"] == "CALL"].copy()
+                _rcvrs_a  = _newt_all[_newt_all["option_type_decoded"] == "PUT"].copy()
+                _matched_p_ids = set()
+                _matched_r_ids = set()
+                _strd_rows = []
+                _exo_types = ["STR", "EC", "EXOTIC", "BARRIER", "BERMUDAN", "ASIAN", "DIGITAL", "RANGE"]
+
+                if not _payers_a.empty and not _rcvrs_a.empty and "strike_pct" in _newt_all.columns:
+                    for _pi, _p in _payers_a.iterrows():
+                        if _pi in _matched_p_ids:
+                            continue
+                        _s_p = round(float(_p.get("strike_pct") or 0), 2)
+                        _t_p = str(_p.get("swp_tenor",""))
+                        _e_p = str(_p.get("opt_tenor",""))
+                        _ccy_p = str(_p.get("notional_ccy",""))
+                        _time_p = pd.to_datetime(_p.get("event_timestamp"), errors="coerce")
+
+                        _match = _rcvrs_a[
+                            (~_rcvrs_a.index.isin(_matched_r_ids)) &
+                            (_rcvrs_a["swp_tenor"] == _t_p) &
+                            (_rcvrs_a["opt_tenor"] == _e_p) &
+                            (_rcvrs_a["notional_ccy"] == _ccy_p) &
+                            (_rcvrs_a["strike_pct"].apply(lambda x: abs(float(x or 0) - _s_p) < 0.01))
+                        ]
+                        if not _match.empty and _time_p is not pd.NaT:
+                            for _ri, _r in _match.iterrows():
+                                _time_r = pd.to_datetime(_r.get("event_timestamp"), errors="coerce")
+                                if _time_r is not pd.NaT and abs((_time_p - _time_r).total_seconds()) <= 120:
+                                    _matched_p_ids.add(_pi)
+                                    _matched_r_ids.add(_ri)
+                                    _p_prem_a = float(_p.get("premium_amount") or 0)
+                                    _r_prem_a = float(_r.get("premium_amount") or 0)
+                                    _comb_prem = _p_prem_a + _r_prem_a
+                                    _comb_not = float(_p.get("notional_leg1") or 0)
+                                    _comb_bp = round(_comb_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
+                                    _strd_rows.append({
+                                        "Type": "🔵 Straddle",
+                                        "Time": _time_p.strftime("%H:%M:%S"),
+                                        "CCY": _ccy_p,
+                                        "Opt Expiry": _e_p,
+                                        "Swp Tenor": _t_p,
+                                        "Strike": f"{_s_p:.2f}%",
+                                        "Notional": _fmt_notional(_comb_not),
+                                        "Premium": _fmt_premium(_comb_prem) if _comb_prem else "—",
+                                        "Prem BP": f"{_comb_bp:.2f}" if _comb_bp else "—",
+                                        "Platform": PLATFORM_NAMES.get(str(_p.get("platform_identifier","")), str(_p.get("platform_identifier",""))),
+                                    })
+                                    break
+
+                # Single legs (unmatched)
+                _single_rows = []
+                for _si, _s_row in _newt_all.iterrows():
+                    _ot = _s_row.get("option_type_decoded", "")
+                    if _si in _matched_p_ids or _si in _matched_r_ids:
+                        continue
+                    if _ot.upper() in _exo_types:
+                        continue
+                    _s_prem = float(_s_row.get("premium_amount") or 0)
+                    _s_not = float(_s_row.get("notional_leg1") or 0)
+                    _s_bp = round(_s_prem / _s_not * 10000, 2) if _s_not > 0 else 0
+                    _s_time = pd.to_datetime(_s_row.get("event_timestamp"), errors="coerce")
+                    _pc_label = "🟢 Payer" if _ot == "CALL" else "🔴 Receiver" if _ot == "PUT" else f"⚪ {_ot}"
+                    _single_rows.append({
+                        "Type": _pc_label,
+                        "Time": _s_time.strftime("%H:%M:%S") if _s_time is not pd.NaT else "—",
+                        "CCY": str(_s_row.get("notional_ccy", "")),
+                        "Opt Expiry": str(_s_row.get("opt_tenor", "—")),
+                        "Swp Tenor": str(_s_row.get("swp_tenor", "—")),
+                        "Strike": f"{float(_s_row.get('strike_pct') or 0):.2f}%" if pd.notna(_s_row.get("strike_pct")) else "—",
+                        "Notional": _fmt_notional(_s_not),
+                        "Premium": _fmt_premium(_s_prem) if _s_prem else "—",
+                        "Prem BP": f"{_s_bp:.2f}" if _s_bp else "—",
+                        "Platform": PLATFORM_NAMES.get(str(_s_row.get("platform_identifier","")), str(_s_row.get("platform_identifier",""))),
+                    })
+
+                # Exotics
+                _exo_rows = []
+                for _ei, _e_row in _newt_all.iterrows():
+                    _ot = str(_e_row.get("option_type_decoded", "")).upper()
+                    if _ei in _matched_p_ids or _ei in _matched_r_ids:
+                        continue
+                    if _ot not in _exo_types:
+                        continue
+                    _e_prem = float(_e_row.get("premium_amount") or 0)
+                    _e_not = float(_e_row.get("notional_leg1") or 0)
+                    _e_bp = round(_e_prem / _e_not * 10000, 2) if _e_not > 0 else 0
+                    _e_time = pd.to_datetime(_e_row.get("event_timestamp"), errors="coerce")
+                    _exo_rows.append({
+                        "Type": f"🟡 {_ot}",
+                        "Time": _e_time.strftime("%H:%M:%S") if _e_time is not pd.NaT else "—",
+                        "CCY": str(_e_row.get("notional_ccy", "")),
+                        "Opt Expiry": str(_e_row.get("opt_tenor", "—")),
+                        "Swp Tenor": str(_e_row.get("swp_tenor", "—")),
+                        "Strike": f"{float(_e_row.get('strike_pct') or 0):.2f}%" if pd.notna(_e_row.get("strike_pct")) else "—",
+                        "Notional": _fmt_notional(_e_not),
+                        "Premium": _fmt_premium(_e_prem) if _e_prem else "—",
+                        "Prem BP": f"{_e_bp:.2f}" if _e_bp else "—",
+                        "Platform": PLATFORM_NAMES.get(str(_e_row.get("platform_identifier","")), str(_e_row.get("platform_identifier",""))),
+                    })
+
+                # Summary
+                _sc1, _sc2, _sc3, _sc4 = st.columns(4)
+                _sc1.metric("Total NEWT", len(_newt_all))
+                _sc2.metric("Straddles", len(_strd_rows))
+                _sc3.metric("Single Legs", len(_single_rows))
+                _sc4.metric("Exotics", len(_exo_rows))
+
+                # Combined display
+                _all_trades = _strd_rows + _single_rows + _exo_rows
+                if _all_trades:
+                    # Sort by time descending
+                    _all_df = pd.DataFrame(_all_trades)
+                    _all_df = _all_df.sort_values("Time", ascending=False).reset_index(drop=True)
+                    st.dataframe(_all_df, use_container_width=True, hide_index=True,
+                                 height=min(60 + len(_all_df) * 35, 700))
+
+                    # Breakdown by type
+                    with st.expander("📊 Notional by Product Type", expanded=False):
+                        _type_summary = []
+                        for _lbl, _rows in [("Straddles", _strd_rows), ("Single Payers", [r for r in _single_rows if "Payer" in r["Type"]]),
+                                             ("Single Receivers", [r for r in _single_rows if "Receiver" in r["Type"]]), ("Exotics", _exo_rows)]:
+                            if _rows:
+                                _type_summary.append({"Type": _lbl, "Count": len(_rows)})
+                        if _type_summary:
+                            st.dataframe(pd.DataFrame(_type_summary), use_container_width=True, hide_index=True)
 
     # ── Auto-refresh ──────────────────────────────────────────────────────────
     _refresh_map = {"Off": 0, "30s": 30, "1 min": 60, "2 min": 120, "5 min": 300}
