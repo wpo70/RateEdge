@@ -6787,7 +6787,7 @@ Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
                                     _comb_not = float(_p.get("notional_leg1") or 0)
                                     _comb_bp = round(_comb_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
                                     _strd_rows.append({
-                                        "Type": "🔵 Straddle",
+                                        "Type": "🟣 Collar" if (not _t_p or _t_p in ("—","NA","None","")) else "🔵 Straddle",
                                         "Time": _time_p.strftime("%H:%M:%S"),
                                         "CCY": _ccy_p,
                                         "Opt Expiry": _e_p,
@@ -6813,6 +6813,14 @@ Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
                     _s_bp = round(_s_prem / _s_not * 10000, 2) if _s_not > 0 else 0
                     _s_time = pd.to_datetime(_s_row.get("event_timestamp"), errors="coerce")
                     _pc_label = "🟢 Payer" if _ot == "CALL" else "🔴 Receiver" if _ot == "PUT" else f"⚪ {_ot}"
+                    # Cap/Floor: has opt_tenor but no swp_tenor
+                    _s_swp = str(_s_row.get("swp_tenor", "") or "").strip()
+                    _s_opt = str(_s_row.get("opt_tenor", "") or "").strip()
+                    if (not _s_swp or _s_swp in ("—", "NA", "None", "")) and _s_opt:
+                        if _ot == "CALL":
+                            _pc_label = "🟩 Cap"
+                        elif _ot == "PUT":
+                            _pc_label = "🟥 Floor"
                     _single_rows.append({
                         "Type": _pc_label,
                         "Time": _s_time.strftime("%H:%M:%S") if _s_time is not pd.NaT else "—",
@@ -6870,8 +6878,15 @@ Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
                     # Breakdown by type
                     with st.expander("📊 Notional by Product Type", expanded=False):
                         _type_summary = []
-                        for _lbl, _rows in [("Straddles", _strd_rows), ("Single Payers", [r for r in _single_rows if "Payer" in r["Type"]]),
-                                             ("Single Receivers", [r for r in _single_rows if "Receiver" in r["Type"]]), ("Exotics", _exo_rows)]:
+                        for _lbl, _rows in [
+                            ("Straddles", [r for r in _strd_rows if "Straddle" in r["Type"]]),
+                            ("Collars", [r for r in _strd_rows if "Collar" in r["Type"]]),
+                            ("Single Payers", [r for r in _single_rows if "Payer" in r["Type"]]),
+                            ("Single Receivers", [r for r in _single_rows if "Receiver" in r["Type"]]),
+                            ("Caps", [r for r in _single_rows if "Cap" in r["Type"]]),
+                            ("Floors", [r for r in _single_rows if "Floor" in r["Type"]]),
+                            ("Exotics", _exo_rows),
+                        ]:
                             if _rows:
                                 _type_summary.append({"Type": _lbl, "Count": len(_rows)})
                         if _type_summary:
