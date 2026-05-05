@@ -21375,7 +21375,7 @@ def rv_tab():
 
                     # Z-score vs history if available; else fall back to sqrt(T) ratio
                     if rs and rs.get("std", 0) > 0.01:
-                        _rs_std_clamped = max(rs["std"], 0.02)  # floor std at 2% to avoid absurd z-scores from quiet periods
+                        _rs_std_clamped = max(rs["std"], 0.012)  # floor std at 1.2% to avoid absurd z-scores from quiet periods
                         z_ratio = (curr_ratio - rs["mean"]) / _rs_std_clamped
                         z_ratio = max(min(z_ratio, 5.0), -5.0)  # cap at ±5σ
                         fair_desc = f"hist mean {rs['mean']:.3f} (n={rs['n']})"
@@ -21395,9 +21395,9 @@ def rv_tab():
                     _n_m1m2 = mtgs_1m if isinstance(mtgs_1m, int) else len(mtgs_1m)
                     mtg_txt = f" | {_n_m1m2} mtg(s) stripped" if _n_m1m2 else ""
 
-                    # Only signal if both z-score AND VRP agree (avoids false positives)
-                    is_rich  = z_ratio > 1.5 and (vrp_1m is None or vrp_1m > 1.25)
-                    is_cheap = z_ratio < -1.5 and (vrp_1m is None or vrp_1m < 0.85)
+                    # v0505e: fire on z-score alone, VRP boosts — only block if VRP clearly disagrees
+                    is_rich  = z_ratio > 1.5 and (vrp_1m is None or vrp_1m > 1.0)
+                    is_cheap = z_ratio < -1.5 and (vrp_1m is None or vrp_1m < 1.0)
 
                     if is_rich:
                         ideas.append({
@@ -27817,15 +27817,18 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
         v1m_adj = v1m - _n_mtgs("1m") * _prem_per
         rs = ratio_stats.get(tn_str)
         if rs and rs.get("std", 0) > 0.01:
-            _rs_std_f = max(rs["std"], 0.02)
+            _rs_std_f = max(rs["std"], 0.012)
             z_ratio = (curr_ratio - rs["mean"]) / _rs_std_f
             z_ratio = max(min(z_ratio, 5.0), -5.0)
         else:
             gamma_fair = v1y / math.sqrt(12)
             z_ratio = (v1m_adj - gamma_fair) / max(gamma_fair * 0.15, 1.0)
         vrp_1m = round(v1m_adj / rv_21d, 2) if rv_21d and rv_21d > 0 else None
-        is_rich = z_ratio > 1.5 and (vrp_1m is None or vrp_1m > 1.25)
-        is_cheap = z_ratio < -1.5 and (vrp_1m is None or vrp_1m < 0.85)
+        # v0505e: fire on z-score alone (>1.5), VRP confirms and boosts score
+        _vrp_confirms_rich = vrp_1m is not None and vrp_1m > 1.20
+        _vrp_confirms_cheap = vrp_1m is not None and vrp_1m < 0.85
+        is_rich = z_ratio > 1.5 and (vrp_1m is None or vrp_1m > 1.0)  # only block if VRP clearly disagrees
+        is_cheap = z_ratio < -1.5 and (vrp_1m is None or vrp_1m < 1.0)
         if is_rich:
             ideas.append({
                 "Type": "Gamma/Theta", "Score": min(z_ratio * 12 + (max(vrp_1m - 1, 0) * 20 if vrp_1m else 0), 100),
@@ -28080,6 +28083,149 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                     })
     except Exception:
         pass  # Skip USD-specific if data unavailable
+
+    # ── 13. Tenor Butterfly (tenor dimension) ─────────────────────────────
+    # Most common vol RV trade: 2Y/5Y/10Y fly, 2Y/5Y/20Y fly at each expiry
+    if atm is not None:
+        _TENOR_FLY_STRUCTS = [
+            (2, 5, 10, "2/5/10"),
+            (2, 5, 20, "2/5/20"),
+            (5, 10, 20, "5/10/20"),
+            (5, 10, 30, "5/10/30"),
+            (2, 10, 30, "2/10/30"),
+        ]
+        for exp_lbl in ["1m", "3m", "6m", "1y", "2y", "5y"]:
+            for t_short, t_mid, t_long, fly_label in _TENOR_FLY_STRUCTS:
+                v_s = get_matrix_value(atm, exp_lbl, float(t_short))
+                v_m = get_matrix_value(atm, exp_lbl, float(t_mid))
+                v_l = get_matrix_value(atm, exp_lbl, float(t_long))
+                if not all(x for x in (v_s, v_m, v_l)):
+                    continue
+                # Weighted fly: belly vs interpolated wings
+                w_short = (t_long - t_mid) / (t_long - t_short)
+                w_long = (t_mid - t_short) / (t_long - t_short)
+                fly = v_m - (w_short * v_s + w_long * v_l)
+                if abs(fly) > 1.5:
+                    direction = "Sell belly" if fly > 0 else "Buy belly"
+                    ideas.append({
+                        "Type": "Tenor Butterfly",
+                        "Score": min(abs(fly) * 8, 80),
+                        "Structure": f"{exp_lbl}×{fly_label}Y fly",
+                        "Direction": direction,
+                        "Trade": (f"{'Sell' if fly>0 else 'Buy'} {exp_lbl}×{t_mid}Y, "
+                                  f"{'Buy' if fly>0 else 'Sell'} wings {t_short}Y+{t_long}Y"),
+                        "Signal": f"Fly = {fly:+.2f}bp | {t_short}Y={v_s:.1f} {t_mid}Y={v_m:.1f} {t_long}Y={v_l:.1f}",
+                        "Rationale": (f"{exp_lbl}×{t_mid}Y vol {'rich' if fly>0 else 'cheap'} vs {t_short}Y/{t_long}Y "
+                                      f"wings by {abs(fly):.1f}bp — weighted butterfly."),
+                        "Risk": "Tenor curve can stay dislocated; carry depends on rate moves",
+                        "e1": exp_lbl, "e2": exp_lbl, "tn": f"{t_mid}Y", "tn_y": t_mid,
+                    })
+
+    # ── 14. Historical Percentile Ranking ─────────────────────────────────
+    # Where is current vol vs its range over last N snapshots?
+    # <10th pctile = screaming cheap, >90th = screaming rich — regardless of z-score
+    if fv_stats and atm is not None:
+        try:
+            conn_pct = get_db_connection()
+            if conn_pct:
+                cur_pct = conn_pct.cursor()
+                cur_pct.execute("""
+                    SELECT atm_vols FROM vol_history
+                    WHERE currency='USD' AND user_id='shared'
+                    ORDER BY snapshot_date DESC LIMIT 120
+                """, )
+                _pct_rows = cur_pct.fetchall()
+                conn_pct.close()
+                if _pct_rows and len(_pct_rows) >= 20:
+                    _pct_history = {}  # (exp, tenor) -> [vol values]
+                    for (_atm_json,) in _pct_rows:
+                        if not _atm_json:
+                            continue
+                        for row in _atm_json.get("values", []):
+                            _e = (row.get("Expiry") or "").lower()
+                            for tn in ["2Y", "5Y", "10Y", "20Y", "30Y"]:
+                                v = row.get(tn)
+                                if v and float(v) > 0:
+                                    _pct_history.setdefault((_e, tn), []).append(float(v))
+
+                    for exp_lbl in ["1m", "3m", "6m", "1y", "2y", "5y"]:
+                        for tn_str in ["2Y", "5Y", "10Y", "20Y", "30Y"]:
+                            _hist = _pct_history.get((exp_lbl, tn_str), [])
+                            if len(_hist) < 20:
+                                continue
+                            _curr = get_matrix_value(atm, exp_lbl, float(tn_str.replace("Y", "")))
+                            if _curr is None:
+                                continue
+                            _sorted = sorted(_hist)
+                            _pctile = sum(1 for h in _sorted if h <= _curr) / len(_sorted) * 100
+                            if _pctile <= 10:
+                                ideas.append({
+                                    "Type": "Percentile Extreme",
+                                    "Score": min((15 - _pctile) * 5, 75),
+                                    "Structure": f"{exp_lbl}×{tn_str} at {_pctile:.0f}th pctile",
+                                    "Direction": "Buy vol",
+                                    "Trade": f"Buy {exp_lbl}×{tn_str} straddle — vol near historic lows",
+                                    "Signal": f"{_curr:.1f}bp at {_pctile:.0f}th pctile of {len(_hist)} obs (range {_sorted[0]:.1f}–{_sorted[-1]:.1f})",
+                                    "Rationale": f"{exp_lbl}×{tn_str} at {_curr:.1f}bp is near the bottom of its range — "
+                                                 f"only {_pctile:.0f}% of observations were lower.",
+                                    "Risk": "Vol can stay low in low-vol regimes; theta decay",
+                                    "e1": exp_lbl, "e2": exp_lbl, "tn": tn_str, "tn_y": float(tn_str.replace("Y", "")),
+                                })
+                            elif _pctile >= 90:
+                                ideas.append({
+                                    "Type": "Percentile Extreme",
+                                    "Score": min((_pctile - 85) * 5, 75),
+                                    "Structure": f"{exp_lbl}×{tn_str} at {_pctile:.0f}th pctile",
+                                    "Direction": "Sell vol",
+                                    "Trade": f"Sell {exp_lbl}×{tn_str} straddle — vol near historic highs",
+                                    "Signal": f"{_curr:.1f}bp at {_pctile:.0f}th pctile of {len(_hist)} obs (range {_sorted[0]:.1f}–{_sorted[-1]:.1f})",
+                                    "Rationale": f"{exp_lbl}×{tn_str} at {_curr:.1f}bp is near the top of its range — "
+                                                 f"{_pctile:.0f}% of observations were lower.",
+                                    "Risk": "Vol regime shift higher; event risk",
+                                    "e1": exp_lbl, "e2": exp_lbl, "tn": tn_str, "tn_y": float(tn_str.replace("Y", "")),
+                                })
+        except Exception:
+            pass
+
+    # ── 15. Vol Carry / Rolldown ──────────────────────────────────────────
+    # A trade can look "cheap" on vol level but bleed from negative carry.
+    # Carry = difference between current vol and vol at shorter expiry (rolldown on vol surface).
+    # Positive carry = vol increases as you approach expiry (backwardation = good for longs).
+    if atm is not None:
+        _CARRY_PAIRS = [("3m", "1m"), ("6m", "3m"), ("1y", "6m"), ("2y", "1y")]
+        for tn in [2, 5, 10]:
+            for long_e, short_e in _CARRY_PAIRS:
+                v_long = get_matrix_value(atm, long_e, float(tn))
+                v_short = get_matrix_value(atm, short_e, float(tn))
+                if not (v_long and v_short):
+                    continue
+                carry_bp = v_short - v_long  # positive = backwardation (vol rolls UP as time passes)
+                if carry_bp > 3.0:
+                    ideas.append({
+                        "Type": "Vol Carry",
+                        "Score": min(carry_bp * 6, 50),
+                        "Structure": f"{long_e}×{tn}Y positive carry",
+                        "Direction": "Buy vol",
+                        "Trade": f"Buy {long_e}×{tn}Y straddle — {carry_bp:.1f}bp positive rolldown",
+                        "Signal": f"Carry = {carry_bp:+.1f}bp ({short_e}={v_short:.1f} vs {long_e}={v_long:.1f})",
+                        "Rationale": f"Vol surface backwardated: {long_e}×{tn}Y at {v_long:.1f}bp rolls to "
+                                     f"{short_e}×{tn}Y at {v_short:.1f}bp — {carry_bp:.1f}bp positive carry per period.",
+                        "Risk": "Carry estimate assumes stable surface; curve can flatten",
+                        "e1": long_e, "e2": long_e, "tn": f"{tn}Y", "tn_y": tn,
+                    })
+                elif carry_bp < -5.0:
+                    ideas.append({
+                        "Type": "Vol Carry",
+                        "Score": min(abs(carry_bp) * 4, 50),
+                        "Structure": f"{long_e}×{tn}Y negative carry warning",
+                        "Direction": "Sell vol",
+                        "Trade": f"Sell {long_e}×{tn}Y — {abs(carry_bp):.1f}bp negative rolldown supports short",
+                        "Signal": f"Carry = {carry_bp:+.1f}bp ({short_e}={v_short:.1f} vs {long_e}={v_long:.1f})",
+                        "Rationale": f"Vol surface contango: buyer of {long_e}×{tn}Y bleeds {abs(carry_bp):.1f}bp "
+                                     f"as position rolls down to {short_e}. Theta + rolldown favours seller.",
+                        "Risk": "Event risk can overwhelm carry; vol spike wipes out theta",
+                        "e1": long_e, "e2": long_e, "tn": f"{tn}Y", "tn_y": tn,
+                    })
 
     # ── 11. MOVE context adjustment ───────────────────────────────────────
     if move_val and move_val > 120:
