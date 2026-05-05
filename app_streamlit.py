@@ -6825,7 +6825,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 _matched_p_ids = set()
                 _matched_r_ids = set()
                 _paired_rows = []
-                _exo_types = ["STR", "EC", "EXOTIC", "BARRIER", "BERMUDAN", "ASIAN", "DIGITAL", "RANGE"]
+                _exo_types = ["EC", "EXOTIC", "BARRIER", "BERMUDAN", "ASIAN", "DIGITAL", "RANGE"]
 
                 if not _payers_a.empty and not _rcvrs_a.empty and "strike_pct" in _newt_all.columns:
                     for _pi, _p in _payers_a.iterrows():
@@ -6879,7 +6879,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     elif not _has_swp:
                                         _ptype = "🟣 Collar"
                                         _strike_disp = f"Cap:{_s_p:.2f}% / Flr:{_s_r:.2f}%"
-                                        _prem_disp = f"Cap:{_fmt_premium(_p_prem)} + Flr:{_fmt_premium(_r_prem)} = {_fmt_premium(_comb_prem)}" if _comb_prem else "—"
+                                        # Collar: buy one leg, sell the other — show individual legs
+                                        _prem_disp = f"Buy:{_fmt_premium(_p_prem)} / Sell:{_fmt_premium(_r_prem)}" if (_p_prem or _r_prem) else "—"
+                                        _comb_prem = _p_prem - _r_prem  # net premium (buy - sell)
+                                        _comb_bp = round(_comb_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
                                     else:
                                         _ptype = "🔵 Straddle"
                                         _strike_disp = f"{_s_p:.2f}%"
@@ -6894,7 +6897,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         "Strike": _strike_disp,
                                         "Notional": _fmt_notional(_comb_not),
                                         "Premium": _prem_disp,
-                                        "Prem BP": f"{_comb_bp:.2f}" if _comb_bp else "—",
+                                        "Nett Prem BP": f"{_comb_bp:.2f}" if _comb_bp else "—",
                                         "P Prem BP": f"{_p_bp:.2f}" if _p_bp else "—",
                                         "R Prem BP": f"{_r_bp:.2f}" if _r_bp else "—",
                                         "Platform": PLATFORM_NAMES.get(str(_p.get("platform_identifier","")), str(_p.get("platform_identifier",""))),
@@ -6913,7 +6916,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _s_not = float(_s_row.get("notional_leg1") or 0)
                     _s_bp = round(_s_prem / _s_not * 10000, 2) if _s_not > 0 else 0
                     _s_time = _to_local(_s_row.get("event_timestamp"))
-                    _pc_label = "🟢 Payer" if _ot == "CALL" else "🔴 Receiver" if _ot == "PUT" else f"⚪ {_ot}"
+                    _pc_label = "🟢 Payer" if _ot == "CALL" else "🔴 Receiver" if _ot == "PUT" else "🔵 Straddle" if str(_ot).upper() == "STR" else f"⚪ {_ot}"
                     _s_swp = str(_s_row.get("swp_tenor", "") or "").strip()
                     _s_opt = str(_s_row.get("opt_tenor", "") or "").strip()
                     if (not _s_swp or _s_swp in ("—", "NA", "None", "")) and _s_opt:
@@ -6930,7 +6933,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         "Strike": f"{float(_s_row.get('strike_pct') or 0):.2f}%" if pd.notna(_s_row.get("strike_pct")) else "—",
                         "Notional": _fmt_notional(_s_not),
                         "Premium": _fmt_premium(_s_prem) if _s_prem else "—",
-                        "Prem BP": f"{_s_bp:.2f}" if _s_bp else "—",
+                        "Nett Prem BP": f"{_s_bp:.2f}" if _s_bp else "—",
                         "P Prem BP": "—",
                         "R Prem BP": "—",
                         "Platform": PLATFORM_NAMES.get(str(_s_row.get("platform_identifier","")), str(_s_row.get("platform_identifier",""))),
@@ -6957,7 +6960,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         "Strike": f"{float(_e_row.get('strike_pct') or 0):.2f}%" if pd.notna(_e_row.get("strike_pct")) else "—",
                         "Notional": _fmt_notional(_e_not),
                         "Premium": _fmt_premium(_e_prem) if _e_prem else "—",
-                        "Prem BP": f"{_e_bp:.2f}" if _e_bp else "—",
+                        "Nett Prem BP": f"{_e_bp:.2f}" if _e_bp else "—",
                         "P Prem BP": "—",
                         "R Prem BP": "—",
                         "Platform": PLATFORM_NAMES.get(str(_e_row.get("platform_identifier","")), str(_e_row.get("platform_identifier",""))),
