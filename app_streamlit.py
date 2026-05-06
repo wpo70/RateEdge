@@ -6268,7 +6268,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
         with col4:
             st.markdown("**Platform & Action**")
-            _all_platforms = [p for p in _sdr_get_distinct("platform_identifier") if p in PLATFORM_NAMES]
+            _BROKER_MICS = ["BGCD", "BILT", "DWSF", "GSEF", "IGDL", "ISWE", "ISWV",
+                           "TPSE", "TSEF", "TWSF", "XXXX"]
+            _all_platforms = sorted(_BROKER_MICS, key=lambda p: PLATFORM_NAMES.get(p, p))
             _platform_display = [f"{PLATFORM_NAMES.get(p, p)} ({p})" for p in _all_platforms]
             _platform_map = {f"{PLATFORM_NAMES.get(p, p)} ({p})": p for p in _all_platforms}
             sel_platform_labels = st.multiselect("Platform", _platform_display,
