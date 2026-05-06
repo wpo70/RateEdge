@@ -7867,6 +7867,53 @@ def vol_config_tab():
             if not snapshots:
                 st.info("No snapshots saved yet. Create your first snapshot above!")
             else:
+                # ── Handle pending load/delete actions (callback-driven) ──
+                _pending_load = st.session_state.pop("_pending_snap_load", None)
+                if _pending_load:
+                    loaded_snap = load_vol_snapshot(_pending_load["id"])
+                    if loaded_snap:
+                        _lc = loaded_snap['currency']
+                        if "vol_data" not in st.session_state:
+                            st.session_state["vol_data"] = {}
+                        if _lc not in st.session_state["vol_data"]:
+                            st.session_state["vol_data"][_lc] = {}
+                        st.session_state["vol_data"][_lc]["atm"] = loaded_snap["atm"]
+                        st.session_state["vol_data"][_lc]["alpha"] = loaded_snap["alpha"]
+                        st.session_state["vol_data"][_lc]["beta"] = loaded_snap["beta"]
+                        st.session_state["vol_data"][_lc]["rho"] = loaded_snap["rho"]
+                        st.session_state["vol_data"][_lc]["nu"] = loaded_snap["nu"]
+                        if "vol_editor" in st.session_state:
+                            st.session_state["vol_editor"]["working"].pop(_lc, None)
+                            st.session_state["vol_editor"]["base"].pop(_lc, None)
+                        _h = st.session_state.get(f"_atm_hash_{_lc}", 0)
+                        st.session_state[f"_atm_hash_{_lc}"] = _h + 1
+                        st.session_state.get("atm_prem_matrix", {}).pop(_lc, None)
+                        if "timestamps" not in st.session_state:
+                            st.session_state["timestamps"] = {}
+                        st.session_state["timestamps"][f"atm_{_lc}"] = loaded_snap['snapshot_date'].strftime('%Y-%m-%d %H:%M:%S')
+                        st.session_state["timestamps"][f"sabr_{_lc}"] = loaded_snap['snapshot_date'].strftime('%Y-%m-%d %H:%M:%S')
+                        st.session_state[f"_loaded_vol_label_{_lc}"] = _pending_load["label"]
+                        _rl = [f"{_bc}:{st.session_state[f'_loaded_vol_label_{_bc}']}"
+                               for _bc in SUPPORTED_CURRENCIES if st.session_state.get(f"_loaded_vol_label_{_bc}")]
+                        _old_banner = st.session_state.get("_auto_load_msg", "")
+                        _cfg_part = ""
+                        if "| Configs:" in _old_banner:
+                            _cfg_part = " | Configs:" + _old_banner.split("| Configs:")[1]
+                        if _rl:
+                            st.session_state["_auto_load_msg"] = f"✅ Vols: {', '.join(_rl)}" + _cfg_part
+                        st.success(f"✅ Loaded: {_pending_load['label']}")
+                    else:
+                        st.error("Failed to load snapshot")
+
+                _pending_del = st.session_state.pop("_pending_snap_del", None)
+                if _pending_del:
+                    if delete_vol_snapshot(_pending_del):
+                        st.success("✅ Deleted")
+                        list_vol_snapshots.clear()
+                        st.session_state.pop("_snap_list_cache", None)
+                    else:
+                        st.error("Failed to delete")
+
                 st.caption(f"Found {len(snapshots)} snapshot(s)")
                 
                 for snap in snapshots:
@@ -7905,58 +7952,16 @@ def vol_config_tab():
                                 st.caption(f"Created: {snap['created_at'].strftime('%Y-%m-%d %H:%M:%S')} AEST")
                         
                         with col2:
-                            if st.button("📂 Load", key=f"load_snap_{snap['id']}", use_container_width=True):
-                                loaded_snap = load_vol_snapshot(snap['id'])
-                                if loaded_snap:
-                                    # Load into session state
-                                    ccy = loaded_snap['currency']
-                                    if "vol_data" not in st.session_state:
-                                        st.session_state["vol_data"] = {}
-                                    if ccy not in st.session_state["vol_data"]:
-                                        st.session_state["vol_data"][ccy] = {}
-                                    
-                                    st.session_state["vol_data"][ccy]["atm"] = loaded_snap["atm"]
-                                    st.session_state["vol_data"][ccy]["alpha"] = loaded_snap["alpha"]
-                                    st.session_state["vol_data"][ccy]["beta"] = loaded_snap["beta"]
-                                    st.session_state["vol_data"][ccy]["rho"] = loaded_snap["rho"]
-                                    st.session_state["vol_data"][ccy]["nu"] = loaded_snap["nu"]
-                                    # Clear vol_editor so it reloads from fresh surface
-                                    if "vol_editor" in st.session_state:
-                                        st.session_state["vol_editor"]["working"].pop(ccy, None)
-                                        st.session_state["vol_editor"]["base"].pop(ccy, None)
-                                    _h = st.session_state.get(f"_atm_hash_{ccy}", 0)
-                                    st.session_state[f"_atm_hash_{ccy}"] = _h + 1
-                                    st.session_state.get("atm_prem_matrix", {}).pop(ccy, None)
-                                    
-                                    # Update timestamps
-                                    if "timestamps" not in st.session_state:
-                                        st.session_state["timestamps"] = {}
-                                    st.session_state["timestamps"][f"atm_{ccy}"] = loaded_snap['snapshot_date'].strftime('%Y-%m-%d %H:%M:%S')
-                                    st.session_state["timestamps"][f"sabr_{ccy}"] = loaded_snap['snapshot_date'].strftime('%Y-%m-%d %H:%M:%S')
-                                    
-                                    # v3004s: update per-ccy label and rebuild banner
-                                    st.session_state[f"_loaded_vol_label_{ccy}"] = snap['label']
-                                    _rl = [f"{_bc}:{st.session_state[f'_loaded_vol_label_{_bc}']}"
-                                           for _bc in SUPPORTED_CURRENCIES if st.session_state.get(f"_loaded_vol_label_{_bc}")]
-                                    _old_banner = st.session_state.get("_auto_load_msg", "")
-                                    _cfg_part = ""
-                                    if "| Configs:" in _old_banner:
-                                        _cfg_part = " | Configs:" + _old_banner.split("| Configs:")[1]
-                                    if _rl:
-                                        st.session_state["_auto_load_msg"] = f"✅ Vols: {', '.join(_rl)}" + _cfg_part
-
-                                    st.success(f"✅ Loaded snapshot: {snap['label']}")
-                                    st.rerun()
-                                else:
-                                    st.error("Failed to load snapshot")
+                            st.button("📂 Load", key=f"load_snap_{snap['id']}",
+                                      use_container_width=True,
+                                      on_click=lambda _sid=snap['id'], _lbl=snap['label']:
+                                          st.session_state.update({"_pending_snap_load": {"id": _sid, "label": _lbl}}))
                         
                         with col3:
-                            if st.button("🗑️ Delete", key=f"del_snap_{snap['id']}", use_container_width=True):
-                                if delete_vol_snapshot(snap['id']):
-                                    st.success("✅ Deleted")
-                                    st.rerun()
-                                else:
-                                    st.error("Failed to delete")
+                            st.button("🗑️ Delete", key=f"del_snap_{snap['id']}",
+                                      use_container_width=True,
+                                      on_click=lambda _sid=snap['id']:
+                                          st.session_state.update({"_pending_snap_del": _sid}))
 
 
 
