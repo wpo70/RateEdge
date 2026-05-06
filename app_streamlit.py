@@ -16288,7 +16288,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     if _ex_active == 2:
         st.markdown("### Bermudan Swaption / Callable Swap")
-        st.caption("Hull-White 1F trinomial tree (200+ steps), calibrated to co-terminal swaptions from ATM surface.")
+        st.caption("Hull-White 1F trinomial tree (200+ steps), calibrated to co-terminal swaptions. SABR smile-adjusted when params available.")
 
         berm_type = st.radio("Structure",
             ["Bermudan Payer", "Bermudan Receiver", "Callable Swap (pay-fixed)"],
@@ -16333,6 +16333,19 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
 
         st.caption(f"Exercise dates: {', '.join(f'{t}y' for t in ex_dates)} "
                    f"({len(ex_dates)} exercise opportunities)")
+
+        # SABR params from vol surface
+        _sabr_a = st.session_state.get("vol_data", {}).get(ccy, {}).get("alpha")
+        _sabr_b = st.session_state.get("vol_data", {}).get(ccy, {}).get("beta")
+        _sabr_r = st.session_state.get("vol_data", {}).get(ccy, {}).get("rho")
+        _sabr_n = st.session_state.get("vol_data", {}).get(ccy, {}).get("nu")
+        _has_sabr = all(x is not None for x in (_sabr_a, _sabr_b, _sabr_r, _sabr_n))
+        berm_use_sabr = st.checkbox("Use SABR smile for calibration & exercise",
+                                     value=_has_sabr, disabled=not _has_sabr,
+                                     key="berm_sabr",
+                                     help="When checked, uses SABR-implied vol at the strike moneyness instead of ATM for co-terminal calibration and European comparison")
+        if not _has_sabr:
+            st.caption("No SABR params loaded — load a vol snapshot with SABR calibration, or ATM-only will be used.")
 
         # Forward and strike
         if curve is not None:
@@ -16417,28 +16430,52 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
                         else:
                             return max((K_b - S_) * annuity_ * berm_notional * 1e6, 0.0)
 
-                    # ── Co-terminal vol lookup ───────────────────────
-                    def _co_vol(T_exp_, T_sw_):
+                    # ── Co-terminal vol lookup (SABR-aware) ──────────
+                    def _co_vol(T_exp_, T_sw_, F_=None, K_=None):
+                        """Get co-terminal vol. If SABR enabled and F/K provided,
+                        returns smile-adjusted vol at strike moneyness."""
                         if atm is None:
                             return 35.0
+                        atm_vol = None
+                        exp_lbl_match = None
                         for lbl_ in ["3m","6m","9m","1y","18m","2y","3y","4y","5y","7y","10y","12y","15y","20y"]:
                             if abs(label_to_years(lbl_) - T_exp_) < 0.2:
                                 v_ = get_matrix_value(atm, lbl_, T_sw_)
                                 if v_:
-                                    return v_
-                        return 35.0
+                                    atm_vol = v_
+                                    exp_lbl_match = lbl_
+                                    break
+                        if atm_vol is None:
+                            return 35.0
+                        # SABR smile adjustment
+                        if berm_use_sabr and _has_sabr and F_ is not None and K_ is not None and exp_lbl_match:
+                            params = get_sabr_params_from_matrices(_sabr_a, _sabr_b, _sabr_r, _sabr_n, exp_lbl_match, T_sw_)
+                            if params and T_exp_ > 0.01:
+                                try:
+                                    smile_vol = sabr_normal_vol_smile(
+                                        F_, K_, T_exp_,
+                                        params["alpha"], params["beta"],
+                                        params["rho"], params["nu"])
+                                    if smile_vol > 0:
+                                        return smile_vol * 10000.0  # convert to bp
+                                except Exception:
+                                    pass
+                        return atm_vol
 
                     # ── Calibrate sigma_HW to co-terminal swaptions ──
                     sigmas_hw = []
+                    _cal_details = []  # for calibration table
                     for T_ex in ex_dates:
                         T_remaining = T_final - T_ex
-                        mkt_vol_bp = _co_vol(T_ex, T_remaining)
                         # Market European swaption price (Bachelier)
                         if curve is not None:
                             fwd_co, ann_co, _ = forward_and_annuity_from_curve(
                                 curve, ccy, T_ex, T_remaining, ois_curve)
                         else:
                             fwd_co, ann_co = 0.043, T_remaining
+                        atm_vol_bp = _co_vol(T_ex, T_remaining)
+                        smile_vol_bp = _co_vol(T_ex, T_remaining, fwd_co, K_b)
+                        mkt_vol_bp = smile_vol_bp  # use smile-adjusted vol for calibration
                         sigma_n_ = mkt_vol_bp / 10000.0
                         sqrt_T_ = math.sqrt(max(T_ex, 0.001))
                         df_co_ = _P0(T_ex)
@@ -16480,6 +16517,11 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
                         except Exception:
                             sig_cal_ = 0.01
                         sigmas_hw.append(max(sig_cal_, 0.0001))
+                        _cal_details.append({
+                            "T_ex": T_ex, "T_rem": T_remaining,
+                            "fwd": fwd_co, "atm_vol": atm_vol_bp,
+                            "smile_vol": smile_vol_bp, "sig_hw": sigmas_hw[-1],
+                        })
 
                     # Use average calibrated sigma for tree
                     sigma_hw_tree = sum(sigmas_hw) / len(sigmas_hw)
@@ -16552,7 +16594,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
                             curve, ccy, ex_dates[0], T_swap, ois_curve)
                     else:
                         fwd_e, ann_e = fwd_b, ann_b
-                    mkt_vol_e = _co_vol(ex_dates[0], T_swap)
+                    mkt_vol_e = _co_vol(ex_dates[0], T_swap, fwd_e, K_b)
                     r_disc_e = _ois_zero(ex_dates[0])
 
                     euro_ticket = SwaptionTicket()
@@ -16644,6 +16686,10 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
 
                     # ── Results display ────────────────────────────────
                     st.markdown("---")
+                    if berm_use_sabr:
+                        _skew_1st = _cal_details[0]["smile_vol"] - _cal_details[0]["atm_vol"]
+                        st.caption(f"SABR smile active — 1st call skew: {_skew_1st:+.1f}bp "
+                                   f"(ATM={_cal_details[0]['atm_vol']:.1f}bp, @K={_cal_details[0]['smile_vol']:.1f}bp)")
                     br1, br2, br3, br4 = st.columns(4)
                     br1.metric(f"Bermudan PV ({ccy})", f"${berm_pv:,.0f}")
                     br2.metric("Bermudan PV (bp)", f"{berm_pv_bp:.2f}bp")
@@ -16687,17 +16733,27 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
 
                     # ── Calibration detail ─────────────────────────────
                     with st.expander("HW1F Calibration — Co-terminal sigma"):
-                        df_cal = pd.DataFrame([{
-                            "Exercise Date": f"{te:.2f}y",
-                            "Co-terminal Swap": f"{T_final-te:.1f}Y",
-                            "Mkt Vol (bp)": f"{_co_vol(te, T_final-te):.1f}",
-                            "HW sigma (%)": f"{sigmas_hw[idx]*100:.4f}",
-                        } for idx, te in enumerate(ex_dates)])
+                        _cal_rows = []
+                        for idx, cd in enumerate(_cal_details):
+                            _row = {
+                                "Exercise": f"{cd['T_ex']:.2f}y",
+                                "Co-term Swap": f"{cd['T_rem']:.1f}Y",
+                                "Fwd Rate (%)": f"{cd['fwd']*100:.3f}",
+                                "ATM Vol (bp)": f"{cd['atm_vol']:.1f}",
+                            }
+                            if berm_use_sabr:
+                                _row["SABR Vol @K (bp)"] = f"{cd['smile_vol']:.1f}"
+                                _row["Skew (bp)"] = f"{cd['smile_vol'] - cd['atm_vol']:+.1f}"
+                            _row["HW sigma (%)"] = f"{cd['sig_hw']*100:.4f}"
+                            _cal_rows.append(_row)
+                        df_cal = pd.DataFrame(_cal_rows)
                         st.dataframe(df_cal, use_container_width=True, hide_index=True)
+                        _sabr_note = " | SABR smile-adjusted" if berm_use_sabr else " | ATM only"
                         st.caption(f"Mean reversion a = {hw_mr*100:.2f}% | "
                                    f"Tree sigma = {sigma_hw_tree*100:.4f}% (avg calibrated) | "
                                    f"Tree: {N_steps} steps, dt={dt:.5f}y, dx={dx:.6f}, "
-                                   f"j_max={j_max} ({n_nodes} nodes wide)")
+                                   f"j_max={j_max} ({n_nodes} nodes wide)"
+                                   f"{_sabr_note}")
 
                 except Exception as e:
                     st.error(f"Pricing error: {e}")
