@@ -7880,7 +7880,7 @@ def vol_config_tab():
         
         if tab_manage:
             st.markdown("#### Saved Snapshots")
-            manage_ccy = st.selectbox("Filter by Currency", ["All"] + SUPPORTED_CURRENCIES, key="manage_snap_ccy")
+            manage_ccy = st.selectbox("Filter by Currency", ["All"] + list(SUPPORTED_CURRENCIES) + ["EUR"], key="manage_snap_ccy")
             user_id = st.session_state.get("username", "default")
             filter_ccy = None if manage_ccy == "All" else manage_ccy
 
