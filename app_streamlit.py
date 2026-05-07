@@ -6829,9 +6829,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 _sdr_ccy = st.session_state.get("sidebar_ccy", "USD").split(" ")[0]
                 _tz_name, _tz_label = _CCY_TIMEZONE.get(_sdr_ccy, ("America/New_York", "NYC"))
                 _local_tz = _ZI_sdr(_tz_name)
-                # v0705y: fixed column name "Time" — dynamic header was breaking render for LDN.
-                # Show tz label in the caption below the table instead.
-                _time_col = f"Time ({_tz_label})"
+                _time_col = "Time"
 
                 def _to_local(ts_):
                     ts_ = pd.to_datetime(ts_, errors="coerce")
@@ -7016,12 +7014,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 if _all_trades:
                     _all_df = pd.DataFrame(_all_trades)
                     _all_df = _all_df.sort_values(_time_col, ascending=False).reset_index(drop=True)
-                    # v0705y: explicit column_config for the dynamic time column.
-                    # Without this, Streamlit was sometimes hiding "Time (LDN)" while
-                    # rendering "Time (NYC)" / "Time (SYD)" fine.
+                    st.caption(f"Times shown in **{_tz_label}**")
                     st.dataframe(_all_df, use_container_width=True, hide_index=True,
-                                 height=min(60 + len(_all_df) * 35, 700),
-                                 column_config={_time_col: st.column_config.TextColumn(_time_col, width="small")})
+                                 height=min(60 + len(_all_df) * 35, 700))
                     st.caption("Straddle prem deduped for all brokers except DWSF (report full straddle prem on each leg). "
                                "DWSF strikes normalised (÷100).")
 
