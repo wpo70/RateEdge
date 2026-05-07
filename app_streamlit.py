@@ -6744,11 +6744,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             if _time_r is not pd.NaT and abs((_time_p - _time_r).total_seconds()) <= 120:
                                 _p_prem = float(_p.get("premium_amount") or 0)
                                 _r_prem = float(_r.get("premium_amount") or 0)
-                                # Dedup: if P_prem ≈ R_prem (within 5%), broker reported full straddle prem on each leg
-                                if _p_prem > 0 and _r_prem > 0 and min(_p_prem, _r_prem) / max(_p_prem, _r_prem) > 0.95:
-                                    _strd_prem = max(_p_prem, _r_prem)
-                                else:
-                                    _strd_prem = _p_prem + _r_prem
+                                _strd_prem = _p_prem + _r_prem
                                 _strd_not = float(_p.get("notional_leg1") or 0)
                                 _strd_prem_bp = round(_strd_prem / _strd_not * 10000, 2) if _strd_not > 0 else 0
                                 _straddles.append({
@@ -6877,17 +6873,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _s_r = round(float(_r.get("strike_pct") or 0), 2)
                                     _p_prem = float(_p.get("premium_amount") or 0)
                                     _r_prem = float(_r.get("premium_amount") or 0)
-                                    # Dedup: if P_prem ≈ R_prem (within 5%), broker reported full
-                                    # straddle premium on each leg — use just one, not P+R
                                     _prem_deduped = False
-                                    if _p_prem > 0 and _r_prem > 0:
-                                        _prem_ratio = min(_p_prem, _r_prem) / max(_p_prem, _r_prem)
-                                        if _prem_ratio > 0.95:
-                                            # Premiums nearly identical → broker reports straddle prem on each leg
-                                            _comb_prem = max(_p_prem, _r_prem)  # use one leg only
-                                            _prem_deduped = True
-                                    if not _prem_deduped:
-                                        _comb_prem = _p_prem + _r_prem
+                                    _comb_prem = _p_prem + _r_prem
                                     _comb_not = float(_p.get("notional_leg1") or 0)
                                     _comb_bp = round(_comb_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
                                     _p_bp = round(_p_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
@@ -6900,8 +6887,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     if _same_strike and _has_swp:
                                         _ptype = "🔵 Straddle"
                                         _strike_disp = f"{_s_p:.2f}%"
-                                        _dd_flag = " *" if _prem_deduped else ""
-                                        _prem_disp = f"{_fmt_premium(_comb_prem)}{_dd_flag}" if _comb_prem else "—"
+                                        _prem_disp = f"{_fmt_premium(_comb_prem)}" if _comb_prem else "—"
                                     elif not _same_strike and _has_swp:
                                         _ptype = "🟠 Strangle"
                                         _strike_disp = f"P:{_s_p:.2f}% / R:{_s_r:.2f}%"
@@ -6909,8 +6895,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     elif _same_strike and not _has_swp:
                                         _ptype = "🟤 C/F Straddle"
                                         _strike_disp = f"{_s_p:.2f}%"
-                                        _dd_flag = " *" if _prem_deduped else ""
-                                        _prem_disp = f"Cap:{_fmt_premium(_p_prem)} + Flr:{_fmt_premium(_r_prem)} = {_fmt_premium(_comb_prem)}{_dd_flag}" if _comb_prem else "—"
+                                        _prem_disp = f"Cap:{_fmt_premium(_p_prem)} + Flr:{_fmt_premium(_r_prem)} = {_fmt_premium(_comb_prem)}" if _comb_prem else "—"
                                     elif not _same_strike and not _has_swp:
                                         _ptype = "🟣 Collar"
                                         _strike_disp = f"Cap:{_s_p:.2f}% / Flr:{_s_r:.2f}%"
@@ -7018,8 +7003,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _all_df = _all_df.sort_values(_time_col, ascending=False).reset_index(drop=True)
                     st.dataframe(_all_df, use_container_width=True, hide_index=True,
                                  height=min(60 + len(_all_df) * 35, 700))
-                    st.caption("* = premium deduped (P≈R, broker reported straddle prem on each leg). "
-                               "DWSF strikes normalised (÷100).")
+                    st.caption("DWSF strikes normalised (÷100).")
 
                     with st.expander("Notional by Product Type", expanded=False):
                         _type_summary = []
