@@ -6561,9 +6561,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
         try:
             ts = pd.Timestamp(v)
             if tz:
+                # v0705t: localize to UTC first if naive (DTCC SDR timestamps are UTC)
+                # before converting. tz_convert requires a tz-aware Timestamp.
+                if ts.tzinfo is None:
+                    ts = ts.tz_localize("UTC")
                 ts = ts.tz_convert(tz)
             return ts.strftime("%m/%d %H:%M")
-        except: return str(v)[:16]
+        except Exception:
+            return str(v)[:16]
 
     # ── Blotter table ─────────────────────────────────────────────────────────
     if df.empty:
@@ -6832,12 +6837,26 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 _time_col = f"Time ({_tz_label})"
 
                 def _to_local(ts_):
-                    ts_ = pd.to_datetime(ts_, errors="coerce")
-                    if ts_ is pd.NaT:
+                    try:
+                        ts_ = pd.to_datetime(ts_, errors="coerce")
+                        if pd.isna(ts_):
+                            return pd.NaT
+                        if ts_.tzinfo is None:
+                            ts_ = ts_.tz_localize("UTC")
+                        return ts_.astimezone(_local_tz)
+                    except Exception:
                         return pd.NaT
-                    if ts_.tzinfo is None:
-                        ts_ = ts_.tz_localize("UTC")
-                    return ts_.astimezone(_local_tz)
+
+                # v0705u: safe time-formatter — robust against any failure mode of _to_local.
+                # The previous `is not pd.NaT` identity check failed silently for EUR rows in
+                # certain pandas versions, blanking the time column.
+                def _fmt_local(ts_):
+                    if pd.isna(ts_):
+                        return "—"
+                    try:
+                        return ts_.strftime("%d-%b %H:%M")
+                    except Exception:
+                        return "—"
 
                 # Classify options: CALL=Payer/Cap, PUT=Receiver/Floor
                 _payers_a = _newt_all[_newt_all["option_type_decoded"] == "CALL"].copy()
@@ -6919,7 +6938,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                                     _paired_rows.append({
                                         "Type": _ptype,
-                                        _time_col: _local_time.strftime("%d-%b %H:%M") if _local_time is not pd.NaT else "—",
+                                        _time_col: _fmt_local(_local_time),
                                         "CCY": _ccy_p,
                                         "Opt Expiry": _e_p,
                                         "Swp Tenor": _t_p if _t_p and _t_p not in ("—","NA","None","") else "—",
@@ -6955,7 +6974,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _pc_label = "🟥 Floor"
                     _single_rows.append({
                         "Type": _pc_label,
-                        _time_col: _s_time.strftime("%d-%b %H:%M") if _s_time is not pd.NaT else "—",
+                        _time_col: _fmt_local(_s_time),
                         "CCY": str(_s_row.get("notional_ccy", "")),
                         "Opt Expiry": str(_s_row.get("opt_tenor", "—")),
                         "Swp Tenor": _s_swp if _s_swp and _s_swp not in ("—","NA","None","") else "—",
@@ -6982,7 +7001,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _e_time = _to_local(_e_row.get("execution_timestamp") or _e_row.get("event_timestamp"))
                     _exo_rows.append({
                         "Type": f"🟡 {_ot}",
-                        _time_col: _e_time.strftime("%d-%b %H:%M") if _e_time is not pd.NaT else "—",
+                        _time_col: _fmt_local(_e_time),
                         "CCY": str(_e_row.get("notional_ccy", "")),
                         "Opt Expiry": str(_e_row.get("opt_tenor", "—")),
                         "Swp Tenor": str(_e_row.get("swp_tenor", "—")),
@@ -10238,7 +10257,8 @@ def _load_basis_history_usd(years_back: int = 20) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.fragment
+# v0705s: NOT decorated with @st.fragment — outer fwd_analysis_tab() is already a fragment.
+# Nested fragments cause widget keys to register twice → StreamlitDuplicateElementKey.
 def _fwd_analysis_tab_usd():
     """USD FWD IRS Analysis — mirrors AUD 7 sub-tabs with SOFR/FEDFUNDS/SOFR-FF Basis."""
     st.subheader("📈 FWD IRS Analysis — USD")
@@ -11179,7 +11199,8 @@ def _load_basis_history_eur(years_back: int = 20) -> pd.DataFrame:
 
 
 
-@st.fragment
+# v0705s: NOT decorated with @st.fragment — outer fwd_analysis_tab() is already a fragment.
+# Nested fragments cause widget keys to register twice → StreamlitDuplicateElementKey.
 def _fwd_analysis_tab_eur():
     """EUR FWD IRS Analysis — mirrors USD 8 sub-tabs with EURIBOR 6M / EURIBOR 3M / 6M-3M Basis."""
     st.subheader("📈 FWD IRS Analysis — EUR")
