@@ -8145,8 +8145,12 @@ def curves_tab():
     import plotly.graph_objects as go
     st.subheader("📐 IRS Curves & Forward Matrix")
 
-    ccy = st.session_state.get("sidebar_ccy", "AUD")
-    if ccy not in SUPPORTED_CURRENCIES: ccy = SUPPORTED_CURRENCIES[0]
+    # v0705h: normalize "EUR (PENDING)" → "EUR". EUR allowed in Curves tab only.
+    # AUD/USD/NZD branches LOCKED — never modified by EUR work.
+    _raw_ccy = st.session_state.get("sidebar_ccy", "AUD")
+    ccy = str(_raw_ccy).split(" ")[0]
+    _CURVES_TAB_CCYS = list(SUPPORTED_CURRENCIES) + ["EUR"]
+    if ccy not in _CURVES_TAB_CCYS: ccy = SUPPORTED_CURRENCIES[0]
 
     curve     = st.session_state.get("config_curves", {}).get(ccy)
     basis_6v3 = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
@@ -8170,6 +8174,7 @@ def curves_tab():
 
     # ══════════════════════════════════════════════════════════════════════════
     # USD CURVES — SOFR OIS / FF OIS / FF-SOFR BASIS
+    # ⛔ LOCKED (v0705g): DO NOT MODIFY. EUR work added new branch below; AUD/USD untouched.
     # ══════════════════════════════════════════════════════════════════════════
     if ccy == "USD":
         import plotly.graph_objects as go
@@ -8428,10 +8433,297 @@ def curves_tab():
                     st.info("Click **▶ Generate USD Forward Matrix** to compute.")
 
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # EUR CURVES — ESTR OIS (discount) / EURIBOR 6M (projection) / EURIBOR 3M (short end)
+    # v0705h: NEW. Build mirrors USD pattern. ESTR is discount curve; EURIBOR 6M is the
+    # forward-rate-determining projection curve for tenors ≥2Y per market convention.
+    # EURIBOR 3M serves the ≤1Y short end. Until BBG EURIBOR data lands, the projection
+    # curves render empty and the forward matrix falls back to ESTR as a proxy with a
+    # banner note. Forward strikes for ATM swaptions are computed off the projection
+    # curve (or ESTR proxy until EURIBOR loads), discounted on ESTR.
+    # ══════════════════════════════════════════════════════════════════════════
+    if ccy == "EUR":
+        import plotly.graph_objects as go
+        _estr_curve   = st.session_state.get("config_curves", {}).get("EUR")
+        _euribor_6m   = st.session_state.get("config_basis", {}).get("EUR", {}).get("euribor_6m")
+        _euribor_3m   = st.session_state.get("config_basis", {}).get("EUR", {}).get("euribor_3m")
+        _estr_eu_bas  = st.session_state.get("config_basis", {}).get("EUR", {}).get("estr_euribor_basis")
+
+        # v0705h: always recompute ESTR-EURIBOR basis from current curves (don't use stale cache)
+        # Mirrors USD SOFR-FF basis logic — basis = projection − discount in bp.
+        if _estr_curve is not None and _euribor_6m is not None and not _estr_curve.empty and not _euribor_6m.empty:
+            try:
+                _e_sorted = _estr_curve.sort_values("MaturityY")
+                _b_sorted = _euribor_6m.sort_values("MaturityY")
+                _e_xs = _e_sorted["MaturityY"].to_numpy().astype(float)
+                _e_ys = _e_sorted["ZeroRatePct"].to_numpy().astype(float)
+                _b_xs = _b_sorted["MaturityY"].to_numpy().astype(float)
+                _b_ys = _b_sorted["ZeroRatePct"].to_numpy().astype(float)
+                _all_mats = sorted(set(round(float(x), 6) for x in _e_xs) | set(round(float(x), 6) for x in _b_xs))
+                _min_mat = max(min(_e_xs), min(_b_xs))
+                _max_mat = min(max(_e_xs), max(_b_xs))
+                _all_mats = [m for m in _all_mats if _min_mat <= m <= _max_mat]
+                if _all_mats:
+                    _e_interp = np.interp(_all_mats, _e_xs, _e_ys)
+                    _b_interp = np.interp(_all_mats, _b_xs, _b_ys)
+                    _estr_eu_bas = pd.DataFrame({
+                        "MaturityY": _all_mats,
+                        "BasisBp": [round((_b_interp[i] - _e_interp[i]) * 100, 4) for i in range(len(_all_mats))]
+                    })
+                    st.session_state.setdefault("config_basis", {}).setdefault("EUR", {})["estr_euribor_basis"] = _estr_eu_bas
+            except Exception:
+                pass
+
+        if _estr_curve is None:
+            st.info("No EUR curves loaded. Go to IRS / Vol Upload tab and commit your config file, "
+                    "or wait for the on-demand DB loader to populate ESTR.")
+        else:
+            # Banner if EURIBOR data still missing — explicit note to user
+            if _euribor_6m is None or (hasattr(_euribor_6m, "empty") and _euribor_6m.empty):
+                st.warning("⚠️ EURIBOR 6M projection curve not yet loaded — forward matrix falls back to ESTR as a proxy. "
+                           "Strikes will be approximate until EURIBOR data is loaded into `swap_rates`.")
+
+            # ── EUR Curve Chart ──────────────────────────────────────────────
+            _eur_fig = go.Figure()
+
+            # ESTR OIS curve (discount)
+            if _estr_curve is not None and not _estr_curve.empty:
+                _eur_fig.add_trace(go.Scatter(
+                    x=_estr_curve["MaturityY"], y=_estr_curve["ZeroRatePct"],
+                    mode="lines+markers", name="ESTR OIS (discount)",
+                    line=dict(color="#38bdf8", width=2),
+                    marker=dict(size=5)
+                ))
+
+            # EURIBOR 6M curve (projection)
+            if _euribor_6m is not None and not _euribor_6m.empty:
+                _eur_fig.add_trace(go.Scatter(
+                    x=_euribor_6m["MaturityY"], y=_euribor_6m["ZeroRatePct"],
+                    mode="lines+markers", name="EURIBOR 6M (projection)",
+                    line=dict(color="#f59e0b", width=2, dash="dash"),
+                    marker=dict(size=5)
+                ))
+
+            # EURIBOR 3M curve (short-end projection)
+            if _euribor_3m is not None and not _euribor_3m.empty:
+                _eur_fig.add_trace(go.Scatter(
+                    x=_euribor_3m["MaturityY"], y=_euribor_3m["ZeroRatePct"],
+                    mode="lines+markers", name="EURIBOR 3M (≤1Y projection)",
+                    line=dict(color="#a855f7", width=2, dash="dot"),
+                    marker=dict(size=5)
+                ))
+
+            _eur_fig.update_layout(
+                title="EUR Rate Curves (%)", height=320, margin=dict(l=40,r=20,t=40,b=40),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
+                font=dict(color="#94a3b8", size=11),
+                xaxis=dict(title="Maturity (Y)", gridcolor="#1e293b"),
+                yaxis=dict(title="Rate (%)", gridcolor="#1e293b"),
+                legend=dict(bgcolor="rgba(0,0,0,0)"),
+                hovermode="x unified"
+            )
+            st.plotly_chart(_eur_fig, use_container_width=True)
+
+            # EUR Curve Data Tables
+            def _eur_mat_to_tenor(_y):
+                try:
+                    _y = float(_y)
+                except Exception:
+                    return str(_y)
+                _map = [
+                    (1/52, "1w"), (2/52, "2w"), (3/52, "3w"),
+                    (1/12, "1m"), (2/12, "2m"), (3/12, "3m"), (4/12, "4m"),
+                    (5/12, "5m"), (6/12, "6m"), (7/12, "7m"), (8/12, "8m"),
+                    (9/12, "9m"), (10/12, "10m"), (11/12, "11m"),
+                    (1.0, "1y"), (1.5, "18m"),
+                    (2.0, "2y"), (3.0, "3y"), (4.0, "4y"), (5.0, "5y"),
+                    (6.0, "6y"), (7.0, "7y"), (8.0, "8y"), (9.0, "9y"),
+                    (10.0, "10y"), (12.0, "12y"), (15.0, "15y"),
+                    (20.0, "20y"), (25.0, "25y"), (30.0, "30y"),
+                    (40.0, "40y"), (50.0, "50y"), (60.0, "60y"),
+                ]
+                for _v, _lbl in _map:
+                    if abs(_y - _v) < 0.005:
+                        return _lbl
+                return f"{_y:.4g}Y"
+
+            def _eur_relabel(_df):
+                if _df is None or _df.empty: return _df
+                _dc = _df.copy()
+                if "MaturityY" in _dc.columns:
+                    _dc["MaturityY"] = _dc["MaturityY"].apply(_eur_mat_to_tenor)
+                return _dc
+
+            with st.expander("EUR Curve Data", expanded=False):
+                _eur_tcols = st.columns(3)
+                with _eur_tcols[0]:
+                    st.caption("ESTR OIS (%)")
+                    if _estr_curve is not None and not _estr_curve.empty:
+                        st.dataframe(_eur_relabel(_estr_curve).rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Rate(%)"}),
+                                     use_container_width=True, hide_index=True)
+                with _eur_tcols[1]:
+                    st.caption("EURIBOR 6M (%)")
+                    if _euribor_6m is not None and not _euribor_6m.empty:
+                        st.dataframe(_eur_relabel(_euribor_6m).rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Rate(%)"}),
+                                     use_container_width=True, hide_index=True)
+                    else:
+                        st.info("Pending BBG load")
+                with _eur_tcols[2]:
+                    st.caption("ESTR-EURIBOR Basis (bp)")
+                    if _estr_eu_bas is not None and not _estr_eu_bas.empty:
+                        _bas_tbl = _eur_relabel(_estr_eu_bas).rename(columns={"MaturityY":"Tenor","BasisBp":"Basis(bp)"})
+                        st.dataframe(_bas_tbl.style.format({"Basis(bp)": "{:.4f}"}),
+                                     use_container_width=True, hide_index=True)
+                    else:
+                        st.info("Needs both curves")
+
+            # ESTR-EURIBOR Basis chart (bp)
+            if _estr_eu_bas is not None and not _estr_eu_bas.empty:
+                _bas_labels = _eur_relabel(_estr_eu_bas)["MaturityY"].tolist()
+                _bas_fig = go.Figure()
+                _bas_fig.add_trace(go.Bar(
+                    x=_bas_labels, y=_estr_eu_bas["BasisBp"].tolist(),
+                    name="ESTR-EURIBOR Basis",
+                    marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _estr_eu_bas["BasisBp"]]
+                ))
+                _bas_min = min(_estr_eu_bas["BasisBp"].min(), 0) * 1.3
+                _bas_max = max(_estr_eu_bas["BasisBp"].max(), 0) * 1.3
+                if _bas_min == _bas_max:
+                    _bas_min, _bas_max = -1, 1
+                _bas_fig.update_layout(
+                    title="ESTR / EURIBOR 6M Basis (bp)", height=280, margin=dict(l=50,r=20,t=40,b=40),
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
+                    font=dict(color="#94a3b8", size=11),
+                    xaxis=dict(title="Tenor", gridcolor="#1e293b", type="category"),
+                    yaxis=dict(title="Basis (bp)", gridcolor="#1e293b",
+                               range=[_bas_min, _bas_max], zeroline=True,
+                               zerolinecolor="#475569", zerolinewidth=1,
+                               tickformat=".1f"),
+                )
+                st.plotly_chart(_bas_fig, use_container_width=True)
+
+            st.markdown("---")
+
+            # ── EUR Forward Matrix ───────────────────────────────────────────
+            if "eur_fwd_matrix" not in st.session_state: st.session_state["eur_fwd_matrix"] = {}
+            if "eur_fwd_section_open" not in st.session_state: st.session_state["eur_fwd_section_open"] = True
+
+            _efl = "▼ Hide EUR Forward Matrix" if st.session_state["eur_fwd_section_open"] else "▶ Show EUR Forward Matrix"
+            if st.button(_efl, key="eur_fwd_toggle"):
+                st.session_state["eur_fwd_section_open"] = not st.session_state["eur_fwd_section_open"]
+
+            if st.session_state["eur_fwd_section_open"]:
+                _eur_fwd_cols = st.columns([3, 1, 3, 3])
+                with _eur_fwd_cols[0]:
+                    # Build curve options dynamically — only show what's loaded
+                    _eur_fwd_options = ["ESTR OIS"]
+                    if _euribor_6m is not None and not _euribor_6m.empty:
+                        _eur_fwd_options.insert(0, "EURIBOR 6M")
+                    if _euribor_3m is not None and not _euribor_3m.empty:
+                        _eur_fwd_options.append("EURIBOR 3M")
+                    if _estr_eu_bas is not None and not _estr_eu_bas.empty:
+                        _eur_fwd_options.append("ESTR-EURIBOR Basis")
+                    _eur_fwd_mode = st.radio(
+                        "Curve", _eur_fwd_options,
+                        horizontal=True, key="eur_fwd_mode"
+                    )
+                with _eur_fwd_cols[1]:
+                    pass  # spacer
+                with _eur_fwd_cols[2]:
+                    _gen_eur_fwd = st.button("▶ Generate EUR Forward Matrix", key="gen_eur_fwd",
+                                             type="primary", use_container_width=True)
+                with _eur_fwd_cols[3]:
+                    _has_eur_fwd = _eur_fwd_mode in st.session_state.get("eur_fwd_matrix", {})
+                    st.download_button("⬇ Download",
+                        data=st.session_state["eur_fwd_matrix"].get(_eur_fwd_mode, pd.DataFrame()).to_csv() if _has_eur_fwd else "",
+                        file_name=f"EUR_fwd_{_eur_fwd_mode.replace(' ','_')}.csv",
+                        key="dl_eur_fwd", use_container_width=True, type="primary", disabled=not _has_eur_fwd)
+
+                if _gen_eur_fwd:
+                    st.session_state["_gen_eur_fwd_requested"] = True
+
+                if st.session_state.get("_gen_eur_fwd_requested"):
+                    st.session_state.pop("_gen_eur_fwd_requested", None)
+
+                    # Standard EUR expiry/tenor grid — match USD/AUD layout (22×12)
+                    _EUR_EXPIRIES = [1/52, 1/12, 2/12, 3/12, 6/12, 9/12, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30]
+                    _EUR_TENORS   = [1, 2, 3, 4, 5, 7, 10, 12, 15, 20, 25, 30]
+                    _EXP_LABELS   = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
+                    _TEN_LABELS   = ["1Y","2Y","3Y","4Y","5Y","7Y","10Y","12Y","15Y","20Y","25Y","30Y"]
+
+                    def _eur_interp_rate(df_curve, maturity, col="ZeroRatePct"):
+                        """Linear interpolation from a zero curve DataFrame."""
+                        xs = df_curve["MaturityY"].values
+                        ys = df_curve[col].values
+                        return float(np.interp(maturity, xs, ys))
+
+                    def _eur_fwd_rate(df_curve, exp, ten, col="ZeroRatePct"):
+                        """Forward rate from zero curve: (z2*t2 - z1*t1) / tenor.
+                        Matches USD logic — zero-curve fwd, no compounding adjustment."""
+                        if df_curve is None or df_curve.empty: return None
+                        t1, t2 = exp, exp + ten
+                        z1 = _eur_interp_rate(df_curve, t1, col) / 100
+                        z2 = _eur_interp_rate(df_curve, t2, col) / 100
+                        return round(((z2 * t2 - z1 * t1) / ten) * 100, 4)
+
+                    with st.spinner("Generating EUR forward matrices..."):
+                        # Build a matrix for each available curve
+                        _curves_to_build = [
+                            ("ESTR OIS", _estr_curve),
+                            ("EURIBOR 6M", _euribor_6m),
+                            ("EURIBOR 3M", _euribor_3m),
+                        ]
+                        for _label, _df_in in _curves_to_build:
+                            if _df_in is None or (hasattr(_df_in, "empty") and _df_in.empty):
+                                continue
+                            _rows = {}
+                            for ei, exp in enumerate(_EUR_EXPIRIES):
+                                _row = {}
+                                for ti, ten in enumerate(_EUR_TENORS):
+                                    _row[_TEN_LABELS[ti]] = _eur_fwd_rate(_df_in, exp, ten)
+                                _rows[_EXP_LABELS[ei]] = _row
+                            _df_out = pd.DataFrame(_rows).T
+                            _df_out.index.name = "Expiry"
+                            _df_out = _df_out.reset_index()
+                            st.session_state["eur_fwd_matrix"][_label] = _df_out
+
+                        # ESTR-EURIBOR Basis matrix (bp, interpolated directly — same pattern as USD SOFR-FF)
+                        if _estr_eu_bas is not None and not _estr_eu_bas.empty:
+                            _bas_rows = {}
+                            for ei, exp in enumerate(_EUR_EXPIRIES):
+                                _row = {}
+                                for ti, ten in enumerate(_EUR_TENORS):
+                                    _mid = float(np.interp(exp + ten/2,
+                                                           _estr_eu_bas["MaturityY"].values,
+                                                           _estr_eu_bas["BasisBp"].values))
+                                    _row[_TEN_LABELS[ti]] = round(_mid, 2)
+                                _bas_rows[_EXP_LABELS[ei]] = _row
+                            _bas_df = pd.DataFrame(_bas_rows).T
+                            _bas_df.index.name = "Expiry"
+                            _bas_df = _bas_df.reset_index()
+                            st.session_state["eur_fwd_matrix"]["ESTR-EURIBOR Basis"] = _bas_df
+
+                # Display selected matrix
+                _disp_key = _eur_fwd_mode
+                _disp_df  = st.session_state.get("eur_fwd_matrix", {}).get(_disp_key)
+                if _disp_df is not None and not _disp_df.empty:
+                    _num_cols = [c for c in _disp_df.columns if c != "Expiry"]
+                    _fmt_dict = {c: "{:.4f}" for c in _num_cols}
+                    st.dataframe(
+                        _disp_df.style.format(_fmt_dict).background_gradient(
+                            cmap="RdYlGn_r" if _disp_key == "ESTR-EURIBOR Basis" else "RdYlGn",
+                            subset=_num_cols),
+                        use_container_width=True, hide_index=True, height=820
+                    )
+                else:
+                    st.info("Click **▶ Generate EUR Forward Matrix** to compute.")
+
+
     # ── Chart toggles (AUD/NZD only) ─────────────────────────────────────────
-    # AUD/NZD chart — defaults so USD path through try block is harmless
+    # AUD/NZD chart — defaults so USD/EUR path through try block is harmless
+    # ⛔ LOCKED (v0705g): AUD/NZD branches DO NOT MODIFY.
     _show_par = _show_irs = _show_ois = _show_b6 = _show_b3 = False
-    if ccy != "USD":
+    if ccy not in ("USD", "EUR"):
         _ck = st.columns(5)
         with _ck[0]: _show_par = st.checkbox("IRS Par", value=True, key="chart_par")
         with _ck[1]: _show_irs = st.checkbox("IRS Zero", value=True, key="chart_irs")
@@ -8439,7 +8731,7 @@ def curves_tab():
         with _ck[3]: _show_b6  = st.checkbox("6v3 Basis", value=True, key="chart_b6")
         with _ck[4]: _show_b3  = st.checkbox("3v1 Basis", value=True, key="chart_b3")
 
-    if ccy != "USD":
+    if ccy not in ("USD", "EUR"):
      try:
         fig = go.Figure()
         if _show_par:
@@ -8502,7 +8794,7 @@ def curves_tab():
      except Exception as _e:
         st.warning(f"Chart: {_e}")
 
-    if ccy != "USD":
+    if ccy not in ("USD", "EUR"):
      with st.expander("IRS Par Rates & Curve Data", expanded=False):
         _cols_to_show = []
         if ccy == "USD": pass  # no AUD data tables for USD
@@ -8548,7 +8840,8 @@ def curves_tab():
                 st.dataframe(_df, use_container_width=True, hide_index=True)
 
     # ── IRS Forward Matrix (AUD/NZD only) ────────────────────────────────────────
-    if ccy != "USD":
+    # ⛔ LOCKED: USD has its own matrix (above), EUR has its own matrix (above).
+    if ccy not in ("USD", "EUR"):
         if "fwd_matrix"   not in st.session_state: st.session_state["fwd_matrix"]   = {}
         if "basis_matrix" not in st.session_state: st.session_state["basis_matrix"] = {}
         if "fwd_section_open" not in st.session_state: st.session_state["fwd_section_open"] = True
@@ -25139,6 +25432,10 @@ def main():
                     "AUD": [("6M BBSW", "main"), ("AONIA", "ois")],
                     "USD": [("SOFR", "main"), ("FEDFUNDS", "basis")],
                     "NZD": [("3M BKBM", "main"), ("NZONIA", "basis")],
+                    # v0705h: EUR added. ESTR is the discount curve (used as "main" for now until
+                    # EURIBOR projection data lands). EURIBOR 6M is the projection curve per market
+                    # convention for ≥2Y; EURIBOR 3M for ≤1Y. floating_rate strings match swap_rates DB.
+                    "EUR": [("ESTR", "main"), ("EURIBOR 6M", "euribor_6m"), ("EURIBOR 3M", "euribor_3m")],
                 }
                 for _fr, _role in _curve_map.get(target_ccy, []):
                     try:
@@ -25164,6 +25461,9 @@ def main():
                         elif _role == "basis":
                             _bk = "fedfunds_ois" if target_ccy == "USD" else "nzonia_display"
                             st.session_state.setdefault("config_basis", {}).setdefault(target_ccy, {})[_bk] = _df
+                        elif _role in ("euribor_6m", "euribor_3m"):
+                            # v0705h: EUR projection curves go to config_basis["EUR"] under their role keys
+                            st.session_state.setdefault("config_basis", {}).setdefault(target_ccy, {})[_role] = _df
                     except Exception:
                         pass
 
@@ -25201,6 +25501,14 @@ def main():
             # Load ALL currencies at startup
             for _sc in SUPPORTED_CURRENCIES:
                 _load_ccy_curves(_sc)
+            # v0705h: also prime EUR if user's restored sidebar ccy is EUR (so EUR Curves tab
+            # renders with data on first paint instead of needing a ccy-switch round-trip)
+            try:
+                _startup_ccy = str(st.session_state.get("sidebar_ccy", "")).split(" ")[0]
+                if _startup_ccy == "EUR":
+                    _load_ccy_curves("EUR")
+            except Exception:
+                pass
 
             # Store function reference for on-demand currency refresh
             st.session_state["_load_ccy_curves_fn"] = _load_ccy_curves
