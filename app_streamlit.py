@@ -7651,10 +7651,24 @@ def vol_config_tab():
     st.markdown("---")
     st.markdown("#### Currently Loaded Status")
     
-    # Show auto-load result if present (use get not pop - Home tab shows it persistently)
-    _auto_msg = st.session_state.get("_auto_load_msg")
-    if _auto_msg:
-        st.info(_auto_msg)
+    # v0705o: rebuild banner per-ccy filtered by the selectbox (below).
+    # The selectbox key persists in session_state so we can read it before it's drawn.
+    _banner_filter = st.session_state.get("upload_status_ccy_filter", "All")
+    _banner_ccys = (list(SUPPORTED_CURRENCIES) + ["EUR"]) if _banner_filter == "All" else [_banner_filter]
+    _banner_parts = []
+    for _bc in _banner_ccys:
+        _lbl = st.session_state.get(f"_loaded_vol_label_{_bc}")
+        if _lbl:
+            _banner_parts.append(f"{_bc}:{_lbl}")
+    _legacy = st.session_state.get("_auto_load_msg", "") or ""
+    _cfg_part = ""
+    if "| Configs:" in _legacy:
+        _cfg_part = " | Configs:" + _legacy.split("| Configs:")[1]
+    if _banner_parts:
+        st.info(f"✅ Vols: {', '.join(_banner_parts)}{_cfg_part}")
+    elif _legacy and not any(f"_loaded_vol_label_{c}" in st.session_state for c in (list(SUPPORTED_CURRENCIES) + ["EUR"])):
+        # Fallback: nothing in per-ccy state but legacy banner exists (first render before any load tracked)
+        st.info(_legacy)
 
     # Show post-load summary (persists after rerun from Load from Database)
     _post_msgs = st.session_state.pop("_post_load_msgs", None)
@@ -7934,13 +7948,14 @@ def vol_config_tab():
                     _h = st.session_state.get(f"_atm_hash_{_lc}", 0)
                     st.session_state[f"_atm_hash_{_lc}"] = _h + 1
                     st.session_state.get("atm_prem_matrix", {}).pop(_lc, None)
-                    if "timestamps" not in st.session_state:
-                        st.session_state["timestamps"] = {}
-                    st.session_state["timestamps"][f"atm_{_lc}"] = loaded_snap['snapshot_date'].strftime('%Y-%m-%d %H:%M:%S')
-                    st.session_state["timestamps"][f"sabr_{_lc}"] = loaded_snap['snapshot_date'].strftime('%Y-%m-%d %H:%M:%S')
+                    # v0705o: write to load_timestamps via set_timestamp() so the status block
+                    # (which calls get_timestamp_str()) sees the load. Also set _vol_loaded flag.
+                    set_timestamp("atm", _lc)
+                    set_timestamp("sabr", _lc)
+                    st.session_state[f"_vol_loaded_{_lc}"] = True
                     st.session_state[f"_loaded_vol_label_{_lc}"] = _pending_load["label"]
                     _rl = [f"{_bc}:{st.session_state[f'_loaded_vol_label_{_bc}']}"
-                           for _bc in SUPPORTED_CURRENCIES if st.session_state.get(f"_loaded_vol_label_{_bc}")]
+                           for _bc in (list(SUPPORTED_CURRENCIES) + ["EUR"]) if st.session_state.get(f"_loaded_vol_label_{_bc}")]
                     _old_banner = st.session_state.get("_auto_load_msg", "")
                     _cfg_part = ""
                     if "| Configs:" in _old_banner:
