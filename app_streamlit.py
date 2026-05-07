@@ -7699,7 +7699,9 @@ def vol_config_tab():
         except Exception:
             pass
 
-    for ccy in SUPPORTED_CURRENCIES:
+    # v0705j: include EUR in status block (Curves tab supports EUR; this just shows status).
+    # AUD/NZD/USD logic untouched.
+    for ccy in list(SUPPORTED_CURRENCIES) + ["EUR"]:
         atm, a, b, r, n = get_ccy_vol_data(ccy)
         _cc = st.session_state.get("config_curves", {}).get(ccy)
         curve = _cc if _cc is not None else get_ccy_curve(ccy)
