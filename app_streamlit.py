@@ -7033,8 +7033,29 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 if _all_trades:
                     _all_df = pd.DataFrame(_all_trades)
                     _all_df = _all_df.sort_values(_time_col, ascending=False).reset_index(drop=True)
+                    # v0705v: explicit column_config + sample-value diagnostic so the time column
+                    # always renders with adequate width regardless of header text.
+                    _col_cfg = {
+                        _time_col:    st.column_config.TextColumn(_time_col, width="small"),
+                        "Type":       st.column_config.TextColumn("Type", width="small"),
+                        "CCY":        st.column_config.TextColumn("CCY", width="small"),
+                        "Opt Expiry": st.column_config.TextColumn("Opt Expiry", width="small"),
+                        "Swp Tenor":  st.column_config.TextColumn("Swp Tenor", width="small"),
+                        "Strike":     st.column_config.TextColumn("Strike", width="medium"),
+                        "Notional":   st.column_config.TextColumn("Notional", width="small"),
+                        "Premium":    st.column_config.TextColumn("Premium", width="medium"),
+                        "Nett Prem BP": st.column_config.TextColumn("Nett BP", width="small"),
+                        "P Prem BP":  st.column_config.TextColumn("P BP", width="small"),
+                        "R Prem BP":  st.column_config.TextColumn("R BP", width="small"),
+                        "Platform":   st.column_config.TextColumn("Platform", width="small"),
+                    }
                     st.dataframe(_all_df, use_container_width=True, hide_index=True,
-                                 height=min(60 + len(_all_df) * 35, 700))
+                                 height=min(60 + len(_all_df) * 35, 700),
+                                 column_config=_col_cfg)
+                    # Diagnostic: show a sample of the time column values so we can confirm
+                    # the data reaches the dataframe even if rendering is misbehaving.
+                    _sample_times = [str(v) for v in _all_df[_time_col].head(3).tolist()]
+                    st.caption(f"Time column ({_time_col}) sample: {_sample_times}")
                     st.caption("Straddle prem deduped for all brokers except DWSF (report full straddle prem on each leg). "
                                "DWSF strikes normalised (÷100).")
 
