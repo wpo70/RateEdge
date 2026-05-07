@@ -7699,9 +7699,19 @@ def vol_config_tab():
         except Exception:
             pass
 
+    # v0705l: ccy filter for status cards. Default "All" shows AUD/NZD/USD/EUR.
+    _status_ccys_all = list(SUPPORTED_CURRENCIES) + ["EUR"]
+    _status_filter = st.selectbox(
+        "Show currency",
+        ["All"] + _status_ccys_all,
+        index=0,
+        key="upload_status_ccy_filter",
+    )
+    _status_ccys = _status_ccys_all if _status_filter == "All" else [_status_filter]
+
     # v0705j: include EUR in status block (Curves tab supports EUR; this just shows status).
     # AUD/NZD/USD logic untouched.
-    for ccy in list(SUPPORTED_CURRENCIES) + ["EUR"]:
+    for ccy in _status_ccys:
         atm, a, b, r, n = get_ccy_vol_data(ccy)
         _cc = st.session_state.get("config_curves", {}).get(ccy)
         curve = _cc if _cc is not None else get_ccy_curve(ccy)
