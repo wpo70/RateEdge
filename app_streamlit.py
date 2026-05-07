@@ -25574,11 +25574,14 @@ def main():
             key="sidebar_ccy",
         )
         # v2904e: refresh curves from DB when currency actually changes
+        # v0705m: normalize "EUR (PENDING)" → "EUR" so _curve_map lookup succeeds
+        _ccy_for_load = str(ccy).split(" ")[0]
         _loader = st.session_state.get("_load_ccy_curves_fn")
         if _loader and HAS_POSTGRES:
             _prev_sidebar_ccy = st.session_state.get("_prev_sidebar_ccy")
-            if _prev_sidebar_ccy is not None and _prev_sidebar_ccy != ccy:
-                _loader(ccy, force=True)
+            _prev_norm = str(_prev_sidebar_ccy).split(" ")[0] if _prev_sidebar_ccy else None
+            if _prev_norm is not None and _prev_norm != _ccy_for_load:
+                _loader(_ccy_for_load, force=True)
             st.session_state["_prev_sidebar_ccy"] = ccy
         
         # Vol mode
