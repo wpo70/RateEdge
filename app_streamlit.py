@@ -6881,17 +6881,17 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         _ptype = "🟠 Strangle"
                                         _strike_disp = f"P:{_s_p:.2f}% / R:{_s_r:.2f}%"
                                         _prem_disp = f"P:{_fmt_premium(_p_prem)} + R:{_fmt_premium(_r_prem)} = {_fmt_premium(_comb_prem)}" if _comb_prem else "—"
-                                    elif not _has_swp:
+                                    elif _same_strike and not _has_swp:
+                                        _ptype = "🟤 C/F Straddle"
+                                        _strike_disp = f"{_s_p:.2f}%"
+                                        _prem_disp = f"Cap:{_fmt_premium(_p_prem)} + Flr:{_fmt_premium(_r_prem)} = {_fmt_premium(_comb_prem)}" if _comb_prem else "—"
+                                    elif not _same_strike and not _has_swp:
                                         _ptype = "🟣 Collar"
                                         _strike_disp = f"Cap:{_s_p:.2f}% / Flr:{_s_r:.2f}%"
                                         # Collar: buy one leg, sell the other — show individual legs
                                         _prem_disp = f"Buy:{_fmt_premium(_p_prem)} / Sell:{_fmt_premium(_r_prem)}" if (_p_prem or _r_prem) else "—"
                                         _comb_prem = _p_prem - _r_prem  # net premium (buy - sell)
                                         _comb_bp = round(_comb_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
-                                    else:
-                                        _ptype = "🔵 Straddle"
-                                        _strike_disp = f"{_s_p:.2f}%"
-                                        _prem_disp = f"{_fmt_premium(_comb_prem)}" if _comb_prem else "—"
 
                                     _paired_rows.append({
                                         "Type": _ptype,
@@ -6972,16 +6972,18 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     })
 
                 # Summary
-                _n_straddles = len([r for r in _paired_rows if "Straddle" in r["Type"]])
+                _n_straddles = len([r for r in _paired_rows if r["Type"] == "🔵 Straddle"])
                 _n_strangles = len([r for r in _paired_rows if "Strangle" in r["Type"]])
+                _n_cf_straddles = len([r for r in _paired_rows if "C/F Straddle" in r["Type"]])
                 _n_collars = len([r for r in _paired_rows if "Collar" in r["Type"]])
-                _sc1, _sc2, _sc3, _sc4, _sc5, _sc6 = st.columns(6)
+                _sc1, _sc2, _sc3, _sc4, _sc5, _sc6, _sc7 = st.columns(7)
                 _sc1.metric("Total NEWT", len(_newt_all))
                 _sc2.metric("Straddles", _n_straddles)
-                _sc3.metric("Strangles", _n_strangles)
-                _sc4.metric("Collars", _n_collars)
-                _sc5.metric("Single Legs", len(_single_rows))
-                _sc6.metric("Exotics", len(_exo_rows))
+                _sc3.metric("C/F Straddles", _n_cf_straddles)
+                _sc4.metric("Strangles", _n_strangles)
+                _sc5.metric("Collars", _n_collars)
+                _sc6.metric("Single Legs", len(_single_rows))
+                _sc7.metric("Exotics", len(_exo_rows))
 
                 # Combined display
                 _all_trades = _paired_rows + _single_rows + _exo_rows
@@ -6994,7 +6996,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     with st.expander("Notional by Product Type", expanded=False):
                         _type_summary = []
                         for _lbl, _rows in [
-                            ("Straddles", [r for r in _paired_rows if "Straddle" in r["Type"]]),
+                            ("Straddles", [r for r in _paired_rows if r["Type"] == "🔵 Straddle"]),
+                            ("C/F Straddles", [r for r in _paired_rows if "C/F Straddle" in r["Type"]]),
                             ("Strangles", [r for r in _paired_rows if "Strangle" in r["Type"]]),
                             ("Collars", [r for r in _paired_rows if "Collar" in r["Type"]]),
                             ("Single Payers", [r for r in _single_rows if "Payer" in r["Type"]]),
