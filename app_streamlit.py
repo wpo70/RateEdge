@@ -8475,6 +8475,7 @@ def curves_tab():
         _euribor_6m   = st.session_state.get("config_basis", {}).get("EUR", {}).get("euribor_6m")
         _euribor_3m   = st.session_state.get("config_basis", {}).get("EUR", {}).get("euribor_3m")
         _estr_eu_bas  = st.session_state.get("config_basis", {}).get("EUR", {}).get("estr_euribor_basis")
+        _eu_6m3m_bas  = st.session_state.get("config_basis", {}).get("EUR", {}).get("euribor_6m_3m_basis")
 
         # v0705h: always recompute ESTR-EURIBOR basis from current curves (don't use stale cache)
         # Mirrors USD SOFR-FF basis logic — basis = projection − discount in bp.
@@ -8498,6 +8499,30 @@ def curves_tab():
                         "BasisBp": [round((_b_interp[i] - _e_interp[i]) * 100, 4) for i in range(len(_all_mats))]
                     })
                     st.session_state.setdefault("config_basis", {}).setdefault("EUR", {})["estr_euribor_basis"] = _estr_eu_bas
+            except Exception:
+                pass
+
+        # v0705p: EURIBOR 6M-3M tenor basis = (6M EURIBOR − 3M EURIBOR) in bp.
+        if _euribor_6m is not None and _euribor_3m is not None and not _euribor_6m.empty and not _euribor_3m.empty:
+            try:
+                _b6_sorted = _euribor_6m.sort_values("MaturityY")
+                _b3_sorted = _euribor_3m.sort_values("MaturityY")
+                _b6_xs = _b6_sorted["MaturityY"].to_numpy().astype(float)
+                _b6_ys = _b6_sorted["ZeroRatePct"].to_numpy().astype(float)
+                _b3_xs = _b3_sorted["MaturityY"].to_numpy().astype(float)
+                _b3_ys = _b3_sorted["ZeroRatePct"].to_numpy().astype(float)
+                _all_mats2 = sorted(set(round(float(x), 6) for x in _b6_xs) | set(round(float(x), 6) for x in _b3_xs))
+                _min_mat2 = max(min(_b6_xs), min(_b3_xs))
+                _max_mat2 = min(max(_b6_xs), max(_b3_xs))
+                _all_mats2 = [m for m in _all_mats2 if _min_mat2 <= m <= _max_mat2]
+                if _all_mats2:
+                    _b6_interp = np.interp(_all_mats2, _b6_xs, _b6_ys)
+                    _b3_interp = np.interp(_all_mats2, _b3_xs, _b3_ys)
+                    _eu_6m3m_bas = pd.DataFrame({
+                        "MaturityY": _all_mats2,
+                        "BasisBp": [round((_b6_interp[i] - _b3_interp[i]) * 100, 4) for i in range(len(_all_mats2))]
+                    })
+                    st.session_state.setdefault("config_basis", {}).setdefault("EUR", {})["euribor_6m_3m_basis"] = _eu_6m3m_bas
             except Exception:
                 pass
 
@@ -8582,7 +8607,8 @@ def curves_tab():
                 return _dc
 
             with st.expander("EUR Curve Data", expanded=False):
-                _eur_tcols = st.columns(3)
+                # v0705p: 5 columns — ESTR, EURIBOR 6M, EURIBOR 3M, ESTR-EUR basis, 6M-3M basis
+                _eur_tcols = st.columns(5)
                 with _eur_tcols[0]:
                     st.caption("ESTR OIS (%)")
                     if _estr_curve is not None and not _estr_curve.empty:
@@ -8596,36 +8622,71 @@ def curves_tab():
                     else:
                         st.info("Pending BBG load")
                 with _eur_tcols[2]:
+                    st.caption("EURIBOR 3M (%)")
+                    if _euribor_3m is not None and not _euribor_3m.empty:
+                        st.dataframe(_eur_relabel(_euribor_3m).rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Rate(%)"}),
+                                     use_container_width=True, hide_index=True)
+                    else:
+                        st.info("Pending BBG load")
+                with _eur_tcols[3]:
                     st.caption("ESTR-EURIBOR Basis (bp)")
                     if _estr_eu_bas is not None and not _estr_eu_bas.empty:
                         _bas_tbl = _eur_relabel(_estr_eu_bas).rename(columns={"MaturityY":"Tenor","BasisBp":"Basis(bp)"})
                         st.dataframe(_bas_tbl.style.format({"Basis(bp)": "{:.4f}"}),
                                      use_container_width=True, hide_index=True)
                     else:
-                        st.info("Needs both curves")
+                        st.info("Needs ESTR + 6M")
+                with _eur_tcols[4]:
+                    st.caption("EURIBOR 6M-3M Basis (bp)")
+                    if _eu_6m3m_bas is not None and not _eu_6m3m_bas.empty:
+                        _bas_tbl2 = _eur_relabel(_eu_6m3m_bas).rename(columns={"MaturityY":"Tenor","BasisBp":"Basis(bp)"})
+                        st.dataframe(_bas_tbl2.style.format({"Basis(bp)": "{:.4f}"}),
+                                     use_container_width=True, hide_index=True)
+                    else:
+                        st.info("Needs 6M + 3M")
 
-            # ESTR-EURIBOR Basis chart (bp)
-            if _estr_eu_bas is not None and not _estr_eu_bas.empty:
-                _bas_labels = _eur_relabel(_estr_eu_bas)["MaturityY"].tolist()
+            # Basis bar chart (bp) — ESTR-EURIBOR + EURIBOR 6M-3M (v0705p)
+            _has_estr_eu = _estr_eu_bas is not None and not _estr_eu_bas.empty
+            _has_6m3m = _eu_6m3m_bas is not None and not _eu_6m3m_bas.empty
+            if _has_estr_eu or _has_6m3m:
                 _bas_fig = go.Figure()
-                _bas_fig.add_trace(go.Bar(
-                    x=_bas_labels, y=_estr_eu_bas["BasisBp"].tolist(),
-                    name="ESTR-EURIBOR Basis",
-                    marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in _estr_eu_bas["BasisBp"]]
-                ))
-                _bas_min = min(_estr_eu_bas["BasisBp"].min(), 0) * 1.3
-                _bas_max = max(_estr_eu_bas["BasisBp"].max(), 0) * 1.3
+                _all_y = []
+                # Use whichever has more points to drive the x-axis order
+                _x_source = _estr_eu_bas if _has_estr_eu else _eu_6m3m_bas
+                _bas_labels = _eur_relabel(_x_source)["MaturityY"].tolist()
+                if _has_estr_eu:
+                    _bas_fig.add_trace(go.Bar(
+                        x=_eur_relabel(_estr_eu_bas)["MaturityY"].tolist(),
+                        y=_estr_eu_bas["BasisBp"].tolist(),
+                        name="ESTR-EURIBOR 6M",
+                        marker_color="#f59e0b",
+                        opacity=0.85,
+                    ))
+                    _all_y.extend(_estr_eu_bas["BasisBp"].tolist())
+                if _has_6m3m:
+                    _bas_fig.add_trace(go.Bar(
+                        x=_eur_relabel(_eu_6m3m_bas)["MaturityY"].tolist(),
+                        y=_eu_6m3m_bas["BasisBp"].tolist(),
+                        name="EURIBOR 6M-3M",
+                        marker_color="#a855f7",
+                        opacity=0.85,
+                    ))
+                    _all_y.extend(_eu_6m3m_bas["BasisBp"].tolist())
+                _bas_min = min(min(_all_y), 0) * 1.3 if _all_y else -1
+                _bas_max = max(max(_all_y), 0) * 1.3 if _all_y else 1
                 if _bas_min == _bas_max:
                     _bas_min, _bas_max = -1, 1
                 _bas_fig.update_layout(
-                    title="ESTR / EURIBOR 6M Basis (bp)", height=280, margin=dict(l=50,r=20,t=40,b=40),
+                    title="EUR Tenor Bases (bp)", height=280, margin=dict(l=50,r=20,t=40,b=40),
                     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
                     font=dict(color="#94a3b8", size=11),
+                    barmode="group",
                     xaxis=dict(title="Tenor", gridcolor="#1e293b", type="category"),
                     yaxis=dict(title="Basis (bp)", gridcolor="#1e293b",
                                range=[_bas_min, _bas_max], zeroline=True,
                                zerolinecolor="#475569", zerolinewidth=1,
                                tickformat=".1f"),
+                    legend=dict(bgcolor="rgba(0,0,0,0)"),
                 )
                 st.plotly_chart(_bas_fig, use_container_width=True)
 
@@ -8650,6 +8711,8 @@ def curves_tab():
                         _eur_fwd_options.append("EURIBOR 3M")
                     if _estr_eu_bas is not None and not _estr_eu_bas.empty:
                         _eur_fwd_options.append("ESTR-EURIBOR Basis")
+                    if _eu_6m3m_bas is not None and not _eu_6m3m_bas.empty:
+                        _eur_fwd_options.append("EURIBOR 6M-3M Basis")
                     _eur_fwd_mode = st.radio(
                         "Curve", _eur_fwd_options,
                         horizontal=True, key="eur_fwd_mode"
@@ -8730,6 +8793,22 @@ def curves_tab():
                             _bas_df = _bas_df.reset_index()
                             st.session_state["eur_fwd_matrix"]["ESTR-EURIBOR Basis"] = _bas_df
 
+                        # v0705p: EURIBOR 6M-3M Basis matrix (bp)
+                        if _eu_6m3m_bas is not None and not _eu_6m3m_bas.empty:
+                            _bas_rows2 = {}
+                            for ei, exp in enumerate(_EUR_EXPIRIES):
+                                _row = {}
+                                for ti, ten in enumerate(_EUR_TENORS):
+                                    _mid = float(np.interp(exp + ten/2,
+                                                           _eu_6m3m_bas["MaturityY"].values,
+                                                           _eu_6m3m_bas["BasisBp"].values))
+                                    _row[_TEN_LABELS[ti]] = round(_mid, 2)
+                                _bas_rows2[_EXP_LABELS[ei]] = _row
+                            _bas_df2 = pd.DataFrame(_bas_rows2).T
+                            _bas_df2.index.name = "Expiry"
+                            _bas_df2 = _bas_df2.reset_index()
+                            st.session_state["eur_fwd_matrix"]["EURIBOR 6M-3M Basis"] = _bas_df2
+
                 # Display selected matrix
                 _disp_key = _eur_fwd_mode
                 _disp_df  = st.session_state.get("eur_fwd_matrix", {}).get(_disp_key)
@@ -8738,7 +8817,7 @@ def curves_tab():
                     _fmt_dict = {c: "{:.4f}" for c in _num_cols}
                     st.dataframe(
                         _disp_df.style.format(_fmt_dict).background_gradient(
-                            cmap="RdYlGn_r" if _disp_key == "ESTR-EURIBOR Basis" else "RdYlGn",
+                            cmap="RdYlGn_r" if _disp_key in ("ESTR-EURIBOR Basis", "EURIBOR 6M-3M Basis") else "RdYlGn",
                             subset=_num_cols),
                         use_container_width=True, hide_index=True, height=820
                     )
