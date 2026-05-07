@@ -6369,7 +6369,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
     filters = []
     params = []
 
-    filters.append("trade_date BETWEEN %s AND %s")
+    filters.append("execution_timestamp::date BETWEEN %s AND %s")
     params += [date_from, date_to]
 
     if sel_type and len(sel_type) < 11:
@@ -6406,10 +6406,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             opt_tenor, swp_tenor, notional_ccy,
             upi_underlier_name, strike_pct, premium_amount,
             notional_leg1, cleared, platform_identifier,
-            event_timestamp, trade_date
+            event_timestamp, execution_timestamp, trade_date
         FROM dtcc_sdr
         {where}
-        ORDER BY event_timestamp DESC
+        ORDER BY execution_timestamp DESC
         LIMIT 5000
     """
 
@@ -6590,7 +6590,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 _prem_bp_str = "—"
             und    = (r.get("upi_underlier_name") or "—").replace("NA/Swap ","").replace(" Compound","")
             rows_html.append({
-                "Time":       _ts_fmt_tz(r.get("event_timestamp"), user_tz),
+                "Time":       _ts_fmt_tz(r.get("execution_timestamp") or r.get("event_timestamp"), user_tz),
                 "Action":     r.get("action_type",""),
                 "P/C":        _fmt_type(r.get("option_type_decoded","")),
                 "Opt Expiry": r.get("opt_tenor","—"),
@@ -6720,7 +6720,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _t_p = str(_p.get("swp_tenor",""))
                     _e_p = str(_p.get("opt_tenor",""))
                     _ccy_p = str(_p.get("notional_ccy",""))
-                    _time_p = pd.to_datetime(_p.get("event_timestamp"), errors="coerce")
+                    _time_p = pd.to_datetime(_p.get("execution_timestamp") or _p.get("event_timestamp"), errors="coerce")
 
                     _match = _rcvrs[
                         (_rcvrs["swp_tenor"] == _t_p) &
@@ -6730,7 +6730,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     ]
                     if not _match.empty and _time_p is not pd.NaT:
                         for _, _r in _match.iterrows():
-                            _time_r = pd.to_datetime(_r.get("event_timestamp"), errors="coerce")
+                            _time_r = pd.to_datetime(_r.get("execution_timestamp") or _r.get("event_timestamp"), errors="coerce")
                             if _time_r is not pd.NaT and abs((_time_p - _time_r).total_seconds()) <= 120:
                                 _p_prem = float(_p.get("premium_amount") or 0)
                                 _r_prem = float(_r.get("premium_amount") or 0)
@@ -6840,7 +6840,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         _t_p = str(_p.get("swp_tenor","") or "").strip()
                         _e_p = str(_p.get("opt_tenor","") or "").strip()
                         _ccy_p = str(_p.get("notional_ccy",""))
-                        _time_p = pd.to_datetime(_p.get("event_timestamp"), errors="coerce")
+                        _time_p = pd.to_datetime(_p.get("execution_timestamp") or _p.get("event_timestamp"), errors="coerce")
 
                         # Match: same expiry, same ccy, within 2 min
                         _match = _rcvrs_a[
@@ -6856,7 +6856,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                         if not _match.empty and _time_p is not pd.NaT:
                             for _ri, _r in _match.iterrows():
-                                _time_r = pd.to_datetime(_r.get("event_timestamp"), errors="coerce")
+                                _time_r = pd.to_datetime(_r.get("execution_timestamp") or _r.get("event_timestamp"), errors="coerce")
                                 if _time_r is not pd.NaT and abs((_time_p - _time_r).total_seconds()) <= 120:
                                     _matched_p_ids.add(_pi)
                                     _matched_r_ids.add(_ri)
@@ -6920,7 +6920,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _s_prem = float(_s_row.get("premium_amount") or 0)
                     _s_not = float(_s_row.get("notional_leg1") or 0)
                     _s_bp = round(_s_prem / _s_not * 10000, 2) if _s_not > 0 else 0
-                    _s_time = _to_local(_s_row.get("event_timestamp"))
+                    _s_time = _to_local(_s_row.get("execution_timestamp") or _s_row.get("event_timestamp"))
                     _pc_label = "🟢 Payer" if _ot == "CALL" else "🔴 Receiver" if _ot == "PUT" else "🔵 Straddle" if str(_ot).upper() == "STR" else f"⚪ {_ot}"
                     _s_swp = str(_s_row.get("swp_tenor", "") or "").strip()
                     _s_opt = str(_s_row.get("opt_tenor", "") or "").strip()
@@ -6955,7 +6955,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _e_prem = float(_e_row.get("premium_amount") or 0)
                     _e_not = float(_e_row.get("notional_leg1") or 0)
                     _e_bp = round(_e_prem / _e_not * 10000, 2) if _e_not > 0 else 0
-                    _e_time = _to_local(_e_row.get("event_timestamp"))
+                    _e_time = _to_local(_e_row.get("execution_timestamp") or _e_row.get("event_timestamp"))
                     _exo_rows.append({
                         "Type": f"🟡 {_ot}",
                         _time_col: _e_time.strftime("%d-%b %H:%M") if _e_time is not pd.NaT else "—",
