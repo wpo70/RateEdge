@@ -9383,6 +9383,10 @@ def fwd_analysis_tab():
     if _ccy_current == "USD":
         _fwd_analysis_tab_usd()
         return
+    # v0705r: route EUR to dedicated function. Normalize "EUR (PENDING)" → "EUR".
+    if str(_ccy_current).split(" ")[0] == "EUR":
+        _fwd_analysis_tab_eur()
+        return
 
     st.subheader("📈 FWD IRS Analysis")
 
@@ -10967,6 +10971,947 @@ def _fwd_analysis_tab_usd():
         _fs_c1, _fs_c2, _fs_c3, _fs_c4 = st.columns([1, 1, 1, 1])
         with _fs_c1:
             _fs_fr = st.selectbox("Curve", ["SOFR", "FEDFUNDS"], key="fwd_rv_fr")
+        with _fs_c2:
+            _fs_tenor = st.selectbox("Tenor", _fwd_tenors, index=0, key="fwd_rv_tenor")
+        with _fs_c3:
+            _fs_exp1 = st.selectbox("Expiry A", _fwd_expiries, index=3, key="fwd_rv_exp1")
+        with _fs_c4:
+            _fs_exp2 = st.selectbox("Expiry B", _fwd_expiries, index=4, key="fwd_rv_exp2")
+
+        _fs_yr = st.slider("History (years)", 1, 8, 3, key="fwd_rv_yr")
+        _fc1, _fc2 = st.columns(2)
+        with _fc1:
+            _fs_show_spread = st.checkbox("Show spread (B − A)", True, key="fwd_rv_spread")
+        with _fc2:
+            _fs_show_zscore = st.checkbox("Show rolling Z-score", True, key="fwd_rv_zscore")
+
+
+        _fwd_data = _load_fwd_matrix_history_usd(_fs_fr, _fs_yr)
+
+        if not _fwd_data:
+            st.info(f"No forward matrix history for USD {_fs_fr}. Backfill from **RV tab → Curve RV → Backfill**.")
+        else:
+            def _extract_fwd_series(data, expiry, tenor):
+                dates, vals = [], []
+                for d, m in sorted(data.items()):
+                    for row in m.get("values", []):
+                        if str(row.get("Expiry", "")).lower() == expiry.lower():
+                            v = row.get(tenor)
+                            if v is not None:
+                                dates.append(pd.Timestamp(d))
+                                vals.append(float(v))
+                            break
+                if not dates: return None
+                return pd.Series(vals, index=dates, name=f"{expiry}{tenor.lower()}")
+
+            _s1 = _extract_fwd_series(_fwd_data, _fs_exp1, _fs_tenor)
+            _s2 = _extract_fwd_series(_fwd_data, _fs_exp2, _fs_tenor)
+            _label_a = f"{_fs_exp1}{_fs_tenor.lower()}"
+            _label_b = f"{_fs_exp2}{_fs_tenor.lower()}"
+
+            if _s1 is not None or _s2 is not None:
+                _fig_fs = go.Figure()
+                if not _fs_show_spread:
+                    if _s1 is not None:
+                        _fig_fs.add_trace(go.Scatter(x=_s1.index, y=_s1.values, mode="lines",
+                            name=_label_a, line=dict(color="#3b82f6", width=1.8)))
+                    if _s2 is not None:
+                        _fig_fs.add_trace(go.Scatter(x=_s2.index, y=_s2.values, mode="lines",
+                            name=_label_b, line=dict(color="#ef4444", width=1.8)))
+                    _fig_fs.update_layout(
+                        title=f"USD {_fs_fr}: {_label_a} vs {_label_b}",
+                        yaxis_title="Rate (%)", template="plotly_dark",
+                        height=420, margin=dict(l=60,r=20,t=40,b=40),
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                    st.plotly_chart(_fig_fs, use_container_width=True)
+                else:
+                    if _s1 is not None and _s2 is not None:
+                        _spread = (_s2 - _s1).dropna() * 100
+                        if not _spread.empty:
+                            _fig_fs.add_trace(go.Scatter(x=_spread.index, y=_spread.values, mode="lines",
+                                name=f"{_label_b} − {_label_a}", line=dict(color="#3b82f6", width=1.8)))
+                            _mean = _spread.mean(); _std = _spread.std()
+                            _fig_fs.add_hline(y=_mean, line=dict(color="#94a3b8", dash="dash", width=1),
+                                annotation_text=f"Mean: {_mean:.1f}bp")
+                            _fig_fs.add_hline(y=_mean + _std, line=dict(color="#22c55e", dash="dot", width=0.8),
+                                annotation_text=f"+1σ: {_mean+_std:.1f}bp")
+                            _fig_fs.add_hline(y=_mean - _std, line=dict(color="#ef4444", dash="dot", width=0.8),
+                                annotation_text=f"−1σ: {_mean-_std:.1f}bp")
+                            _fig_fs.update_layout(
+                                title=f"USD {_fs_fr}: {_label_b} − {_label_a} (bp)",
+                                yaxis_title="Spread (bp)", template="plotly_dark",
+                                height=420, margin=dict(l=60,r=20,t=40,b=40),
+                                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                            st.plotly_chart(_fig_fs, use_container_width=True)
+
+                            # Stats table
+                            _current = _spread.iloc[-1]
+                            _z = (_current - _mean) / _std if _std > 0 else 0
+                            _pctl = ((_spread < _current).sum() / len(_spread)) * 100
+                            _stats_df = pd.DataFrame({
+                                "Metric": ["Current", "Mean", "Std Dev", "Z-Score", "Percentile",
+                                           "Min", "Max", "1Y Min", "1Y Max"],
+                                "Value": [
+                                    f"{_current:.1f}bp", f"{_mean:.1f}bp", f"{_std:.1f}bp",
+                                    f"{_z:.2f}", f"{_pctl:.0f}%",
+                                    f"{_spread.min():.1f}bp", f"{_spread.max():.1f}bp",
+                                    f"{_spread.tail(252).min():.1f}bp" if len(_spread) >= 252 else "—",
+                                    f"{_spread.tail(252).max():.1f}bp" if len(_spread) >= 252 else "—"
+                                ]
+                            })
+                            st.dataframe(_stats_df, hide_index=True, use_container_width=False)
+
+                            # Rolling Z-score
+                            if _fs_show_zscore and _std > 0:
+                                _roll_z = (_spread - _spread.rolling(63).mean()) / _spread.rolling(63).std()
+                                _roll_z = _roll_z.dropna()
+                                if not _roll_z.empty:
+                                    _fig_z = go.Figure()
+                                    _fig_z.add_trace(go.Scatter(x=_roll_z.index, y=_roll_z.values,
+                                        mode="lines", name="63d Rolling Z", line=dict(color="#a855f7", width=1.5)))
+                                    _fig_z.add_hline(y=0, line=dict(color="#64748b", width=1))
+                                    _fig_z.add_hline(y=2, line=dict(color="#ef4444", dash="dot", width=0.8))
+                                    _fig_z.add_hline(y=-2, line=dict(color="#22c55e", dash="dot", width=0.8))
+                                    _fig_z.update_layout(
+                                        title="Rolling 63d Z-Score", yaxis_title="Z-Score",
+                                        template="plotly_dark", height=300,
+                                        margin=dict(l=60,r=20,t=40,b=40),
+                                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                                    st.plotly_chart(_fig_z, use_container_width=True)
+                        else:
+                            st.warning("No overlapping dates for spread calculation.")
+                    else:
+                        st.warning(f"Need both {_label_a} and {_label_b} in history.")
+
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# EUR FWD IRS Analysis — v0705r
+# Mirrors USD pattern. Currency='EUR', floating_rate ∈ {'EURIBOR 6M', 'EURIBOR 3M'}.
+# Basis is computed on-the-fly from the two EURIBOR curves (no benchmark_rates row).
+# AUD/USD code paths LOCKED — this is a parallel implementation, no shared state.
+# ══════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_swap_rates_history_eur(floating_rate: str, years_back: int = 20) -> pd.DataFrame:
+    """Load EUR historical swap rates (date × tenor). SOFR or FEDFUNDS."""
+    try:
+        conn = get_db_connection()
+        if conn is None: return pd.DataFrame()
+        cur = conn.cursor()
+        cur.execute("SET statement_timeout = '15s'")
+        cur.execute(
+            """SELECT date, tenor, rate FROM swap_rates
+               WHERE currency='EUR' AND floating_rate=%s
+                 AND date >= CURRENT_DATE - INTERVAL %s
+               ORDER BY date""",
+            (floating_rate, f"{years_back} years"))
+        rows = cur.fetchall()
+        conn.close()
+        if not rows: return pd.DataFrame()
+        df = pd.DataFrame(rows, columns=["date","tenor","rate"])
+        df["date"] = pd.to_datetime(df["date"])
+        df["rate"] = df["rate"].astype(float)
+        return df.pivot_table(index="date", columns="tenor", values="rate", aggfunc="last").sort_index()
+    except Exception:
+        return pd.DataFrame()
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_basis_history_eur(years_back: int = 20) -> pd.DataFrame:
+    """Load EUR EURIBOR 6M-3M basis history, computed from swap_rates (no benchmark_rates row).
+    Returns wide DataFrame (date × tenor) in bp = (EURIBOR_6M − EURIBOR_3M) × 100.
+    Cubic-spline interpolates missing integer-year tenors so all fwd-fwd combos resolve."""
+    try:
+        # Pull both 6M and 3M wide DataFrames
+        _w6 = _load_swap_rates_history_eur("EURIBOR 6M", years_back=years_back)
+        _w3 = _load_swap_rates_history_eur("EURIBOR 3M", years_back=years_back)
+        if _w6.empty or _w3.empty:
+            return pd.DataFrame()
+
+        # Align on common dates and tenors
+        common_cols = sorted(set(_w6.columns) & set(_w3.columns))
+        if not common_cols:
+            return pd.DataFrame()
+        _w6c = _w6[common_cols].sort_index()
+        _w3c = _w3[common_cols].sort_index()
+        common_idx = _w6c.index.intersection(_w3c.index)
+        if len(common_idx) == 0:
+            return pd.DataFrame()
+        _w6c = _w6c.loc[common_idx]
+        _w3c = _w3c.loc[common_idx]
+
+        # Basis in bp
+        wide = (_w6c - _w3c) * 100.0
+
+        # ── Cubic spline interp of missing integer-year tenors (mirrors USD path) ──
+        try:
+            from scipy.interpolate import CubicSpline
+            y_cols = [c for c in wide.columns if c.endswith("Y") and c[:-1].isdigit()]
+            y_cols_sorted = sorted(y_cols, key=lambda c: int(c[:-1]))
+            y_years = [int(c[:-1]) for c in y_cols_sorted]
+            if len(y_years) >= 4:
+                target_years = list(range(min(y_years), max(y_years) + 1))
+                missing_years = [y for y in target_years if y not in y_years]
+                if missing_years:
+                    existing_mat = wide[y_cols_sorted].values
+                    interp_cols = {f"{y}Y": [] for y in missing_years}
+                    for _row in existing_mat:
+                        if pd.isna(_row).any():
+                            for y in missing_years:
+                                interp_cols[f"{y}Y"].append(float("nan"))
+                            continue
+                        cs = CubicSpline(y_years, _row)
+                        for y in missing_years:
+                            interp_cols[f"{y}Y"].append(float(cs(y)))
+                    for col, vals in interp_cols.items():
+                        wide[col] = vals
+                    m_cols = [c for c in wide.columns if c.endswith("M")]
+                    all_y_cols = sorted([c for c in wide.columns if c.endswith("Y") and c[:-1].isdigit()],
+                                        key=lambda c: int(c[:-1]))
+                    other_cols = [c for c in wide.columns if c not in m_cols + all_y_cols]
+                    wide = wide[m_cols + all_y_cols + other_cols]
+        except Exception:
+            pass
+
+        return wide
+    except Exception:
+        return pd.DataFrame()
+
+
+
+@st.fragment
+def _fwd_analysis_tab_eur():
+    """EUR FWD IRS Analysis — mirrors USD 8 sub-tabs with EURIBOR 6M / EURIBOR 3M / 6M-3M Basis."""
+    st.subheader("📈 FWD IRS Analysis — EUR")
+
+    # ── Data loaders ──────────────────────────────────────────────
+    if st.button("🔄 Load EUR Swap Rate History", key="fwd_load_history_eur", type="secondary"):
+        _load_swap_rates_history_eur.clear()
+        _load_basis_history_eur.clear()
+        st.session_state["_fwd_e6m"]  = _load_swap_rates_history_eur("EURIBOR 6M")
+        st.session_state["_fwd_e3m"]    = _load_swap_rates_history_eur("EURIBOR 3M")
+        st.session_state["_fwd_basis_eur"] = _load_basis_history_eur()
+
+    _e6m  = st.session_state.get("_fwd_e6m",  pd.DataFrame())
+    _e3m    = st.session_state.get("_fwd_e3m",    pd.DataFrame())
+    _basis = st.session_state.get("_fwd_basis_eur", pd.DataFrame())
+
+    if _e6m.empty and _e3m.empty and _basis.empty:
+        st.info("Click **🔄 Load EUR Swap Rate History** to populate charts. Spreads can be saved without loading.")
+
+    # ── Curve selector: EURIBOR 6M vs EURIBOR 3M (for IRS tabs 1-3) ──
+    if not _e6m.empty or not _e3m.empty:
+        _eur_curve = st.radio("Rate Curve", ["EURIBOR 6M", "EURIBOR 3M"],
+                              horizontal=True, key="fwd_eur_curve")
+        _curve_df = _e6m if "EURIBOR 6M" in _eur_curve else _e3m
+        st.caption(f"Using {_eur_curve} for IRS spreads / butterflies / fwd-fwd rates")
+    else:
+        _eur_curve = "EURIBOR 6M"
+        _curve_df = pd.DataFrame()
+
+    _sp_colors = ["#3b82f6","#ef4444","#22c55e","#f59e0b","#a855f7","#06b6d4","#f43f5e","#84cc16"]
+
+    # ── Helpers ────────────────────────────────────────────────────
+    def _get_rate(tenor_y, df=None):
+        if df is None: df = _curve_df
+        if df.empty: return None
+        t = f"{int(tenor_y)}Y"
+        return df[t] if t in df.columns else None
+
+    def _fwd(start_y, tenor_y, df=None):
+        if df is None: df = _curve_df
+        end_y = start_y + tenor_y
+        r_s = _get_rate(start_y, df); r_e = _get_rate(end_y, df)
+        if r_s is None or r_e is None: return None
+        return (r_e * end_y - r_s * start_y) / tenor_y
+
+    def _get_basis(tenor_lbl):
+        if _basis.empty or tenor_lbl not in _basis.columns: return None
+        return _basis[tenor_lbl]
+
+    def _fwd_basis(start_y, tenor_y):
+        end_y = start_y + tenor_y
+        s_lbl = f"{int(start_y)}Y"; e_lbl = f"{int(end_y)}Y"
+        b_s = _get_basis(s_lbl); b_e = _get_basis(e_lbl)
+        if b_s is None or b_e is None: return None
+        return (b_e * end_y - b_s * start_y) / tenor_y
+
+    def _fig_layout(fig, cut, ylab):
+        fig.update_layout(
+            height=460, margin=dict(l=50,r=20,t=40,b=40),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(15,23,42,0.8)",
+            legend=dict(orientation="h", y=1.06, font=dict(color="#e2e8f0", size=12)),
+            yaxis_title=ylab,
+            xaxis=dict(gridcolor="#334155", color="#94a3b8", range=[cut, pd.Timestamp.now()]),
+            yaxis=dict(gridcolor="#334155", color="#94a3b8"),
+            font=dict(color="#94a3b8"),
+        )
+
+    def _add_series(fig, label, series, color, bands=False):
+        fig.add_trace(go.Scatter(x=series.index, y=series.values, mode="lines",
+            name=label, line=dict(color=color, width=1.8)))
+        if bands:
+            mu, sd = series.mean(), series.std()
+            fig.add_hline(y=mu, line=dict(color=color, dash="dash", width=1), opacity=0.5)
+            fig.add_hrect(y0=mu-sd, y1=mu+sd, fillcolor=color, opacity=0.06, line_width=0)
+        else:
+            fig.add_hline(y=series.mean(), line=dict(color=color, dash="dot", width=1), opacity=0.4)
+
+    def _chart_tools_eur(fig, series_dict, key, ylab="bp"):
+        import plotly.io as _pio
+        try:
+            _img = _pio.to_image(fig, format="png", width=1400, height=520)
+            st.download_button("📂 Copy Chart", _img, f"RateEdge_EUR_{key}.png", "image/png",
+                               key=f"dl_eur_{key}", use_container_width=False)
+        except Exception:
+            _html = fig.to_html(include_plotlyjs="cdn", full_html=True)
+            st.download_button("📂 Copy Chart", _html.encode(), f"RateEdge_EUR_{key}.html", "text/html",
+                               key=f"dl_eur_{key}", use_container_width=False)
+        if not series_dict: return
+        _all_idx = pd.DatetimeIndex([])
+        for _s in series_dict.values():
+            if hasattr(_s, "index") and not _s.empty:
+                _all_idx = _all_idx.union(_s.index)
+        if _all_idx.empty: return
+        _min_date, _max_date = _all_idx.min().date(), _all_idx.max().date()
+        _dr1, _dr2 = st.columns(2)
+        with _dr1:
+            _stats_start = st.date_input("Stats from", _min_date, min_value=_min_date, max_value=_max_date, key=f"ts_eur_s_{key}")
+        with _dr2:
+            _stats_end = st.date_input("Stats to", _max_date, min_value=_min_date, max_value=_max_date, key=f"ts_eur_e_{key}")
+        _stats_rows = []
+        for _lbl, _sr in series_dict.items():
+            _win = _sr[(_sr.index.date >= _stats_start) & (_sr.index.date <= _stats_end)]
+            if _win.empty: continue
+            _stats_rows.append({
+                "Series": _lbl,
+                "Hi":      round(_win.max(), 3),
+                "Lo":      round(_win.min(), 3),
+                "Mean":    round(_win.mean(), 3),
+                "Std":     round(_win.std(), 3),
+                "Current": round(_win.iloc[-1], 3),
+            })
+        if _stats_rows:
+            st.dataframe(pd.DataFrame(_stats_rows), use_container_width=True, hide_index=True)
+
+    # ── Autosave / restore user prefs ──────────────────────────────
+    def _autosave_fwd_prefs_eur():
+        if not HAS_POSTGRES or not get_db_url(): return
+        import time as _t
+        if _t.time() - st.session_state.get("_fwd_prefs_eur_last_save", 0) < 5: return
+        _uid = st.session_state.get("username", "default")
+        _prefs = {
+            "irs_sp_list_eur":   [list(x) for x in st.session_state.get("irs_sp_list_eur", [])],
+            "irs_fl_list_eur":   [list(x) for x in st.session_state.get("irs_fl_list_eur", [])],
+            "fvfv_list_eur":     [list(x) for x in st.session_state.get("fvfv_list_eur", [])],
+            "bs_list_eur":       list(st.session_state.get("bs_list_eur", [])),
+            "fvbs_list_eur":     [list(x) for x in st.session_state.get("fvbs_list_eur", [])],
+            "bsp_list_eur":      [list(x) for x in st.session_state.get("bsp_list_eur", [])],
+            "bfly_bs_list_eur":  [list(x) for x in st.session_state.get("bfly_bs_list_eur", [])],
+        }
+        try:
+            save_user_config(_uid, "fwd_analysis_prefs_eur", "GLB", _prefs)
+            st.session_state["_fwd_prefs_eur_last_save"] = _t.time()
+        except Exception:
+            pass
+
+    if HAS_POSTGRES and "_fwd_prefs_eur_restored" not in st.session_state:
+        try:
+            _uid_r = st.session_state.get("username", "default")
+            _saved = load_user_config(_uid_r, "fwd_analysis_prefs_eur", "GLB")
+            if _saved:
+                for _k in ["irs_sp_list_eur","irs_fl_list_eur","fvfv_list_eur",
+                           "fvbs_list_eur","bsp_list_eur","bfly_bs_list_eur"]:
+                    if _k in _saved:
+                        st.session_state[_k] = [tuple(x) for x in _saved[_k]]
+                if "bs_list_eur" in _saved:
+                    st.session_state["bs_list_eur"] = list(_saved["bs_list_eur"])
+        except Exception:
+            pass
+        st.session_state["_fwd_prefs_eur_restored"] = True
+
+    # ── Tenor options — populate from DB-loaded data only ──────────────
+    _yr_tenors = sorted(list(set(
+        [int(c[:-1]) for c in _e6m.columns if c.endswith("Y") and c[:-1].isdigit()] +
+        [int(c[:-1]) for c in _e3m.columns   if c.endswith("Y") and c[:-1].isdigit()]
+    )))
+    _tn_opts = [f"{y}Y" for y in _yr_tenors]
+    if not _tn_opts:
+        _tn_opts = ["(load history first)"]
+
+    _basis_tn_opts = sorted(
+        [c for c in _basis.columns if c.endswith("Y") and c[:-1].isdigit()],
+        key=lambda x: int(x[:-1])
+    ) if not _basis.empty else ["(load history first)"]
+
+    _fwd_starts = [1,2,3,4,5,7,10,12,15,20]
+    _fwd_tenors = [1,2,3,5,7,10]
+
+    # ── Sub-tab buttons ────────────────────────────────────────────
+    _an_tab_names = ["IRS Spreads", "IRS Butterflies", "Fwd-Fwd Rates",
+                     "EURIBOR 6M-3M Outright", "EURIBOR 6M-3M Fwd-Fwd", "EURIBOR 6M-3M Spreads", "EURIBOR 6M-3M Butterflies",
+                     "Fwd Spread RV"]
+    _an_active = st.session_state.get("_an_active_tab_eur", 0)
+    _an_cols = st.columns(len(_an_tab_names))
+    for _ai, _an in enumerate(_an_tab_names):
+        with _an_cols[_ai]:
+            if st.button(_an, key=f"_an_tab_eur_{_ai}",
+                         type="primary" if _ai == _an_active else "secondary",
+                         use_container_width=True):
+                st.session_state["_an_active_tab_eur"] = _ai
+                st.rerun()
+    st.markdown("---")
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 1: IRS SPREADS
+    # ─────────────────────────────────────────────────────────────
+    if _an_active == 0:
+        st.markdown(f"#### EUR {_eur_curve} Curve Spreads")
+        if "irs_sp_list_eur" not in st.session_state:
+            st.session_state["irs_sp_list_eur"] = []
+
+        bc1, bc2, bc3, bc4 = st.columns([1.2, 1.2, 0.8, 1.8])
+        with bc1:
+            _l1 = st.selectbox("Leg 1 (short)", _tn_opts,
+                               index=_tn_opts.index("2Y") if "2Y" in _tn_opts else 0, key="eur_sp_l1")
+        with bc2:
+            _l2_default = _tn_opts.index("10Y") if "10Y" in _tn_opts else min(4, len(_tn_opts)-1)
+            _l2 = st.selectbox("Leg 2 (long)", _tn_opts, index=_l2_default, key="eur_sp_l2")
+        with bc3:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            _add_clicked = st.button("➕ Add", key="eur_sp_add", use_container_width=True)
+        with bc4:
+            rc1, rc2 = st.columns([3,1])
+            with rc1:
+                _rm = st.selectbox("Remove spread", ["  —  "] + [f"{a} → {b}" for a,b in st.session_state["irs_sp_list_eur"]], key="eur_sp_rm")
+            with rc2:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                if st.button("➖", key="eur_sp_rm_btn", use_container_width=True) and _rm != "  —  ":
+                    _rp = _rm.split(" → ")
+                    if len(_rp)==2 and (_rp[0],_rp[1]) in st.session_state["irs_sp_list_eur"]:
+                        st.session_state["irs_sp_list_eur"].remove((_rp[0],_rp[1]))
+                        _autosave_fwd_prefs_eur()
+
+        if _add_clicked:
+            _a = st.session_state.get("eur_sp_l1", _l1); _b = st.session_state.get("eur_sp_l2", _l2)
+            if _a == _b:
+                st.warning("Leg 1 and Leg 2 must be different tenors.")
+            elif (_a, _b) in st.session_state["irs_sp_list_eur"]:
+                st.warning(f"{_a} → {_b} is already in the list.")
+            else:
+                st.session_state["irs_sp_list_eur"].append((_a, _b))
+                _autosave_fwd_prefs_eur()
+                st.success(f"✅ Added {_a} → {_b}")
+
+        c1, c2, c3 = st.columns(3)
+        with c1: _yr = st.slider("History (years)", 1, 8, 5, key="eur_sp_yr")
+        with c2: _bands = st.checkbox("Mean ± 1σ bands", True, key="eur_sp_bands")
+
+        _cut = pd.Timestamp.now() - pd.DateOffset(years=_yr)
+        _fig = go.Figure(); _series = {}; _no_data = []
+        for _a, _b in st.session_state["irs_sp_list_eur"]:
+            try: _ay = int(_a[:-1]); _by = int(_b[:-1])
+            except (ValueError, IndexError): _no_data.append(f"{_a} → {_b}"); continue
+            _ra = _get_rate(_ay); _rb = _get_rate(_by)
+            if _ra is None or _rb is None: _no_data.append(f"{_a} → {_b}"); continue
+            _sr = (_rb - _ra).dropna()
+            _sr = _sr[_sr.index >= _cut] * 100
+            if not _sr.empty: _series[f"{_a} → {_b}"] = _sr
+            else: _no_data.append(f"{_a} → {_b}")
+
+        def _sp_sort(lbl):
+            try:
+                p = lbl.split(" → "); return (int(p[0][:-1]), int(p[1][:-1]))
+            except: return (99, 99)
+        _series = dict(sorted(_series.items(), key=lambda x: _sp_sort(x[0])))
+        _keys = list(_series.keys())
+        with c3:
+            _as_spread = st.checkbox("Show as spread", False, key="eur_sp_as_spread")
+        if _as_spread and len(_keys) >= 2:
+            _sc1, _sc2 = st.columns(2)
+            with _sc1: _s1 = st.selectbox("Series A", _keys, index=0, key="eur_sp_s1")
+            with _sc2:
+                _s2_opts = [k for k in _keys if k != _s1]
+                _s2 = st.selectbox("Series B (subtract)", _s2_opts, index=0, key="eur_sp_s2") if _s2_opts else None
+            if _s2 and _s1 in _series and _s2 in _series:
+                _cmb = (_series[_s1] - _series[_s2]).dropna()
+                _fig.add_trace(go.Scatter(x=_cmb.index, y=_cmb.values, mode="lines",
+                    name=f"{_s1}  →  {_s2}", line=dict(color=_sp_colors[0], width=1.8)))
+                _fig.add_hline(y=_cmb.mean(), line=dict(color="#94a3b8", dash="dash", width=1))
+                _active = {f"{_s1}  →  {_s2}": _cmb}
+            else:
+                _as_spread = False; _active = _series
+        else:
+            _active = _series
+        if not _as_spread:
+            for _i, (_lbl, _sr) in enumerate(_series.items()):
+                _add_series(_fig, _lbl, _sr, _sp_colors[_i % len(_sp_colors)], _bands)
+        if _series:
+            _fig_layout(_fig, _cut, "Spread (bp)")
+            st.plotly_chart(_fig, use_container_width=True)
+            _chart_tools_eur(_fig, _active, "sp", "bp")
+        if _no_data:
+            st.info(f"✅ Saved — no historical data yet to chart: {', '.join(_no_data)}")
+        if not _series and not _no_data and st.session_state["irs_sp_list_eur"]:
+            st.info("✅ Spreads saved. No historical swap rate data in DB yet — load via button above.")
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 2: IRS BUTTERFLIES
+    # ─────────────────────────────────────────────────────────────
+    if _an_active == 1:
+        st.markdown(f"#### EUR {_eur_curve} Rate Butterflies")
+        if "irs_fl_list_eur" not in st.session_state:
+            st.session_state["irs_fl_list_eur"] = []
+
+        bc1,bc2,bc3,bc4,bc5 = st.columns([1,1,1,0.7,1.5])
+        with bc1: _fl_w = st.selectbox("Wing 1", _tn_opts, index=_tn_opts.index("2Y") if "2Y" in _tn_opts else 0, key="eur_fl_w")
+        with bc2: _fl_m = st.selectbox("Body",   _tn_opts, index=_tn_opts.index("5Y") if "5Y" in _tn_opts else 2, key="eur_fl_m")
+        with bc3: _fl_e = st.selectbox("Wing 2", _tn_opts, index=_tn_opts.index("10Y") if "10Y" in _tn_opts else 4, key="eur_fl_e")
+        with bc4:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            _fl_add = st.button("➕ Add", key="eur_fl_add", use_container_width=True)
+        with bc5:
+            rc1,rc2 = st.columns([3,1])
+            with rc1:
+                _fl_rm = st.selectbox("Remove", ["  —  "]+[f"{w}/{m}/{e}" for w,m,e in st.session_state["irs_fl_list_eur"]], key="eur_fl_rm")
+            with rc2:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                if st.button("➖", key="eur_fl_rm_btn", use_container_width=True) and _fl_rm != "  —  ":
+                    _rp = _fl_rm.split("/")
+                    if len(_rp)==3 and tuple(_rp) in st.session_state["irs_fl_list_eur"]:
+                        st.session_state["irs_fl_list_eur"].remove(tuple(_rp))
+                        _autosave_fwd_prefs_eur()
+
+        if _fl_add:
+            _fw = st.session_state.get("eur_fl_w", _fl_w)
+            _fm = st.session_state.get("eur_fl_m", _fl_m)
+            _fe = st.session_state.get("eur_fl_e", _fl_e)
+            if len({_fw,_fm,_fe}) < 3:
+                st.warning("Wing 1, Body and Wing 2 must all be different tenors.")
+            elif (_fw,_fm,_fe) in st.session_state["irs_fl_list_eur"]:
+                st.warning(f"{_fw}/{_fm}/{_fe} is already in the list.")
+            else:
+                st.session_state["irs_fl_list_eur"].append((_fw,_fm,_fe))
+                _autosave_fwd_prefs_eur()
+
+        c1,c2,c3 = st.columns(3)
+        with c1: _fl_yr = st.slider("History (years)",1,8,5,key="eur_fl_yr")
+        _cut_fl = pd.Timestamp.now() - pd.DateOffset(years=_fl_yr)
+        _fig_fl = go.Figure(); _fl_series = {}
+        for _fw,_fm,_fe in st.session_state["irs_fl_list_eur"]:
+            try: _wy=int(_fw[:-1]); _my=int(_fm[:-1]); _ey=int(_fe[:-1])
+            except: continue
+            _rw=_get_rate(_wy); _rm=_get_rate(_my); _re=_get_rate(_ey)
+            if _rw is None or _rm is None or _re is None: continue
+            _fly = (_rm - 0.5*(_rw+_re)).dropna()
+            _fly = _fly[_fly.index>=_cut_fl]*100
+            _fl_series[f"{_fw}/{_fm}/{_fe}"] = _fly
+
+        _fl_keys = list(_fl_series.keys())
+        with c2:
+            _fl_as_spread = st.checkbox("Show as spread", False, key="eur_fl_as_spread")
+        if _fl_as_spread and len(_fl_keys) >= 2:
+            _fc1, _fc2 = st.columns(2)
+            with _fc1: _fl_s1 = st.selectbox("Series A", _fl_keys, index=0, key="eur_fl_s1")
+            with _fc2:
+                _fl_s2_opts = [k for k in _fl_keys if k != _fl_s1]
+                _fl_s2 = st.selectbox("Series B (subtract)", _fl_s2_opts, index=0, key="eur_fl_s2") if _fl_s2_opts else None
+            if _fl_s2 and _fl_s1 in _fl_series and _fl_s2 in _fl_series:
+                _cmb = (_fl_series[_fl_s1] - _fl_series[_fl_s2]).dropna()
+                _fig_fl.add_trace(go.Scatter(x=_cmb.index,y=_cmb.values,mode="lines",
+                    name=f"{_fl_s1}  →  {_fl_s2}",line=dict(color=_sp_colors[0],width=1.8)))
+                _fig_fl.add_hline(y=_cmb.mean(),line=dict(color="#94a3b8",dash="dash",width=1))
+                _fl_active = {f"{_fl_s1}  →  {_fl_s2}": _cmb}
+            else:
+                _fl_as_spread = False; _fl_active = _fl_series
+        else:
+            _fl_active = _fl_series
+        if not _fl_as_spread:
+            for _i,(_lbl,_fly) in enumerate(_fl_series.items()):
+                _add_series(_fig_fl, _lbl, _fly, _sp_colors[_i%len(_sp_colors)])
+        _fig_fl.add_hline(y=0, line=dict(color="#64748b",width=1))
+        _fig_layout(_fig_fl, _cut_fl, "Fly (bp)")
+        st.plotly_chart(_fig_fl, use_container_width=True)
+        _chart_tools_eur(_fig_fl, _fl_active, "fl", "bp")
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 3: FWD-FWD RATES
+    # ─────────────────────────────────────────────────────────────
+    if _an_active == 2:
+        st.markdown(f"#### EUR {_eur_curve} Forward-Forward Swap Rates")
+        if "fvfv_list_eur" not in st.session_state:
+            st.session_state["fvfv_list_eur"] = []
+
+        bc1,bc2,bc3,bc4 = st.columns([1,1,0.7,1.5])
+        with bc1: _fv_st = st.selectbox("Start (years)", _fwd_starts, index=_fwd_starts.index(2) if 2 in _fwd_starts else 0, key="eur_fv_st")
+        with bc2: _fv_tn = st.selectbox("Tenor (years)", _fwd_tenors, index=_fwd_tenors.index(2) if 2 in _fwd_tenors else 0, key="eur_fv_tn")
+        with bc3:
+            st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+            _fv_add = st.button("➕ Add", key="eur_fv_add", use_container_width=True)
+        with bc4:
+            rc1, rc2 = st.columns([3,1])
+            with rc1:
+                _fv_rm = st.selectbox("Remove", ["  —  "]+[f"{s}y{t}y" for s,t in st.session_state["fvfv_list_eur"]], key="eur_fv_rm")
+            with rc2:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                if st.button("➖", key="eur_fv_rm_btn", use_container_width=True) and _fv_rm != "  —  ":
+                    _rp = _fv_rm[:-1].split("y")
+                    if len(_rp)==2:
+                        try:
+                            _rs,_rt=int(_rp[0]),int(_rp[1])
+                            if (_rs,_rt) in st.session_state["fvfv_list_eur"]:
+                                st.session_state["fvfv_list_eur"].remove((_rs,_rt))
+                                _autosave_fwd_prefs_eur()
+                        except: pass
+
+        if _fv_add:
+            _fvs = st.session_state.get("eur_fv_st", _fv_st)
+            _fvt = st.session_state.get("eur_fv_tn", _fv_tn)
+            if (_fvs,_fvt) in st.session_state["fvfv_list_eur"]:
+                st.warning(f"{_fvs}y{_fvt}y is already in the list.")
+            else:
+                st.session_state["fvfv_list_eur"].append((_fvs,_fvt))
+                _autosave_fwd_prefs_eur()
+
+        c1,c2,c3 = st.columns(3)
+        with c1: _fv_yr = st.slider("History (years)",1,8,5,key="eur_fv_yr")
+        _cut_fv = pd.Timestamp.now() - pd.DateOffset(years=_fv_yr)
+        _fig_fv = go.Figure(); _fv_series = {}
+        for _s,_t in st.session_state["fvfv_list_eur"]:
+            _r = _fwd(_s,_t)
+            if _r is not None:
+                _fv_series[f"{_s}y{_t}y"] = _r[_r.index>=_cut_fv].dropna()
+
+        _fv_keys = list(_fv_series.keys())
+        with c2:
+            _fv_as_spread = st.checkbox("Show as spread", False, key="eur_fv_sprd")
+        if _fv_as_spread and len(_fv_keys) >= 2:
+            _vc1, _vc2 = st.columns(2)
+            with _vc1: _fv_s1 = st.selectbox("Series A", _fv_keys, index=0, key="eur_fv_s1")
+            with _vc2:
+                _fv_s2_opts = [k for k in _fv_keys if k != _fv_s1]
+                _fv_s2 = st.selectbox("Series B (subtract)", _fv_s2_opts, index=0, key="eur_fv_s2") if _fv_s2_opts else None
+            if _fv_s2 and _fv_s1 in _fv_series and _fv_s2 in _fv_series:
+                _cmb=(_fv_series[_fv_s1]-_fv_series[_fv_s2]).dropna()*100
+                _fig_fv.add_trace(go.Scatter(x=_cmb.index,y=_cmb.values,mode="lines",
+                    name=f"{_fv_s1}  →  {_fv_s2}",line=dict(color=_sp_colors[0],width=1.8)))
+                _fig_fv.add_hline(y=_cmb.mean(),line=dict(color="#94a3b8",dash="dash",width=1))
+                _fig_layout(_fig_fv, _cut_fv, "Spread (bp)")
+                _fv_active = {f"{_fv_s1}  →  {_fv_s2}": _cmb}
+            else:
+                _fv_as_spread = False; _fv_active = _fv_series
+        else:
+            _fv_active = _fv_series
+        if not _fv_as_spread:
+            for _i,(_l,_s) in enumerate(_fv_series.items()):
+                _add_series(_fig_fv, _l, _s, _sp_colors[_i%len(_sp_colors)])
+            _fig_layout(_fig_fv, _cut_fv, "Rate (%)")
+        st.plotly_chart(_fig_fv, use_container_width=True)
+        _chart_tools_eur(_fig_fv, _fv_active, "fv", "%")
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 4: EURIBOR 6M-3M OUTRIGHT
+    # ─────────────────────────────────────────────────────────────
+    if _an_active == 3:
+        st.markdown("#### EURIBOR 6M-3M Basis — Outright (EURIBOR 6M − EURIBOR 3M)")
+        if _basis.empty:
+            st.info("No EURIBOR 6M-3M basis history loaded — click **Load EUR Swap Rate History** above.")
+        else:
+            if "bs_list_eur" not in st.session_state:
+                st.session_state["bs_list_eur"] = []
+            bc1,bc2,bc3 = st.columns([1.5,0.7,1.5])
+            with bc1:
+                _bs_add_tn = st.selectbox("Add tenor",
+                    [t for t in _basis_tn_opts if t not in st.session_state["bs_list_eur"]] or _basis_tn_opts,
+                    key="eur_bs_add_tn")
+            with bc2:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                _bs_add = st.button("➕ Add", key="eur_bs_add", use_container_width=True)
+            with bc3:
+                rc1, rc2 = st.columns([3,1])
+                with rc1:
+                    _bs_rm = st.selectbox("Remove", ["  —  "]+st.session_state["bs_list_eur"], key="eur_bs_rm")
+                with rc2:
+                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                    if st.button("➖", key="eur_bs_rm_btn", use_container_width=True) and _bs_rm != "  —  " and _bs_rm in st.session_state["bs_list_eur"]:
+                        st.session_state["bs_list_eur"].remove(_bs_rm)
+                        _autosave_fwd_prefs_eur()
+
+            if _bs_add:
+                _btn = st.session_state.get("eur_bs_add_tn", _bs_add_tn)
+                if _btn not in st.session_state["bs_list_eur"]:
+                    st.session_state["bs_list_eur"].append(_btn)
+                    _autosave_fwd_prefs_eur()
+
+            c1,c2 = st.columns(2)
+            with c1: _bs_yr = st.slider("History (years)",1,8,5,key="eur_bs_yr")
+            _cut_bs = pd.Timestamp.now() - pd.DateOffset(years=_bs_yr)
+            _fig_bs = go.Figure(); _bs_series = {}
+            for _i,_tn in enumerate(st.session_state["bs_list_eur"]):
+                _b = _get_basis(_tn)
+                if _b is None: continue
+                _b = _b.dropna()
+                _b = _b[_b.index>=_cut_bs]
+                _bs_series[f"{_tn} EURIBOR 6M-3M"] = _b
+                _add_series(_fig_bs, f"{_tn} EURIBOR 6M-3M", _b, _sp_colors[_i%len(_sp_colors)])
+            _fig_bs.add_hline(y=0,line=dict(color="#64748b",width=1))
+            _fig_layout(_fig_bs, _cut_bs, "EURIBOR 6M-3M Basis (bp)")
+            st.plotly_chart(_fig_bs, use_container_width=True)
+            _chart_tools_eur(_fig_bs, _bs_series, "bs", "bp")
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 5: EURIBOR 6M-3M FWD-FWD
+    # ─────────────────────────────────────────────────────────────
+    if _an_active == 4:
+        st.markdown("#### EURIBOR 6M-3M Basis — Forward-Forward")
+        st.caption("Fwd-fwd EURIBOR 6M-3M basis for same start/tenor (basis curve used directly)")
+        if _basis.empty:
+            st.info("No EURIBOR 6M-3M basis history loaded — click **Load EUR Swap Rate History** above.")
+        else:
+            if "fvbs_list_eur" not in st.session_state:
+                st.session_state["fvbs_list_eur"] = []
+
+            bc1,bc2,bc3,bc4 = st.columns([1,1,0.7,1.5])
+            with bc1: _fvbs_st = st.selectbox("Start (years)", _fwd_starts, index=_fwd_starts.index(2) if 2 in _fwd_starts else 0, key="eur_fvbs_st")
+            with bc2: _fvbs_tn = st.selectbox("Tenor (years)", _fwd_tenors, index=_fwd_tenors.index(2) if 2 in _fwd_tenors else 0, key="eur_fvbs_tn")
+            with bc3:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                _fvbs_add = st.button("➕ Add", key="eur_fvbs_add", use_container_width=True)
+            with bc4:
+                rc1, rc2 = st.columns([3,1])
+                with rc1:
+                    _fvbs_rm = st.selectbox("Remove", ["  —  "]+[f"{s}y{t}y" for s,t in st.session_state["fvbs_list_eur"]], key="eur_fvbs_rm")
+                with rc2:
+                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                    if st.button("➖", key="eur_fvbs_rm_btn", use_container_width=True) and _fvbs_rm != "  —  ":
+                        _rp = _fvbs_rm[:-1].split("y")
+                        if len(_rp)==2:
+                            try:
+                                _rs,_rt=int(_rp[0]),int(_rp[1])
+                                if (_rs,_rt) in st.session_state["fvbs_list_eur"]:
+                                    st.session_state["fvbs_list_eur"].remove((_rs,_rt))
+                                    _autosave_fwd_prefs_eur()
+                            except: pass
+
+            if _fvbs_add:
+                _fvs = st.session_state.get("eur_fvbs_st", _fvbs_st)
+                _fvt = st.session_state.get("eur_fvbs_tn", _fvbs_tn)
+                if (_fvs,_fvt) in st.session_state["fvbs_list_eur"]:
+                    st.warning(f"{_fvs}y{_fvt}y is already in the list.")
+                else:
+                    st.session_state["fvbs_list_eur"].append((_fvs,_fvt))
+                    _autosave_fwd_prefs_eur()
+
+            c1,c2 = st.columns(2)
+            with c1: _fvbs_yr = st.slider("History (years)",1,8,5,key="eur_fvbs_yr")
+            _cut_fvbs = pd.Timestamp.now() - pd.DateOffset(years=_fvbs_yr)
+            _fig_fvbs = go.Figure(); _fvbs_series = {}
+            for _s,_t in st.session_state["fvbs_list_eur"]:
+                _fb = _fwd_basis(_s,_t)
+                if _fb is None: continue
+                _fb = _fb.dropna()
+                _fvbs_series[f"{_s}y{_t}y EURIBOR 6M-3M"] = _fb[_fb.index>=_cut_fvbs]
+
+            _fvbs_keys = list(_fvbs_series.keys())
+            with c2:
+                _fvbs_as_spread = st.checkbox("Show as spread", False, key="eur_fvbs_as_spread")
+            if _fvbs_as_spread and len(_fvbs_keys) >= 2:
+                _v6c1, _v6c2 = st.columns(2)
+                with _v6c1: _fvbs_s1 = st.selectbox("Series A", _fvbs_keys, index=0, key="eur_fvbs_s1")
+                with _v6c2:
+                    _fvbs_s2_opts = [k for k in _fvbs_keys if k != _fvbs_s1]
+                    _fvbs_s2 = st.selectbox("Series B (subtract)", _fvbs_s2_opts, index=0, key="eur_fvbs_s2") if _fvbs_s2_opts else None
+                if _fvbs_s2 and _fvbs_s1 in _fvbs_series and _fvbs_s2 in _fvbs_series:
+                    _cmb=(_fvbs_series[_fvbs_s1]-_fvbs_series[_fvbs_s2]).dropna()
+                    _fig_fvbs.add_trace(go.Scatter(x=_cmb.index,y=_cmb.values,mode="lines",
+                        name=f"{_fvbs_s1}  →  {_fvbs_s2}",line=dict(color=_sp_colors[0],width=1.8)))
+                    _fig_fvbs.add_hline(y=_cmb.mean(),line=dict(color="#94a3b8",dash="dash",width=1))
+                    _fvbs_active = {f"{_fvbs_s1}  →  {_fvbs_s2}": _cmb}
+                else:
+                    _fvbs_as_spread = False; _fvbs_active = _fvbs_series
+            else:
+                _fvbs_active = _fvbs_series
+            if not _fvbs_as_spread:
+                for _i,(_l,_b) in enumerate(_fvbs_series.items()):
+                    _add_series(_fig_fvbs, _l, _b, _sp_colors[_i%len(_sp_colors)])
+            _fig_fvbs.add_hline(y=0,line=dict(color="#64748b",width=1))
+            _fig_layout(_fig_fvbs, _cut_fvbs, "EURIBOR 6M-3M Fwd-Fwd Basis (bp)")
+            st.plotly_chart(_fig_fvbs, use_container_width=True)
+            _chart_tools_eur(_fig_fvbs, _fvbs_active, "fvbs", "bp")
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 6: EURIBOR 6M-3M SPREADS
+    # ─────────────────────────────────────────────────────────────
+    if _an_active == 5:
+        st.markdown("#### EURIBOR 6M-3M Basis Spreads")
+        if _basis.empty:
+            st.info("No EURIBOR 6M-3M basis history loaded — click **Load EUR Swap Rate History** above.")
+        elif len(_basis_tn_opts) < 2:
+            st.info("Need at least 2 basis tenors in DB.")
+        else:
+            if "bsp_list_eur" not in st.session_state:
+                st.session_state["bsp_list_eur"] = []
+
+            bc1,bc2,bc3,bc4 = st.columns([1.2,1.2,0.7,1.5])
+            with bc1: _bsp_l1 = st.selectbox("Leg 1 (basis tenor)", _basis_tn_opts, index=0, key="eur_bsp_l1")
+            with bc2: _bsp_l2 = st.selectbox("Leg 2 (basis tenor)", _basis_tn_opts, index=min(2,len(_basis_tn_opts)-1), key="eur_bsp_l2")
+            with bc3:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                _bsp_add = st.button("➕ Add", key="eur_bsp_add", use_container_width=True)
+            with bc4:
+                rc1, rc2 = st.columns([3,1])
+                with rc1:
+                    _bsp_rm = st.selectbox("Remove", ["  —  "]+[f"{a} → {b}" for a,b in st.session_state["bsp_list_eur"]], key="eur_bsp_rm")
+                with rc2:
+                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                    if st.button("➖", key="eur_bsp_rm_btn", use_container_width=True) and _bsp_rm != "  —  ":
+                        _rp=_bsp_rm.split(" → ")
+                        if len(_rp)==2 and tuple(_rp) in st.session_state["bsp_list_eur"]:
+                            st.session_state["bsp_list_eur"].remove(tuple(_rp))
+                            _autosave_fwd_prefs_eur()
+
+            if _bsp_add:
+                _bl1 = st.session_state.get("eur_bsp_l1", _bsp_l1)
+                _bl2 = st.session_state.get("eur_bsp_l2", _bsp_l2)
+                if _bl1 == _bl2:
+                    st.warning("Leg 1 and Leg 2 must be different tenors.")
+                elif (_bl1, _bl2) in st.session_state["bsp_list_eur"]:
+                    st.warning(f"{_bl1} → {_bl2} is already in the list.")
+                else:
+                    st.session_state["bsp_list_eur"].append((_bl1, _bl2))
+                    _autosave_fwd_prefs_eur()
+
+            c1,c2,c3 = st.columns(3)
+            with c1: _bsp_yr = st.slider("History (years)",1,8,5,key="eur_bsp_yr")
+            with c2: _bsp_as_spread = st.checkbox("Show as spread", False, key="eur_bsp_as_spread")
+
+            _cut_bsp = pd.Timestamp.now() - pd.DateOffset(years=_bsp_yr)
+            _fig_bsp = go.Figure(); _bsp_series = {}
+            for _a,_b in st.session_state["bsp_list_eur"]:
+                _ba = _get_basis(_a); _bb = _get_basis(_b)
+                if _ba is None or _bb is None: continue
+                _bsprd = (_ba - _bb).dropna()
+                _bsp_series[f"{_a} → {_b} EURIBOR 6M-3M sprd"] = _bsprd[_bsprd.index>=_cut_bsp]
+
+            _bsp_keys = list(_bsp_series.keys())
+            if _bsp_as_spread and len(_bsp_keys) >= 2:
+                _bc1, _bc2 = st.columns(2)
+                with _bc1: _bsp_s1 = st.selectbox("Series A", _bsp_keys, index=0, key="eur_bsp_s1")
+                with _bc2:
+                    _bsp_s2_opts = [k for k in _bsp_keys if k != _bsp_s1]
+                    _bsp_s2 = st.selectbox("Series B (subtract)", _bsp_s2_opts, index=0, key="eur_bsp_s2") if _bsp_s2_opts else None
+                if _bsp_s2 and _bsp_s1 in _bsp_series and _bsp_s2 in _bsp_series:
+                    _cmb=(_bsp_series[_bsp_s1]-_bsp_series[_bsp_s2]).dropna()
+                    _fig_bsp.add_trace(go.Scatter(x=_cmb.index,y=_cmb.values,mode="lines",
+                        name=f"{_bsp_s1}  →  {_bsp_s2}",line=dict(color=_sp_colors[0],width=1.8)))
+                    _fig_bsp.add_hline(y=_cmb.mean(),line=dict(color="#94a3b8",dash="dash",width=1))
+                    _bsp_active = {f"{_bsp_s1}  →  {_bsp_s2}": _cmb}
+                else:
+                    _bsp_as_spread = False; _bsp_active = _bsp_series
+            else:
+                _bsp_active = _bsp_series
+            if not _bsp_as_spread:
+                for _i,(_lbl,_bsprd) in enumerate(_bsp_series.items()):
+                    _add_series(_fig_bsp, _lbl, _bsprd, _sp_colors[_i%len(_sp_colors)])
+            _fig_bsp.add_hline(y=0,line=dict(color="#64748b",width=1))
+            _fig_layout(_fig_bsp, _cut_bsp, "EURIBOR 6M-3M Spread (bp)")
+            st.plotly_chart(_fig_bsp, use_container_width=True)
+            _chart_tools_eur(_fig_bsp, _bsp_active, "bsp", "bp")
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 7: EURIBOR 6M-3M BUTTERFLIES
+    # ─────────────────────────────────────────────────────────────
+    if _an_active == 6:
+        st.markdown("#### EURIBOR 6M-3M Basis Butterflies")
+        st.caption("Fly = EURIBOR 6M-3M(body) − 0.5 × [EURIBOR 6M-3M(wing1) + EURIBOR 6M-3M(wing2)]")
+        if _basis.empty:
+            st.info("No EURIBOR 6M-3M basis history loaded — click **Load EUR Swap Rate History** above.")
+        elif len(_basis_tn_opts) < 3:
+            st.info("Need at least 3 basis tenors in DB.")
+        else:
+            if "bfly_bs_list_eur" not in st.session_state:
+                st.session_state["bfly_bs_list_eur"] = []
+
+            bc1,bc2,bc3,bc4,bc5 = st.columns([1,1,1,0.7,1.5])
+            with bc1: _bbw1 = st.selectbox("Wing 1", _basis_tn_opts, index=0, key="eur_bfly_bs_w1")
+            with bc2: _bbbd = st.selectbox("Body",   _basis_tn_opts, index=min(2,len(_basis_tn_opts)-1), key="eur_bfly_bs_bd")
+            with bc3: _bbw2 = st.selectbox("Wing 2", _basis_tn_opts, index=min(4,len(_basis_tn_opts)-1), key="eur_bfly_bs_w2")
+            with bc4:
+                st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                _bbfly_add = st.button("➕ Add", key="eur_bfly_bs_add", use_container_width=True)
+            with bc5:
+                rc1,rc2 = st.columns([3,1])
+                with rc1:
+                    _bbfly_rm = st.selectbox("Remove", ["  —  "]+[f"{w}/{m}/{e}" for w,m,e in st.session_state["bfly_bs_list_eur"]], key="eur_bfly_bs_rm")
+                with rc2:
+                    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+                    if st.button("➖", key="eur_bfly_bs_rm_btn", use_container_width=True) and _bbfly_rm != "  —  ":
+                        _rp = _bbfly_rm.split("/")
+                        if len(_rp)==3 and tuple(_rp) in st.session_state["bfly_bs_list_eur"]:
+                            st.session_state["bfly_bs_list_eur"].remove(tuple(_rp))
+                            _autosave_fwd_prefs_eur()
+
+            if _bbfly_add:
+                _w1 = st.session_state.get("eur_bfly_bs_w1", _bbw1)
+                _bd = st.session_state.get("eur_bfly_bs_bd", _bbbd)
+                _w2 = st.session_state.get("eur_bfly_bs_w2", _bbw2)
+                if len({_w1,_bd,_w2}) < 3:
+                    st.warning("Wing 1, Body and Wing 2 must all be different tenors.")
+                elif (_w1,_bd,_w2) in st.session_state["bfly_bs_list_eur"]:
+                    st.warning(f"{_w1}/{_bd}/{_w2} already in list.")
+                else:
+                    st.session_state["bfly_bs_list_eur"].append((_w1,_bd,_w2))
+                    _autosave_fwd_prefs_eur()
+
+            c1,c2,c3 = st.columns(3)
+            with c1: _bbfly_yr = st.slider("History (years)",1,8,5,key="eur_bfly_bs_yr")
+            with c2: _bbfly_as_spread = st.checkbox("Show as spread", False, key="eur_bfly_bs_as_spread")
+            _cut_bbfly = pd.Timestamp.now() - pd.DateOffset(years=_bbfly_yr)
+            _fig_bbfly = go.Figure(); _bbfly_series = {}
+            for _w1,_bd,_w2 in st.session_state["bfly_bs_list_eur"]:
+                _bw1_s = _get_basis(_w1); _bbd_s = _get_basis(_bd); _bw2_s = _get_basis(_w2)
+                if _bw1_s is None or _bbd_s is None or _bw2_s is None: continue
+                _fly = (_bbd_s - 0.5*(_bw1_s + _bw2_s)).dropna()
+                _bbfly_series[f"{_w1}/{_bd}/{_w2}"] = _fly[_fly.index>=_cut_bbfly]
+
+            _bbfly_keys = list(_bbfly_series.keys())
+            if _bbfly_as_spread and len(_bbfly_keys) >= 2:
+                _bbc1,_bbc2 = st.columns(2)
+                with _bbc1: _bbs1 = st.selectbox("Series A", _bbfly_keys, index=0, key="eur_bfly_bs_s1")
+                with _bbc2:
+                    _bbs2_opts = [k for k in _bbfly_keys if k != _bbs1]
+                    _bbs2 = st.selectbox("Series B (subtract)", _bbs2_opts, index=0, key="eur_bfly_bs_s2") if _bbs2_opts else None
+                if _bbs2 and _bbs1 in _bbfly_series and _bbs2 in _bbfly_series:
+                    _cmb = (_bbfly_series[_bbs1]-_bbfly_series[_bbs2]).dropna()
+                    _fig_bbfly.add_trace(go.Scatter(x=_cmb.index,y=_cmb.values,mode="lines",
+                        name=f"{_bbs1}  →  {_bbs2}",line=dict(color=_sp_colors[0],width=1.8)))
+                    _fig_bbfly.add_hline(y=_cmb.mean(),line=dict(color="#94a3b8",dash="dash",width=1))
+                    _bbfly_active = {f"{_bbs1}  →  {_bbs2}": _cmb}
+                else:
+                    _bbfly_as_spread = False; _bbfly_active = _bbfly_series
+            else:
+                _bbfly_active = _bbfly_series
+            if not _bbfly_as_spread:
+                for _i,(_lbl,_fly) in enumerate(_bbfly_series.items()):
+                    _add_series(_fig_bbfly, _lbl, _fly, _sp_colors[_i%len(_sp_colors)])
+            _fig_bbfly.add_hline(y=0,line=dict(color="#64748b",width=1))
+            _fig_layout(_fig_bbfly, _cut_bbfly, "EURIBOR 6M-3M Fly (bp)")
+            st.plotly_chart(_fig_bbfly, use_container_width=True)
+            _chart_tools_eur(_fig_bbfly, _bbfly_active, "bfly_bs", "bp")
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 8: FWD SPREAD RV (from fwd_matrix_history)
+    # ─────────────────────────────────────────────────────────────
+    if _an_active == 7:
+        st.markdown("#### Forward Spread RV — USD")
+        st.caption("Forward rate pairs, curve steepness z-scores & percentiles from stored forward matrices.")
+
+        _fwd_expiries = ["1m", "3m", "6m", "1y", "2y", "3y", "5y", "7y", "10y"]
+        _fwd_tenors = ["1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "15Y", "20Y", "30Y"]
+
+        _fs_c1, _fs_c2, _fs_c3, _fs_c4 = st.columns([1, 1, 1, 1])
+        with _fs_c1:
+            _fs_fr = st.selectbox("Curve", ["EURIBOR 6M", "EURIBOR 3M"], key="fwd_rv_fr")
         with _fs_c2:
             _fs_tenor = st.selectbox("Tenor", _fwd_tenors, index=0, key="fwd_rv_tenor")
         with _fs_c3:
