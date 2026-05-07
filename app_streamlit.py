@@ -6834,7 +6834,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 _sdr_ccy = st.session_state.get("sidebar_ccy", "USD").split(" ")[0]
                 _tz_name, _tz_label = _CCY_TIMEZONE.get(_sdr_ccy, ("America/New_York", "NYC"))
                 _local_tz = _ZI_sdr(_tz_name)
-                _time_col = f"Time ({_tz_label})"
+                # v0705w: use plain "Time" as the dict/column key — parentheses in dict keys
+                # were causing Streamlit column_config matching to misbehave. Display the tz
+                # in the column header via column_config label instead.
+                _time_col = "Time"
+                _time_header = f"Time ({_tz_label})"
 
                 def _to_local(ts_):
                     try:
@@ -7033,10 +7037,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 if _all_trades:
                     _all_df = pd.DataFrame(_all_trades)
                     _all_df = _all_df.sort_values(_time_col, ascending=False).reset_index(drop=True)
-                    # v0705v: explicit column_config + sample-value diagnostic so the time column
-                    # always renders with adequate width regardless of header text.
+                    # v0705w: explicit column order — Time first. column_config relabels with tz.
+                    _col_order = [_time_col, "Type", "CCY", "Opt Expiry", "Swp Tenor", "Strike",
+                                  "Notional", "Premium", "Nett Prem BP", "P Prem BP", "R Prem BP", "Platform"]
+                    _col_order = [c for c in _col_order if c in _all_df.columns]
+                    _all_df = _all_df[_col_order]
                     _col_cfg = {
-                        _time_col:    st.column_config.TextColumn(_time_col, width="small"),
+                        _time_col:    st.column_config.TextColumn(_time_header, width="small"),
                         "Type":       st.column_config.TextColumn("Type", width="small"),
                         "CCY":        st.column_config.TextColumn("CCY", width="small"),
                         "Opt Expiry": st.column_config.TextColumn("Opt Expiry", width="small"),
@@ -7052,10 +7059,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     st.dataframe(_all_df, use_container_width=True, hide_index=True,
                                  height=min(60 + len(_all_df) * 35, 700),
                                  column_config=_col_cfg)
-                    # Diagnostic: show a sample of the time column values so we can confirm
-                    # the data reaches the dataframe even if rendering is misbehaving.
-                    _sample_times = [str(v) for v in _all_df[_time_col].head(3).tolist()]
-                    st.caption(f"Time column ({_time_col}) sample: {_sample_times}")
+                    st.caption("Straddle prem deduped for all brokers except DWSF (report full straddle prem on each leg). "
+                               "DWSF strikes normalised (÷100).")
                     st.caption("Straddle prem deduped for all brokers except DWSF (report full straddle prem on each leg). "
                                "DWSF strikes normalised (÷100).")
 
