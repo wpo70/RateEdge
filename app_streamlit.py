@@ -7700,11 +7700,11 @@ def vol_config_tab():
             pass
 
     # v0705l: ccy filter for status cards. Default "All" shows AUD/NZD/USD/EUR.
+    # v0705n: drop index= so session_state persists across full reruns (e.g. after vol load).
     _status_ccys_all = list(SUPPORTED_CURRENCIES) + ["EUR"]
     _status_filter = st.selectbox(
         "Show currency",
         ["All"] + _status_ccys_all,
-        index=0,
         key="upload_status_ccy_filter",
     )
     _status_ccys = _status_ccys_all if _status_filter == "All" else [_status_filter]
