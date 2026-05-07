@@ -1309,7 +1309,7 @@ def _load_usd_sdr_flow_cached():
                 _sorted = sorted(_rows, key=lambda x: abs(float(x[3] or 0)), reverse=True)[:15]
                 for _ot, _otn, _stn, _nl, _sk, _pm, _et, _pl in _sorted:
                     _nl_fmt = f"${float(_nl)/1e6:.0f}m" if _nl else ""
-                    _sk_fmt = f"K={float(_sk):.2f}%" if _sk else ""
+                    _sk_fmt = f"K={float(_sk):.5f}%" if _sk else ""
                     _lines.append(f"  {_otn}x{_stn} {_ot} {_sk_fmt} {_nl_fmt}")
                 _block = "\n".join(_lines)
     except:
@@ -6678,7 +6678,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 if not _hm_data.empty:
                     # Round to nearest 25bp bucket
                     _hm_data["strike_bucket"] = (_hm_data["strike_norm"] * 4).round() / 4
-                    _hm_data["strike_label"] = _hm_data["strike_bucket"].apply(lambda x: f"{x:.2f}%")
+                    _hm_data["strike_label"] = _hm_data["strike_bucket"].apply(lambda x: f"{x:.5f}%")
                     _hm_data["notional_m"] = _hm_data["notional_leg1"].fillna(0) / 1e6
 
                     _ccy_label = ", ".join(sel_ccy) if sel_ccy else "All CCY"
@@ -6744,7 +6744,12 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             if _time_r is not pd.NaT and abs((_time_p - _time_r).total_seconds()) <= 120:
                                 _p_prem = float(_p.get("premium_amount") or 0)
                                 _r_prem = float(_r.get("premium_amount") or 0)
-                                _strd_prem = _p_prem + _r_prem
+                                _PREM_DEDUP_MICS_SD = {"BGCD","TPSE","TSEF","TWSF","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
+                                _sd_mic = str(_p.get("platform_identifier", ""))
+                                if _sd_mic in _PREM_DEDUP_MICS_SD and _p_prem > 0 and _r_prem > 0:
+                                    _strd_prem = max(_p_prem, _r_prem)
+                                else:
+                                    _strd_prem = _p_prem + _r_prem
                                 _strd_not = float(_p.get("notional_leg1") or 0)
                                 _strd_prem_bp = round(_strd_prem / _strd_not * 10000, 2) if _strd_not > 0 else 0
                                 _straddles.append({
@@ -6752,7 +6757,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     "CCY": _ccy_p,
                                     "Opt Expiry": _e_p,
                                     "Swp Tenor": _t_p,
-                                    "Strike": f"{_s_p:.2f}%",
+                                    "Strike": f"{_s_p:.5f}%",
                                     "Notional": _fmt_notional(_strd_not),
                                     "Premium": _fmt_premium(_strd_prem) if _strd_prem else "—",
                                     "Prem BP": f"{_strd_prem_bp:.2f}" if _strd_prem_bp else "—",
@@ -6873,8 +6878,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _s_r = round(float(_r.get("strike_pct") or 0), 2)
                                     _p_prem = float(_p.get("premium_amount") or 0)
                                     _r_prem = float(_r.get("premium_amount") or 0)
-                                    _prem_deduped = False
-                                    _comb_prem = _p_prem + _r_prem
+                                    # Brokers (all except DWSF) report full straddle prem on each leg
+                                    _PREM_DEDUP_MICS = {"BGCD","TPSE","TSEF","TWSF","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
+                                    _broker_mic = str(_p.get("platform_identifier", ""))
+                                    _prem_deduped = _broker_mic in _PREM_DEDUP_MICS and _p_prem > 0 and _r_prem > 0
+                                    if _prem_deduped:
+                                        _comb_prem = max(_p_prem, _r_prem)
+                                    else:
+                                        _comb_prem = _p_prem + _r_prem
                                     _comb_not = float(_p.get("notional_leg1") or 0)
                                     _comb_bp = round(_comb_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
                                     _p_bp = round(_p_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
@@ -6886,19 +6897,19 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _has_swp = bool(_t_p and _t_p not in ("—","NA","None",""))
                                     if _same_strike and _has_swp:
                                         _ptype = "🔵 Straddle"
-                                        _strike_disp = f"{_s_p:.2f}%"
+                                        _strike_disp = f"{_s_p:.5f}%"
                                         _prem_disp = f"{_fmt_premium(_comb_prem)}" if _comb_prem else "—"
                                     elif not _same_strike and _has_swp:
                                         _ptype = "🟠 Strangle"
-                                        _strike_disp = f"P:{_s_p:.2f}% / R:{_s_r:.2f}%"
+                                        _strike_disp = f"P:{_s_p:.5f}% / R:{_s_r:.5f}%"
                                         _prem_disp = f"P:{_fmt_premium(_p_prem)} + R:{_fmt_premium(_r_prem)} = {_fmt_premium(_comb_prem)}" if _comb_prem else "—"
                                     elif _same_strike and not _has_swp:
                                         _ptype = "🟤 C/F Straddle"
-                                        _strike_disp = f"{_s_p:.2f}%"
+                                        _strike_disp = f"{_s_p:.5f}%"
                                         _prem_disp = f"Cap:{_fmt_premium(_p_prem)} + Flr:{_fmt_premium(_r_prem)} = {_fmt_premium(_comb_prem)}" if _comb_prem else "—"
                                     elif not _same_strike and not _has_swp:
                                         _ptype = "🟣 Collar"
-                                        _strike_disp = f"Cap:{_s_p:.2f}% / Flr:{_s_r:.2f}%"
+                                        _strike_disp = f"Cap:{_s_p:.5f}% / Flr:{_s_r:.5f}%"
                                         # Collar: buy one leg, sell the other — show individual legs
                                         _prem_disp = f"Buy:{_fmt_premium(_p_prem)} / Sell:{_fmt_premium(_r_prem)}" if (_p_prem or _r_prem) else "—"
                                         _comb_prem = _p_prem - _r_prem  # net premium (buy - sell)
@@ -6946,7 +6957,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         "CCY": str(_s_row.get("notional_ccy", "")),
                         "Opt Expiry": str(_s_row.get("opt_tenor", "—")),
                         "Swp Tenor": _s_swp if _s_swp and _s_swp not in ("—","NA","None","") else "—",
-                        "Strike": f"{float(_s_row.get('strike_pct') or 0):.2f}%" if pd.notna(_s_row.get("strike_pct")) else "—",
+                        "Strike": f"{float(_s_row.get('strike_pct') or 0):.5f}%" if pd.notna(_s_row.get("strike_pct")) else "—",
                         "Notional": _fmt_notional(_s_not),
                         "Premium": _fmt_premium(_s_prem) if _s_prem else "—",
                         "Nett Prem BP": f"{_s_bp:.2f}" if _s_bp else "—",
@@ -6973,7 +6984,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         "CCY": str(_e_row.get("notional_ccy", "")),
                         "Opt Expiry": str(_e_row.get("opt_tenor", "—")),
                         "Swp Tenor": str(_e_row.get("swp_tenor", "—")),
-                        "Strike": f"{float(_e_row.get('strike_pct') or 0):.2f}%" if pd.notna(_e_row.get("strike_pct")) else "—",
+                        "Strike": f"{float(_e_row.get('strike_pct') or 0):.5f}%" if pd.notna(_e_row.get("strike_pct")) else "—",
                         "Notional": _fmt_notional(_e_not),
                         "Premium": _fmt_premium(_e_prem) if _e_prem else "—",
                         "Nett Prem BP": f"{_e_bp:.2f}" if _e_bp else "—",
@@ -7003,7 +7014,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _all_df = _all_df.sort_values(_time_col, ascending=False).reset_index(drop=True)
                     st.dataframe(_all_df, use_container_width=True, hide_index=True,
                                  height=min(60 + len(_all_df) * 35, 700))
-                    st.caption("DWSF strikes normalised (÷100).")
+                    st.caption("Straddle prem deduped for all brokers except DWSF (report full straddle prem on each leg). "
+                               "DWSF strikes normalised (÷100).")
 
                     with st.expander("Notional by Product Type", expanded=False):
                         _type_summary = []
@@ -11273,9 +11285,9 @@ def swaptions_tab(vol_mode: str):
                 eff_disc_rate = float(_np_ois.interp(_disc_t, ois_xs, ois_ys))
                 disc_source = "OIS"
                 if is_midcurve:
-                    st.caption(f"OIS @ expiry {expiry_y:.2f}Y: {eff_disc_rate*100:.2f}% | swap start {expiry_y+delay_y:.2f}Y")
+                    st.caption(f"OIS @ expiry {expiry_y:.2f}Y: {eff_disc_rate*100:.5f}% | swap start {expiry_y+delay_y:.2f}Y")
                 else:
-                    st.caption(f"OIS rate: {eff_disc_rate*100:.2f}% @ {_disc_t:.2f}Y")
+                    st.caption(f"OIS rate: {eff_disc_rate*100:.5f}% @ {_disc_t:.2f}Y")
             except Exception as _de:
                 eff_disc_rate = 0.035
                 disc_source = f"Flat (OIS error: {_de})"
@@ -11651,7 +11663,7 @@ def swaptions_tab(vol_mode: str):
                     model=model_type, label=f"Payer {expiry_display}x{swap_tenor}", use_curve=curve is not None)
                 res = price_swaption(ticket)
                 legs.append(("Payer", strike_pct, 1, res))
-                label = f"Payer {expiry_display}x{swap_tenor} K={strike_pct:.2f}%"
+                label = f"Payer {expiry_display}x{swap_tenor} K={strike_pct:.5f}%"
                 
             elif structure == "Receiver":
                 vol_k1 = get_vol_for_strike(strike_pct)
@@ -11662,7 +11674,7 @@ def swaptions_tab(vol_mode: str):
                     model=model_type, label=f"Receiver {expiry_display}x{swap_tenor}", use_curve=curve is not None)
                 res = price_swaption(ticket)
                 legs.append(("Receiver", strike_pct, 1, res))
-                label = f"Receiver {expiry_display}x{swap_tenor} K={strike_pct:.2f}%"
+                label = f"Receiver {expiry_display}x{swap_tenor} K={strike_pct:.5f}%"
                 
             elif structure == "ATM Straddle":
                 vol_atm = get_vol_for_strike(fwd_pct)
@@ -11691,12 +11703,12 @@ def swaptions_tab(vol_mode: str):
                     side="Payer", payoff_type="vanilla", notional=notional*1e6, currency=ccy,
                     expiry_years=expiry_y, swap_tenor_years=tenor_y, forward=fwd_pct/100.0,
                     strike=strike_pct/100.0, vol=vol_k1, discount_rate=eff_disc_rate, annuity=ann,
-                    model=model_type, label=f"Payer K={strike_pct:.2f}%", use_curve=curve is not None)
+                    model=model_type, label=f"Payer K={strike_pct:.5f}%", use_curve=curve is not None)
                 ticket_r = SwaptionTicket(
                     side="Receiver", payoff_type="vanilla", notional=notional*1e6, currency=ccy,
                     expiry_years=expiry_y, swap_tenor_years=tenor_y, forward=fwd_pct/100.0,
                     strike=strike_pct_2/100.0, vol=vol_k2, discount_rate=eff_disc_rate, annuity=ann,
-                    model=model_type, label=f"Receiver K={strike_pct_2:.2f}%", use_curve=curve is not None)
+                    model=model_type, label=f"Receiver K={strike_pct_2:.5f}%", use_curve=curve is not None)
                 res_p = price_swaption(ticket_p)
                 res_r = price_swaption(ticket_r)
                 legs.append(("Long Payer", strike_pct, 1, res_p))
@@ -11713,12 +11725,12 @@ def swaptions_tab(vol_mode: str):
                     side="Payer", payoff_type="vanilla", notional=notional*1e6, currency=ccy,
                     expiry_years=expiry_y, swap_tenor_years=tenor_y, forward=fwd_pct/100.0,
                     strike=strike_pct/100.0, vol=vol_k1, discount_rate=eff_disc_rate, annuity=ann,
-                    model=model_type, label=f"Payer K={strike_pct:.2f}%", use_curve=curve is not None)
+                    model=model_type, label=f"Payer K={strike_pct:.5f}%", use_curve=curve is not None)
                 ticket_r = SwaptionTicket(
                     side="Receiver", payoff_type="vanilla", notional=notional*1e6, currency=ccy,
                     expiry_years=expiry_y, swap_tenor_years=tenor_y, forward=fwd_pct/100.0,
                     strike=strike_pct_2/100.0, vol=vol_k2, discount_rate=eff_disc_rate, annuity=ann,
-                    model=model_type, label=f"Receiver K={strike_pct_2:.2f}%", use_curve=curve is not None)
+                    model=model_type, label=f"Receiver K={strike_pct_2:.5f}%", use_curve=curve is not None)
                 res_p = price_swaption(ticket_p)
                 res_r = price_swaption(ticket_r)
                 if is_long_payer:
@@ -11740,17 +11752,17 @@ def swaptions_tab(vol_mode: str):
                     side="Payer", payoff_type="vanilla", notional=notional*1e6, currency=ccy,
                     expiry_years=expiry_y, swap_tenor_years=tenor_y, forward=fwd_pct/100.0,
                     strike=strike_pct/100.0, vol=vol_k1, discount_rate=eff_disc_rate, annuity=ann,
-                    model=model_type, label=f"Long 1x Payer K1={strike_pct:.2f}%", use_curve=curve is not None)
+                    model=model_type, label=f"Long 1x Payer K1={strike_pct:.5f}%", use_curve=curve is not None)
                 ticket_2 = SwaptionTicket(
                     side="Payer", payoff_type="vanilla", notional=notional*1e6, currency=ccy,
                     expiry_years=expiry_y, swap_tenor_years=tenor_y, forward=fwd_pct/100.0,
                     strike=strike_pct_2/100.0, vol=vol_k2, discount_rate=eff_disc_rate, annuity=ann,
-                    model=model_type, label=f"Short 1x Payer K2={strike_pct_2:.2f}%", use_curve=curve is not None)
+                    model=model_type, label=f"Short 1x Payer K2={strike_pct_2:.5f}%", use_curve=curve is not None)
                 ticket_3 = SwaptionTicket(
                     side="Payer", payoff_type="vanilla", notional=notional*1e6, currency=ccy,
                     expiry_years=expiry_y, swap_tenor_years=tenor_y, forward=fwd_pct/100.0,
                     strike=strike_pct_3/100.0, vol=vol_k3, discount_rate=eff_disc_rate, annuity=ann,
-                    model=model_type, label=f"Short 1x Payer K3={strike_pct_3:.2f}%", use_curve=curve is not None)
+                    model=model_type, label=f"Short 1x Payer K3={strike_pct_3:.5f}%", use_curve=curve is not None)
                 res_1 = price_swaption(ticket_1)
                 res_2 = price_swaption(ticket_2)
                 res_3 = price_swaption(ticket_3)
@@ -11769,17 +11781,17 @@ def swaptions_tab(vol_mode: str):
                     side="Receiver", payoff_type="vanilla", notional=notional*1e6, currency=ccy,
                     expiry_years=expiry_y, swap_tenor_years=tenor_y, forward=fwd_pct/100.0,
                     strike=strike_pct/100.0, vol=vol_k1, discount_rate=eff_disc_rate, annuity=ann,
-                    model=model_type, label=f"Long 1x Receiver K1={strike_pct:.2f}%", use_curve=curve is not None)
+                    model=model_type, label=f"Long 1x Receiver K1={strike_pct:.5f}%", use_curve=curve is not None)
                 ticket_2 = SwaptionTicket(
                     side="Receiver", payoff_type="vanilla", notional=notional*1e6, currency=ccy,
                     expiry_years=expiry_y, swap_tenor_years=tenor_y, forward=fwd_pct/100.0,
                     strike=strike_pct_2/100.0, vol=vol_k2, discount_rate=eff_disc_rate, annuity=ann,
-                    model=model_type, label=f"Short 1x Receiver K2={strike_pct_2:.2f}%", use_curve=curve is not None)
+                    model=model_type, label=f"Short 1x Receiver K2={strike_pct_2:.5f}%", use_curve=curve is not None)
                 ticket_3 = SwaptionTicket(
                     side="Receiver", payoff_type="vanilla", notional=notional*1e6, currency=ccy,
                     expiry_years=expiry_y, swap_tenor_years=tenor_y, forward=fwd_pct/100.0,
                     strike=strike_pct_3/100.0, vol=vol_k3, discount_rate=eff_disc_rate, annuity=ann,
-                    model=model_type, label=f"Short 1x Receiver K3={strike_pct_3:.2f}%", use_curve=curve is not None)
+                    model=model_type, label=f"Short 1x Receiver K3={strike_pct_3:.5f}%", use_curve=curve is not None)
                 res_1 = price_swaption(ticket_1)
                 res_2 = price_swaption(ticket_2)
                 res_3 = price_swaption(ticket_3)
@@ -12639,14 +12651,14 @@ def caps_floors_tab(vol_mode: str):
                     pv_total, delta_total, vega_total, gamma_total = res["pv"], res["delta"], res["vega"], res["gamma"]
                     caplet_details = res["caplets"]
                     legs.append(("Cap", strike*100, 1, res))
-                    label = f"Cap {first_fixing}-{tenor} K={strike*100:.2f}%"
+                    label = f"Cap {first_fixing}-{tenor} K={strike*100:.5f}%"
                     
                 elif cf_type == "Floor":
                     res = price_strip(strike, False, "Floor")
                     pv_total, delta_total, vega_total, gamma_total = res["pv"], res["delta"], res["vega"], res["gamma"]
                     caplet_details = res["caplets"]
                     legs.append(("Floor", strike*100, 1, res))
-                    label = f"Floor {first_fixing}-{tenor} K={strike*100:.2f}%"
+                    label = f"Floor {first_fixing}-{tenor} K={strike*100:.5f}%"
                     
                 elif cf_type == "Straddle":
                     res_cap = price_strip(fwd, True, "Cap")
@@ -12716,14 +12728,14 @@ def caps_floors_tab(vol_mode: str):
                     pv_total, delta_total, vega_total, gamma_total = res["pv"], res["delta"], res["vega"], res["gamma"]
                     caplet_details = res["caplets"]
                     legs.append(("Digital Cap", strike*100, 1, res))
-                    label = f"Digital Cap {first_fixing}-{tenor} K={strike*100:.2f}% | 100bp payout per fixing"
+                    label = f"Digital Cap {first_fixing}-{tenor} K={strike*100:.5f}% | 100bp payout per fixing"
     
                 elif cf_type == "Digital Floor":
                     res = price_digital_strip(strike, False, "Digital Floor")
                     pv_total, delta_total, vega_total, gamma_total = res["pv"], res["delta"], res["vega"], res["gamma"]
                     caplet_details = res["caplets"]
                     legs.append(("Digital Floor", strike*100, 1, res))
-                    label = f"Digital Floor {first_fixing}-{tenor} K={strike*100:.2f}% | 100bp payout per fixing"
+                    label = f"Digital Floor {first_fixing}-{tenor} K={strike*100:.5f}% | 100bp payout per fixing"
     
                 # Calculate premium in bp: (PV / Notional) * 10000
                 pv_bp = (pv_total / (notional * 1e6)) * 10000.0 if notional > 0 else 0.0
@@ -16769,7 +16781,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
                         df_cal = pd.DataFrame(_cal_rows)
                         st.dataframe(df_cal, use_container_width=True, hide_index=True)
                         _sabr_note = " | SABR smile-adjusted" if berm_use_sabr else " | ATM only"
-                        st.caption(f"Mean reversion a = {hw_mr*100:.2f}% | "
+                        st.caption(f"Mean reversion a = {hw_mr*100:.5f}% | "
                                    f"Tree sigma = {sigma_hw_tree*100:.4f}% (avg calibrated) | "
                                    f"Tree: {N_steps} steps, dt={dt:.5f}y, dx={dx:.6f}, "
                                    f"j_max={j_max} ({n_nodes} nodes wide)"
@@ -16827,7 +16839,7 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
                     forward=fwd, strike=k, vol=base_sigma,
                     discount_rate=disc_ois, annuity=ann,
                     model="Normal",
-                    payout_bp=25.0, label=f"Digital @ {k*100:.2f}%",
+                    payout_bp=25.0, label=f"Digital @ {k*100:.5f}%",
                     use_curve=curve is not None,
                 )
                 res = price_swaption(ticket)
@@ -20214,7 +20226,7 @@ def rv_tab():
                             text=["Today"], textposition="top center",
                             textfont=dict(color="#f59e0b", size=11),
                             name="Today",
-                            hovertemplate=f"SPI ATM: {_spi_front_atm:.2f}%<br>Swptn 3m×5Y: {_sw_3m5y:.1f}bp<extra></extra>"
+                            hovertemplate=f"SPI ATM: {_spi_front_atm:.5f}%<br>Swptn 3m×5Y: {_sw_3m5y:.1f}bp<extra></extra>"
                         ))
 
                         _xav_fig.update_layout(
@@ -20227,7 +20239,7 @@ def rv_tab():
                             paper_bgcolor="rgba(0,0,0,0)",
                         )
                         st.plotly_chart(_xav_fig, use_container_width=True)
-                        st.caption(f"Today — SPI: **{_spi_front_atm:.2f}%** | Swptn 3m×5Y: **{_sw_3m5y:.1f}bp** | "
+                        st.caption(f"Today — SPI: **{_spi_front_atm:.5f}%** | Swptn 3m×5Y: **{_sw_3m5y:.1f}bp** | "
                                    f"Ratio: **{_sw_3m5y/(_spi_front_atm*100*math.sqrt(0.25)):.3f}**")
 
         # ── Cross-Asset Vol: Swaption vs VIX/SPX (USD) ────────────────
@@ -20329,7 +20341,7 @@ def rv_tab():
                             text=["Today"], textposition="top center",
                             textfont=dict(color="#f59e0b", size=11),
                             name="Today",
-                            hovertemplate=f"{_eq_label} ATM: {_eq_vol:.2f}%<br>Swptn 3m×5Y: {_sw_3m5y:.1f}bp<extra></extra>"
+                            hovertemplate=f"{_eq_label} ATM: {_eq_vol:.5f}%<br>Swptn 3m×5Y: {_sw_3m5y:.1f}bp<extra></extra>"
                         ))
                         _xav_fig.update_layout(
                             xaxis=dict(title=f"{_eq_label} ATM (%)", range=[0, 45]),
@@ -20341,7 +20353,7 @@ def rv_tab():
                             paper_bgcolor="rgba(0,0,0,0)",
                         )
                         st.plotly_chart(_xav_fig, use_container_width=True)
-                        st.caption(f"Today — {_eq_label}: **{_eq_vol:.2f}%** | Swptn 3m×5Y: **{_sw_3m5y:.1f}bp** | "
+                        st.caption(f"Today — {_eq_label}: **{_eq_vol:.5f}%** | Swptn 3m×5Y: **{_sw_3m5y:.1f}bp** | "
                                    f"Ratio: **{_sw_3m5y/(_eq_vol*100*math.sqrt(0.25)):.3f}**")
             elif atm is None:
                 st.warning(f"Load your {ccy} ATM vol surface first to see cross-asset analysis.")
@@ -20495,7 +20507,7 @@ def rv_tab():
             for t, v, lbl in fwd_pts:
                 if v:
                     fig_curve.add_annotation(x=t, y=v,
-                        text=f"{lbl}: {v:.2f}%",
+                        text=f"{lbl}: {v:.5f}%",
                         showarrow=True, arrowhead=2, arrowcolor="#f59e0b",
                         font=dict(color="#f59e0b", size=10))
             fig_curve.update_layout(title=f"{ccy} IRS Curve   —   Current", xaxis_title="Tenor (y)",
@@ -21246,7 +21258,7 @@ def rv_tab():
                                             _spi_note = float(_fv)
                                             st.session_state["spi_vol_override"] = _spi_note
                             if _spi_note:
-                                st.metric("ASX SPI Vol (front 50D)", f"{_spi_note:.2f}%",
+                                st.metric("ASX SPI Vol (front 50D)", f"{_spi_note:.5f}%",
                                           help="Front-month SPI 200 implied vol, "
                                                "used as cross-asset context for rates vol.")
                             else:
@@ -21384,13 +21396,13 @@ def rv_tab():
                                 if HAS_POSTGRES:
                                     save_user_config("wpo@rateedge.au", "spi_vol_surface", "AUD", _new_spi_surf)
                                     save_user_config("wpo@rateedge.au", "spi_vol_override", "AUD", {"value": _front_atm})
-                                st.success(f"✅ SPI surface saved. Front ATM: {_front_atm:.2f}%")
+                                st.success(f"✅ SPI surface saved. Front ATM: {_front_atm:.5f}%")
                                 st.rerun()
 
                         # DB load already done above
                         _spi_atm = st.session_state.get("spi_vol_override", _spi_surf.get("Jun-26", {}).get("50D", 0.0))
                         if _spi_atm and _spi_atm > 0:
-                            st.caption(f"SPI front ATM (50D Jun-26): **{_spi_atm:.2f}%** — used as equity vol context")
+                            st.caption(f"SPI front ATM (50D Jun-26): **{_spi_atm:.5f}%** — used as equity vol context")
                         st.caption("📊 BBG: `XPA Index` → OVDV for SPI vol surface")
 
                     # SPX vol surface for USD
@@ -21444,12 +21456,12 @@ def rv_tab():
                                 st.session_state["spx_vol_surface"] = _new_spx_surf
                                 _front_spx_atm = _new_spx_surf.get(_SPX_CONTRACTS[0], {}).get("50D", 0.0)
                                 st.session_state["spx_vol_override"] = _front_spx_atm
-                                st.success(f"✅ SPX surface saved. Front ATM: {_front_spx_atm:.2f}%")
+                                st.success(f"✅ SPX surface saved. Front ATM: {_front_spx_atm:.5f}%")
                                 st.rerun()
 
                         _spx_atm = st.session_state.get("spx_vol_override", _spx_surf.get("14-Apr-26", {}).get("50D", 0.0))
                         if _spx_atm and _spx_atm > 0:
-                            st.caption(f"SPX front ATM (50D {_SPX_CONTRACTS[0]}): **{_spx_atm:.2f}%** | VIX spot: **{_vix_spot:.2f}** — equity vol context")
+                            st.caption(f"SPX front ATM (50D {_SPX_CONTRACTS[0]}): **{_spx_atm:.5f}%** | VIX spot: **{_vix_spot:.2f}** — equity vol context")
 
                     # Add custom meeting date
                     st.markdown("**Add Custom Meeting Date**")
@@ -25616,7 +25628,7 @@ def main():
                     _desc = f"{_ccy_t} {_opt_t}×{_swp_t}" if _swp_t else f"{_ccy_t} {_opt_t}"
                     _side = _otype_t.upper() if _otype_t else ""
                     st.toast(
-                        f"📡 {_side} {_desc} K={_strike_t:.2f}% ${_not_mm:.0f}mm",
+                        f"📡 {_side} {_desc} K={_strike_t:.5f}% ${_not_mm:.0f}mm",
                         icon="📡"
                     )
             except Exception:
@@ -30753,7 +30765,7 @@ def sod_report_tab():
                                                 _nl = _tr.get("notional_leg1",0)
                                                 _tp = _tr.get("trade_type","")
                                                 _nl_fmt = f"{float(_nl)/1e6:.0f}M" if pd.notna(_nl) and float(_nl) > 0 else "—"
-                                                _sk_fmt = f"K={float(_sk):.2f}%" if pd.notna(_sk) else ""
+                                                _sk_fmt = f"K={float(_sk):.5f}%" if pd.notna(_sk) else ""
                                                 _sdr_block += f"\n  {_ot}x{_st} {_tp} {_sk_fmt} {_nl_fmt}"
                     except Exception as _sdr_err:
                         _sdr_block = ""
