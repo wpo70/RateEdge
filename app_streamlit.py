@@ -6561,14 +6561,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
         try:
             ts = pd.Timestamp(v)
             if tz:
-                # v0705t: localize to UTC first if naive (DTCC SDR timestamps are UTC)
-                # before converting. tz_convert requires a tz-aware Timestamp.
-                if ts.tzinfo is None:
-                    ts = ts.tz_localize("UTC")
                 ts = ts.tz_convert(tz)
             return ts.strftime("%m/%d %H:%M")
-        except Exception:
-            return str(v)[:16]
+        except: return str(v)[:16]
 
     # ── Blotter table ─────────────────────────────────────────────────────────
     if df.empty:
@@ -6834,33 +6829,15 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 _sdr_ccy = st.session_state.get("sidebar_ccy", "USD").split(" ")[0]
                 _tz_name, _tz_label = _CCY_TIMEZONE.get(_sdr_ccy, ("America/New_York", "NYC"))
                 _local_tz = _ZI_sdr(_tz_name)
-                # v0705w: use plain "Time" as the dict/column key — parentheses in dict keys
-                # were causing Streamlit column_config matching to misbehave. Display the tz
-                # in the column header via column_config label instead.
-                _time_col = "Time"
-                _time_header = f"Time ({_tz_label})"
+                _time_col = f"Time ({_tz_label})"
 
                 def _to_local(ts_):
-                    try:
-                        ts_ = pd.to_datetime(ts_, errors="coerce")
-                        if pd.isna(ts_):
-                            return pd.NaT
-                        if ts_.tzinfo is None:
-                            ts_ = ts_.tz_localize("UTC")
-                        return ts_.astimezone(_local_tz)
-                    except Exception:
+                    ts_ = pd.to_datetime(ts_, errors="coerce")
+                    if ts_ is pd.NaT:
                         return pd.NaT
-
-                # v0705u: safe time-formatter — robust against any failure mode of _to_local.
-                # The previous `is not pd.NaT` identity check failed silently for EUR rows in
-                # certain pandas versions, blanking the time column.
-                def _fmt_local(ts_):
-                    if pd.isna(ts_):
-                        return "—"
-                    try:
-                        return ts_.strftime("%d-%b %H:%M")
-                    except Exception:
-                        return "—"
+                    if ts_.tzinfo is None:
+                        ts_ = ts_.tz_localize("UTC")
+                    return ts_.astimezone(_local_tz)
 
                 # Classify options: CALL=Payer/Cap, PUT=Receiver/Floor
                 _payers_a = _newt_all[_newt_all["option_type_decoded"] == "CALL"].copy()
@@ -6942,7 +6919,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                                     _paired_rows.append({
                                         "Type": _ptype,
-                                        _time_col: _fmt_local(_local_time),
+                                        _time_col: _local_time.strftime("%d-%b %H:%M") if _local_time is not pd.NaT else "—",
                                         "CCY": _ccy_p,
                                         "Opt Expiry": _e_p,
                                         "Swp Tenor": _t_p if _t_p and _t_p not in ("—","NA","None","") else "—",
@@ -6978,7 +6955,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _pc_label = "🟥 Floor"
                     _single_rows.append({
                         "Type": _pc_label,
-                        _time_col: _fmt_local(_s_time),
+                        _time_col: _s_time.strftime("%d-%b %H:%M") if _s_time is not pd.NaT else "—",
                         "CCY": str(_s_row.get("notional_ccy", "")),
                         "Opt Expiry": str(_s_row.get("opt_tenor", "—")),
                         "Swp Tenor": _s_swp if _s_swp and _s_swp not in ("—","NA","None","") else "—",
@@ -7005,7 +6982,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _e_time = _to_local(_e_row.get("execution_timestamp") or _e_row.get("event_timestamp"))
                     _exo_rows.append({
                         "Type": f"🟡 {_ot}",
-                        _time_col: _fmt_local(_e_time),
+                        _time_col: _e_time.strftime("%d-%b %H:%M") if _e_time is not pd.NaT else "—",
                         "CCY": str(_e_row.get("notional_ccy", "")),
                         "Opt Expiry": str(_e_row.get("opt_tenor", "—")),
                         "Swp Tenor": str(_e_row.get("swp_tenor", "—")),
@@ -7037,30 +7014,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 if _all_trades:
                     _all_df = pd.DataFrame(_all_trades)
                     _all_df = _all_df.sort_values(_time_col, ascending=False).reset_index(drop=True)
-                    # v0705w: explicit column order — Time first. column_config relabels with tz.
-                    _col_order = [_time_col, "Type", "CCY", "Opt Expiry", "Swp Tenor", "Strike",
-                                  "Notional", "Premium", "Nett Prem BP", "P Prem BP", "R Prem BP", "Platform"]
-                    _col_order = [c for c in _col_order if c in _all_df.columns]
-                    _all_df = _all_df[_col_order]
-                    _col_cfg = {
-                        _time_col:    st.column_config.TextColumn(_time_header, width="small"),
-                        "Type":       st.column_config.TextColumn("Type", width="small"),
-                        "CCY":        st.column_config.TextColumn("CCY", width="small"),
-                        "Opt Expiry": st.column_config.TextColumn("Opt Expiry", width="small"),
-                        "Swp Tenor":  st.column_config.TextColumn("Swp Tenor", width="small"),
-                        "Strike":     st.column_config.TextColumn("Strike", width="medium"),
-                        "Notional":   st.column_config.TextColumn("Notional", width="small"),
-                        "Premium":    st.column_config.TextColumn("Premium", width="medium"),
-                        "Nett Prem BP": st.column_config.TextColumn("Nett BP", width="small"),
-                        "P Prem BP":  st.column_config.TextColumn("P BP", width="small"),
-                        "R Prem BP":  st.column_config.TextColumn("R BP", width="small"),
-                        "Platform":   st.column_config.TextColumn("Platform", width="small"),
-                    }
                     st.dataframe(_all_df, use_container_width=True, hide_index=True,
-                                 height=min(60 + len(_all_df) * 35, 700),
-                                 column_config=_col_cfg)
-                    st.caption("Straddle prem deduped for all brokers except DWSF (report full straddle prem on each leg). "
-                               "DWSF strikes normalised (÷100).")
+                                 height=min(60 + len(_all_df) * 35, 700))
                     st.caption("Straddle prem deduped for all brokers except DWSF (report full straddle prem on each leg). "
                                "DWSF strikes normalised (÷100).")
 
