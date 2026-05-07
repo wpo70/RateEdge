@@ -6884,6 +6884,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _prem_deduped = _broker_mic in _PREM_DEDUP_MICS and _p_prem > 0 and _r_prem > 0
                                     if _prem_deduped:
                                         _comb_prem = max(_p_prem, _r_prem)
+                                        _p_prem = _comb_prem / 2.0
+                                        _r_prem = _comb_prem / 2.0
                                     else:
                                         _comb_prem = _p_prem + _r_prem
                                     _comb_not = float(_p.get("notional_leg1") or 0)
