@@ -8571,7 +8571,7 @@ def curves_tab():
                 font=dict(color="#94a3b8", size=11),
                 xaxis=dict(title="Maturity (Y)", gridcolor="#1e293b"),
                 yaxis=dict(title="Rate (%)", gridcolor="#1e293b"),
-                legend=dict(bgcolor="rgba(0,0,0,0)"),
+                legend=dict(bgcolor="rgba(15,23,42,0.6)", font=dict(color="#f1f5f9", size=13)),
                 hovermode="x unified"
             )
             st.plotly_chart(_eur_fig, use_container_width=True)
@@ -8686,7 +8686,7 @@ def curves_tab():
                                range=[_bas_min, _bas_max], zeroline=True,
                                zerolinecolor="#475569", zerolinewidth=1,
                                tickformat=".1f"),
-                    legend=dict(bgcolor="rgba(0,0,0,0)"),
+                    legend=dict(bgcolor="rgba(15,23,42,0.6)", font=dict(color="#f1f5f9", size=13)),
                 )
                 st.plotly_chart(_bas_fig, use_container_width=True)
 
