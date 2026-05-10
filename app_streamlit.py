@@ -2563,6 +2563,37 @@ def build_usd_sofr_schedule(expiry: float, tenor: float) -> List[Tuple[float, fl
     return schedule
 
 
+def build_eur_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]:
+    """
+    v0805c: EUR vanilla swaption.
+    Convention: T+2 TARGET BD spot, mod-fol.
+    - Tenor ≤ 1Y: float = 3M EURIBOR Act/360 (quarterly), fixed = annual 30/360
+    - Tenor ≥ 2Y: float = 6M EURIBOR Act/360 (semi-annual), fixed = annual 30/360
+    Schedule returned matches the FIXED LEG (annuity discounting).
+    Returns list of (time_in_years_from_today, accrual_30_360).
+    """
+    today = _pricing_date()
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=2)
+    months_per_period = 12  # annual fixed leg
+    total_months = int(round(tenor * 12))
+    n = max(1, int(round(tenor * (12 / months_per_period))))
+    schedule = []
+    prev = fwd_start
+    for i in range(1, n + 1):
+        raw = _add_months(fwd_start, i * months_per_period if i < n else total_months)
+        pay = _mod_fol(raw)
+        # 30/360 ISDA accrual for fixed leg
+        d1y, d1m, d1d = prev.year, prev.month, prev.day
+        d2y, d2m, d2d = pay.year, pay.month, pay.day
+        if d1d == 31: d1d = 30
+        if d2d == 31 and d1d == 30: d2d = 30
+        accrual = ((d2y - d1y) * 360 + (d2m - d1m) * 30 + (d2d - d1d)) / 360.0
+        t_years = _act365(today, pay)
+        schedule.append((t_years, accrual))
+        prev = pay
+    return schedule
+
+
 def build_generic_schedule(expiry: float, tenor: float, freq: float = 0.5, spot_lag: float = 1.0) -> List[Tuple[float, float]]:
     """T+2BD spot (NZD/USD), mod-fol, Act/365. freq: 0.25=Q/Q, 0.5=S/S."""
     months_per = int(round(freq * 12))
@@ -2610,6 +2641,8 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         sched = build_generic_schedule(expiry, tenor, freq=freq_nzd, spot_lag=2.0)
     elif ccy == "USD":
         sched = build_usd_sofr_schedule(expiry, tenor)
+    elif ccy == "EUR":
+        sched = build_eur_schedule(expiry, tenor)
     else:
         sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=1.0)
 
@@ -2637,6 +2670,20 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
             _proj_curve = st.session_state["_aud_proj_curve"]
         else:
             _proj_curve = curve
+    elif ccy == "EUR":
+        # v0805c: EUR projection — EURIBOR 6M for ≥2Y, EURIBOR 3M for ≤1Y.
+        # Falls back to ESTR if EURIBOR data is missing.
+        _eur_b = st.session_state.get("config_basis", {}).get("EUR", {})
+        _e6m = _eur_b.get("euribor_6m")
+        _e3m = _eur_b.get("euribor_3m")
+        if tenor <= 1.0 and _e3m is not None and not _e3m.empty:
+            _proj_curve = _e3m
+        elif _e6m is not None and not _e6m.empty:
+            _proj_curve = _e6m
+        elif _e3m is not None and not _e3m.empty:
+            _proj_curve = _e3m
+        else:
+            _proj_curve = curve  # ESTR fallback
     else:
         _proj_curve = curve
 
@@ -12296,8 +12343,9 @@ def swaptions_tab(vol_mode: str):
     ccy = ccy_select.split(" ")[0]
     
     # Check if pending currency selected
-    if "PENDING" in ccy_select:
-        st.warning(f"├ö├àÔöé {ccy} pricing coming soon. Currently supported: AUD, NZD, USD")
+    # v0805c: EUR is now supported in the swaption pricer — bypass the PENDING warning.
+    if "PENDING" in ccy_select and ccy != "EUR":
+        st.warning(f"├ö├àÔöé {ccy} pricing coming soon. Currently supported: AUD, NZD, USD, EUR")
         return
     
     # ── USD sub-nav: OTC Swaption Vols vs SR3 Listed Vols ─────────────
@@ -12322,6 +12370,12 @@ def swaptions_tab(vol_mode: str):
     _cc = st.session_state.get("config_curves", {}).get(ccy)
     curve = _cc if _cc is not None else get_ccy_curve(ccy)
 
+    # v0805c: EUR — ESTR IS the OIS curve for EUR; config_curves['EUR'] holds ESTR.
+    # ois_curve must point to ESTR for discounting; projection (EURIBOR 6M/3M) is
+    # selected inside forward_and_annuity_from_curve.
+    if ccy == "EUR" and ois_curve is None and curve is not None:
+        ois_curve = curve  # ESTR
+
     # USD-specific convention display
     if ccy == "USD":
         with st.expander("📐 USD SOFR Conventions", expanded=False):
@@ -12339,6 +12393,25 @@ def swaptions_tab(vol_mode: str):
 | **Vol** | Normal (bp/annum) |
 | **Margin (Physical)** | LCH SwapClear / CME IRS Clearing — IM on delivery |
 | **LCH vs CME basis** | *Pending — BBG feed* |
+""")
+
+    # v0805c: EUR conventions panel — mirrors USD pattern.
+    if ccy == "EUR":
+        with st.expander("📐 EUR EURIBOR Conventions", expanded=False):
+            st.markdown("""
+| | Convention |
+|---|---|
+| **Underlying (≥2Y)** | 6M EURIBOR vs annual fixed |
+| **Underlying (≤1Y)** | 3M EURIBOR vs annual fixed |
+| **Fixed leg** | Annual, 30/360 ISDA |
+| **Float leg** | Semi-annual (6M) or quarterly (3M), Act/360 |
+| **Exercise** | European |
+| **Settlement** | Cash (ICESWAP2 EUR-ISDA-EURIBOR) or Physical (LCH/Eurex) |
+| **Spot** | T+2 TARGET BD |
+| **Discounting** | ESTR OIS |
+| **Premium** | bp of notional, T+2 |
+| **Vol** | Normal (bp/annum) |
+| **Source** | BBG `EUR BVOL Cube` (Discounting: OIS, Index Tenor: 6M) |
 """)
 
     # ── SABR Smile Mode & Alpha Monitor ──────────────────────────────
@@ -12980,6 +13053,9 @@ def swaptions_tab(vol_mode: str):
         roll = "Q/Q" if tenor_y <= 3 else "S/S"
     elif ccy == "NZD":
         roll = "Q/Q" if tenor_y <= 2 else "S/S"
+    elif ccy == "EUR":
+        # v0805c: EUR — annual fixed vs semi 6M EURIBOR (≥2Y) or quarterly 3M EURIBOR (≤1Y)
+        roll = "A/Q" if tenor_y <= 1 else "A/S"
     else:
         roll = "S/S"
 
