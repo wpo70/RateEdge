@@ -3419,6 +3419,283 @@ def _build_listed_caplet_curve_by_date(
     return result
 
 
+# v1105e: EUR-specific calibrator with tight tolerances.
+# Identical logic to build_caplet_vol_curve but brentq xtol=1e-10 (was 0.001)
+# and least_squares ftol/xtol/gtol=1e-12 (was 1e-6) so the priced PV matches
+# the wedge cumulative target to ~6 decimal places of bp.
+def build_caplet_vol_curve_eur(ccy: str, atm_surface, sabr_params=None, 
+                          spread_3m1y=-3.0, spread_1y1y=12.0, spread_2y1y=15.0, 
+                          spread_3y1y=19.0, spread_4y1y=22.0, spread_5y2y=40.0, spread_7y3y=60.0,
+                          spread_10y2y=50.0, spread_12y3y=70.0,
+                          listed_front_vols=None):
+    """
+    Build caplet vol curve using cumulative premium method with proper solving.
+    """
+    if atm_surface is None or atm_surface.empty:
+        return None
+    
+    import scipy.optimize as opt
+    
+    caplet_vols = {}
+    cumulative_leg_prems = {}
+    
+    def get_swaption_premium(expiry_label, tenor_y):
+        """Get swaption PREMIUM - calculate directly from vol surface"""
+        try:
+            # Get curve and vol
+            _cc = st.session_state.get("config_curves", {}).get(ccy)
+            curve = _cc if _cc is not None else get_ccy_curve(ccy)
+            _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+            ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
+            if atm_surface is None or curve is None:
+                return None
+            
+            vol_bp = get_matrix_value(atm_surface, expiry_label, tenor_y)
+            if vol_bp is None:
+                return None
+            
+            # Read directly from atm_prem_matrix — same number as Curves tab
+            _pm = st.session_state.get("atm_prem_matrix", {}).get(ccy, {}).get("prem")
+            if _pm is not None and not _pm.empty:
+                v = get_matrix_value(_pm, expiry_label, tenor_y)
+                if v is not None:
+                    return float(v)
+            # Fallback
+            exp_y = label_to_years(expiry_label)
+            _, ann, _ = forward_and_annuity_from_curve(curve, ccy, exp_y, tenor_y, None)
+            sigma_n = vol_bp / 10000.0
+            return 2 * 0.3989 * sigma_n * math.sqrt(max(exp_y,0.001)) * ann * 10000
+        except:
+            return None
+    
+    def price_caplets_flat_vol(vol_bp, final_maturity_y):
+        """
+        Price caplets using flat vol.
+        Returns total LEG premium in bp.
+        """
+        flat_curve = {}
+        t = 0.25
+        while t <= final_maturity_y + 1e-6:
+            flat_curve[round(t, 2)] = vol_bp
+            t += 0.25
+        return price_caplets_with_vol_curve(ccy, final_maturity_y, flat_curve, notional_mm=1.0)
+    
+    # === STEP 1: 1Y CFS ===
+    # 1Y CFS = 3m start to 1Y maturity = 9 months = 3 quarterly fixings
+    # Get EXACT CFS straddle from table OR calculate directly
+    table_data_1y = st.session_state.get("cfs_table_data", {}).get("3m1y", {})
+    cfs_1y_straddle = table_data_1y.get("cfs_straddle", None)
+    
+    if cfs_1y_straddle is None or cfs_1y_straddle <= 0:
+        # Calculate directly: swaption premium + spread
+        swaption_1y_straddle = get_swaption_premium("3m", 1.0)
+        if swaption_1y_straddle is not None:
+            cfs_1y_straddle = swaption_1y_straddle + spread_3m1y
+    
+    if cfs_1y_straddle and cfs_1y_straddle > 0:
+        cfs_1y_leg = cfs_1y_straddle / 2.0
+        cumulative_leg_prems[1.0] = cfs_1y_leg
+        
+        if listed_front_vols:
+            # v2804k: use SR3 per-quarter vols directly — no flat vol solve.
+            # This ensures the solver calibrates with the correct listed front,
+            # so the CubicSpline shape and repricing are consistent throughout.
+            for t in [0.25, 0.5, 0.75, 1.0]:
+                caplet_vols[t] = listed_front_vols.get(t, listed_front_vols.get(1.0, 75.0))
+        else:
+            # OTC: solve for FLAT vol to 1Y
+            def objective_1y(vol_bp):
+                return price_caplets_flat_vol(vol_bp, 1.0) - cfs_1y_leg
+            
+            try:
+                vol_1y = opt.brentq(objective_1y, 1.0, 200.0, xtol=1e-10, rtol=1e-12)
+                for t in [0.25, 0.5, 0.75, 1.0]:
+                    caplet_vols[t] = max(vol_1y, 1.0)
+            except:
+                vol_fallback = max(cfs_1y_leg * 1.58, 1.0)
+                for t in [0.25, 0.5, 0.75, 1.0]:
+                    caplet_vols[t] = vol_fallback
+    
+    # v2804k: if listed_front_vols extends beyond 1.0 (whites+reds),
+    # pre-set quarter vols for 1.25-2.0 before the solver runs.
+    if listed_front_vols:
+        for _lft in sorted(listed_front_vols.keys()):
+            if _lft > 1.0 + 1e-6:
+                caplet_vols[round(_lft, 2)] = listed_front_vols[_lft]
+
+    # === STEP 2: BOOTSTRAP EACH 1Y GAP SEPARATELY ===
+    # Helper: price ONLY caplets in a specific gap
+    def price_gap_caplets(vol_bp, gap_start_y, gap_end_y):
+        """
+        Price ONLY the caplets from gap_start_y to gap_end_y using flat vol.
+        Returns premium in bp contributed by this gap.
+        """
+        _cc = st.session_state.get("config_curves", {}).get(ccy)
+        curve = _cc if _cc is not None else get_ccy_curve(ccy)
+        _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+        ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
+        if ois_curve is None:
+            ois_curve = curve
+        
+        # Build schedule for the GAP only
+        swap_start = 0.0 + 1.0 / 252.0
+        gap_start_abs = swap_start + gap_start_y
+        gap_end_abs = swap_start + gap_end_y
+        
+        sched = []
+        t = gap_start_abs
+        while t < gap_end_abs - 1e-8:
+            t_next = min(t + 0.25, gap_end_abs)
+            accrual = t_next - t
+            # Store relative time from today for T_fix
+            T_fix = t_next
+            sched.append((T_fix, accrual))
+            t = t_next
+        
+        sigma = vol_bp / 10000.0
+        total_prem_dollars = 0.0
+        
+        for T_fix, accrual in sched:
+            df = df_from_curve(ois_curve, T_fix)
+            phi_zero = 1.0 / math.sqrt(2.0 * math.pi)
+            price_rate = sigma * math.sqrt(T_fix) * phi_zero
+            pv_dollars = 1e6 * accrual * df * price_rate
+            total_prem_dollars += pv_dollars
+        
+        return (total_prem_dollars / 1e6) * 10000.0
+    
+    wedges = [
+        ("1y1y", "1y", 1.0, spread_1y1y, 2.0, 1.0),
+        ("2y1y", "2y", 1.0, spread_2y1y, 3.0, 2.0),
+        ("3y1y", "3y", 1.0, spread_3y1y, 4.0, 3.0),
+        ("4y1y", "4y", 1.0, spread_4y1y, 5.0, 4.0),
+        ("5y2y", "5y", 2.0, spread_5y2y, 7.0, 5.0),
+        ("7y3y", "7y", 3.0, spread_7y3y, 10.0, 7.0),
+        ("10y2y", "10y", 2.0, spread_10y2y, 12.0, 10.0),
+        ("12y3y", "12y", 3.0, spread_12y3y, 15.0, 12.0),
+    ]
+    
+    for table_label, expiry, tenor, spread, result_mat, prior_mat in wedges:
+        if prior_mat not in cumulative_leg_prems:
+            continue
+        
+        wedge_data = st.session_state.get("cfs_table_data", {}).get(table_label, {})
+        wedge_straddle = wedge_data.get("cfs_straddle", None)
+        
+        if wedge_straddle is None or wedge_straddle <= 0:
+            wedge_swaption_straddle = get_swaption_premium(expiry, tenor)
+            if wedge_swaption_straddle is not None:
+                wedge_straddle = wedge_swaption_straddle + spread
+        
+        if wedge_straddle is None or wedge_straddle <= 0:
+            continue
+        
+        wedge_leg = wedge_straddle / 2.0
+        
+        # This wedge_leg is the INCREMENTAL premium for the gap (prior_mat to result_mat)
+        gap_premium_target = wedge_leg
+        
+        # Bootstrap: find flat vol for THIS GAP ONLY
+        def objective(vol_bp):
+            return price_gap_caplets(vol_bp, prior_mat, result_mat) - gap_premium_target
+        
+        wedge_leg = wedge_straddle / 2.0
+        cumulative_leg_prem = cumulative_leg_prems[prior_mat] + wedge_leg
+        cumulative_leg_prems[result_mat] = cumulative_leg_prem
+        
+        # Store initial guess for anchor vol (will be refined later)
+        gap_premium = wedge_leg
+        initial_vol_guess = max(gap_premium * 1.5, 50.0)
+        caplet_vols[result_mat] = initial_vol_guess
+    
+    # === STEP 3: SOLVE FOR ALL ANCHOR VOLS SIMULTANEOUSLY ===
+    # Must solve all at once because cubic spline shape depends on ALL anchors
+    # v2804g: RESTORED from v2604w. The forward bucket solver + iterative
+    # CubicSpline approach was wrong — it couldn't converge because adjusting
+    # one anchor distorts all others through the spline. least_squares handles
+    # the cross-dependencies correctly.
+    
+    def price_with_interp_curve(anchor_vols_array):
+        """
+        Given vols at anchor points, cubic spline interpolate and price all maturities.
+        Returns array of pricing errors vs targets.
+        """
+        # Build vol dict from array
+        temp_vols = dict(caplet_vols)  # Start with 1Y vols
+        anchor_mats_to_solve = sorted([m for m in cumulative_leg_prems.keys() if m > 1.0])
+        
+        for i, mat in enumerate(anchor_mats_to_solve):
+            temp_vols[mat] = max(anchor_vols_array[i], 1.0)
+        
+        # Cubic spline - only use integer anchors
+        all_anchor_mats = np.array(sorted([m for m in temp_vols.keys() if m >= 1.0 and m == int(m)]))
+        all_anchor_vols = np.array([temp_vols[m] for m in all_anchor_mats])
+        
+        if len(all_anchor_mats) < 2:
+            return np.array([0.0] * len(anchor_mats_to_solve))
+        
+        cs = CubicSpline(all_anchor_mats, all_anchor_vols)
+        
+        # Build interpolated curve
+        interp_curve = {}
+        for t in [0.25, 0.5, 0.75, 1.0]:
+            interp_curve[t] = temp_vols.get(t, temp_vols.get(1.0, 75.0))
+        
+        t = 1.25
+        max_mat = all_anchor_mats[-1]
+        while t <= max_mat + 1e-6:
+            interp_curve[round(t, 2)] = max(float(cs(t)), 1.0)
+            t += 0.25
+        
+        # Price each maturity using SHARED pricing function
+        errors = []
+        for check_mat in anchor_mats_to_solve:
+            target_prem = cumulative_leg_prems[check_mat]
+            actual_prem = price_caplets_with_vol_curve(ccy, check_mat, interp_curve, notional_mm=1.0)
+            errors.append(actual_prem - target_prem)
+        
+        return np.array(errors)
+    
+    # Solve for all anchor vols simultaneously
+    anchor_mats_to_solve = sorted([m for m in cumulative_leg_prems.keys() if m > 1.0])
+    
+    if len(anchor_mats_to_solve) > 0:
+        initial_guess = np.array([caplet_vols[m] for m in anchor_mats_to_solve])
+        
+        from scipy.optimize import least_squares
+        try:
+            result = least_squares(price_with_interp_curve, initial_guess,
+                                   ftol=1e-12, xtol=1e-12, gtol=1e-12,
+                                   max_nfev=2000)
+            
+            if result.success:
+                for i, mat in enumerate(anchor_mats_to_solve):
+                    caplet_vols[mat] = max(result.x[i], 1.0)
+        except:
+            pass
+    
+    # Final cubic spline interpolation with solved anchors
+    anchor_mats = np.array(sorted([m for m in caplet_vols.keys() if m >= 1.0 and m == int(m)]))
+    anchor_vols = np.array([caplet_vols[m] for m in anchor_mats])
+    
+    if len(anchor_mats) >= 2:
+        cs = CubicSpline(anchor_mats, anchor_vols)
+        
+        caplet_vols_final = {}
+        for t in [0.25, 0.5, 0.75, 1.0]:
+            caplet_vols_final[t] = caplet_vols.get(t, caplet_vols.get(1.0, 75.0))
+        
+        t = 1.25
+        max_mat = anchor_mats[-1]
+        while t <= max_mat + 1e-6:
+            caplet_vols_final[round(t, 2)] = max(float(cs(t)), 1.0)
+            t += 0.25
+        
+        return caplet_vols_final
+    
+    return caplet_vols if caplet_vols else None
+
+
 def build_caplet_vol_curve_sr3(
     ccy: str,
     cutoff_years: float = 2.0,
@@ -13629,9 +13906,6 @@ def caps_floors_tab(vol_mode: str):
             st.session_state.setdefault("config_basis", {}).setdefault("EUR", {})["ois"] = _estr
 
         # v1105d: one-time migration to force EUR wedge defaults to apply.
-        # Without this, any stale wedge values left over from v1105b (when EUR was
-        # falling back to AUD defaults) persist in session_state and the per-ccy
-        # defaults dict skip path (line ~13759) doesn't re-run.
         if not st.session_state.get("_eur_wedge_migration_v1105d"):
             _eur_defaults = {
                 "cf_spr_3m1y": 5.0,  "cf_spr_1y1y": 8.0,   "cf_spr_2y1y": 10.0,
@@ -13639,7 +13913,6 @@ def caps_floors_tab(vol_mode: str):
                 "cf_spr_7y3y": 40.0, "cf_spr_10y2y": 25.0, "cf_spr_12y3y": 60.0,
                 "cf_spr_15v20": -3.0, "cf_spr_20v30": -3.0,
             }
-            # Try DB first for any saved EUR overrides
             _db_eur = {}
             if HAS_POSTGRES and st.session_state.get("authenticated") and st.session_state.get("username"):
                 try:
@@ -13649,12 +13922,22 @@ def caps_floors_tab(vol_mode: str):
             _final = {**_eur_defaults, **_db_eur}
             for _k, _v in _final.items():
                 st.session_state[_k] = float(_v)
-                # Also clear the _new widget key and _temp working copy so the UI re-seeds
                 st.session_state.pop(f"{_k}_new", None)
                 st.session_state.pop(f"{_k}_temp", None)
-            # Force the ccy-switch block to re-run if it would have skipped
             st.session_state.pop("_cf_last_active_ccy", None)
             st.session_state["_eur_wedge_migration_v1105d"] = True
+
+        # v1105e: bust caches when EUR mode (Q/Q vs S/S) changes so the caplet curve
+        # and ATM CFS Straddles table recompute. Without this, the graph and table
+        # show stale values from the previous mode.
+        _prev_eur_mode = st.session_state.get("_prev_eur_cfs_mode")
+        if _prev_eur_mode != _eur_cfs_mode:
+            for _bk in ["_caplet_curve_key", "_atm_cfs_cache_key", "_atm_cfs_rows_cache",
+                        "_cfs_otc_build_cache", "_cfs_listed_build_cache",
+                        "_cfs_chart_sig", "_cfs_chart_fig", "_cfs_chart_tbl",
+                        f"caplet_vol_curve_EUR"]:
+                st.session_state.pop(_bk, None)
+            st.session_state["_prev_eur_cfs_mode"] = _eur_cfs_mode
 
         st.markdown("---")
 
@@ -15296,7 +15579,9 @@ def caps_floors_tab(vol_mode: str):
                         _cfs_td.setdefault("3m1y", {})["cfs_straddle"] = _otc_1y_stradd
                     if _otc_1y1y_gap is not None:
                         _cfs_td.setdefault("1y1y", {})["cfs_straddle"] = _otc_1y1y_gap
-                    return build_caplet_vol_curve(
+                    # v1105e: route EUR to dedicated calibrator with tight tolerances
+                    _build_fn = build_caplet_vol_curve_eur if ccy == "EUR" else build_caplet_vol_curve
+                    return _build_fn(
                         ccy, atm, None,
                         spread_3m1y=spreads_dict["3m1y"],
                         spread_1y1y=spreads_dict["1y1y"],
