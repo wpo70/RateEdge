@@ -15126,8 +15126,6 @@ def caps_floors_tab(vol_mode: str):
                 # the render pipeline to splice the Active source's front end
                 # with the wedge-chain long end and PCHIP-spline the join.
                 st.session_state["_cfs_calc_requested"] = True
-                # v1105k: bump counter so chart sig changes and chart rebuilds.
-                st.session_state["_cfs_build_counter"] = st.session_state.get("_cfs_build_counter", 0) + 1
                 # v2404p: NO cache pops, NO preserve blocks, NO st.rerun().
                 # Cache sigs auto-invalidate when spreads change.
                 # _calc_requested flag triggers rebuild in the pipeline.
@@ -16926,11 +16924,10 @@ def caps_floors_tab(vol_mode: str):
                 _skip_chart_render = False
 
                 # ── Chart cache: skip CubicSpline rebuild if curves haven't changed ──
-                # v1105k: include ccy + build counter in sig — guarantees EUR chart
-                # rebuilds on every Calculate even if curve happens to have same hash.
+                # v1105l: ccy in sig so AUD/EUR switch redraws; counter REMOVED because
+                # it forced a CubicSpline+300-pt rebuild on every Streamlit rerun.
                 _chart_sig = (
                     ccy,
-                    st.session_state.get("_cfs_build_counter", 0),
                     hash(str(sorted((st.session_state.get("_cfs_otc_curve") or {}).items()))),
                     hash(str(sorted((st.session_state.get("_cfs_listed_bootstrap") or {}).items()))),
                     hash(str(sorted((st.session_state.get("_cfs_sr3_hybrid") or {}).items()))),
