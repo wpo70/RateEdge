@@ -14027,10 +14027,18 @@ def caps_floors_tab(vol_mode: str):
         # Apply
         for _k, _v in _new_stash.items():
             if _k in _cf_spread_keys:
-                st.session_state[_k] = float(_v)
-                # Also clear the _temp working copy so the UI reflects the swap
-                st.session_state.pop(f"{_k}_temp", None)
-                st.session_state.pop(f"{_k}_new", None)
+                _v_float = float(_v)
+                st.session_state[_k] = _v_float
+                if ccy == "EUR":
+                    # v1105j: EUR-only — seed _temp and _new widget keys to the new value
+                    # instead of popping. Popping caused EUR's first wedge edit to be lost.
+                    # AUD/USD/NZD keep the original pop behavior (locked path).
+                    st.session_state[f"{_k}_temp"] = _v_float
+                    st.session_state[f"{_k}_new"] = _v_float
+                else:
+                    # AUD/USD/NZD: original behavior - pop temp/new so widget re-seeds.
+                    st.session_state.pop(f"{_k}_temp", None)
+                    st.session_state.pop(f"{_k}_new", None)
         st.session_state["_cf_last_active_ccy"] = ccy
         # Bust caplet cache so curve rebuilds with new ccy's wedges
         st.session_state.pop("_caplet_curve_key", None)
