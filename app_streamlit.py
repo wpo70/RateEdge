@@ -13628,26 +13628,6 @@ def caps_floors_tab(vol_mode: str):
         if _estr is not None and st.session_state.get("config_basis", {}).get("EUR", {}).get("ois") is None:
             st.session_state.setdefault("config_basis", {}).setdefault("EUR", {})["ois"] = _estr
 
-        # v1105b: seed EUR wedge defaults if not yet present in session.
-        # Tries DB cf_spreads/EUR first; falls back to sensible defaults.
-        if not st.session_state.get("_eur_cfs_seeded"):
-            _eur_wedge_defaults = {
-                "cf_spr_3m1y": 5.0,  "cf_spr_1y1y": 8.0,   "cf_spr_2y1y": 10.0,
-                "cf_spr_3y1y": 13.0, "cf_spr_4y1y": 15.0,  "cf_spr_5y2y": 30.0,
-                "cf_spr_7y3y": 40.0, "cf_spr_10y2y": 25.0, "cf_spr_12y3y": 60.0,
-                "cf_spr_15v20": -3.0, "cf_spr_20v30": -3.0,
-            }
-            _db_eur_spreads = {}
-            if HAS_POSTGRES and st.session_state.get("authenticated") and st.session_state.get("username"):
-                try:
-                    _db_eur_spreads = load_user_config(st.session_state.get("username"), "cf_spreads", "EUR") or {}
-                except Exception:
-                    _db_eur_spreads = {}
-            for _k, _v in _eur_wedge_defaults.items():
-                if _k not in st.session_state:
-                    st.session_state[_k] = float(_db_eur_spreads.get(_k, _v))
-            st.session_state["_eur_cfs_seeded"] = True
-
         st.markdown("---")
 
     # ═══════════════════════════════════════════════════════════════════
@@ -13770,6 +13750,11 @@ def caps_floors_tab(vol_mode: str):
                 "cf_spr_3y1y":15.0, "cf_spr_4y1y":18.0, "cf_spr_5y2y":30.0,
                 "cf_spr_7y3y":40.0, "cf_spr_10y2y":30.0, "cf_spr_12y3y":60.0,
                 "cf_spr_15v20":-5.0},
+        # v1105c: EUR baseline (tunable — will be replaced once user saves to cf_spreads/EUR)
+        "EUR": {"cf_spr_3m1y":5.0,  "cf_spr_1y1y":8.0,  "cf_spr_2y1y":10.0,
+                "cf_spr_3y1y":13.0, "cf_spr_4y1y":15.0, "cf_spr_5y2y":30.0,
+                "cf_spr_7y3y":40.0, "cf_spr_10y2y":25.0, "cf_spr_12y3y":60.0,
+                "cf_spr_15v20":-3.0, "cf_spr_20v30":-3.0},
     }
     _prev_ccy = st.session_state.get("_cf_last_active_ccy")
     if _prev_ccy != ccy:
