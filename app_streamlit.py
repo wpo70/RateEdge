@@ -7353,8 +7353,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     ).reset_index()
                     _tot_count    = int(_broker_agg["count"].sum()) if not _broker_agg.empty else 0
                     _tot_notional = float(_broker_agg["notional"].sum()) if not _broker_agg.empty else 0.0
-                    _broker_agg["Pct of Trades"]   = (_broker_agg["count"] / _tot_count * 100).round(2) if _tot_count > 0 else 0
-                    _broker_agg["Pct of Notional"] = (_broker_agg["notional"] / _tot_notional * 100).round(2) if _tot_notional > 0 else 0
+                    _broker_agg["Pct of Trades"]   = (_broker_agg["count"] / _tot_count * 100).round(2).apply(lambda v: f"{v:.2f}%") if _tot_count > 0 else "0.00%"
+                    _broker_agg["Pct of Notional"] = (_broker_agg["notional"] / _tot_notional * 100).round(2).apply(lambda v: f"{v:.2f}%") if _tot_notional > 0 else "0.00%"
                     _broker_agg["Notional"]        = _broker_agg["notional"].apply(_fmt_notional)
                     _broker_agg = _broker_agg.sort_values("count", ascending=False)[
                         ["Platform", "count", "Pct of Trades", "Notional", "Pct of Notional"]
@@ -7364,14 +7364,40 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _all_df_display = _all_df.drop(columns=["_notional_num"], errors="ignore")
 
                     # Assemble CSV: trades table → blank → broker breakdown
-                    import io as _io_csv
+                    # v1205c: Excel-friendly format:
+                    #  - UTF-8 BOM so Excel auto-detects encoding (no gibberish)
+                    #  - Emoji stripped from Type column (Excel can't render colour emoji)
+                    #  - Breakdown section padded to same column count as trades
+                    #    so Excel doesn't fragment the layout
+                    import io as _io_csv, re as _re_csv
                     _csv_buf = _io_csv.StringIO()
-                    _all_df_display.to_csv(_csv_buf, index=False)
-                    _csv_buf.write("\n")
-                    _csv_buf.write("Broker / Platform Breakdown\n")
-                    _broker_agg.to_csv(_csv_buf, index=False)
-                    _csv_buf.write(f"\nTotal Trades,{_tot_count}\n")
-                    _csv_buf.write(f"Total Notional,{_fmt_notional(_tot_notional)}\n")
+                    _csv_buf.write("\ufeff")  # BOM for Excel
+
+                    # Strip emoji from Type column for CSV (keep in app display)
+                    _trades_for_csv = _all_df_display.copy()
+                    if "Type" in _trades_for_csv.columns:
+                        _trades_for_csv["Type"] = _trades_for_csv["Type"].astype(str).apply(
+                            lambda s: _re_csv.sub(r'[^\x00-\x7F]+', '', s).strip()
+                        )
+
+                    _trades_for_csv.to_csv(_csv_buf, index=False, lineterminator="\r\n")
+
+                    # Pad broker breakdown to same column width as trades (12 cols)
+                    _n_cols = len(_trades_for_csv.columns)
+                    _pad = "," * (_n_cols - 5)  # broker section has 5 cols
+
+                    _csv_buf.write("\r\n")
+                    _csv_buf.write("Broker / Platform Breakdown" + ("," * (_n_cols - 1)) + "\r\n")
+                    _broker_header = list(_broker_agg.columns)
+                    _csv_buf.write(",".join(_broker_header) + _pad + "\r\n")
+                    for _, _r in _broker_agg.iterrows():
+                        _vals = [str(_r[c]) for c in _broker_header]
+                        # quote any field containing a comma
+                        _vals = [f'"{v}"' if "," in v else v for v in _vals]
+                        _csv_buf.write(",".join(_vals) + _pad + "\r\n")
+                    _csv_buf.write("\r\n")
+                    _csv_buf.write(f"Total Trades,{_tot_count}" + ("," * (_n_cols - 2)) + "\r\n")
+                    _csv_buf.write(f"Total Notional,{_fmt_notional(_tot_notional)}" + ("," * (_n_cols - 2)) + "\r\n")
 
                     _csv_dl_col1, _csv_dl_col2 = st.columns([1, 5])
                     with _csv_dl_col1:
