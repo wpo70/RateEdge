@@ -3419,91 +3419,12 @@ def _build_listed_caplet_curve_by_date(
     return result
 
 
-# v1105e: EUR-specific calibrator with tight tolerances.
-# Identical logic to build_caplet_vol_curve but brentq xtol=1e-10 (was 0.001)
-# and least_squares ftol/xtol/gtol=1e-12 (was 1e-6) so the priced PV matches
-# the wedge cumulative target to ~6 decimal places of bp.
+
 # ══════════════════════════════════════════════════════════════════════════
-# v1105f: Canonical EUR cap-strip pricing.
-# Both the calibrator (build_caplet_vol_curve_eur) and the EUR pricer-button
-# path MUST go through this function. Identical inputs → identical outputs.
-# This is what guarantees the priced PV = wedge cumulative target EXACTLY.
+# v1105i: EUR-only copy of build_caplet_vol_curve. Identical logic.
+# Exists as a separate function so EUR can be tuned independently of AUD/USD.
+# Touching this DOES NOT touch the AUD/USD path.
 # ══════════════════════════════════════════════════════════════════════════
-def _eur_cap_strip_premium_bp(vol_curve_dict, first_fixing_y, tenor_y, curve=None, ois_curve=None):
-    """
-    Sum of caplet PVs for an ATM straddle leg, expressed in bp/notional.
-    - vol_curve_dict: {T_fix: vol_bp} - normal Bachelier vol per caplet
-    - first_fixing_y: forward start (e.g. 0.25 for 3m start)
-    - tenor_y: TOTAL cap length from today (e.g. 1.0 for 1Y cap = 3m start, 9m of fixings)
-    - curve / ois_curve: optional override; defaults to session EUR config
-    Returns LEG premium in bp (multiply by 2 for straddle).
-
-    Semantics MATCH the pricer button (line 14361) exactly:
-      - schedule built from 1/252 to tenor_y + 1/252 in 0.25 steps
-      - skip if T_i <= first_fixing_y + 1/252
-      - per-caplet F_i and disc_rate from session curves
-      - ATM straddle leg: K = F_i per caplet
-    """
-    import math
-    if curve is None:
-        curve = st.session_state.get("config_curves", {}).get("EUR")
-    if ois_curve is None:
-        ois_curve = st.session_state.get("config_basis", {}).get("EUR", {}).get("ois")
-        if ois_curve is None:
-            ois_curve = curve  # ESTR fallback
-    if curve is None or (hasattr(curve, 'empty') and curve.empty):
-        return 0.0
-
-    # Schedule: quarterly from base, MATCHES pricer schedule (swaptions_tab line ~13879)
-    base = 1.0 / 252.0
-    cap_start = base
-    cap_end = tenor_y + base
-    sched = []
-    t = cap_start
-    while t < cap_end - 1e-8:
-        t_next = min(t + 0.25, cap_end)
-        sched.append((t_next, t_next - t))
-        t = t_next
-
-    # Skip threshold matches pricer (line 14367): T_i <= first_fixing_y + base
-    skip_thresh = first_fixing_y + base
-    notional = 1.0e6
-    total_pv = 0.0
-
-    for T_i, accrual in sched:
-        if T_i <= skip_thresh:
-            continue
-        # Vol lookup — same logic as get_caplet_vol_for_fixing
-        vol_bp = vol_curve_dict.get(T_i)
-        if vol_bp is None:
-            mats = sorted(vol_curve_dict.keys())
-            if not mats:
-                vol_bp = 35.0
-            elif T_i < mats[0]:
-                vol_bp = vol_curve_dict[mats[0]]
-            elif T_i > mats[-1]:
-                vol_bp = vol_curve_dict[mats[-1]]
-            else:
-                for j in range(len(mats) - 1):
-                    if mats[j] <= T_i <= mats[j+1]:
-                        a = (T_i - mats[j]) / (mats[j+1] - mats[j])
-                        vol_bp = vol_curve_dict[mats[j]] + a * (vol_curve_dict[mats[j+1]] - vol_curve_dict[mats[j]])
-                        break
-        sigma = vol_bp / 10000.0
-
-        # Per-caplet forward (3M)
-        F_i, _, _ = forward_and_annuity_from_curve(curve, "EUR", max(T_i - 0.25, 0.001), 0.25, ois_curve)
-
-        # Disc rate from OIS (ESTR for EUR)
-        disc_rate = interpolate_zero(ois_curve, T_i)
-
-        # ATM straddle leg → K = F (per-caplet ATM)
-        res = bachelier_caplet(notional, accrual, F_i, F_i, sigma, T_i, disc_rate, is_cap=True)
-        total_pv += res["pv"]
-
-    return (total_pv / notional) * 10000.0
-
-
 def build_caplet_vol_curve_eur(ccy: str, atm_surface, sabr_params=None, 
                           spread_3m1y=-3.0, spread_1y1y=12.0, spread_2y1y=15.0, 
                           spread_3y1y=19.0, spread_4y1y=22.0, spread_5y2y=40.0, spread_7y3y=60.0,
@@ -3584,16 +3505,12 @@ def build_caplet_vol_curve_eur(ccy: str, atm_surface, sabr_params=None,
             for t in [0.25, 0.5, 0.75, 1.0]:
                 caplet_vols[t] = listed_front_vols.get(t, listed_front_vols.get(1.0, 75.0))
         else:
-            # OTC: solve for FLAT vol to 1Y using CANONICAL cap-strip pricer.
-            # v1105f: 1Y CFS = 3m start, 1Y total → first_fixing_y=0.25, tenor_y=1.0.
-            # This matches the pricer button EXACTLY (line 14361), so by construction
-            # the priced PV will equal cfs_1y_leg to numerical precision.
+            # OTC: solve for FLAT vol to 1Y
             def objective_1y(vol_bp):
-                flat = {round(t, 2): vol_bp for t in [0.25, 0.5, 0.75, 1.0]}
-                return _eur_cap_strip_premium_bp(flat, first_fixing_y=0.25, tenor_y=1.0) - cfs_1y_leg
-
+                return price_caplets_flat_vol(vol_bp, 1.0) - cfs_1y_leg
+            
             try:
-                vol_1y = opt.brentq(objective_1y, 1.0, 200.0, xtol=1e-10, rtol=1e-12)
+                vol_1y = opt.brentq(objective_1y, 1.0, 200.0, xtol=0.001)
                 for t in [0.25, 0.5, 0.75, 1.0]:
                     caplet_vols[t] = max(vol_1y, 1.0)
             except:
@@ -3732,11 +3649,11 @@ def build_caplet_vol_curve_eur(ccy: str, atm_surface, sabr_params=None,
             interp_curve[round(t, 2)] = max(float(cs(t)), 1.0)
             t += 0.25
         
-        # v1105f: route through canonical pricer so calibrated PV equals priced PV exactly
+        # Price each maturity using SHARED pricing function
         errors = []
         for check_mat in anchor_mats_to_solve:
             target_prem = cumulative_leg_prems[check_mat]
-            actual_prem = _eur_cap_strip_premium_bp(interp_curve, first_fixing_y=0.25, tenor_y=check_mat)
+            actual_prem = price_caplets_with_vol_curve(ccy, check_mat, interp_curve, notional_mm=1.0)
             errors.append(actual_prem - target_prem)
         
         return np.array(errors)
@@ -3750,8 +3667,8 @@ def build_caplet_vol_curve_eur(ccy: str, atm_surface, sabr_params=None,
         from scipy.optimize import least_squares
         try:
             result = least_squares(price_with_interp_curve, initial_guess,
-                                   ftol=1e-12, xtol=1e-12, gtol=1e-12,
-                                   max_nfev=2000)
+                                   ftol=1e-6, xtol=1e-6, gtol=1e-6,
+                                   max_nfev=500)
             
             if result.success:
                 for i, mat in enumerate(anchor_mats_to_solve):
@@ -13955,76 +13872,10 @@ def caps_floors_tab(vol_mode: str):
     ccy = ccy_select.split(" ")[0]
     
     # Check if pending currency selected
-    # v1105b: EUR supported in CFS via WEDGES path (3M Q/Q or 6M S/S sub-nav)
+    # v1105i: EUR allowed through to use parallel EUR CFS path (build_caplet_vol_curve_eur)
     if "PENDING" in ccy_select and ccy != "EUR":
         st.warning(f"├ö├àÔöé {ccy} pricing coming soon. Currently supported: AUD, NZD, USD, EUR")
         return
-
-    # ═══════════════════════════════════════════════════════════════════
-    # v1105b: EUR CFS sub-nav — 3M EURIBOR Q/Q vs 6M EURIBOR S/S
-    # ═══════════════════════════════════════════════════════════════════
-    if ccy == "EUR":
-        st.markdown("### EUR Caps & Floors")
-        _eur_cfs_mode = st.radio(
-            "EUR caplet mode",
-            ["3M EURIBOR (Q/Q)", "6M EURIBOR (S/S)"],
-            horizontal=True,
-            key="eur_cfs_mode",
-        )
-        st.session_state["_eur_cfs_freq"] = 0.25 if "3M" in _eur_cfs_mode else 0.5
-        # Projection curve: 3M EURIBOR for Q/Q mode, 6M EURIBOR for S/S mode.
-        # Falls back to ESTR if EURIBOR not loaded.
-        _eur_b = st.session_state.get("config_basis", {}).get("EUR", {})
-        _e6m = _eur_b.get("euribor_6m")
-        _e3m = _eur_b.get("euribor_3m")
-        _e_proj = _e3m if "3M" in _eur_cfs_mode else _e6m
-        if _e_proj is None or (hasattr(_e_proj, "empty") and _e_proj.empty):
-            _alt = _e6m if "3M" in _eur_cfs_mode else _e3m
-            if _alt is not None and not _alt.empty:
-                st.warning(f"⚠️ {_eur_cfs_mode} curve not loaded — using fallback")
-                _e_proj = _alt
-        # Stash for downstream code paths to pick up
-        st.session_state["_eur_cfs_proj_curve"] = _e_proj
-        # ESTR is OIS for EUR — ensure config_basis['EUR']['ois'] is set
-        _estr = st.session_state.get("config_curves", {}).get("EUR")
-        if _estr is not None and st.session_state.get("config_basis", {}).get("EUR", {}).get("ois") is None:
-            st.session_state.setdefault("config_basis", {}).setdefault("EUR", {})["ois"] = _estr
-
-        # v1105d: one-time migration to force EUR wedge defaults to apply.
-        if not st.session_state.get("_eur_wedge_migration_v1105d"):
-            _eur_defaults = {
-                "cf_spr_3m1y": 5.0,  "cf_spr_1y1y": 8.0,   "cf_spr_2y1y": 10.0,
-                "cf_spr_3y1y": 13.0, "cf_spr_4y1y": 15.0,  "cf_spr_5y2y": 30.0,
-                "cf_spr_7y3y": 40.0, "cf_spr_10y2y": 25.0, "cf_spr_12y3y": 60.0,
-                "cf_spr_15v20": -3.0, "cf_spr_20v30": -3.0,
-            }
-            _db_eur = {}
-            if HAS_POSTGRES and st.session_state.get("authenticated") and st.session_state.get("username"):
-                try:
-                    _db_eur = load_user_config(st.session_state.get("username"), "cf_spreads", "EUR") or {}
-                except Exception:
-                    _db_eur = {}
-            _final = {**_eur_defaults, **_db_eur}
-            for _k, _v in _final.items():
-                st.session_state[_k] = float(_v)
-                st.session_state.pop(f"{_k}_new", None)
-                st.session_state.pop(f"{_k}_temp", None)
-            st.session_state.pop("_cf_last_active_ccy", None)
-            st.session_state["_eur_wedge_migration_v1105d"] = True
-
-        # v1105e: bust caches when EUR mode (Q/Q vs S/S) changes so the caplet curve
-        # and ATM CFS Straddles table recompute. Without this, the graph and table
-        # show stale values from the previous mode.
-        _prev_eur_mode = st.session_state.get("_prev_eur_cfs_mode")
-        if _prev_eur_mode != _eur_cfs_mode:
-            for _bk in ["_caplet_curve_key", "_atm_cfs_cache_key", "_atm_cfs_rows_cache",
-                        "_cfs_otc_build_cache", "_cfs_listed_build_cache",
-                        "_cfs_chart_sig", "_cfs_chart_fig", "_cfs_chart_tbl",
-                        f"caplet_vol_curve_EUR"]:
-                st.session_state.pop(_bk, None)
-            st.session_state["_prev_eur_cfs_mode"] = _eur_cfs_mode
-
-        st.markdown("---")
 
     # ═══════════════════════════════════════════════════════════════════
     # v2704w: clear chart cache when currency changes — prevents USD curves
@@ -14146,7 +13997,7 @@ def caps_floors_tab(vol_mode: str):
                 "cf_spr_3y1y":15.0, "cf_spr_4y1y":18.0, "cf_spr_5y2y":30.0,
                 "cf_spr_7y3y":40.0, "cf_spr_10y2y":30.0, "cf_spr_12y3y":60.0,
                 "cf_spr_15v20":-5.0},
-        # v1105c: EUR baseline (tunable — will be replaced once user saves to cf_spreads/EUR)
+        # v1105i: EUR baseline
         "EUR": {"cf_spr_3m1y":5.0,  "cf_spr_1y1y":8.0,  "cf_spr_2y1y":10.0,
                 "cf_spr_3y1y":13.0, "cf_spr_4y1y":15.0, "cf_spr_5y2y":30.0,
                 "cf_spr_7y3y":40.0, "cf_spr_10y2y":25.0, "cf_spr_12y3y":60.0,
@@ -15267,17 +15118,6 @@ def caps_floors_tab(vol_mode: str):
                 # the render pipeline to splice the Active source's front end
                 # with the wedge-chain long end and PCHIP-spline the join.
                 st.session_state["_cfs_calc_requested"] = True
-                # v1105g: also nuke all chart/curve caches so the graph + table
-                # actually redraw with the new curve. Without this the cache key
-                # at line 17068 still matches the stale curve hash and the chart
-                # falls into the _skip_chart_build branch.
-                for _bust_k in ["_cfs_chart_sig", "_cfs_chart_fig", "_cfs_chart_tbl",
-                                "_cfs_otc_curve", "_cfs_listed_bootstrap",
-                                "_cfs_sr3_hybrid", "_cfs_sr3_full",
-                                "_cfs_otc_build_cache", "_cfs_listed_build_cache",
-                                "_atm_cfs_cache_key", "_atm_cfs_rows_cache",
-                                "_caplet_curve_key", f"caplet_vol_curve_{ccy}"]:
-                    st.session_state.pop(_bust_k, None)
                 # v2404p: NO cache pops, NO preserve blocks, NO st.rerun().
                 # Cache sigs auto-invalidate when spreads change.
                 # _calc_requested flag triggers rebuild in the pipeline.
@@ -15675,7 +15515,8 @@ def caps_floors_tab(vol_mode: str):
                         _cfs_td.setdefault("3m1y", {})["cfs_straddle"] = _otc_1y_stradd
                     if _otc_1y1y_gap is not None:
                         _cfs_td.setdefault("1y1y", {})["cfs_straddle"] = _otc_1y1y_gap
-                    # v1105e: route EUR to dedicated calibrator with tight tolerances
+                    # v1105i: route EUR to its own calibrator (identical code, separate function).
+                    # AUD/USD/NZD continue to use build_caplet_vol_curve.
                     _build_fn = build_caplet_vol_curve_eur if ccy == "EUR" else build_caplet_vol_curve
                     return _build_fn(
                         ccy, atm, None,
@@ -27089,9 +26930,7 @@ def main():
                 if _sc:
                     _cur = _sc.cursor()
                     _sl = []
-                    # v1105a: include EUR in startup auto-load (alongside SUPPORTED_CURRENCIES)
-                    _autoload_ccys = list(SUPPORTED_CURRENCIES) + ["EUR"]
-                    for _cy in _autoload_ccys:
+                    for _cy in SUPPORTED_CURRENCIES:
                         # All currencies: latest snapshot, include shared records
                         _cur.execute("""
                             SELECT id FROM vol_history
@@ -27294,9 +27133,16 @@ def main():
                         pass
 
             # Load ALL currencies at startup
-            # v1105a: include EUR in the always-load list (no longer conditional on sidebar)
-            for _sc in list(SUPPORTED_CURRENCIES) + ["EUR"]:
+            for _sc in SUPPORTED_CURRENCIES:
                 _load_ccy_curves(_sc)
+            # v0705h: also prime EUR if user's restored sidebar ccy is EUR (so EUR Curves tab
+            # renders with data on first paint instead of needing a ccy-switch round-trip)
+            try:
+                _startup_ccy = str(st.session_state.get("sidebar_ccy", "")).split(" ")[0]
+                if _startup_ccy == "EUR":
+                    _load_ccy_curves("EUR")
+            except Exception:
+                pass
 
             # Store function reference for on-demand currency refresh
             st.session_state["_load_ccy_curves_fn"] = _load_ccy_curves
