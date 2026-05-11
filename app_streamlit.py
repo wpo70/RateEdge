@@ -27140,8 +27140,6 @@ def main():
                 if _sc:
                     _cur = _sc.cursor()
                     _sl = []
-                    # v1205m: EUR not in SUPPORTED_CURRENCIES but vol_history exists for EUR.
-                    # Include EUR in the startup loop so the ATM surface auto-loads on login.
                     for _cy in list(SUPPORTED_CURRENCIES) + ["EUR"]:
                         # All currencies: latest snapshot, include shared records
                         _cur.execute("""
@@ -27345,14 +27343,8 @@ def main():
                         pass
 
             # Load ALL currencies at startup
-            for _sc in SUPPORTED_CURRENCIES:
+            for _sc in list(SUPPORTED_CURRENCIES) + ["EUR"]:
                 _load_ccy_curves(_sc)
-            # v1205m: always load EUR at startup too (EUR not in SUPPORTED_CURRENCIES
-            # but data exists in DB and is needed for Curves/CFS/RV/Vol Editor tabs).
-            try:
-                _load_ccy_curves("EUR")
-            except Exception:
-                pass
 
             # Store function reference for on-demand currency refresh
             st.session_state["_load_ccy_curves_fn"] = _load_ccy_curves
