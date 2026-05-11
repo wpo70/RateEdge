@@ -13628,6 +13628,34 @@ def caps_floors_tab(vol_mode: str):
         if _estr is not None and st.session_state.get("config_basis", {}).get("EUR", {}).get("ois") is None:
             st.session_state.setdefault("config_basis", {}).setdefault("EUR", {})["ois"] = _estr
 
+        # v1105d: one-time migration to force EUR wedge defaults to apply.
+        # Without this, any stale wedge values left over from v1105b (when EUR was
+        # falling back to AUD defaults) persist in session_state and the per-ccy
+        # defaults dict skip path (line ~13759) doesn't re-run.
+        if not st.session_state.get("_eur_wedge_migration_v1105d"):
+            _eur_defaults = {
+                "cf_spr_3m1y": 5.0,  "cf_spr_1y1y": 8.0,   "cf_spr_2y1y": 10.0,
+                "cf_spr_3y1y": 13.0, "cf_spr_4y1y": 15.0,  "cf_spr_5y2y": 30.0,
+                "cf_spr_7y3y": 40.0, "cf_spr_10y2y": 25.0, "cf_spr_12y3y": 60.0,
+                "cf_spr_15v20": -3.0, "cf_spr_20v30": -3.0,
+            }
+            # Try DB first for any saved EUR overrides
+            _db_eur = {}
+            if HAS_POSTGRES and st.session_state.get("authenticated") and st.session_state.get("username"):
+                try:
+                    _db_eur = load_user_config(st.session_state.get("username"), "cf_spreads", "EUR") or {}
+                except Exception:
+                    _db_eur = {}
+            _final = {**_eur_defaults, **_db_eur}
+            for _k, _v in _final.items():
+                st.session_state[_k] = float(_v)
+                # Also clear the _new widget key and _temp working copy so the UI re-seeds
+                st.session_state.pop(f"{_k}_new", None)
+                st.session_state.pop(f"{_k}_temp", None)
+            # Force the ccy-switch block to re-run if it would have skipped
+            st.session_state.pop("_cf_last_active_ccy", None)
+            st.session_state["_eur_wedge_migration_v1105d"] = True
+
         st.markdown("---")
 
     # ═══════════════════════════════════════════════════════════════════
