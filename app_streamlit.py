@@ -7364,26 +7364,19 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _all_df_display = _all_df.drop(columns=["_notional_num"], errors="ignore")
 
                     # Assemble CSV: trades table → blank → broker breakdown
-                    # v1205c: Excel-friendly format:
-                    #  - UTF-8 BOM so Excel auto-detects encoding (no gibberish)
-                    #  - Emoji stripped from Type column (Excel can't render colour emoji)
+                    # v1205d: Excel-friendly format:
+                    #  - UTF-8 BOM so Excel auto-detects encoding (emojis render correctly)
+                    #  - CRLF line endings (Excel-native)
                     #  - Breakdown section padded to same column count as trades
                     #    so Excel doesn't fragment the layout
-                    import io as _io_csv, re as _re_csv
+                    import io as _io_csv
                     _csv_buf = _io_csv.StringIO()
                     _csv_buf.write("\ufeff")  # BOM for Excel
 
-                    # Strip emoji from Type column for CSV (keep in app display)
-                    _trades_for_csv = _all_df_display.copy()
-                    if "Type" in _trades_for_csv.columns:
-                        _trades_for_csv["Type"] = _trades_for_csv["Type"].astype(str).apply(
-                            lambda s: _re_csv.sub(r'[^\x00-\x7F]+', '', s).strip()
-                        )
+                    _all_df_display.to_csv(_csv_buf, index=False, lineterminator="\r\n")
 
-                    _trades_for_csv.to_csv(_csv_buf, index=False, lineterminator="\r\n")
-
-                    # Pad broker breakdown to same column width as trades (12 cols)
-                    _n_cols = len(_trades_for_csv.columns)
+                    # Pad broker breakdown to same column width as trades
+                    _n_cols = len(_all_df_display.columns)
                     _pad = "," * (_n_cols - 5)  # broker section has 5 cols
 
                     _csv_buf.write("\r\n")
