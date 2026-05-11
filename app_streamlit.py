@@ -13593,9 +13593,62 @@ def caps_floors_tab(vol_mode: str):
     ccy = ccy_select.split(" ")[0]
     
     # Check if pending currency selected
-    if "PENDING" in ccy_select:
-        st.warning(f"├ö├àÔöé {ccy} pricing coming soon. Currently supported: AUD, NZD, USD")
+    # v1105b: EUR supported in CFS via WEDGES path (3M Q/Q or 6M S/S sub-nav)
+    if "PENDING" in ccy_select and ccy != "EUR":
+        st.warning(f"├ö├àÔöé {ccy} pricing coming soon. Currently supported: AUD, NZD, USD, EUR")
         return
+
+    # ═══════════════════════════════════════════════════════════════════
+    # v1105b: EUR CFS sub-nav — 3M EURIBOR Q/Q vs 6M EURIBOR S/S
+    # ═══════════════════════════════════════════════════════════════════
+    if ccy == "EUR":
+        st.markdown("### EUR Caps & Floors")
+        _eur_cfs_mode = st.radio(
+            "EUR caplet mode",
+            ["3M EURIBOR (Q/Q)", "6M EURIBOR (S/S)"],
+            horizontal=True,
+            key="eur_cfs_mode",
+        )
+        st.session_state["_eur_cfs_freq"] = 0.25 if "3M" in _eur_cfs_mode else 0.5
+        # Projection curve: 3M EURIBOR for Q/Q mode, 6M EURIBOR for S/S mode.
+        # Falls back to ESTR if EURIBOR not loaded.
+        _eur_b = st.session_state.get("config_basis", {}).get("EUR", {})
+        _e6m = _eur_b.get("euribor_6m")
+        _e3m = _eur_b.get("euribor_3m")
+        _e_proj = _e3m if "3M" in _eur_cfs_mode else _e6m
+        if _e_proj is None or (hasattr(_e_proj, "empty") and _e_proj.empty):
+            _alt = _e6m if "3M" in _eur_cfs_mode else _e3m
+            if _alt is not None and not _alt.empty:
+                st.warning(f"⚠️ {_eur_cfs_mode} curve not loaded — using fallback")
+                _e_proj = _alt
+        # Stash for downstream code paths to pick up
+        st.session_state["_eur_cfs_proj_curve"] = _e_proj
+        # ESTR is OIS for EUR — ensure config_basis['EUR']['ois'] is set
+        _estr = st.session_state.get("config_curves", {}).get("EUR")
+        if _estr is not None and st.session_state.get("config_basis", {}).get("EUR", {}).get("ois") is None:
+            st.session_state.setdefault("config_basis", {}).setdefault("EUR", {})["ois"] = _estr
+
+        # v1105b: seed EUR wedge defaults if not yet present in session.
+        # Tries DB cf_spreads/EUR first; falls back to sensible defaults.
+        if not st.session_state.get("_eur_cfs_seeded"):
+            _eur_wedge_defaults = {
+                "cf_spr_3m1y": 5.0,  "cf_spr_1y1y": 8.0,   "cf_spr_2y1y": 10.0,
+                "cf_spr_3y1y": 13.0, "cf_spr_4y1y": 15.0,  "cf_spr_5y2y": 30.0,
+                "cf_spr_7y3y": 40.0, "cf_spr_10y2y": 25.0, "cf_spr_12y3y": 60.0,
+                "cf_spr_15v20": -3.0, "cf_spr_20v30": -3.0,
+            }
+            _db_eur_spreads = {}
+            if HAS_POSTGRES and st.session_state.get("authenticated") and st.session_state.get("username"):
+                try:
+                    _db_eur_spreads = load_user_config(st.session_state.get("username"), "cf_spreads", "EUR") or {}
+                except Exception:
+                    _db_eur_spreads = {}
+            for _k, _v in _eur_wedge_defaults.items():
+                if _k not in st.session_state:
+                    st.session_state[_k] = float(_db_eur_spreads.get(_k, _v))
+            st.session_state["_eur_cfs_seeded"] = True
+
+        st.markdown("---")
 
     # ═══════════════════════════════════════════════════════════════════
     # v2704w: clear chart cache when currency changes — prevents USD curves
