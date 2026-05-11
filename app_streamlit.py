@@ -7256,6 +7256,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         "P Prem BP": f"{_p_bp:.2f}" if _p_bp else "—",
                                         "R Prem BP": f"{_r_bp:.2f}" if _r_bp else "—",
                                         "Platform": PLATFORM_NAMES.get(str(_p.get("platform_identifier","")), str(_p.get("platform_identifier",""))),
+                                        "_notional_num": float(_comb_not or 0),  # v1105o: numeric for broker % breakdown
                                     })
                                     break
 
@@ -7292,6 +7293,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         "P Prem BP": "—",
                         "R Prem BP": "—",
                         "Platform": PLATFORM_NAMES.get(str(_s_row.get("platform_identifier","")), str(_s_row.get("platform_identifier",""))),
+                        "_notional_num": float(_s_not or 0),  # v1105o
                     })
 
                 # Exotics
@@ -7319,6 +7321,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         "P Prem BP": "—",
                         "R Prem BP": "—",
                         "Platform": PLATFORM_NAMES.get(str(_e_row.get("platform_identifier","")), str(_e_row.get("platform_identifier",""))),
+                        "_notional_num": float(_e_not or 0),  # v1105o
                     })
 
                 # Summary
@@ -7340,9 +7343,49 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 if _all_trades:
                     _all_df = pd.DataFrame(_all_trades)
                     _all_df = _all_df.sort_values(_time_col, ascending=False).reset_index(drop=True)
+
+                    # v1105o: build CSV with broker % breakdown appended at the bottom.
+                    # Uses hidden _notional_num column for numeric notional aggregation,
+                    # then drops it from the displayed dataframe.
+                    _broker_agg = _all_df.groupby("Platform").agg(
+                        count=("Platform", "size"),
+                        notional=("_notional_num", "sum"),
+                    ).reset_index()
+                    _tot_count    = int(_broker_agg["count"].sum()) if not _broker_agg.empty else 0
+                    _tot_notional = float(_broker_agg["notional"].sum()) if not _broker_agg.empty else 0.0
+                    _broker_agg["Pct of Trades"]   = (_broker_agg["count"] / _tot_count * 100).round(2) if _tot_count > 0 else 0
+                    _broker_agg["Pct of Notional"] = (_broker_agg["notional"] / _tot_notional * 100).round(2) if _tot_notional > 0 else 0
+                    _broker_agg["Notional"]        = _broker_agg["notional"].apply(_fmt_notional)
+                    _broker_agg = _broker_agg.sort_values("count", ascending=False)[
+                        ["Platform", "count", "Pct of Trades", "Notional", "Pct of Notional"]
+                    ].rename(columns={"count": "Trade Count"})
+
+                    # Hidden numeric column out of display df
+                    _all_df_display = _all_df.drop(columns=["_notional_num"], errors="ignore")
+
+                    # Assemble CSV: trades table → blank → broker breakdown
+                    import io as _io_csv
+                    _csv_buf = _io_csv.StringIO()
+                    _all_df_display.to_csv(_csv_buf, index=False)
+                    _csv_buf.write("\n")
+                    _csv_buf.write("Broker / Platform Breakdown\n")
+                    _broker_agg.to_csv(_csv_buf, index=False)
+                    _csv_buf.write(f"\nTotal Trades,{_tot_count}\n")
+                    _csv_buf.write(f"Total Notional,{_fmt_notional(_tot_notional)}\n")
+
+                    _csv_dl_col1, _csv_dl_col2 = st.columns([1, 5])
+                    with _csv_dl_col1:
+                        st.download_button(
+                            "⬇ Download CSV (with broker breakdown)",
+                            data=_csv_buf.getvalue(),
+                            file_name=f"sdr_full_analytics_{_sdr_ccy}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+                            mime="text/csv",
+                            key="_sdr_full_csv_dl",
+                        )
+
                     st.caption(f"Times shown in **{_tz_label}**")
-                    st.dataframe(_all_df, use_container_width=True, hide_index=True,
-                                 height=min(60 + len(_all_df) * 35, 700))
+                    st.dataframe(_all_df_display, use_container_width=True, hide_index=True,
+                                 height=min(60 + len(_all_df_display) * 35, 700))
                     st.caption("Straddle prem deduped for all brokers except DWSF (report full straddle prem on each leg). "
                                "DWSF strikes normalised (÷100).")
 
