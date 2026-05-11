@@ -7448,14 +7448,24 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                     def _sdr_autosave_on_click(_data=_xlsx_buf.getvalue(), _ccy=_sdr_ccy, _fname=_fname_csv):
                         try:
-                            import pathlib as _pl_sdr
+                            import pathlib as _pl_sdr, os as _os_sdr
                             _autosave_dir = _pl_sdr.Path(_SDR_AUTOSAVE_ROOT) / _ccy
                             _autosave_dir.mkdir(parents=True, exist_ok=True)
                             _autosave_path = _autosave_dir / _fname
                             with open(_autosave_path, "wb") as _f_save:
                                 _f_save.write(_data)
-                            st.session_state[f"_sdr_autosave_last_path_{_ccy}"] = str(_autosave_path)
-                            st.session_state[f"_sdr_autosave_last_err_{_ccy}"] = None
+                                _f_save.flush()
+                                _os_sdr.fsync(_f_save.fileno())
+                            # v1205l: verify file actually landed on disk + show native Windows-style path
+                            if _autosave_path.exists():
+                                _native = str(_autosave_path).replace("/", "\\")
+                                _size = _autosave_path.stat().st_size
+                                st.session_state[f"_sdr_autosave_last_path_{_ccy}"] = f"{_native}  ({_size:,} bytes)"
+                                st.session_state[f"_sdr_autosave_last_err_{_ccy}"] = None
+                            else:
+                                st.session_state[f"_sdr_autosave_last_err_{_ccy}"] = (
+                                    f"Write completed but file not found at {_autosave_path}"
+                                )
                         except Exception as _save_err:
                             # Surface the error so user can see what went wrong
                             st.session_state[f"_sdr_autosave_last_err_{_ccy}"] = f"{type(_save_err).__name__}: {_save_err}"
@@ -27130,7 +27140,9 @@ def main():
                 if _sc:
                     _cur = _sc.cursor()
                     _sl = []
-                    for _cy in SUPPORTED_CURRENCIES:
+                    # v1205m: EUR not in SUPPORTED_CURRENCIES but vol_history exists for EUR.
+                    # Include EUR in the startup loop so the ATM surface auto-loads on login.
+                    for _cy in list(SUPPORTED_CURRENCIES) + ["EUR"]:
                         # All currencies: latest snapshot, include shared records
                         _cur.execute("""
                             SELECT id FROM vol_history
@@ -27335,12 +27347,10 @@ def main():
             # Load ALL currencies at startup
             for _sc in SUPPORTED_CURRENCIES:
                 _load_ccy_curves(_sc)
-            # v0705h: also prime EUR if user's restored sidebar ccy is EUR (so EUR Curves tab
-            # renders with data on first paint instead of needing a ccy-switch round-trip)
+            # v1205m: always load EUR at startup too (EUR not in SUPPORTED_CURRENCIES
+            # but data exists in DB and is needed for Curves/CFS/RV/Vol Editor tabs).
             try:
-                _startup_ccy = str(st.session_state.get("sidebar_ccy", "")).split(" ")[0]
-                if _startup_ccy == "EUR":
-                    _load_ccy_curves("EUR")
+                _load_ccy_curves("EUR")
             except Exception:
                 pass
 
