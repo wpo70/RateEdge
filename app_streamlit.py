@@ -15644,17 +15644,26 @@ def caps_floors_tab(vol_mode: str):
         _calc_requested = st.session_state.get("_cfs_calc_requested", False)
         _otc_cached = st.session_state.get("_cfs_otc_build_cache")
         _listed_cached = st.session_state.get("_cfs_listed_build_cache")
+        # v1105m: EUR-only — force rebuild if the cached curve was built for a different ccy.
+        # AUD/USD path unchanged (they relied on shared cache before).
+        _ccy_mismatch = (
+            ccy == "EUR"
+            and _otc_cached is not None
+            and _otc_cached.get("ccy") != "EUR"
+        )
         # Build when: (a) Calculate/Commit pressed, (b) no cache at all,
-        # (c) Listed curve is None but we might need it now (SR3 data loaded since)
+        # (c) Listed curve is None but we might need it now (SR3 data loaded since),
+        # (d) EUR cache mismatch (built for different ccy)
         _listed_curve_stale = (_listed_cached is not None and _listed_cached.get("curve") is None
                                and ccy == "USD" and _listed_1y_stradd is not None and _listed_1y_stradd > 0)
-        _need_build = _calc_requested or (_otc_cached is None) or _listed_curve_stale
+        _need_build = _calc_requested or (_otc_cached is None) or _listed_curve_stale or _ccy_mismatch
 
         if _need_build:
             _otc_curve_built = _call_build_otc(_spreads_dict)
             st.session_state["_cfs_otc_build_cache"] = {
                 "sig": (_spreads_tuple, _atm_hash),
                 "curve": _otc_curve_built,
+                "ccy":   ccy,  # v1105m: track which ccy this cache is for
             }
             if ccy == "USD":
                 _listed_curve_built = _call_build_listed(_spreads_dict)
@@ -15663,6 +15672,7 @@ def caps_floors_tab(vol_mode: str):
             st.session_state["_cfs_listed_build_cache"] = {
                 "sig": (_spreads_tuple, _atm_hash),
                 "curve": _listed_curve_built,
+                "ccy":   ccy,
             }
         else:
             _otc_curve_built = _otc_cached.get("curve") if _otc_cached else None
