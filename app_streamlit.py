@@ -7358,7 +7358,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _broker_agg["Notional"]        = _broker_agg["notional"].apply(_fmt_notional)
                     _broker_agg = _broker_agg.sort_values("count", ascending=False)[
                         ["Platform", "count", "Pct of Trades", "Notional", "Pct of Notional"]
-                    ].rename(columns={"count": "Trade Count"})
+                    ].rename(columns={"count": "Trade Count", "Platform": "Broker"})
 
                     # Hidden numeric column out of display df
                     _all_df_display = _all_df.drop(columns=["_notional_num"], errors="ignore")
@@ -7380,7 +7380,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _pad = "," * (_n_cols - 5)  # broker section has 5 cols
 
                     _csv_buf.write("\r\n")
-                    _csv_buf.write("Broker / Platform Breakdown" + ("," * (_n_cols - 1)) + "\r\n")
+                    _csv_buf.write("Broker Breakdown" + ("," * (_n_cols - 1)) + "\r\n")
                     _broker_header = list(_broker_agg.columns)
                     _csv_buf.write(",".join(_broker_header) + _pad + "\r\n")
                     for _, _r in _broker_agg.iterrows():
