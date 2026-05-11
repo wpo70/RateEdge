@@ -15267,6 +15267,17 @@ def caps_floors_tab(vol_mode: str):
                 # the render pipeline to splice the Active source's front end
                 # with the wedge-chain long end and PCHIP-spline the join.
                 st.session_state["_cfs_calc_requested"] = True
+                # v1105g: also nuke all chart/curve caches so the graph + table
+                # actually redraw with the new curve. Without this the cache key
+                # at line 17068 still matches the stale curve hash and the chart
+                # falls into the _skip_chart_build branch.
+                for _bust_k in ["_cfs_chart_sig", "_cfs_chart_fig", "_cfs_chart_tbl",
+                                "_cfs_otc_curve", "_cfs_listed_bootstrap",
+                                "_cfs_sr3_hybrid", "_cfs_sr3_full",
+                                "_cfs_otc_build_cache", "_cfs_listed_build_cache",
+                                "_atm_cfs_cache_key", "_atm_cfs_rows_cache",
+                                "_caplet_curve_key", f"caplet_vol_curve_{ccy}"]:
+                    st.session_state.pop(_bust_k, None)
                 # v2404p: NO cache pops, NO preserve blocks, NO st.rerun().
                 # Cache sigs auto-invalidate when spreads change.
                 # _calc_requested flag triggers rebuild in the pipeline.
