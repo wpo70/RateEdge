@@ -26642,7 +26642,9 @@ def main():
                 if _sc:
                     _cur = _sc.cursor()
                     _sl = []
-                    for _cy in SUPPORTED_CURRENCIES:
+                    # v1105a: include EUR in startup auto-load (alongside SUPPORTED_CURRENCIES)
+                    _autoload_ccys = list(SUPPORTED_CURRENCIES) + ["EUR"]
+                    for _cy in _autoload_ccys:
                         # All currencies: latest snapshot, include shared records
                         _cur.execute("""
                             SELECT id FROM vol_history
@@ -26845,16 +26847,9 @@ def main():
                         pass
 
             # Load ALL currencies at startup
-            for _sc in SUPPORTED_CURRENCIES:
+            # v1105a: include EUR in the always-load list (no longer conditional on sidebar)
+            for _sc in list(SUPPORTED_CURRENCIES) + ["EUR"]:
                 _load_ccy_curves(_sc)
-            # v0705h: also prime EUR if user's restored sidebar ccy is EUR (so EUR Curves tab
-            # renders with data on first paint instead of needing a ccy-switch round-trip)
-            try:
-                _startup_ccy = str(st.session_state.get("sidebar_ccy", "")).split(" ")[0]
-                if _startup_ccy == "EUR":
-                    _load_ccy_curves("EUR")
-            except Exception:
-                pass
 
             # Store function reference for on-demand currency refresh
             st.session_state["_load_ccy_curves_fn"] = _load_ccy_curves
