@@ -7364,41 +7364,76 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _all_df_display = _all_df.drop(columns=["_notional_num"], errors="ignore")
 
                     # Assemble CSV: trades table → blank → broker breakdown
-                    # v1205d: Excel-friendly format:
-                    #  - UTF-8 BOM so Excel auto-detects encoding (emojis render correctly)
-                    #  - CRLF line endings (Excel-native)
-                    #  - Breakdown section padded to same column count as trades
-                    #    so Excel doesn't fragment the layout
+                    # v1205f: ship as XLSX (not CSV) so Excel column widths auto-fit on open.
+                    #  - UTF-8 throughout (emojis render)
+                    #  - Breakdown section appended below trades on same sheet
+                    #  - Column widths computed from max-content-length per column
                     import io as _io_csv
-                    _csv_buf = _io_csv.StringIO()
-                    _csv_buf.write("\ufeff")  # BOM for Excel
+                    from datetime import datetime as _dt_csv
+                    import openpyxl as _oxl_csv
+                    from openpyxl.styles import Font as _Font_csv
 
-                    _all_df_display.to_csv(_csv_buf, index=False, lineterminator="\r\n")
+                    _wb_csv = _oxl_csv.Workbook()
+                    _ws_csv = _wb_csv.active
+                    _ws_csv.title = "Trades"
 
-                    # Pad broker breakdown to same column width as trades
-                    _n_cols = len(_all_df_display.columns)
-                    _pad = "," * (_n_cols - 5)  # broker section has 5 cols
+                    # Header row
+                    _hdr_cols = list(_all_df_display.columns)
+                    _ws_csv.append(_hdr_cols)
+                    for _cell in _ws_csv[1]:
+                        _cell.font = _Font_csv(bold=True)
 
-                    _csv_buf.write("\r\n")
-                    _csv_buf.write("Broker Breakdown" + ("," * (_n_cols - 1)) + "\r\n")
-                    _broker_header = list(_broker_agg.columns)
-                    _csv_buf.write(",".join(_broker_header) + _pad + "\r\n")
+                    # Trade rows
+                    for _, _r in _all_df_display.iterrows():
+                        _ws_csv.append([_r[c] for c in _hdr_cols])
+
+                    # Blank row + Broker Breakdown section
+                    _ws_csv.append([])
+                    _br_title_row = _ws_csv.max_row + 1
+                    _ws_csv.cell(row=_br_title_row, column=1, value="Broker Breakdown").font = _Font_csv(bold=True)
+
+                    _br_hdr = list(_broker_agg.columns)
+                    _ws_csv.append(_br_hdr)
+                    for _cell in _ws_csv[_ws_csv.max_row]:
+                        _cell.font = _Font_csv(bold=True)
                     for _, _r in _broker_agg.iterrows():
-                        _vals = [str(_r[c]) for c in _broker_header]
-                        # quote any field containing a comma
-                        _vals = [f'"{v}"' if "," in v else v for v in _vals]
-                        _csv_buf.write(",".join(_vals) + _pad + "\r\n")
-                    _csv_buf.write("\r\n")
-                    _csv_buf.write(f"Total Trades,{_tot_count}" + ("," * (_n_cols - 2)) + "\r\n")
-                    _csv_buf.write(f"Total Notional,{_fmt_notional(_tot_notional)}" + ("," * (_n_cols - 2)) + "\r\n")
+                        _ws_csv.append([_r[c] for c in _br_hdr])
+
+                    _ws_csv.append([])
+                    _ws_csv.append(["Total Trades", _tot_count])
+                    _ws_csv.append(["Total Notional", _fmt_notional(_tot_notional)])
+
+                    # Auto-fit column widths (best-effort)
+                    for _col_idx in range(1, _ws_csv.max_column + 1):
+                        _max_len = 0
+                        for _row_idx in range(1, _ws_csv.max_row + 1):
+                            _val = _ws_csv.cell(row=_row_idx, column=_col_idx).value
+                            if _val is not None:
+                                _len = len(str(_val))
+                                if _len > _max_len:
+                                    _max_len = _len
+                        _ws_csv.column_dimensions[_oxl_csv.utils.get_column_letter(_col_idx)].width = min(_max_len + 2, 60)
+
+                    _xlsx_buf = _io_csv.BytesIO()
+                    _wb_csv.save(_xlsx_buf)
+                    _xlsx_buf.seek(0)
+
+                    # Filename: SDR_Trades_(CCY)_(DDMMMYY)_(HHMM){TZ}.xlsx
+                    # v1205g: local machine time + local TZ abbreviation — follows
+                    # the user wherever they are (Sydney → London move handled automatically).
+                    _local_now = _dt_csv.now().astimezone()  # local timezone
+                    _tz_abbr = _local_now.tzname() or ""
+                    # tzname() can return verbose strings on some platforms — collapse to short
+                    _tz_short = "".join(c for c in _tz_abbr if c.isupper())[:4] or _tz_abbr[:4]
+                    _fname_csv = f"SDR_Trades_{_sdr_ccy}_{_local_now.strftime('%d%b%y')}_{_local_now.strftime('%H%M')}{_tz_short}.xlsx"
 
                     _csv_dl_col1, _csv_dl_col2 = st.columns([1, 5])
                     with _csv_dl_col1:
                         st.download_button(
-                            "⬇ Download CSV (with broker breakdown)",
-                            data=_csv_buf.getvalue(),
-                            file_name=f"sdr_full_analytics_{_sdr_ccy}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
-                            mime="text/csv",
+                            "⬇ Download (with broker breakdown)",
+                            data=_xlsx_buf.getvalue(),
+                            file_name=_fname_csv,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key="_sdr_full_csv_dl",
                         )
 
