@@ -3423,6 +3423,87 @@ def _build_listed_caplet_curve_by_date(
 # Identical logic to build_caplet_vol_curve but brentq xtol=1e-10 (was 0.001)
 # and least_squares ftol/xtol/gtol=1e-12 (was 1e-6) so the priced PV matches
 # the wedge cumulative target to ~6 decimal places of bp.
+# ══════════════════════════════════════════════════════════════════════════
+# v1105f: Canonical EUR cap-strip pricing.
+# Both the calibrator (build_caplet_vol_curve_eur) and the EUR pricer-button
+# path MUST go through this function. Identical inputs → identical outputs.
+# This is what guarantees the priced PV = wedge cumulative target EXACTLY.
+# ══════════════════════════════════════════════════════════════════════════
+def _eur_cap_strip_premium_bp(vol_curve_dict, first_fixing_y, tenor_y, curve=None, ois_curve=None):
+    """
+    Sum of caplet PVs for an ATM straddle leg, expressed in bp/notional.
+    - vol_curve_dict: {T_fix: vol_bp} - normal Bachelier vol per caplet
+    - first_fixing_y: forward start (e.g. 0.25 for 3m start)
+    - tenor_y: TOTAL cap length from today (e.g. 1.0 for 1Y cap = 3m start, 9m of fixings)
+    - curve / ois_curve: optional override; defaults to session EUR config
+    Returns LEG premium in bp (multiply by 2 for straddle).
+
+    Semantics MATCH the pricer button (line 14361) exactly:
+      - schedule built from 1/252 to tenor_y + 1/252 in 0.25 steps
+      - skip if T_i <= first_fixing_y + 1/252
+      - per-caplet F_i and disc_rate from session curves
+      - ATM straddle leg: K = F_i per caplet
+    """
+    import math
+    if curve is None:
+        curve = st.session_state.get("config_curves", {}).get("EUR")
+    if ois_curve is None:
+        ois_curve = st.session_state.get("config_basis", {}).get("EUR", {}).get("ois")
+        if ois_curve is None:
+            ois_curve = curve  # ESTR fallback
+    if curve is None or (hasattr(curve, 'empty') and curve.empty):
+        return 0.0
+
+    # Schedule: quarterly from base, MATCHES pricer schedule (swaptions_tab line ~13879)
+    base = 1.0 / 252.0
+    cap_start = base
+    cap_end = tenor_y + base
+    sched = []
+    t = cap_start
+    while t < cap_end - 1e-8:
+        t_next = min(t + 0.25, cap_end)
+        sched.append((t_next, t_next - t))
+        t = t_next
+
+    # Skip threshold matches pricer (line 14367): T_i <= first_fixing_y + base
+    skip_thresh = first_fixing_y + base
+    notional = 1.0e6
+    total_pv = 0.0
+
+    for T_i, accrual in sched:
+        if T_i <= skip_thresh:
+            continue
+        # Vol lookup — same logic as get_caplet_vol_for_fixing
+        vol_bp = vol_curve_dict.get(T_i)
+        if vol_bp is None:
+            mats = sorted(vol_curve_dict.keys())
+            if not mats:
+                vol_bp = 35.0
+            elif T_i < mats[0]:
+                vol_bp = vol_curve_dict[mats[0]]
+            elif T_i > mats[-1]:
+                vol_bp = vol_curve_dict[mats[-1]]
+            else:
+                for j in range(len(mats) - 1):
+                    if mats[j] <= T_i <= mats[j+1]:
+                        a = (T_i - mats[j]) / (mats[j+1] - mats[j])
+                        vol_bp = vol_curve_dict[mats[j]] + a * (vol_curve_dict[mats[j+1]] - vol_curve_dict[mats[j]])
+                        break
+        sigma = vol_bp / 10000.0
+
+        # Per-caplet forward (3M)
+        F_i, _, _ = forward_and_annuity_from_curve(curve, "EUR", max(T_i - 0.25, 0.001), 0.25, ois_curve)
+
+        # Disc rate from OIS (ESTR for EUR)
+        disc_rate = interpolate_zero(ois_curve, T_i)
+
+        # ATM straddle leg → K = F (per-caplet ATM)
+        res = bachelier_caplet(notional, accrual, F_i, F_i, sigma, T_i, disc_rate, is_cap=True)
+        total_pv += res["pv"]
+
+    return (total_pv / notional) * 10000.0
+
+
 def build_caplet_vol_curve_eur(ccy: str, atm_surface, sabr_params=None, 
                           spread_3m1y=-3.0, spread_1y1y=12.0, spread_2y1y=15.0, 
                           spread_3y1y=19.0, spread_4y1y=22.0, spread_5y2y=40.0, spread_7y3y=60.0,
@@ -3503,10 +3584,14 @@ def build_caplet_vol_curve_eur(ccy: str, atm_surface, sabr_params=None,
             for t in [0.25, 0.5, 0.75, 1.0]:
                 caplet_vols[t] = listed_front_vols.get(t, listed_front_vols.get(1.0, 75.0))
         else:
-            # OTC: solve for FLAT vol to 1Y
+            # OTC: solve for FLAT vol to 1Y using CANONICAL cap-strip pricer.
+            # v1105f: 1Y CFS = 3m start, 1Y total → first_fixing_y=0.25, tenor_y=1.0.
+            # This matches the pricer button EXACTLY (line 14361), so by construction
+            # the priced PV will equal cfs_1y_leg to numerical precision.
             def objective_1y(vol_bp):
-                return price_caplets_flat_vol(vol_bp, 1.0) - cfs_1y_leg
-            
+                flat = {round(t, 2): vol_bp for t in [0.25, 0.5, 0.75, 1.0]}
+                return _eur_cap_strip_premium_bp(flat, first_fixing_y=0.25, tenor_y=1.0) - cfs_1y_leg
+
             try:
                 vol_1y = opt.brentq(objective_1y, 1.0, 200.0, xtol=1e-10, rtol=1e-12)
                 for t in [0.25, 0.5, 0.75, 1.0]:
@@ -3647,11 +3732,11 @@ def build_caplet_vol_curve_eur(ccy: str, atm_surface, sabr_params=None,
             interp_curve[round(t, 2)] = max(float(cs(t)), 1.0)
             t += 0.25
         
-        # Price each maturity using SHARED pricing function
+        # v1105f: route through canonical pricer so calibrated PV equals priced PV exactly
         errors = []
         for check_mat in anchor_mats_to_solve:
             target_prem = cumulative_leg_prems[check_mat]
-            actual_prem = price_caplets_with_vol_curve(ccy, check_mat, interp_curve, notional_mm=1.0)
+            actual_prem = _eur_cap_strip_premium_bp(interp_curve, first_fixing_y=0.25, tenor_y=check_mat)
             errors.append(actual_prem - target_prem)
         
         return np.array(errors)
