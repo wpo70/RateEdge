@@ -16582,6 +16582,24 @@ def caps_floors_tab(vol_mode: str):
                   with st.expander("Traceback"):
                       st.code(_tb.format_exc())
 
+        # v1105n: EUR-only — mirror the USD-only write/pop block at the end of
+        # _need_build path. Without this, EUR never:
+        #   (a) writes _cfs_otc_curve so chart_sig invalidates,
+        #   (b) clears _cfs_calc_requested so _need_build keeps firing every render,
+        #   (c) pops _cfs_chart_sig/_cfs_chart_fig so the chart redraws,
+        #   (d) pops _atm_cfs_cache_key so the ATM CFS table re-renders.
+        # AUD/USD/NZD paths unchanged (locked).
+        if ccy == "EUR":
+            st.session_state["_cfs_otc_curve"]        = otc_caplet_curve
+            st.session_state["_cfs_listed_bootstrap"] = _listed_curve_built
+            st.session_state["_cfs_sr3_hybrid"]       = sr3_hybrid_curve
+            st.session_state["_cfs_sr3_full"]         = sr3_full_curve
+            st.session_state.pop("_cfs_calc_requested", None)
+            st.session_state.pop("_atm_cfs_cache_key", None)
+            st.session_state.pop("_atm_cfs_rows_cache", None)
+            st.session_state.pop("_cfs_chart_sig", None)
+            st.session_state.pop("_cfs_chart_fig", None)
+
         # ── ATM CFS Straddle Table ──────────────────────────────────
         st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
         _atm_cfs_exp = st.expander("ATM CFS Straddles", expanded=st.session_state.get("atm_cfs_expanded", True))
