@@ -21924,7 +21924,8 @@ def rv_tab():
     with _rv_main_tab:
         st.caption("Live vol surface + IRS curve for richness/cheapness signals.")
 
-    ccy = st.session_state.get("sidebar_ccy", "AUD")
+    # v1205k: normalise sidebar_ccy — strip "(PENDING)" suffix so EUR lookups work.
+    ccy = str(st.session_state.get("sidebar_ccy", "AUD")).split(" ")[0]
     curve     = get_ccy_curve(ccy)
     _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
     ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
@@ -22017,8 +22018,14 @@ def rv_tab():
             return float(np.interp(t, _xs_c, _ys_c))
         # Use the fwd matrix directly — authoritative source
         # USD stores fwd matrix in usd_fwd_matrix["SOFR OIS"], not fwd_matrix["USD"]
+        # v1205k: EUR stores fwd matrix in eur_fwd_matrix["EURIBOR 6M"]
         if ccy == "USD":
             _rv_fwd_matrix = st.session_state.get("usd_fwd_matrix", {}).get("SOFR OIS")
+        elif ccy == "EUR":
+            _eur_fwds = st.session_state.get("eur_fwd_matrix", {})
+            _rv_fwd_matrix = (_eur_fwds.get("EURIBOR 6M")
+                              or _eur_fwds.get("EURIBOR 3M")
+                              or _eur_fwds.get("ESTR"))
         else:
             _rv_fwd_matrix = st.session_state.get("fwd_matrix", {}).get(ccy)
         def _fwd_rate(t1, t2):
@@ -22479,6 +22486,20 @@ def rv_tab():
                                    f"Ratio: **{_sw_3m5y/(_eq_vol*100*math.sqrt(0.25)):.3f}**")
             elif atm is None:
                 st.warning(f"Load your {ccy} ATM vol surface first to see cross-asset analysis.")
+
+        # ── Cross-Asset Vol: Swaption vs VSTOXX (EUR) — pending BBG feed ────
+        elif ccy == "EUR":
+            # v1205k: VSTOXX/EUStoxx vol feed not yet ingested. Stub block so EUR
+            # RV tab matches AUD/USD structure. When VSTOXX history lands in DB
+            # (similar to vix_spot / spx_vol_surface for USD), mirror the USD
+            # ratio strip + quadrant chart blocks above using:
+            #   _vstoxx_spot = st.session_state.get("vstoxx_spot")
+            #   _estoxx_surf = st.session_state.get("estoxx_vol_surface", {})
+            st.markdown("---")
+            st.markdown("#### 📊 Cross-Asset Vol — Swaption vs VSTOXX")
+            st.caption("VSTOXX / Euro Stoxx 50 vol feed pending BBG ingest. "
+                       "Once loaded, ratio strip and vol regime quadrant will populate "
+                       "(same logic as USD VIX block).")
 
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     # TAB 2   —   CURVE RV & SPREAD ANALYSIS
