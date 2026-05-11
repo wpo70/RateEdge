@@ -7419,43 +7419,50 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _xlsx_buf.seek(0)
 
                     # Filename: SDR_Trades_(CCY)_(DDMMMYY)_(HHMM){TZ}.xlsx
-                    # v1205g: local machine time + local TZ abbreviation — follows
-                    # the user wherever they are (Sydney → London move handled automatically).
-                    _local_now = _dt_csv.now().astimezone()  # local timezone
+                    # v1205j: explicit user-machine timezone lookup. datetime.now().astimezone()
+                    # returns UTC on Windows when TZ env var or system locale isn't detected,
+                    # which broke the filename time. Read Windows registry / IANA tz directly.
+                    #
+                    # MACHINE-CHANGE NOTE: change _USER_TZ when moving between offices:
+                    #   - Sydney home:    "Australia/Sydney"
+                    #   - London office:  "Europe/London"
+                    #   - NYC trip:       "America/New_York"
+                    _USER_TZ = "Australia/Sydney"
+                    try:
+                        from zoneinfo import ZoneInfo as _ZI_csv2
+                        _local_now = _dt_csv.now(_ZI_csv2(_USER_TZ))
+                    except Exception:
+                        _local_now = _dt_csv.now().astimezone()  # fallback
                     _tz_abbr = _local_now.tzname() or ""
-                    # tzname() can return verbose strings on some platforms — collapse to short
                     _tz_short = "".join(c for c in _tz_abbr if c.isupper())[:4] or _tz_abbr[:4]
                     _fname_csv = f"SDR_Trades_{_sdr_ccy}_{_local_now.strftime('%d%b%y')}_{_local_now.strftime('%H%M')}{_tz_short}.xlsx"
 
                     # ─────────────────────────────────────────────────────────
-                    # v1205i: Auto-save XLSX to local IRO folder ONLY when user
-                    # clicks Download. on_click callback fires once per click.
+                    # v1205j: Auto-save XLSX to local IRO folder on Download click.
                     # ─────────────────────────────────────────────────────────
                     # IMPORTANT: hard-coded path below assumes Will's current machine.
-                    # When changing machines (e.g., Sydney → London office workstation),
-                    # update the _SDR_AUTOSAVE_ROOT path constant ONLY:
-                    #   - Current (home Sydney):    C:\Users\willp\DealerWeb London\SDR Reported Trades\IRO
-                    #   - Future London office:     e.g. C:\Users\W.Parry-Okeden\DealerWeb\SDR\IRO
+                    # When changing machines (Sydney → London office workstation),
+                    # update the _SDR_AUTOSAVE_ROOT constant ONLY.
                     # Subfolders {EUR, USD, AUD, NZD, ...} are created under root automatically.
-                    # If the path is unreachable (different machine / Azure / Render), the
-                    # auto-save is silently skipped and the browser download still works.
                     _SDR_AUTOSAVE_ROOT = r"C:\Users\willp\DealerWeb London\SDR Reported Trades\IRO"
 
                     def _sdr_autosave_on_click(_data=_xlsx_buf.getvalue(), _ccy=_sdr_ccy, _fname=_fname_csv):
                         try:
                             import pathlib as _pl_sdr
                             _autosave_dir = _pl_sdr.Path(_SDR_AUTOSAVE_ROOT) / _ccy
-                            if _autosave_dir.parent.exists():
-                                _autosave_dir.mkdir(parents=True, exist_ok=True)
-                                _autosave_path = _autosave_dir / _fname
-                                with open(_autosave_path, "wb") as _f_save:
-                                    _f_save.write(_data)
-                                st.session_state[f"_sdr_autosave_last_path_{_ccy}"] = str(_autosave_path)
-                        except Exception:
-                            pass
+                            _autosave_dir.mkdir(parents=True, exist_ok=True)
+                            _autosave_path = _autosave_dir / _fname
+                            with open(_autosave_path, "wb") as _f_save:
+                                _f_save.write(_data)
+                            st.session_state[f"_sdr_autosave_last_path_{_ccy}"] = str(_autosave_path)
+                            st.session_state[f"_sdr_autosave_last_err_{_ccy}"] = None
+                        except Exception as _save_err:
+                            # Surface the error so user can see what went wrong
+                            st.session_state[f"_sdr_autosave_last_err_{_ccy}"] = f"{type(_save_err).__name__}: {_save_err}"
 
-                    # Show last-saved path if it exists (from a previous click)
+                    # Show last-saved path or error from a previous click
                     _autosaved_path = st.session_state.get(f"_sdr_autosave_last_path_{_sdr_ccy}")
+                    _autosave_err   = st.session_state.get(f"_sdr_autosave_last_err_{_sdr_ccy}")
 
                     _csv_dl_col1, _csv_dl_col2 = st.columns([1, 5])
                     with _csv_dl_col1:
@@ -7468,7 +7475,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             on_click=_sdr_autosave_on_click,
                         )
                     with _csv_dl_col2:
-                        if _autosaved_path:
+                        if _autosave_err:
+                            st.caption(f"⚠️ Auto-save failed: {_autosave_err}")
+                        elif _autosaved_path:
                             st.caption(f"💾 Last auto-saved to `{_autosaved_path}`")
 
                     st.caption(f"Times shown in **{_tz_label}**")
