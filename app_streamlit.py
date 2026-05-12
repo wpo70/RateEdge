@@ -14009,6 +14009,479 @@ def swaptions_tab(vol_mode: str):
 # that change the widget tree structure — every one causes a Streamlit
 # delta protocol crash inside a fragment. Full-page reruns are slightly
 # slower but never crash.
+# ═══════════════════════════════════════════════════════════════════════════
+# EUR Caps & Floors — fully separate code path (v1205x).
+# AUD/USD/NZD continue using caps_floors_tab() unchanged. EUR has its own:
+#   - Wedge widget loop with EUR-prefixed session keys (cf_spr_3m1y_eur etc)
+#   - 15v20 + 20v30 vol spread widgets (30Y CFS extension)
+#   - Calculate handler with its own DB save
+#   - Build pipeline with its own cache (_cfs_otc_build_cache_eur)
+#   - ATM CFS Straddles table with its own cache
+#   - Shared chart at end (reads local caplet_vol_curve, no shared state)
+# DB rows still keyed as cf_spreads / 'EUR' (no rename) — only session keys differ.
+# ═══════════════════════════════════════════════════════════════════════════
+def caps_floors_tab_eur(vol_mode: str, ccy: str):
+    """Self-contained EUR caps & floors tab. No shared session state with
+    AUD/USD/NZD code path except the chart render block at the end."""
+    import numpy as _np
+    import pandas as _pd
+    import math as _math
+    import os as _os
+    import json as _json
+
+    # ── EUR session-state key constants ───────────────────────────────
+    _EUR_WEDGE_KEYS = ["cf_spr_3m1y_eur", "cf_spr_1y1y_eur", "cf_spr_2y1y_eur",
+                       "cf_spr_3y1y_eur", "cf_spr_4y1y_eur", "cf_spr_5y2y_eur",
+                       "cf_spr_7y3y_eur", "cf_spr_10y2y_eur", "cf_spr_12y3y_eur",
+                       "cf_spr_15v20_eur", "cf_spr_20v30_eur"]
+    _EUR_DEFAULTS = {
+        "cf_spr_3m1y_eur": 5.0,  "cf_spr_1y1y_eur": 8.0,  "cf_spr_2y1y_eur": 10.0,
+        "cf_spr_3y1y_eur": 12.0, "cf_spr_4y1y_eur": 15.0, "cf_spr_5y2y_eur": 25.0,
+        "cf_spr_7y3y_eur": 35.0, "cf_spr_10y2y_eur": 30.0, "cf_spr_12y3y_eur": 50.0,
+        "cf_spr_15v20_eur": -5.0, "cf_spr_20v30_eur": -5.0,
+    }
+    # DB row -> session_state mapping (DB keys have no _eur suffix)
+    _DB_TO_SESS = {k.replace("_eur", ""): k for k in _EUR_WEDGE_KEYS}
+
+    # ── First-time load from DB / file for EUR session keys ───────────
+    if not any(k in st.session_state for k in _EUR_WEDGE_KEYS):
+        _loaded = {}
+        if HAS_POSTGRES and st.session_state.get("authenticated") and st.session_state.get("username"):
+            try:
+                _db_eur = load_user_config(st.session_state.get("username"), "cf_spreads", "EUR")
+                if _db_eur:
+                    _loaded = _db_eur
+            except Exception:
+                pass
+        if not _loaded:
+            try:
+                _eur_file = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "cfs_spreads_eur.json")
+                with open(_eur_file, "r") as _f:
+                    _loaded = _json.load(_f)
+            except Exception:
+                pass
+        for _db_k, _sess_k in _DB_TO_SESS.items():
+            _v = _loaded.get(_db_k, _EUR_DEFAULTS[_sess_k])
+            st.session_state[_sess_k] = float(_v)
+
+    # ── Header ─────────────────────────────────────────────────────────
+    st.subheader("Caps & Floors — EUR")
+    col_ccy, col_spacer = st.columns([1, 3])
+    with col_ccy:
+        st.markdown(
+            f"<div style='padding:6px 12px;background:#1e3050;color:#38bdf8;"
+            f"border-radius:6px;font-weight:600;display:inline-block'>{ccy}</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── ATM check ──────────────────────────────────────────────────────
+    atm = get_working_atm_surface(ccy)
+    if atm is None or atm.empty:
+        st.warning("⚠️ No EUR ATM vol surface loaded. Upload via Vol Config tab.")
+        return
+    _atm_hash = st.session_state.get(f"_atm_hash_{ccy}", 0)
+
+    # ── Refresh Swaptions button — populates cfs_table_data ──────────
+    st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
+    bl, _, br = st.columns([2, 0.2, 2])
+    with bl:
+        _calc_btn_clicked = st.button(
+            "🧮 Calculate CFS Curve",
+            key="apply_spreads_eur",
+            type="primary",
+            help="Builds EUR caplet vol curve from wedge spreads + ATM swaptions.",
+        )
+    with br:
+        _refresh_btn_clicked = st.button(
+            "🔄 Refresh Swaptions",
+            key="gen_swpt_prem_eur",
+            type="primary",
+        )
+
+    if _refresh_btn_clicked:
+        _prem_df = st.session_state.get("atm_prem_matrix", {}).get(ccy, {}).get("prem")
+        if _prem_df is None or _prem_df.empty:
+            st.error(
+                f"ATM premium matrix is empty for {ccy}. Go to Curves tab, "
+                "click 'Generate Forward & ATM Matrix', then return here."
+            )
+        else:
+            _ois_rs = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+            if _ois_rs is None:
+                _ois_rs = get_basis_curve(ccy, "ois")
+            _rows_ok = 0
+            st.session_state.setdefault("cfs_table_data", {})
+            for _lbl, _exp, _ten, _cfs_lbl in [
+                ("3m1y","3m",1.0,"1Y CFS"),("1y1y","1y",1.0,"2Y CFS"),
+                ("2y1y","2y",1.0,"3Y CFS"),("3y1y","3y",1.0,"4Y CFS"),
+                ("4y1y","4y",1.0,"5Y CFS"),("5y2y","5y",2.0,"7Y CFS"),
+                ("7y3y","7y",3.0,"10Y CFS"),("10y2y","10y",2.0,"12Y CFS"),
+                ("12y3y","12y",3.0,"15Y CFS"),
+            ]:
+                try:
+                    _ten_col = f"{int(_ten)}Y" if _ten == int(_ten) else f"{_ten}Y"
+                    try:
+                        _v = float(_prem_df.loc[_exp, _ten_col])
+                        if _pd.isna(_v): _v = None
+                    except (KeyError, TypeError, ValueError):
+                        _v = get_matrix_value(_prem_df, _exp, _ten)
+                    if _v is None:
+                        continue
+                    _exp_y = label_to_years(_exp)
+                    try:
+                        if _ois_rs is not None:
+                            _ox = _ois_rs[_ois_rs.columns[0]].to_numpy().astype(float)
+                            _oy = _ois_rs[_ois_rs.columns[1]].to_numpy().astype(float) / 100.0
+                            _r = float(_np.interp(_exp_y, _ox, _oy))
+                            _df = _math.exp(-_r * _exp_y)
+                        else:
+                            _df = _math.exp(-0.04 * _exp_y)
+                    except Exception:
+                        _df = _math.exp(-0.04 * _exp_y)
+                    _v_spot = round(float(_v) * _df, 4)
+                    st.session_state["cfs_table_data"][_lbl] = {
+                        "swaption": _v_spot,
+                        "cfs_label": _cfs_lbl,
+                        "cfs_straddle": _v_spot,
+                    }
+                    _rows_ok += 1
+                except Exception:
+                    pass
+            st.success(f"✅ Refreshed {_rows_ok}/9 swaption rows.")
+            st.rerun()
+
+    # ── Wedge widget loop ──────────────────────────────────────────────
+    st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
+    _wexp = st.expander("Spreads & SABRs", expanded=st.session_state.get("wedges_expanded_eur", True))
+    with _wexp:
+        st.session_state.setdefault("cfs_table_data", {})
+        # ROW_DATA: (session_key, wedge_lbl, tbl_lbl, tbl_wedge, cfs_lbl)
+        _EUR_ROW_DATA = [
+            ("cf_spr_3m1y_eur",  "3m1y→1Y",     "3m1y",  "3mx1",  "1Y CFS"),
+            ("cf_spr_1y1y_eur",  "1y1y vs 1x2",    "1y1y",  "1x2",   "2Y CFS"),
+            ("cf_spr_2y1y_eur",  "2y1y vs 2x3",    "2y1y",  "2x3",   "3Y CFS"),
+            ("cf_spr_3y1y_eur",  "3y1y vs 3x4",    "3y1y",  "3x4",   "4Y CFS"),
+            ("cf_spr_4y1y_eur",  "4y1y vs 4x5",    "4y1y",  "4x5",   "5Y CFS"),
+            ("cf_spr_5y2y_eur",  "5y2y vs 5x7",    "5y2y",  "5x7",   "7Y CFS"),
+            ("cf_spr_7y3y_eur",  "7y3y vs 7x10",   "7y3y",  "7x10",  "10Y CFS"),
+            ("cf_spr_10y2y_eur", "10y2y vs 10x12", "10y2y", "10x12", "12Y CFS"),
+            ("cf_spr_12y3y_eur", "12y3y vs 12x15", "12y3y", "12x15", "15Y CFS"),
+        ]
+        CW = [1.3, 0.55, 1.0, 0.55, 0.05, 0.55, 0.9, 0.75, 0.55, 0.55, 0.9, 0.65]
+        _hc = st.columns(CW)
+        for _i, _lbl in [(0,"Wedge"),(1,"Last"),(2,"Current(bp)"),(3,"Chg"),(5,"Label"),
+                          (6,"Swptn"),(7,"Spot Swptn"),(8,"Wdg"),(9,"Sprd"),(10,"FWD CFS"),(11,"Target")]:
+            _align = "right" if _i in (1,3,6,7,8,9,10,11) else "left"
+            _color = "#22c55e" if _i == 7 else "#64748b"
+            _hc[_i].markdown(
+                f"<div style='font-size:0.75rem;font-weight:600;color:{_color};text-align:{_align}'>{_lbl}</div>",
+                unsafe_allow_html=True,
+            )
+        st.markdown("<hr style='margin:2px 0 0 0;border-color:#334155'>", unsafe_allow_html=True)
+
+        _new_eur_spreads = {}
+        for _sess_k, _wedge_lbl, _tbl_lbl, _tbl_wedge, _cfs_lbl in _EUR_ROW_DATA:
+            _last_val = st.session_state[_sess_k]
+            _wkey = f"{_sess_k}_new"
+            _tkey = f"{_sess_k}_temp"
+            # cur_val: prefer widget's own _new, then _temp, then committed
+            _cur_val = st.session_state.get(_wkey,
+                       st.session_state.get(_tkey, _last_val))
+            _tdata = st.session_state["cfs_table_data"].get(_tbl_lbl, {})
+            _swpt = _tdata.get("swaption", None)
+            _rc = st.columns(CW)
+            _fs = "font-size:0.80rem;padding-top:6px"
+            _rc[0].markdown(f"<div style='{_fs}'>{_wedge_lbl}</div>", unsafe_allow_html=True)
+            _rc[1].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>{_last_val:.1f}</div>", unsafe_allow_html=True)
+            _new_val = _rc[2].number_input(
+                "", value=_cur_val, key=_wkey,
+                format="%.1f", step=0.5, label_visibility="collapsed",
+            )
+            _delta = _new_val - _last_val
+            _dc = "#22c55e" if _delta > 0 else "#ef4444" if _delta < 0 else "#94a3b8"
+            _rc[3].markdown(f"<div style='{_fs};text-align:right;color:{_dc}'>{_delta:+.1f}</div>", unsafe_allow_html=True)
+            if _swpt is not None:
+                _cfs = _swpt + _new_val
+                st.session_state["cfs_table_data"].setdefault(_tbl_lbl, {})["cfs_straddle"] = _cfs
+                _spot_str = f"{_swpt:.4f}"
+                _cfs_str  = f"{_cfs:.4f}"
+            else:
+                _spot_str = "  —  "
+                _cfs_str  = "  —  "
+            st.session_state["cfs_table_data"].setdefault(_tbl_lbl, {})["cfs_label"] = _cfs_lbl
+            _rc[5].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>{_tbl_lbl}</div>", unsafe_allow_html=True)
+            _rc[7].markdown(f"<div style='{_fs};text-align:right;color:#22c55e;font-weight:600'>{_spot_str}</div>", unsafe_allow_html=True)
+            _rc[8].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>{_tbl_wedge}</div>", unsafe_allow_html=True)
+            _rc[9].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>{_new_val:.1f}</div>", unsafe_allow_html=True)
+            _rc[10].markdown(f"<div style='{_fs};text-align:right;color:#38bdf8;font-weight:600'>{_cfs_str}</div>", unsafe_allow_html=True)
+            _rc[11].markdown(f"<div style='{_fs};text-align:right;color:#64748b'>{_cfs_lbl}</div>", unsafe_allow_html=True)
+            _new_eur_spreads[_sess_k] = _new_val
+            st.session_state[_tkey] = _new_val
+
+        # ── 15v20 vol spread row ────────────────────────────────────
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+        st.markdown("<hr style='margin:2px 0;border-color:#1e3050;border-style:dashed'>", unsafe_allow_html=True)
+        _vs_cols = st.columns(CW)
+        _vs_cols[0].markdown(f"<div style='{_fs};color:#f59e0b'>15y vs 20y Vol Spd</div>", unsafe_allow_html=True)
+        _s15_last = st.session_state.get("cf_spr_15v20_eur", -5.0)
+        _s15_cur  = st.session_state.get("cf_spr_15v20_eur_new",
+                    st.session_state.get("cf_spr_15v20_eur_temp", _s15_last))
+        _vs_cols[1].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>{_s15_last:.1f}</div>", unsafe_allow_html=True)
+        _s15_new = _vs_cols[2].number_input(
+            "", value=_s15_cur, key="cf_spr_15v20_eur_new",
+            format="%.1f", step=0.5, label_visibility="collapsed",
+        )
+        _d15 = _s15_new - _s15_last
+        _dc15 = "#22c55e" if _d15 > 0 else "#ef4444" if _d15 < 0 else "#94a3b8"
+        _vs_cols[3].markdown(f"<div style='{_fs};text-align:right;color:{_dc15}'>{_d15:+.1f}</div>", unsafe_allow_html=True)
+        _vs_cols[5].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>vol spd</div>", unsafe_allow_html=True)
+        _vs_cols[8].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>15→20</div>", unsafe_allow_html=True)
+        _vs_cols[9].markdown(f"<div style='{_fs};text-align:right;color:#f59e0b'>{_s15_new:.1f}bp</div>", unsafe_allow_html=True)
+        _vs_cols[10].markdown(f"<div style='{_fs};text-align:right;color:#38bdf8;font-weight:600'>20Y CFS</div>", unsafe_allow_html=True)
+        _vs_cols[11].markdown(f"<div style='{_fs};text-align:right;color:#64748b'>vol ext</div>", unsafe_allow_html=True)
+        st.session_state["cf_spr_15v20_eur_temp"] = _s15_new
+        _new_eur_spreads["cf_spr_15v20_eur"] = _s15_new
+
+        # ── 20v30 vol spread row (NEW for EUR — 30Y extension) ─────
+        _vs_cols30 = st.columns(CW)
+        _vs_cols30[0].markdown(f"<div style='{_fs};color:#f59e0b'>20y vs 30y Vol Spd</div>", unsafe_allow_html=True)
+        _s20_last = st.session_state.get("cf_spr_20v30_eur", -5.0)
+        _s20_cur  = st.session_state.get("cf_spr_20v30_eur_new",
+                    st.session_state.get("cf_spr_20v30_eur_temp", _s20_last))
+        _vs_cols30[1].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>{_s20_last:.1f}</div>", unsafe_allow_html=True)
+        _s20_new = _vs_cols30[2].number_input(
+            "", value=_s20_cur, key="cf_spr_20v30_eur_new",
+            format="%.1f", step=0.5, label_visibility="collapsed",
+        )
+        _d20 = _s20_new - _s20_last
+        _dc20 = "#22c55e" if _d20 > 0 else "#ef4444" if _d20 < 0 else "#94a3b8"
+        _vs_cols30[3].markdown(f"<div style='{_fs};text-align:right;color:{_dc20}'>{_d20:+.1f}</div>", unsafe_allow_html=True)
+        _vs_cols30[5].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>vol spd</div>", unsafe_allow_html=True)
+        _vs_cols30[8].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>20→30</div>", unsafe_allow_html=True)
+        _vs_cols30[9].markdown(f"<div style='{_fs};text-align:right;color:#f59e0b'>{_s20_new:.1f}bp</div>", unsafe_allow_html=True)
+        _vs_cols30[10].markdown(f"<div style='{_fs};text-align:right;color:#38bdf8;font-weight:600'>30Y CFS</div>", unsafe_allow_html=True)
+        _vs_cols30[11].markdown(f"<div style='{_fs};text-align:right;color:#64748b'>vol ext</div>", unsafe_allow_html=True)
+        st.session_state["cf_spr_20v30_eur_temp"] = _s20_new
+        _new_eur_spreads["cf_spr_20v30_eur"] = _s20_new
+
+    # ── Calculate button handler ──────────────────────────────────────
+    if _calc_btn_clicked and require_admin("Edit Spreads"):
+        # Step 1: commit edited spreads (read from widget _new keys directly)
+        for _sess_k in _EUR_WEDGE_KEYS:
+            _wkey = f"{_sess_k}_new"
+            _v = st.session_state.get(_wkey,
+                  _new_eur_spreads.get(_sess_k, st.session_state.get(_sess_k)))
+            st.session_state[_sess_k] = float(_v)
+        # Step 2: persist to file
+        try:
+            _eur_file = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "cfs_spreads_eur.json")
+            with open(_eur_file, "w") as _f:
+                _json.dump({_db_k: st.session_state[_sess_k] for _db_k, _sess_k in _DB_TO_SESS.items()}, _f)
+        except Exception:
+            pass
+        # Step 3: persist to DB (same row layout as before, keys without _eur suffix)
+        try:
+            if HAS_POSTGRES:
+                _db_data = {_db_k: float(st.session_state[_sess_k]) for _db_k, _sess_k in _DB_TO_SESS.items()}
+                _uid = st.session_state.get("username", "default")
+                _conn = get_db_connection()
+                if _conn:
+                    try:
+                        save_user_config(_uid, "cf_spreads", "EUR", _db_data, _conn=_conn)
+                        for _alt in ["wpo@rateedge.au", "wpo70@icloud.com"]:
+                            if _alt != _uid:
+                                save_user_config(_alt, "cf_spreads", "EUR", _db_data, _conn=_conn)
+                        _conn.commit()
+                    finally:
+                        _conn.close()
+        except Exception:
+            pass
+        # Step 4: bust EUR caches and rerun
+        st.session_state.pop("_cfs_otc_build_cache_eur", None)
+        st.session_state.pop("_atm_cfs_cache_key_eur", None)
+        st.session_state.pop("_atm_cfs_rows_cache_eur", None)
+        st.session_state["_cfs_calc_requested_eur"] = True
+        st.rerun()
+
+    # ── Build pipeline ────────────────────────────────────────────────
+    _calc_requested_eur = st.session_state.pop("_cfs_calc_requested_eur", False)
+    _otc_cached_eur = st.session_state.get("_cfs_otc_build_cache_eur")
+    _spreads_dict_eur = {
+        "3m1y":  st.session_state["cf_spr_3m1y_eur"],
+        "1y1y":  st.session_state["cf_spr_1y1y_eur"],
+        "2y1y":  st.session_state["cf_spr_2y1y_eur"],
+        "3y1y":  st.session_state["cf_spr_3y1y_eur"],
+        "4y1y":  st.session_state["cf_spr_4y1y_eur"],
+        "5y2y":  st.session_state["cf_spr_5y2y_eur"],
+        "7y3y":  st.session_state["cf_spr_7y3y_eur"],
+        "10y2y": st.session_state["cf_spr_10y2y_eur"],
+        "12y3y": st.session_state["cf_spr_12y3y_eur"],
+    }
+    _spreads_tuple_eur = tuple(_spreads_dict_eur[k] for k in sorted(_spreads_dict_eur.keys()))
+
+    _need_build_eur = _calc_requested_eur or (_otc_cached_eur is None) or (
+        _otc_cached_eur is not None and _otc_cached_eur.get("sig") != (_spreads_tuple_eur, _atm_hash)
+    )
+
+    caplet_vol_curve = None
+    if _need_build_eur:
+        try:
+            caplet_vol_curve = build_caplet_vol_curve_eur(
+                ccy, atm, None,
+                spread_3m1y=_spreads_dict_eur["3m1y"],
+                spread_1y1y=_spreads_dict_eur["1y1y"],
+                spread_2y1y=_spreads_dict_eur["2y1y"],
+                spread_3y1y=_spreads_dict_eur["3y1y"],
+                spread_4y1y=_spreads_dict_eur["4y1y"],
+                spread_5y2y=_spreads_dict_eur["5y2y"],
+                spread_7y3y=_spreads_dict_eur["7y3y"],
+                spread_10y2y=_spreads_dict_eur["10y2y"],
+                spread_12y3y=_spreads_dict_eur["12y3y"],
+            )
+        except Exception as _be:
+            st.error(f"EUR caplet build failed: {_be}")
+            caplet_vol_curve = None
+        st.session_state["_cfs_otc_build_cache_eur"] = {
+            "sig":   (_spreads_tuple_eur, _atm_hash),
+            "curve": caplet_vol_curve,
+        }
+    else:
+        caplet_vol_curve = _otc_cached_eur.get("curve") if _otc_cached_eur else None
+
+    # ── Extend curve to 30Y using 15v20 and 20v30 spreads ─────────────
+    if caplet_vol_curve and 15.0 in caplet_vol_curve:
+        _spread_15v20 = st.session_state.get("cf_spr_15v20_eur", -5.0)
+        _spread_20v30 = st.session_state.get("cf_spr_20v30_eur", -5.0)
+        _vol_15 = caplet_vol_curve[15.0]
+        _vol_20 = max(_vol_15 + _spread_15v20, 1.0)
+        _vol_30 = max(_vol_15 + _spread_15v20 + _spread_20v30, 1.0)
+        # 15Y→20Y linear
+        _t = 15.25
+        while _t <= 20.01:
+            _frac = (_t - 15.0) / 5.0
+            caplet_vol_curve[round(_t, 2)] = max(_vol_15 + _frac * (_vol_20 - _vol_15), 1.0)
+            _t += 0.25
+        # 20Y→30Y linear
+        _t = 20.25
+        while _t <= 30.01:
+            _frac = (_t - 20.0) / 10.0
+            caplet_vol_curve[round(_t, 2)] = max(_vol_20 + _frac * (_vol_30 - _vol_20), 1.0)
+            _t += 0.25
+
+    if caplet_vol_curve:
+        st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
+
+    # ── ATM CFS Straddles Table ───────────────────────────────────────
+    st.markdown("<hr style='margin:6px 0;border-color:#1e3050'>", unsafe_allow_html=True)
+    _atm_exp = st.expander("ATM CFS Straddles", expanded=st.session_state.get("atm_cfs_expanded_eur", True))
+    with _atm_exp:
+        _CFS_MAP_EUR = [
+            (1, "3m1y"), (2, "1y1y"), (3, "2y1y"), (4, "3y1y"), (5, "4y1y"),
+            (7, "5y2y"), (10, "7y3y"), (12, "10y2y"), (15, "12y3y"),
+            (20, "ext_15v20"), (30, "ext_20v30"),
+        ]
+        _cfs_id_eur = (
+            ccy, _spreads_tuple_eur, _atm_hash,
+            hash(tuple((round(float(k), 3), round(float(v), 4))
+                       for k, v in sorted((caplet_vol_curve or {}).items()))),
+        )
+        _cached_rows_eur = (
+            st.session_state.get("_atm_cfs_cache_key_eur") == _cfs_id_eur
+            and st.session_state.get("_atm_cfs_rows_cache_eur") is not None
+        )
+        if _cached_rows_eur:
+            _atm_rows = st.session_state["_atm_cfs_rows_cache_eur"]
+        else:
+            _atm_rows = []
+            _curve_local = get_ccy_curve(ccy)
+            _ois_local_tmp = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+            if _ois_local_tmp is None:
+                _ois_local_tmp = get_basis_curve(ccy, "ois")
+            _ois_local = _ois_local_tmp if _ois_local_tmp is not None else _curve_local
+            from datetime import date as _dt_date
+            from dateutil.relativedelta import relativedelta as _rd
+            _today = _dt_date.today()
+            _start_dt = _today + _rd(months=3, days=1)
+            _spot_dt  = _today + _rd(days=1)
+            for _yr, _wkey in _CFS_MAP_EUR:
+                try:
+                    _end_dt = _start_dt + _rd(years=_yr)
+                    # Compute ATM forward for an _yr-year swap starting in 3M
+                    if _curve_local is not None:
+                        _fwd, _ann, _ = forward_and_annuity_from_curve(_curve_local, ccy, 0.25, float(_yr), None)
+                        _atm_fwd_pct = float(_fwd) * 100.0
+                    else:
+                        _atm_fwd_pct = float("nan")
+                    # Flat vol from caplet curve (avg over [0.25, _yr+0.25])
+                    if caplet_vol_curve and len(caplet_vol_curve) >= 2:
+                        _t_keys = sorted(caplet_vol_curve.keys())
+                        _t_lo, _t_hi = 0.25, 0.25 + float(_yr)
+                        _vols_in_range = [v for k, v in caplet_vol_curve.items() if _t_lo <= k <= _t_hi]
+                        _flat_vol = sum(_vols_in_range) / len(_vols_in_range) if _vols_in_range else float("nan")
+                    else:
+                        _flat_vol = float("nan")
+                    # Straddle premium (Bachelier): 2 * phi(0) * sigma * sqrt(T) * ann
+                    if _curve_local is not None and not _math.isnan(_flat_vol):
+                        _, _ann_s, _ = forward_and_annuity_from_curve(_curve_local, ccy, 0.25, float(_yr), None)
+                        _sigma_n = _flat_vol / 10000.0
+                        _T = 0.25
+                        _straddle_bp = 2 * 0.3989422804 * _sigma_n * _math.sqrt(_T) * _ann_s * 10000
+                    else:
+                        _straddle_bp = float("nan")
+                    _atm_rows.append({
+                        "Tenor":      f"{_yr}Y",
+                        "Start":      _start_dt.strftime("%d %b %y"),
+                        "End":        _end_dt.strftime("%d %b %y"),
+                        "ATM Fwd %":  f"{_atm_fwd_pct:.3f}" if not _math.isnan(_atm_fwd_pct) else "—",
+                        "Straddle bp":f"{_straddle_bp:.4f}" if not _math.isnan(_straddle_bp) else "—",
+                        "Flat Vol bp":f"{_flat_vol:.2f}" if not _math.isnan(_flat_vol) else "—",
+                    })
+                except Exception:
+                    continue
+            st.session_state["_atm_cfs_cache_key_eur"] = _cfs_id_eur
+            st.session_state["_atm_cfs_rows_cache_eur"] = _atm_rows
+        if _atm_rows:
+            st.dataframe(_pd.DataFrame(_atm_rows), use_container_width=True, hide_index=True)
+        else:
+            st.caption("No ATM CFS rows — click Refresh Swaptions first.")
+
+    # ── Shared chart render ───────────────────────────────────────────
+    if caplet_vol_curve:
+        with st.expander("📊 Resulting Caplet Vol Curve", expanded=False):
+            from scipy.interpolate import CubicSpline as _CS_eur
+            import plotly.graph_objects as _pgo_eur
+            _maturities = _np.array(sorted(caplet_vol_curve.keys()))
+            _vols = _np.array([caplet_vol_curve[t] for t in _maturities])
+            _fig = _pgo_eur.Figure()
+            if len(_maturities) >= 4:
+                _cs = _CS_eur(_maturities, _vols)
+                _fine = _np.linspace(_maturities[0], _maturities[-1], 300)
+                _fig.add_trace(_pgo_eur.Scatter(
+                    x=_fine, y=_cs(_fine), mode="lines",
+                    line=dict(color="#2563eb", width=2),
+                    hoverinfo="skip", name="Spline",
+                ))
+            _fig.add_trace(_pgo_eur.Scatter(
+                x=_maturities, y=_vols, mode="markers",
+                marker=dict(color="#2563eb", size=5, line=dict(color="white", width=1)),
+                hovertemplate="T = %{x:.2f}Y<br>Vol = %{y:.2f} bp<extra></extra>",
+                name="Bootstrapped",
+            ))
+            _max_yr = int(_np.ceil(_maturities[-1])) if len(_maturities) else 10
+            _fig.update_layout(
+                xaxis=dict(title="Maturity (Years)",
+                            tickmode="array",
+                            tickvals=list(range(0, _max_yr + 1)),
+                            ticktext=[str(y) for y in range(0, _max_yr + 1)],
+                            gridcolor="#e2e8f0"),
+                yaxis=dict(title="Vol (bp)", gridcolor="#e2e8f0"),
+                plot_bgcolor="#f8fafc", paper_bgcolor="white",
+                margin=dict(l=50, r=20, t=30, b=40), height=360,
+                hovermode="closest", showlegend=False,
+            )
+            st.plotly_chart(_fig, use_container_width=True)
+
+
 def caps_floors_tab(vol_mode: str):
     st.subheader("Caps & Floors")
     
@@ -14021,6 +14494,12 @@ def caps_floors_tab(vol_mode: str):
     # Extract actual currency code (remove PENDING)
     ccy = ccy_select.split(" ")[0]
     
+    # v1205x: Route EUR to its own self-contained tab. AUD/USD/NZD continue
+    # in this function unchanged. EUR uses separate session keys, separate
+    # build cache, separate ATM CFS table cache.
+    if ccy == "EUR":
+        return caps_floors_tab_eur(vol_mode, ccy)
+
     # Check if pending currency selected
     # v1105i: EUR allowed through to use parallel EUR CFS path (build_caplet_vol_curve_eur)
     if "PENDING" in ccy_select and ccy != "EUR":
