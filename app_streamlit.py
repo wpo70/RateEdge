@@ -14450,12 +14450,15 @@ def caps_floors_tab(vol_mode: str):
                         fs = "font-size:0.80rem;padding-top:6px"
                         rc[0].markdown(f"<div style='{fs}'>{wedge_lbl}</div>", unsafe_allow_html=True)
                     rc[1].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{last_val:.1f}</div>", unsafe_allow_html=True)
-                    # Seed widget key from cur_val on first render only — avoids
-                    # value=/key= race on st.rerun() (20-Apr-2026 fix).
+                    # Restored from v1704j: pass value=cur_val explicitly.
+                    # The 20-Apr-2026 "fix" that removed value= caused the
+                    # wedge to flicker and snap back to the previous value
+                    # because something elsewhere in the render pipeline
+                    # was wiping the _new session_state key between renders.
+                    # With value=cur_val, the widget always seeds from
+                    # _temp (or last_val), making it resilient.
                     _wkey = f"{spr_key}_new"
-                    if _wkey not in st.session_state:
-                        st.session_state[_wkey] = cur_val
-                    new_val = rc[2].number_input("", key=_wkey,
+                    new_val = rc[2].number_input("", value=cur_val, key=_wkey,
                                                   format="%.1f", step=0.5,
                                                   label_visibility="collapsed",
                                                   disabled=_row_skipped)
