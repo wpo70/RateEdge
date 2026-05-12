@@ -15232,13 +15232,32 @@ def caps_floors_tab(vol_mode: str):
         # this was only written inside the USD-only Active-swap block, which
         # broke AUD. Also write _caplet_curve_key with a stable hash so the
         # ATM CFS table cache invalidates correctly.
-        if caplet_vol_curve:
+        # FIX: skip USD here. USD's active source selector writes the correct
+        # curve at L15361 (inside the USD block). Writing OTC here would
+        # overwrite Listed bootstrap / SR3 selections mid-render and the
+        # pricer at L14266 (which reads at top-of-tab) would lag a render
+        # behind every radio change.
+        if caplet_vol_curve and ccy != "USD":
             st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
             # Cache key for ATM CFS table (matches v2004s shape for AUD)
             st.session_state["_caplet_curve_key"] = (
                 ccy, _spreads_tuple, _atm_hash,
                 tuple(sorted(round(v, 4) for v in caplet_vol_curve.values())[:5]),
             )
+            # FIX: post-Calculate cleanup for non-USD currencies. Previously these
+            # pops ONLY happened in the USD block at L15489, so AUD/NZD/EUR were
+            # stuck with:
+            #   - _cfs_calc_requested = True forever (every render rebuilt)
+            #   - _atm_cfs_cache_key never invalidated (ATM CFS Straddle table stale)
+            #   - _cfs_chart_sig never invalidated (Resulting Caplet Vol chart stale)
+            # This is the root cause of wedge edits not visibly updating downstream
+            # tables and charts for AUD.
+            if _need_build:
+                st.session_state.pop("_cfs_calc_requested", None)
+                st.session_state.pop("_atm_cfs_cache_key", None)
+                st.session_state.pop("_atm_cfs_rows_cache", None)
+                st.session_state.pop("_cfs_chart_sig", None)
+                st.session_state.pop("_cfs_chart_fig", None)
 
         # ═════════════════════════════════════════════════════════════════
         # USD-only: SR3 Listed Vol Mode (Step 5 of CFS build, 19-Apr-2026)
