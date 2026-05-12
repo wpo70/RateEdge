@@ -16503,6 +16503,12 @@ def caps_floors_tab(vol_mode: str):
                     st.session_state.get("_cfs_chart_sig") == _chart_sig
                     and st.session_state.get("_cfs_chart_fig") is not None
                 )
+                # RESTORED FROM v1704j: AUD/NZD always rebuild the chart from
+                # local caplet_vol_curve. v1704j had no chart caching at all
+                # and never had a stale-chart-on-deploy problem. Cache stays
+                # only for USD where SR3 overlays make the chart expensive.
+                if ccy != "USD":
+                    _skip_chart_build = False
                 if _skip_chart_build and st.session_state.get("_cfs_chart_fig") is not None:
                     _ctbl = st.session_state.get("_cfs_chart_tbl")
                     if _ctbl is not None:
