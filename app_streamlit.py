@@ -15861,10 +15861,20 @@ def caps_floors_tab(vol_mode: str):
         if caplet_vol_curve:
             st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
             # Cache key for ATM CFS table (matches v2004s shape for AUD)
-            st.session_state["_caplet_curve_key"] = (
-                ccy, _spreads_tuple, _atm_hash,
-                tuple(sorted(round(v, 4) for v in caplet_vol_curve.values())[:5]),
-            )
+            # v1205s: EUR-only — drop _spreads_tuple from the key so editing wedges
+            # doesn't invalidate the ATM CFS table cache on every keystroke. The
+            # caplet_vol_curve values themselves are in the key so post-Calculate
+            # rebuild still invalidates correctly. AUD/USD path unchanged.
+            if ccy == "EUR":
+                st.session_state["_caplet_curve_key"] = (
+                    ccy, _atm_hash,
+                    tuple(sorted(round(v, 4) for v in caplet_vol_curve.values())[:5]),
+                )
+            else:
+                st.session_state["_caplet_curve_key"] = (
+                    ccy, _spreads_tuple, _atm_hash,
+                    tuple(sorted(round(v, 4) for v in caplet_vol_curve.values())[:5]),
+                )
 
         # ═════════════════════════════════════════════════════════════════
         # USD-only: SR3 Listed Vol Mode (Step 5 of CFS build, 19-Apr-2026)
