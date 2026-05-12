@@ -747,8 +747,8 @@ def render_ticket_tab(ss):
 
 HAS_TICKET_TAB = True
 
-SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD"]
-ALL_CURRENCIES = ["AUD", "NZD", "USD", "EUR (PENDING)", "GBP (PENDING)", "JPY (PENDING)", "CAD (PENDING)"]
+SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR"]
+ALL_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP (PENDING)", "JPY (PENDING)", "CAD (PENDING)"]
 
 
 # ============================
@@ -8131,7 +8131,7 @@ def vol_config_tab():
     # v0705o: rebuild banner per-ccy filtered by the selectbox (below).
     # The selectbox key persists in session_state so we can read it before it's drawn.
     _banner_filter = st.session_state.get("upload_status_ccy_filter", "All")
-    _banner_ccys = (list(SUPPORTED_CURRENCIES) + ["EUR"]) if _banner_filter == "All" else [_banner_filter]
+    _banner_ccys = (list(SUPPORTED_CURRENCIES)) if _banner_filter == "All" else [_banner_filter]
     _banner_parts = []
     for _bc in _banner_ccys:
         _lbl = st.session_state.get(f"_loaded_vol_label_{_bc}")
@@ -8143,7 +8143,7 @@ def vol_config_tab():
         _cfg_part = " | Configs:" + _legacy.split("| Configs:")[1]
     if _banner_parts:
         st.info(f"✅ Vols: {', '.join(_banner_parts)}{_cfg_part}")
-    elif _legacy and not any(f"_loaded_vol_label_{c}" in st.session_state for c in (list(SUPPORTED_CURRENCIES) + ["EUR"])):
+    elif _legacy and not any(f"_loaded_vol_label_{c}" in st.session_state for c in (list(SUPPORTED_CURRENCIES))):
         # Fallback: nothing in per-ccy state but legacy banner exists (first render before any load tracked)
         st.info(_legacy)
 
@@ -8192,7 +8192,7 @@ def vol_config_tab():
 
     # v0705l: ccy filter for status cards. Default "All" shows AUD/NZD/USD/EUR.
     # v0705n: drop index= so session_state persists across full reruns (e.g. after vol load).
-    _status_ccys_all = list(SUPPORTED_CURRENCIES) + ["EUR"]
+    _status_ccys_all = list(SUPPORTED_CURRENCIES)
     _status_filter = st.selectbox(
         "Show currency",
         ["All"] + _status_ccys_all,
@@ -8381,7 +8381,7 @@ def vol_config_tab():
         
         if tab_manage:
             st.markdown("#### Saved Snapshots")
-            manage_ccy = st.selectbox("Filter by Currency", ["All"] + list(SUPPORTED_CURRENCIES) + ["EUR"], key="manage_snap_ccy")
+            manage_ccy = st.selectbox("Filter by Currency", ["All"] + list(SUPPORTED_CURRENCIES), key="manage_snap_ccy")
             user_id = st.session_state.get("username", "default")
             filter_ccy = None if manage_ccy == "All" else manage_ccy
 
@@ -8432,7 +8432,7 @@ def vol_config_tab():
                     st.session_state[f"_vol_loaded_{_lc}"] = True
                     st.session_state[f"_loaded_vol_label_{_lc}"] = _pending_load["label"]
                     _rl = [f"{_bc}:{st.session_state[f'_loaded_vol_label_{_bc}']}"
-                           for _bc in (list(SUPPORTED_CURRENCIES) + ["EUR"]) if st.session_state.get(f"_loaded_vol_label_{_bc}")]
+                           for _bc in (list(SUPPORTED_CURRENCIES)) if st.session_state.get(f"_loaded_vol_label_{_bc}")]
                     _old_banner = st.session_state.get("_auto_load_msg", "")
                     _cfg_part = ""
                     if "| Configs:" in _old_banner:
@@ -8653,7 +8653,7 @@ def curves_tab():
     # AUD/USD/NZD branches LOCKED — never modified by EUR work.
     _raw_ccy = st.session_state.get("sidebar_ccy", "AUD")
     ccy = str(_raw_ccy).split(" ")[0]
-    _CURVES_TAB_CCYS = list(SUPPORTED_CURRENCIES) + ["EUR"]
+    _CURVES_TAB_CCYS = list(SUPPORTED_CURRENCIES)
     if ccy not in _CURVES_TAB_CCYS: ccy = SUPPORTED_CURRENCIES[0]
 
     curve     = st.session_state.get("config_curves", {}).get(ccy)
@@ -27140,7 +27140,7 @@ def main():
                 if _sc:
                     _cur = _sc.cursor()
                     _sl = []
-                    for _cy in list(SUPPORTED_CURRENCIES) + ["EUR"]:
+                    for _cy in list(SUPPORTED_CURRENCIES):
                         # All currencies: latest snapshot, include shared records
                         _cur.execute("""
                             SELECT id FROM vol_history
@@ -27343,7 +27343,7 @@ def main():
                         pass
 
             # Load ALL currencies at startup
-            for _sc in list(SUPPORTED_CURRENCIES) + ["EUR"]:
+            for _sc in list(SUPPORTED_CURRENCIES):
                 _load_ccy_curves(_sc)
 
             # Store function reference for on-demand currency refresh
@@ -27388,7 +27388,15 @@ def main():
             key="sidebar_theme",
         )
         st.session_state["theme_name"] = theme_choice
-        
+
+        # v1205q: one-time migration — normalize stored "EUR (PENDING)" → "EUR" so the
+        # index lookup against the new ALL_CURRENCIES (which has plain "EUR") works.
+        _stored_ccy = st.session_state.get("sidebar_ccy")
+        if _stored_ccy and "(PENDING)" in str(_stored_ccy):
+            _normalized = str(_stored_ccy).split(" ")[0]
+            if _normalized in ALL_CURRENCIES:
+                st.session_state["sidebar_ccy"] = _normalized
+
         # Currency — default to USD
         _ccy_idx = ALL_CURRENCIES.index(st.session_state.get("sidebar_ccy", "USD")) if st.session_state.get("sidebar_ccy", "USD") in ALL_CURRENCIES else ALL_CURRENCIES.index("USD")
         ccy = st.selectbox(
