@@ -14624,12 +14624,27 @@ def caps_floors_tab(vol_mode: str):
                               "straddle premiums, solves flat vols at each tenor, and cubic-splines "
                               "on a quarterly grid. Persists spread edits to DB.") and require_admin("Edit Spreads"):
                 # ── Step 1: persist the edited spreads ────────────────
+                # FIX: read from session_state[_new] directly, not from
+                # new_spread_values. new_spread_values was populated earlier
+                # in this render from whatever widget state Streamlit had at
+                # that moment. session_state[_wkey] reflects the absolute
+                # latest user input (Streamlit writes there synchronously
+                # on every click/keystroke). Falls back to new_spread_values
+                # if _new key not present.
                 for spr_key, *_ in ROW_DATA:
-                    st.session_state[spr_key] = new_spread_values[spr_key]
-                st.session_state["cf_spr_15v20"] = new_spread_values.get(
-                    "cf_spr_15v20", st.session_state.get("cf_spr_15v20", -5.0))
-                st.session_state["cf_spr_20v30"] = new_spread_values.get(
-                    "cf_spr_20v30", st.session_state.get("cf_spr_20v30", -5.0))
+                    _committed_val = st.session_state.get(
+                        f"{spr_key}_new",
+                        new_spread_values.get(spr_key, st.session_state.get(spr_key))
+                    )
+                    st.session_state[spr_key] = float(_committed_val)
+                st.session_state["cf_spr_15v20"] = float(st.session_state.get(
+                    "cf_spr_15v20_new",
+                    new_spread_values.get("cf_spr_15v20", st.session_state.get("cf_spr_15v20", -5.0))
+                ))
+                st.session_state["cf_spr_20v30"] = float(st.session_state.get(
+                    "cf_spr_20v30_new",
+                    new_spread_values.get("cf_spr_20v30", st.session_state.get("cf_spr_20v30", -5.0))
+                ))
                 try:
                     _spreads_file = os.path.join(
                         os.path.dirname(os.path.abspath(__file__)), "cfs_spreads.json")
