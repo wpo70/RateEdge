@@ -15163,10 +15163,23 @@ def caps_floors_tab(vol_mode: str):
                 st.caption(f"WARN SR3 full build failed: {_e}")
                 return None
 
+        # FIX: read directly from session_state so the Calculate-click render
+        # picks up the values the button handler just wrote at L14624. The
+        # local `spread_*` vars were captured at L14343 BEFORE the button ran,
+        # so they hold the previous committed values — that's why wedge edits
+        # required two Calculate clicks to take effect. Session state was
+        # already updated by the button handler that ran earlier in this
+        # same render pass.
         _spreads_dict = {
-            "3m1y": spread_3m1y, "1y1y": spread_1y1y, "2y1y": spread_2y1y,
-            "3y1y": spread_3y1y, "4y1y": spread_4y1y, "5y2y": spread_5y2y,
-            "7y3y": spread_7y3y, "10y2y": spread_10y2y, "12y3y": spread_12y3y,
+            "3m1y":  st.session_state.get("cf_spr_3m1y",  spread_3m1y),
+            "1y1y":  st.session_state.get("cf_spr_1y1y",  spread_1y1y),
+            "2y1y":  st.session_state.get("cf_spr_2y1y",  spread_2y1y),
+            "3y1y":  st.session_state.get("cf_spr_3y1y",  spread_3y1y),
+            "4y1y":  st.session_state.get("cf_spr_4y1y",  spread_4y1y),
+            "5y2y":  st.session_state.get("cf_spr_5y2y",  spread_5y2y),
+            "7y3y":  st.session_state.get("cf_spr_7y3y",  spread_7y3y),
+            "10y2y": st.session_state.get("cf_spr_10y2y", spread_10y2y),
+            "12y3y": st.session_state.get("cf_spr_12y3y", spread_12y3y),
         }
         _spreads_tuple = tuple(_spreads_dict[k] for k in sorted(_spreads_dict.keys()))
 
@@ -15179,10 +15192,19 @@ def caps_floors_tab(vol_mode: str):
         _otc_cached = st.session_state.get("_cfs_otc_build_cache")
         _listed_cached = st.session_state.get("_cfs_listed_build_cache")
         # Build when: (a) Calculate/Commit pressed, (b) no cache at all,
-        # (c) Listed curve is None but we might need it now (SR3 data loaded since)
+        # (c) cached sig doesn't match current spreads (wedges changed),
+        # (d) USD listed curve is None but we might need it now (SR3 data loaded since)
         _listed_curve_stale = (_listed_cached is not None and _listed_cached.get("curve") is None
                                and ccy == "USD" and _listed_1y_stradd is not None and _listed_1y_stradd > 0)
-        _need_build = _calc_requested or (_otc_cached is None) or _listed_curve_stale
+        # FIX: compare cached sig to current spreads_tuple + atm_hash. The cache was
+        # storing the sig at write but never comparing it at read, so wedge changes
+        # were silently reused with stale curves. This was the SECOND half of the
+        # "enter wedges twice" bug — the FIRST half is fixed above where _spreads_dict
+        # now reads session_state directly so the Calculate-click render sees the
+        # just-committed values.
+        _cur_sig = (_spreads_tuple, _atm_hash)
+        _cache_stale = (_otc_cached is not None and _otc_cached.get("sig") != _cur_sig)
+        _need_build = _calc_requested or (_otc_cached is None) or _listed_curve_stale or _cache_stale
 
         if _need_build:
             _otc_curve_built = _call_build_otc(_spreads_dict)
