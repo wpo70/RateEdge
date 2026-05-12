@@ -14433,7 +14433,14 @@ def caps_floors_tab(vol_mode: str):
                 for spr_key, wedge_lbl, tbl_lbl, tbl_wedge, cfs_lbl, spread in ROW_DATA:
                     _row_skipped = tbl_lbl in _skip_wedge_keys
                     last_val = st.session_state[spr_key]
-                    cur_val  = st.session_state.get(f"{spr_key}_temp", last_val)
+                    # FIX rapid-click race: prefer the widget's own session_state
+                    # key (_new) which Streamlit writes synchronously on each
+                    # click. _temp is written AFTER widget render so it lags a
+                    # render behind. Without this, rapid up/down clicks reseed
+                    # the widget with stale _temp and silently lose clicks.
+                    _wkey = f"{spr_key}_new"
+                    cur_val  = st.session_state.get(_wkey,
+                               st.session_state.get(f"{spr_key}_temp", last_val))
                     tdata  = st.session_state["cfs_table_data"].get(tbl_lbl, {})
                     swpt   = tdata.get("swaption", None)  # spot premium (post-conversion)
                     new_val = cur_val
@@ -14450,14 +14457,8 @@ def caps_floors_tab(vol_mode: str):
                         fs = "font-size:0.80rem;padding-top:6px"
                         rc[0].markdown(f"<div style='{fs}'>{wedge_lbl}</div>", unsafe_allow_html=True)
                     rc[1].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{last_val:.1f}</div>", unsafe_allow_html=True)
-                    # Restored from v1704j: pass value=cur_val explicitly.
-                    # The 20-Apr-2026 "fix" that removed value= caused the
-                    # wedge to flicker and snap back to the previous value
-                    # because something elsewhere in the render pipeline
-                    # was wiping the _new session_state key between renders.
-                    # With value=cur_val, the widget always seeds from
-                    # _temp (or last_val), making it resilient.
-                    _wkey = f"{spr_key}_new"
+                    # value=cur_val seeds the widget from _new (widget's own
+                    # synchronous state) when available, else _temp, else last_val.
                     new_val = rc[2].number_input("", value=cur_val, key=_wkey,
                                                   format="%.1f", step=0.5,
                                                   label_visibility="collapsed",
@@ -14525,7 +14526,9 @@ def caps_floors_tab(vol_mode: str):
                 _fs = "font-size:0.80rem;padding-top:6px"
                 _vs_cols[0].markdown(f"<div style='{_fs};color:#f59e0b'>15y vs 20y Vol Spd</div>", unsafe_allow_html=True)
                 _spread_15v20_last = st.session_state.get("cf_spr_15v20", -5.0)
-                _spread_15v20_cur  = st.session_state.get("cf_spr_15v20_temp", _spread_15v20_last)
+                # FIX rapid-click race: prefer widget's own _new over _temp.
+                _spread_15v20_cur  = st.session_state.get("cf_spr_15v20_new",
+                                     st.session_state.get("cf_spr_15v20_temp", _spread_15v20_last))
                 _vs_cols[1].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>{_spread_15v20_last:.1f}</div>", unsafe_allow_html=True)
                 # Restored from v1704j: pass value=_spread_15v20_cur explicitly.
                 if "cf_spr_15v20_new" not in st.session_state:
@@ -14549,7 +14552,9 @@ def caps_floors_tab(vol_mode: str):
                     _vs_cols30 = st.columns(CW)
                     _vs_cols30[0].markdown(f"<div style='{_fs};color:#f59e0b'>20y vs 30y Vol Spd</div>", unsafe_allow_html=True)
                     _spread_20v30_last = st.session_state.get("cf_spr_20v30", -5.0)
-                    _spread_20v30_cur  = st.session_state.get("cf_spr_20v30_temp", _spread_20v30_last)
+                    # FIX rapid-click race: prefer widget's own _new over _temp.
+                    _spread_20v30_cur  = st.session_state.get("cf_spr_20v30_new",
+                                         st.session_state.get("cf_spr_20v30_temp", _spread_20v30_last))
                     _vs_cols30[1].markdown(f"<div style='{_fs};text-align:right;color:#94a3b8'>{_spread_20v30_last:.1f}</div>", unsafe_allow_html=True)
                     # Restored from v1704j: pass value=_spread_20v30_cur explicitly.
                     if "cf_spr_20v30_new" not in st.session_state:
