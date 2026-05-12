@@ -27156,6 +27156,12 @@ def main():
                             _cur2.close()
                             if _srow:
                                 _cc2,_av,_sa,_sb,_sr,_sn,_lbl,_dt = _srow
+                                # v1205o: EUR labels are stored without dates ("EOD 1700 LDN") —
+                                # prepend snapshot_date so the user can see which day's close it is.
+                                if _cc2 == "EUR" and _dt is not None and _lbl:
+                                    _dt_str = _dt.strftime("%d-%b-%Y") if hasattr(_dt, "strftime") else str(_dt)
+                                    if _dt_str not in _lbl:
+                                        _lbl = f"EUR EOD {_dt_str} 1700 LDN"
                                 if "vol_data" not in st.session_state: st.session_state["vol_data"] = {}
                                 if _cc2 not in st.session_state["vol_data"]: st.session_state["vol_data"][_cc2] = {}
                                 if _av:
