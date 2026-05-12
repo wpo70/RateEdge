@@ -15823,10 +15823,13 @@ def caps_floors_tab(vol_mode: str):
         _listed_cached = st.session_state.get("_cfs_listed_build_cache")
         # v1105m: EUR-only — force rebuild if the cached curve was built for a different ccy.
         # AUD/USD path unchanged (they relied on shared cache before).
+        # ccy mismatch — applies to ALL currencies. Was EUR-only previously,
+        # but that meant AUD↔USD switches showed the wrong cached curve
+        # (e.g. AUD chart reverted to USD OTC). Cache stores ccy at write time;
+        # if current ccy differs, force rebuild.
         _ccy_mismatch = (
-            ccy == "EUR"
-            and _otc_cached is not None
-            and _otc_cached.get("ccy") != "EUR"
+            _otc_cached is not None
+            and _otc_cached.get("ccy") != ccy
         )
         # Build when: (a) Calculate/Commit pressed, (b) no cache at all,
         # (c) Listed curve is None but we might need it now (SR3 data loaded since),
@@ -15887,21 +15890,15 @@ def caps_floors_tab(vol_mode: str):
         # ATM CFS table cache invalidates correctly.
         if caplet_vol_curve:
             st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
-            # Cache key for ATM CFS table (matches v2004s shape for AUD)
-            # v1205s: EUR-only — drop _spreads_tuple from the key so editing wedges
-            # doesn't invalidate the ATM CFS table cache on every keystroke. The
-            # caplet_vol_curve values themselves are in the key so post-Calculate
-            # rebuild still invalidates correctly. AUD/USD path unchanged.
-            if ccy == "EUR":
-                st.session_state["_caplet_curve_key"] = (
-                    ccy, _atm_hash,
-                    tuple(sorted(round(v, 4) for v in caplet_vol_curve.values())[:5]),
-                )
-            else:
-                st.session_state["_caplet_curve_key"] = (
-                    ccy, _spreads_tuple, _atm_hash,
-                    tuple(sorted(round(v, 4) for v in caplet_vol_curve.values())[:5]),
-                )
+            # All ccy: cache key includes _spreads_tuple so any wedge edit
+            # invalidates ATM CFS table cache. EUR-specific shortcut (drop
+            # spreads_tuple) caused false cache hits when small spread edits
+            # didn't move the bottom-5 sorted curve values → "EUR doesn't
+            # update as quickly as AUD". Same shape as AUD/USD now.
+            st.session_state["_caplet_curve_key"] = (
+                ccy, _spreads_tuple, _atm_hash,
+                tuple(sorted(round(v, 4) for v in caplet_vol_curve.values())[:5]),
+            )
 
         # ═════════════════════════════════════════════════════════════════
         # USD-only: SR3 Listed Vol Mode (Step 5 of CFS build, 19-Apr-2026)
