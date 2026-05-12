@@ -15050,6 +15050,13 @@ def caps_floors_tab(vol_mode: str):
                     tdata  = st.session_state["cfs_table_data"].get(tbl_lbl, {})
                     swpt   = tdata.get("swaption", None)  # spot premium (post-conversion)
                     new_val = cur_val
+                    # v1205t: EUR-only debug — append to render log so we can see state evolution
+                    if ccy == "EUR" and spr_key == "cf_spr_3m1y":
+                        _dbg_log = st.session_state.setdefault("_eur_wedge_debug", [])
+                        _wkey_val = st.session_state.get(f"{spr_key}_new", "MISSING")
+                        _dbg_log.append(f"RENDER: base={last_val} temp={cur_val} _new={_wkey_val} prev_ccy={st.session_state.get('_cf_last_active_ccy')}")
+                        if len(_dbg_log) > 20:
+                            _dbg_log[:] = _dbg_log[-20:]
                     rc = st.columns(CW)
                     # Greyed style when this wedge is superseded by Listed Front
                     if _row_skipped:
@@ -15226,6 +15233,14 @@ def caps_floors_tab(vol_mode: str):
                         st.text(_m)
 
             st.markdown("<hr style='margin:4px 0;border-color:#334155'>", unsafe_allow_html=True)
+
+            # v1205t: EUR debug — surface wedge state evolution
+            if ccy == "EUR" and st.session_state.get("_eur_wedge_debug"):
+                with st.expander("🔧 EUR wedge debug (3m1y state log)", expanded=False):
+                    for _ln in st.session_state["_eur_wedge_debug"][-15:]:
+                        st.text(_ln)
+                    if st.button("Clear debug log", key="_eur_wedge_debug_clear"):
+                        st.session_state["_eur_wedge_debug"] = []
 
             bl, _, br = st.columns([2, 0.2, 2])
             if bl.button("🧮 Calculate CFS Curve", key="apply_spreads", type="primary",
