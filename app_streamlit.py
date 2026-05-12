@@ -14662,10 +14662,15 @@ def caps_floors_tab(vol_mode: str):
                 # the render pipeline to splice the Active source's front end
                 # with the wedge-chain long end and PCHIP-spline the join.
                 st.session_state["_cfs_calc_requested"] = True
-                # v2404p: NO cache pops, NO preserve blocks, NO st.rerun().
-                # Cache sigs auto-invalidate when spreads change.
-                # _calc_requested flag triggers rebuild in the pipeline.
-                # Streamlit reruns naturally after button click.
+                # RESTORED from v1704j (locked, working): bust caplet + ATM CFS
+                # caches explicitly here, then rerun. v2404p commit removed
+                # these claiming "Cache sigs auto-invalidate" — that turned out
+                # to be wrong; ATM CFS Straddle table didn't update on first
+                # Calculate click without these pops.
+                st.session_state.pop("_caplet_curve_key", None)
+                st.session_state.pop("_atm_cfs_cache_key", None)
+                st.session_state.pop("_atm_cfs_rows_cache", None)
+                st.rerun()
             if br.button("🔄 Refresh Swaptions", key="gen_swpt_prem", type="primary"):
                 # Mark this render so the Listed bootstrap pre-calc block
                 # doesn't immediately overwrite the refreshed swaption values.
