@@ -6319,6 +6319,57 @@ def sdr_live_tab():
     import time
     from datetime import date, datetime, timedelta
 
+    # ── SDR Trade Alerts (v1305b: moved here from main() global path) ─────
+    # Was firing every 30s on every tab, causing random ~50-200ms DB hits
+    # mid-typing on Caps & Floors. Now only fires when SDR tab is open.
+    try:
+        _sdr_alert_last = st.session_state.get("_sdr_alert_ts")
+        _sdr_now = pd.Timestamp.now(tz='UTC')
+        _sdr_check_interval = 30  # seconds
+        _do_sdr_check = False
+        if _sdr_alert_last is None:
+            st.session_state["_sdr_alert_ts"] = _sdr_now
+            _do_sdr_check = False  # skip first render
+        elif (_sdr_now - _sdr_alert_last).total_seconds() > _sdr_check_interval:
+            _do_sdr_check = True
+
+        if _do_sdr_check and HAS_POSTGRES:
+            _alert_lookback = st.session_state["_sdr_alert_ts"]
+            st.session_state["_sdr_alert_ts"] = _sdr_now
+            try:
+                conn = get_db_connection()
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT currency, COALESCE(opt_tenor,'') as opt_tenor,
+                           COALESCE(swp_tenor,'') as swp_tenor,
+                           COALESCE(strike_price,0) as strike,
+                           COALESCE(notional_amount,0) as notional,
+                           COALESCE(option_type,'') as opt_type,
+                           execution_timestamp
+                    FROM dtcc_sdr
+                    WHERE action_type = 'NEWT'
+                      AND execution_timestamp > %s
+                      AND (opt_tenor IS NOT NULL OR option_type IS NOT NULL)
+                    ORDER BY execution_timestamp DESC
+                    LIMIT 10
+                """, (_alert_lookback,))
+                _new_trades = cur.fetchall()
+                cur.close()
+                conn.close()
+                for _tr in _new_trades:
+                    _ccy_t, _opt_t, _swp_t, _strike_t, _not_t, _otype_t, _ts_t = _tr
+                    _not_mm = _not_t / 1e6 if _not_t else 0
+                    _desc = f"{_ccy_t} {_opt_t}×{_swp_t}" if _swp_t else f"{_ccy_t} {_opt_t}"
+                    _side = _otype_t.upper() if _otype_t else ""
+                    st.toast(
+                        f"📡 {_side} {_desc} K={_strike_t:.5f}% ${_not_mm:.0f}mm",
+                        icon="📡"
+                    )
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     # ── Styles ────────────────────────────────────────────────────────────────
     st.markdown("""
     <style>
@@ -27793,55 +27844,9 @@ def main():
         _tab_names += ["📍 Multi-CCY"]
         _tab_funcs += [lambda: multi_ccy_tab(vol_mode)]
 
-    # ── SDR Trade Alerts (global — fires on any tab) ───────────────────
-    # Check for new swaption/options trades every 30s, toast when found
-    try:
-        _sdr_alert_last = st.session_state.get("_sdr_alert_ts")
-        _sdr_now = pd.Timestamp.now(tz='UTC')
-        _sdr_check_interval = 30  # seconds
-        _do_sdr_check = False
-        if _sdr_alert_last is None:
-            st.session_state["_sdr_alert_ts"] = _sdr_now
-            _do_sdr_check = False  # skip first render
-        elif (_sdr_now - _sdr_alert_last).total_seconds() > _sdr_check_interval:
-            _do_sdr_check = True
-
-        if _do_sdr_check and HAS_POSTGRES:
-            _alert_lookback = st.session_state["_sdr_alert_ts"]
-            st.session_state["_sdr_alert_ts"] = _sdr_now
-            try:
-                conn = get_db_connection()
-                cur = conn.cursor()
-                cur.execute("""
-                    SELECT currency, COALESCE(opt_tenor,'') as opt_tenor,
-                           COALESCE(swp_tenor,'') as swp_tenor,
-                           COALESCE(strike_price,0) as strike,
-                           COALESCE(notional_amount,0) as notional,
-                           COALESCE(option_type,'') as opt_type,
-                           execution_timestamp
-                    FROM dtcc_sdr
-                    WHERE action_type = 'NEWT'
-                      AND execution_timestamp > %s
-                      AND (opt_tenor IS NOT NULL OR option_type IS NOT NULL)
-                    ORDER BY execution_timestamp DESC
-                    LIMIT 10
-                """, (_alert_lookback,))
-                _new_trades = cur.fetchall()
-                cur.close()
-                conn.close()
-                for _tr in _new_trades:
-                    _ccy_t, _opt_t, _swp_t, _strike_t, _not_t, _otype_t, _ts_t = _tr
-                    _not_mm = _not_t / 1e6 if _not_t else 0
-                    _desc = f"{_ccy_t} {_opt_t}×{_swp_t}" if _swp_t else f"{_ccy_t} {_opt_t}"
-                    _side = _otype_t.upper() if _otype_t else ""
-                    st.toast(
-                        f"📡 {_side} {_desc} K={_strike_t:.5f}% ${_not_mm:.0f}mm",
-                        icon="📡"
-                    )
-            except Exception:
-                pass
-    except Exception:
-        pass
+    # SDR Trade Alerts: moved to sdr_live_tab() in v1305b. Global version was
+    # firing DB queries every 30s on every tab, causing random ~50-200ms hits
+    # while editing wedges. Alerts now only fire when SDR tab is open.
 
     # Tab navigation — visual tabs, single dispatch per render
     tabs = st.tabs(_tab_names)
