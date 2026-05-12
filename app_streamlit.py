@@ -16732,14 +16732,11 @@ def caps_floors_tab(vol_mode: str):
                   with st.expander("Traceback"):
                       st.code(_tb.format_exc())
 
-        # v1105n: EUR-only — mirror the USD-only write/pop block at the end of
-        # _need_build path. Without this, EUR never:
-        #   (a) writes _cfs_otc_curve so chart_sig invalidates,
-        #   (b) clears _cfs_calc_requested so _need_build keeps firing every render,
-        #   (c) pops _cfs_chart_sig/_cfs_chart_fig so the chart redraws,
-        #   (d) pops _atm_cfs_cache_key so the ATM CFS table re-renders.
+        # v1205r: EUR-only — mirror the USD-only write/pop block at the end of
+        # _need_build path. Gated on _need_build (was unconditional in v1105n, causing
+        # chart cache pop on every render → constant rebuilds → "6 clicks to regenerate"). 
         # AUD/USD/NZD paths unchanged (locked).
-        if ccy == "EUR":
+        if ccy == "EUR" and _need_build:
             st.session_state["_cfs_otc_curve"]        = otc_caplet_curve
             st.session_state["_cfs_listed_bootstrap"] = _listed_curve_built
             st.session_state["_cfs_sr3_hybrid"]       = sr3_hybrid_curve
