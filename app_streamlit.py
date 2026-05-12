@@ -15163,10 +15163,23 @@ def caps_floors_tab(vol_mode: str):
                 st.caption(f"WARN SR3 full build failed: {_e}")
                 return None
 
+        # FIX: read spreads from session_state, NOT the local vars captured at
+        # L14343. On the Calculate-click render, the button handler at L14624
+        # writes the new committed values to session_state BEFORE this point,
+        # but the local `spread_*` vars still hold the pre-click values.
+        # Without this fix, the build runs with OLD spreads on the click render
+        # and only picks up new values on a SECOND click — the "enter wedges
+        # twice" bug. Fallback to local vars if session_state key missing.
         _spreads_dict = {
-            "3m1y": spread_3m1y, "1y1y": spread_1y1y, "2y1y": spread_2y1y,
-            "3y1y": spread_3y1y, "4y1y": spread_4y1y, "5y2y": spread_5y2y,
-            "7y3y": spread_7y3y, "10y2y": spread_10y2y, "12y3y": spread_12y3y,
+            "3m1y":  st.session_state.get("cf_spr_3m1y",  spread_3m1y),
+            "1y1y":  st.session_state.get("cf_spr_1y1y",  spread_1y1y),
+            "2y1y":  st.session_state.get("cf_spr_2y1y",  spread_2y1y),
+            "3y1y":  st.session_state.get("cf_spr_3y1y",  spread_3y1y),
+            "4y1y":  st.session_state.get("cf_spr_4y1y",  spread_4y1y),
+            "5y2y":  st.session_state.get("cf_spr_5y2y",  spread_5y2y),
+            "7y3y":  st.session_state.get("cf_spr_7y3y",  spread_7y3y),
+            "10y2y": st.session_state.get("cf_spr_10y2y", spread_10y2y),
+            "12y3y": st.session_state.get("cf_spr_12y3y", spread_12y3y),
         }
         _spreads_tuple = tuple(_spreads_dict[k] for k in sorted(_spreads_dict.keys()))
 
