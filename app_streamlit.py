@@ -33150,66 +33150,71 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                          key="_eur_open_apply",
                          type="primary",
                          disabled=(not _adj_rows or (_net_short_bp == 0 and _net_belly_bp == 0))):
-                # v1405d: vol_editor expects DataFrame stored at
-                # vol_editor["working"]["EUR"] (and base/history etc).
-                # Was writing to vol_editor["EUR"] directly — invisible to
-                # the Vol Editor tab and the publish flow.
-                #
-                # Step 1: build DataFrame from prior_close + adjustments
-                _prior_vals = _prior_close.get("values", [])
-                _rows_out = []
-                for _r in _prior_vals:
-                    _new_row = dict(_r)  # copy
-                    _exp_k = (_new_row.get("Expiry") or _new_row.get("expiry") or "").lower()
-                    if "Expiry" not in _new_row and "expiry" in _new_row:
-                        _new_row["Expiry"] = _new_row.pop("expiry")
-                    # Apply adjustments to this row's cells if in _EUR_OPEN_CELLS
-                    for _exp, _tn in _EUR_OPEN_CELLS:
-                        if _exp.lower() != _exp_k:
-                            continue
-                        _prior_v = _prior_map.get(_exp.lower(), {}).get(_tn)
-                        if _prior_v is None:
-                            continue
-                        _d = _decay.get(_exp, 0.0)
-                        if _exp in ("1m", "3m", "6m"):
-                            _bp_adj = round(_net_short_bp * _d, 2)
-                        else:
-                            _bp_adj = round(_net_belly_bp, 2)
-                        _new_row[_tn] = round(float(_prior_v) + _bp_adj, 2)
-                    _rows_out.append(_new_row)
-                _df_new = pd.DataFrame(_rows_out)
-                if "Expiry" in _df_new.columns:
-                    _df_new = _df_new[["Expiry"] + [c for c in _df_new.columns if c != "Expiry"]]
+                # v1405f: mirror the AUD SOD "Load to Vol Editor" pattern exactly.
+                # Build prior_close DataFrame (base) and adjusted DataFrame (working),
+                # write both into vol_editor, set sod_loaded flag + vol_editor_auto_load.
+                # DO NOT call set_ccy_vol_data — AUD/USD don't either; that overwrites
+                # the live published surface. Vol Editor reads its own working copy.
 
-                # Step 2: write to vol_editor.working[EUR] + base[EUR]
+                # Build prior_close DataFrame (= base, the un-adjusted surface)
+                _prior_vals = _prior_close.get("values", [])
+                _base_rows = []
+                for _r in _prior_vals:
+                    _new_row = dict(_r)
+                    if "expiry" in _new_row and "Expiry" not in _new_row:
+                        _new_row["Expiry"] = _new_row.pop("expiry")
+                    _base_rows.append(_new_row)
+                _base_df = pd.DataFrame(_base_rows)
+                if "Expiry" in _base_df.columns:
+                    _base_df = _base_df[["Expiry"] + [c for c in _base_df.columns if c != "Expiry"]]
+
+                # Build adjusted DataFrame (= working)
+                _working_df = _base_df.copy()
+                _exp_col_lower = _working_df["Expiry"].str.lower().tolist()
+                for _exp, _tn in _EUR_OPEN_CELLS:
+                    if _tn not in _working_df.columns:
+                        continue
+                    _prior_v = _prior_map.get(_exp.lower(), {}).get(_tn)
+                    if _prior_v is None:
+                        continue
+                    _d = _decay.get(_exp, 0.0)
+                    if _exp in ("1m", "3m", "6m"):
+                        _bp_adj = round(_net_short_bp * _d, 2)
+                    else:
+                        _bp_adj = round(_net_belly_bp, 2)
+                    _new_v = round(float(_prior_v) + _bp_adj, 2)
+                    # Find matching row by Expiry
+                    try:
+                        _row_idx = _exp_col_lower.index(_exp.lower())
+                        _working_df.at[_row_idx, _tn] = _new_v
+                    except ValueError:
+                        continue
+
+                # Write to vol_editor — match AUD pattern exactly
                 if "vol_editor" not in st.session_state:
                     st.session_state["vol_editor"] = {
                         "working": {}, "base": {}, "history": {},
-                        "future": {}, "redo_stack": {}, "selected_cell": {},
+                        "future": {}, "redo_stack": {}, "view_mode": {},
+                        "smoothing": {}, "paste_data": {},
                     }
-                st.session_state["vol_editor"]["working"]["EUR"] = _df_new.copy()
-                # Set base = prior_close (so Vol Editor shows diffs vs prior)
-                _prior_df = pd.DataFrame(_prior_vals)
-                if "Expiry" in _prior_df.columns:
-                    _prior_df = _prior_df[["Expiry"] + [c for c in _prior_df.columns if c != "Expiry"]]
-                st.session_state["vol_editor"]["base"]["EUR"] = _prior_df.copy()
-
-                # Step 3: write the new surface to vol_data via set_ccy_vol_data
-                # so downstream caches (atm_prem_matrix, caplet_vol_curve_EUR,
-                # _atm_cfs_cache_key, _atm_hash_EUR) all invalidate properly.
-                # Preserve existing SABR params if present.
-                _existing_eur = st.session_state.get("vol_data", {}).get("EUR", {})
-                set_ccy_vol_data("EUR", _df_new.copy(),
-                                 _existing_eur.get("alpha"),
-                                 _existing_eur.get("beta"),
-                                 _existing_eur.get("rho"),
-                                 _existing_eur.get("nu"))
-                st.session_state["_vol_loaded_EUR"] = True
+                ve = st.session_state["vol_editor"]
+                for _k in ["working", "base", "history", "redo_stack",
+                           "view_mode", "smoothing", "paste_data", "future"]:
+                    if _k not in ve:
+                        ve[_k] = {}
+                ve["base"]["EUR"] = _base_df.copy()
+                ve["working"]["EUR"] = _working_df.copy()
+                ve["history"]["EUR"] = []
+                ve["redo_stack"]["EUR"] = []
+                if "sod_loaded" not in ve:
+                    ve["sod_loaded"] = {}
+                ve["sod_loaded"]["EUR"] = True
+                st.session_state["vol_editor_auto_load"] = True
 
                 st.session_state["_eur_open_applied_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
                 st.success(
-                    f"✓ Applied {len(_adj_rows)} cells to vol_editor.working[EUR]. "
-                    "Open the **Vol Editor** tab — surface is loaded and ready to publish."
+                    f"✓ Loaded EUR open into Vol Editor ({len(_adj_rows)} cells adjusted). "
+                    "Go to **Vol Editor** tab to review and publish."
                 )
         with _apply_col2:
             _last = st.session_state.get("_eur_open_applied_at")
