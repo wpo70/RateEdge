@@ -14151,7 +14151,7 @@ def caps_floors_tab(vol_mode: str):
         "EUR": {"cf_spr_3m1y":3.0,  "cf_spr_1y1y":9.5,  "cf_spr_2y1y":10.0,
                 "cf_spr_3y1y":11.0, "cf_spr_4y1y":12.5, "cf_spr_5y2y":38.5,
                 "cf_spr_7y3y":78.5, "cf_spr_10y2y":55.0, "cf_spr_12y3y":82.0,
-                "cf_spr_15v20":-5.0, "cf_spr_20v30":-5.0},
+                "cf_spr_15v20":-3.0, "cf_spr_20v30":-3.0},
     }
     _prev_ccy = st.session_state.get("_cf_last_active_ccy")
     if _prev_ccy != ccy:
@@ -33302,6 +33302,312 @@ def sod_report_tab():
                     st.rerun()
 
     st.markdown("---")
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # v1305q: EUR Open Vol Adjustment — proposes overnight adjustments based
+    # on MOVE, SDR flow, realised vol, and RV composites. Writes to vol_editor
+    # only after user clicks Approve. Read-only proposal otherwise.
+    # ═══════════════════════════════════════════════════════════════════════
+    _sod_ccy = str(st.session_state.get("sidebar_ccy", "AUD")).split(" ")[0]
+    if _sod_ccy == "EUR":
+        with st.expander("🌅 EUR Open Vol Adjustment", expanded=True):
+            st.caption(
+                "EUR-specific overnight vol adjustment proposal. Reads prior 'EOD 1700 LDN' "
+                "close, checks MOVE/SDR/realised/RV triggers, suggests adjustments to key cells. "
+                "No changes applied until you click **Approve & Apply to Vol Editor**."
+            )
+
+            # ── Configurable triggers (sidebar-style, inline) ─────────────
+            _trig_cols = st.columns(4)
+            with _trig_cols[0]:
+                _trig_move = st.number_input(
+                    "MOVE gap trigger (pts)", value=5.0, min_value=1.0, max_value=20.0,
+                    step=0.5, key="_eur_trig_move",
+                    help="Overnight MOVE delta vs prior close — triggers global vol regime shift")
+            with _trig_cols[1]:
+                _trig_sdr_mm = st.number_input(
+                    "SDR flow (EUR mm 24h)", value=500.0, min_value=50.0, max_value=5000.0,
+                    step=50.0, key="_eur_trig_sdr",
+                    help="Min EUR-only SDR straddle notional to consider customer-flow signal")
+            with _trig_cols[2]:
+                _trig_rv_score = st.number_input(
+                    "RV composite score cutoff", value=80.0, min_value=50.0, max_value=100.0,
+                    step=5.0, key="_eur_trig_rv",
+                    help="Min Score on EUR RV composite signals to drive an adjustment")
+            with _trig_cols[3]:
+                _trig_realised_bp = st.number_input(
+                    "Realised vol gap (bp)", value=1.0, min_value=0.5, max_value=10.0,
+                    step=0.5, key="_eur_trig_rl",
+                    help="Min 5d realised vol change vs prior 5d window")
+
+            # ── Pull prior close from vol_history (EUR, latest 'EOD 1700 LDN') ─
+            _prior_close = None
+            _prior_close_date = None
+            _prior_close_label = None
+            try:
+                if HAS_POSTGRES:
+                    _vh_conn = get_db_connection()
+                    if _vh_conn:
+                        _vh_cur = _vh_conn.cursor()
+                        _vh_cur.execute("""
+                            SELECT snapshot_date, label, atm_vols FROM vol_history
+                            WHERE currency='EUR' AND user_id='shared'
+                              AND label LIKE 'EOD%%LDN%%'
+                            ORDER BY snapshot_date DESC LIMIT 1
+                        """)
+                        _vr = _vh_cur.fetchone()
+                        if _vr:
+                            _prior_close_date, _prior_close_label, _prior_close = _vr[0], _vr[1], _vr[2]
+                        _vh_conn.close()
+            except Exception as _e:
+                st.warning(f"Could not load prior EUR close: {_e}")
+
+            if not _prior_close:
+                st.info("No prior 'EOD 1700 LDN' EUR snapshot found in vol_history. "
+                        "Publish an EUR close first to enable open adjustment.")
+            else:
+                st.markdown(f"**Prior close:** `{_prior_close_label}` ({_prior_close_date})")
+
+                # Build lookup: (expiry_lower → {tenor → vol})
+                _prior_map = {}
+                for _row in _prior_close.get("values", []):
+                    _exp_k = (_row.get("Expiry") or _row.get("expiry") or "").lower()
+                    _prior_map[_exp_k] = {k: float(v) for k, v in _row.items()
+                                          if k.lower() != "expiry" and v not in (None, "")}
+
+                # ── Trigger checks ─────────────────────────────────────────
+                _triggers = []  # list of (name, fired, value, msg, adj_bp_short, adj_bp_belly)
+                _commentary_lines = []
+
+                # 1. ECB / Fed event (manual flag — user-provided override)
+                _event_today = st.checkbox(
+                    "Major event overnight (ECB / Fed / CPI / NFP)", value=False,
+                    key="_eur_event_today",
+                    help="Manual override — tick if a known event drives overnight vol")
+                if _event_today:
+                    _triggers.append(("Event Risk", True, "manual",
+                                      "Major event flagged — short-end +1.0bp, belly +0.5bp",
+                                      1.0, 0.5))
+
+                # 2. MOVE gap
+                try:
+                    _move_now = _fetch_move_index()
+                    _move_hist = _load_vix_move_history("MOVE", 5)
+                    _move_prev = float(_move_hist["close"].iloc[-2]) if len(_move_hist) >= 2 else None
+                    if _move_now and _move_prev:
+                        _move_delta = float(_move_now) - _move_prev
+                        if abs(_move_delta) > _trig_move:
+                            _move_short_bp = 0.5 * (1 if _move_delta > 0 else -1)
+                            _move_belly_bp = 0.3 * (1 if _move_delta > 0 else -1)
+                            _triggers.append(("MOVE Gap", True, f"{_move_delta:+.1f}pts",
+                                              f"MOVE {_move_now:.1f} vs prior {_move_prev:.1f} ({_move_delta:+.1f}) — global rates vol regime {'up' if _move_delta > 0 else 'down'}",
+                                              _move_short_bp, _move_belly_bp))
+                        else:
+                            _triggers.append(("MOVE Gap", False, f"{_move_delta:+.1f}pts",
+                                              f"MOVE delta {_move_delta:+.1f} below {_trig_move:.1f} threshold",
+                                              0.0, 0.0))
+                    else:
+                        _triggers.append(("MOVE Gap", False, "N/A", "MOVE data unavailable", 0.0, 0.0))
+                except Exception:
+                    _triggers.append(("MOVE Gap", False, "err", "MOVE fetch error", 0.0, 0.0))
+
+                # 3. EUR SDR 24h straddle flow (balanced P/R proxy)
+                try:
+                    if HAS_POSTGRES:
+                        _sdr_conn = get_db_connection()
+                        if _sdr_conn:
+                            _sdr_cur = _sdr_conn.cursor()
+                            _sdr_cur.execute("""
+                                SELECT option_type_decoded, COUNT(*) as cnt,
+                                       SUM(COALESCE(notional_leg1, 0)) as total_not
+                                FROM dtcc_sdr
+                                WHERE action_type='NEWT' AND asset_class='IR'
+                                  AND currency='EUR'
+                                  AND execution_timestamp >= NOW() - INTERVAL '24 hours'
+                                GROUP BY option_type_decoded
+                            """)
+                            _sdr_flow = {r[0]: {"cnt": r[1], "not": float(r[2] or 0)} for r in _sdr_cur.fetchall()}
+                            _sdr_conn.close()
+                            _payer = _sdr_flow.get("CALL", {}).get("not", 0)
+                            _rcvr = _sdr_flow.get("PUT", {}).get("not", 0)
+                            _total_eur = (_payer + _rcvr) / 1e6  # in mm
+                            _bal_skew = abs((_payer - _rcvr)) / max(_payer + _rcvr, 1) * 100  # % skew
+                            if _total_eur > _trig_sdr_mm and _bal_skew < 30:
+                                _triggers.append(("SDR Straddle Flow", True,
+                                                  f"€{_total_eur:.0f}mm",
+                                                  f"€{_total_eur:.0f}mm 24h EUR straddle flow (P/R skew {_bal_skew:.0f}%) — customer vol demand",
+                                                  0.5, 0.3))
+                            else:
+                                _triggers.append(("SDR Straddle Flow", False,
+                                                  f"€{_total_eur:.0f}mm",
+                                                  f"€{_total_eur:.0f}mm below €{_trig_sdr_mm:.0f}mm threshold (or skew {_bal_skew:.0f}% too directional)",
+                                                  0.0, 0.0))
+                except Exception:
+                    _triggers.append(("SDR Straddle Flow", False, "err", "SDR fetch error", 0.0, 0.0))
+
+                # 4. 5d realised vol gap (EURIBOR 6M par swap rate volatility, 2Y proxy)
+                _realised_short = None
+                _realised_belly = None
+                try:
+                    _rl_today_5d = _compute_realised_vol_db("EUR", 2.0, 5) if HAS_POSTGRES else None
+                    _rl_today_belly = _compute_realised_vol_db("EUR", 5.0, 5) if HAS_POSTGRES else None
+                    # For "prior 5d" we'd need a different window endpoint — use 10d backward
+                    # as a proxy and subtract. Simpler: compare 5d vs 21d to detect regime shift.
+                    _rl_21d_short = _compute_realised_vol_db("EUR", 2.0, 21) if HAS_POSTGRES else None
+                    if _rl_today_5d and _rl_21d_short:
+                        _rl_delta = float(_rl_today_5d) - float(_rl_21d_short)
+                        if abs(_rl_delta) > _trig_realised_bp:
+                            _rl_short_bp = round(_rl_delta * 0.5, 2)
+                            _rl_belly_bp = round(_rl_delta * 0.3, 2)
+                            _triggers.append(("Realised Vol Gap", True,
+                                              f"{_rl_delta:+.1f}bp",
+                                              f"5d realised {_rl_today_5d:.1f}bp vs 21d avg {_rl_21d_short:.1f}bp ({_rl_delta:+.1f}bp gap)",
+                                              _rl_short_bp, _rl_belly_bp))
+                        else:
+                            _triggers.append(("Realised Vol Gap", False,
+                                              f"{_rl_delta:+.1f}bp",
+                                              f"5d-21d gap {_rl_delta:+.1f}bp below {_trig_realised_bp:.1f}bp threshold",
+                                              0.0, 0.0))
+                except Exception:
+                    _triggers.append(("Realised Vol Gap", False, "err", "Realised vol fetch error", 0.0, 0.0))
+
+                # 5. Top 3 EUR RV ideas — check composite scores
+                _rv_cache = st.session_state.get("_rv_ideas_cache", []) or []
+                _eur_top_ideas = [i for i in _rv_cache if i.get("Score", 0) >= _trig_rv_score][:3]
+                if _eur_top_ideas:
+                    _rv_buy_bias = sum(1 for i in _eur_top_ideas if "Buy" in str(i.get("Direction", "")))
+                    _rv_sell_bias = sum(1 for i in _eur_top_ideas if "Sell" in str(i.get("Direction", "")))
+                    if _rv_buy_bias > _rv_sell_bias:
+                        _rv_short_bp = 0.5
+                        _rv_belly_bp = 0.3
+                        _msg = f"{len(_eur_top_ideas)} top idea(s) ≥{_trig_rv_score:.0f}: net Buy vol bias ({_rv_buy_bias}B/{_rv_sell_bias}S)"
+                    elif _rv_sell_bias > _rv_buy_bias:
+                        _rv_short_bp = -0.5
+                        _rv_belly_bp = -0.3
+                        _msg = f"{len(_eur_top_ideas)} top idea(s) ≥{_trig_rv_score:.0f}: net Sell vol bias ({_rv_buy_bias}B/{_rv_sell_bias}S)"
+                    else:
+                        _rv_short_bp = 0.0
+                        _rv_belly_bp = 0.0
+                        _msg = f"{len(_eur_top_ideas)} top idea(s) ≥{_trig_rv_score:.0f}: mixed bias — no adjustment"
+                    _triggers.append(("RV Top Ideas", _rv_short_bp != 0,
+                                      f"{len(_eur_top_ideas)} ≥{_trig_rv_score:.0f}", _msg,
+                                      _rv_short_bp, _rv_belly_bp))
+                else:
+                    _triggers.append(("RV Top Ideas", False, "0", "No RV composites ≥ threshold", 0.0, 0.0))
+
+                # ── Display triggers ─────────────────────────────────────
+                st.markdown("#### Triggers")
+                _t_df_rows = []
+                _net_short_bp = 0.0
+                _net_belly_bp = 0.0
+                for _name, _fired, _val, _msg, _s_bp, _b_bp in _triggers:
+                    _t_df_rows.append({
+                        "Trigger": _name,
+                        "Fired": "✓" if _fired else "—",
+                        "Value": _val,
+                        "Detail": _msg,
+                        "1m bp": f"{_s_bp:+.1f}" if _fired and _s_bp != 0 else "—",
+                        "Belly bp": f"{_b_bp:+.1f}" if _fired and _b_bp != 0 else "—",
+                    })
+                    if _fired:
+                        _net_short_bp += _s_bp
+                        _net_belly_bp += _b_bp
+                st.dataframe(pd.DataFrame(_t_df_rows), use_container_width=True, hide_index=True)
+
+                # Apply hard caps
+                _net_short_bp = max(min(_net_short_bp, 2.0), -2.0)
+                _net_belly_bp = max(min(_net_belly_bp, 1.0), -1.0)
+
+                # ── Build proposed adjustments grid ─────────────────────
+                # Cells to adjust (user-specified set):
+                # 1m: 2Y 5Y 10Y 20Y | 3m: 1Y 10Y 30Y | 1y: 1Y 5Y 10Y 30Y
+                # 5y: 1Y 5Y 30Y | 10y: 1Y 10Y 30Y | 20y: 1Y 5Y
+                _EUR_OPEN_CELLS = [
+                    ("1m",  "2Y"),  ("1m",  "5Y"),  ("1m",  "10Y"), ("1m",  "20Y"),
+                    ("3m",  "1Y"),  ("3m",  "10Y"), ("3m",  "30Y"),
+                    ("1y",  "1Y"),  ("1y",  "5Y"),  ("1y",  "10Y"), ("1y",  "30Y"),
+                    ("5y",  "1Y"),  ("5y",  "5Y"),  ("5y",  "30Y"),
+                    ("10y", "1Y"),  ("10y", "10Y"), ("10y", "30Y"),
+                    ("20y", "1Y"),  ("20y", "5Y"),
+                ]
+                # Decay: 1m gets full short_bp; 3m linear 0.7×; 6m 0.4×; ≥1y → belly_bp
+                _decay = {"1m": 1.0, "3m": 0.7, "6m": 0.4, "1y": 0.0, "2y": 0.0,
+                          "5y": 0.0, "10y": 0.0, "20y": 0.0}
+
+                _adj_rows = []
+                for _exp, _tn in _EUR_OPEN_CELLS:
+                    _prior_v = _prior_map.get(_exp.lower(), {}).get(_tn)
+                    if _prior_v is None:
+                        continue
+                    _d = _decay.get(_exp, 0.0)
+                    # Short-end vols use short_bp decayed; ≥1y use belly_bp
+                    if _exp in ("1m", "3m", "6m"):
+                        _bp_adj = round(_net_short_bp * _d, 2)
+                    else:
+                        _bp_adj = round(_net_belly_bp, 2)
+                    _new_v = round(float(_prior_v) + _bp_adj, 2)
+                    _adj_rows.append({
+                        "Expiry": _exp,
+                        "Tenor": _tn,
+                        "Prior": f"{_prior_v:.2f}",
+                        "Δbp": f"{_bp_adj:+.2f}",
+                        "Proposed": f"{_new_v:.2f}",
+                    })
+
+                st.markdown(f"#### Proposed Open — net {_net_short_bp:+.1f}bp short / {_net_belly_bp:+.1f}bp belly (capped at ±2/±1)")
+                st.dataframe(pd.DataFrame(_adj_rows), use_container_width=True, hide_index=True)
+
+                # ── Auto-generated commentary ──────────────────────────
+                _comm_parts = []
+                _fired_names = [t[0] for t in _triggers if t[1]]
+                if not _fired_names:
+                    _comm_parts.append("Held overnight on light flow, no event risk. EUR vol unchanged from prior close.")
+                else:
+                    _comm_parts.append(f"EUR open adjustments driven by: {', '.join(_fired_names)}.")
+                    for _name, _fired, _val, _msg, _s_bp, _b_bp in _triggers:
+                        if _fired:
+                            _comm_parts.append(f"• {_name}: {_msg} → 1m {_s_bp:+.1f}bp, belly {_b_bp:+.1f}bp")
+                    _comm_parts.append(f"Net (capped): {_net_short_bp:+.1f}bp short-end, {_net_belly_bp:+.1f}bp belly.")
+                _commentary = "\n".join(_comm_parts)
+                st.markdown("#### Auto-Commentary")
+                st.text_area("Commentary preview", value=_commentary, height=140,
+                             key="_eur_open_commentary", label_visibility="collapsed")
+
+                # ── Apply button ───────────────────────────────────────
+                _apply_col1, _apply_col2 = st.columns([1, 3])
+                with _apply_col1:
+                    if st.button("✓ Approve & Apply to Vol Editor",
+                                 key="_eur_open_apply",
+                                 type="primary",
+                                 disabled=(not _adj_rows or (_net_short_bp == 0 and _net_belly_bp == 0))):
+                        # Build new vol surface in vol_editor format and write
+                        _eur_editor = st.session_state.get("vol_editor", {}).get("EUR")
+                        if _eur_editor is None:
+                            # Seed from prior close
+                            _eur_editor = _prior_close.copy()
+                        # Apply adjustments
+                        _ed_vals = _eur_editor.get("values", [])
+                        _ed_map = {(r.get("Expiry") or r.get("expiry") or "").lower(): r for r in _ed_vals}
+                        for _exp, _tn in _EUR_OPEN_CELLS:
+                            _prior_v = _prior_map.get(_exp.lower(), {}).get(_tn)
+                            if _prior_v is None:
+                                continue
+                            _d = _decay.get(_exp, 0.0)
+                            if _exp in ("1m", "3m", "6m"):
+                                _bp_adj = round(_net_short_bp * _d, 2)
+                            else:
+                                _bp_adj = round(_net_belly_bp, 2)
+                            _new_v = round(float(_prior_v) + _bp_adj, 2)
+                            _row_obj = _ed_map.get(_exp.lower())
+                            if _row_obj is not None:
+                                _row_obj[_tn] = _new_v
+                        st.session_state.setdefault("vol_editor", {})["EUR"] = _eur_editor
+                        st.session_state["_eur_open_applied_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+                        st.success(f"✓ Applied {len(_adj_rows)} cells to vol_editor[EUR]. Review in Vol Config tab and publish when ready.")
+                with _apply_col2:
+                    _last = st.session_state.get("_eur_open_applied_at")
+                    if _last:
+                        st.caption(f"Last applied: {_last}")
 
     user_id = st.session_state.get("username", "default")
 
