@@ -748,7 +748,9 @@ def render_ticket_tab(ss):
 HAS_TICKET_TAB = True
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR"]
-ALL_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP (PENDING)", "JPY (PENDING)", "CAD (PENDING)"]
+# v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
+# any internal lookups (NZD references in scanner gates, etc.) still resolve.
+ALL_CURRENCIES = ["AUD", "USD", "EUR", "NZD (PENDING)", "GBP (PENDING)", "JPY (PENDING)", "CAD (PENDING)"]
 
 
 # ============================
@@ -21322,20 +21324,27 @@ def _meetings_in_window(ccy: str, expiry_label: str) -> list:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def _compute_realised_vol_db(ccy: str, tenor_y: float, window_days: int = 21) -> Optional[float]:
     """Annualised realised normal vol (bp) from swap_rates history.
-    Uses daily rate differences × √252 × 10000."""
+    Uses daily rate differences × √252 × 10000. Cached 5min."""
     try:
         conn = get_db_connection()
         if conn is None:
             return None
         cur = conn.cursor()
+        cur.execute("SET statement_timeout = '5s'")  # don't hang UI on missing data
         if ccy == "AUD":
             fr = "6M BBSW" if tenor_y >= 4.0 else "3M BBSW"
         elif ccy == "USD":
             fr = "SOFR"
-        else:
+        elif ccy == "EUR":
+            fr = "EURIBOR 6M" if tenor_y >= 2.0 else "EURIBOR 3M"
+        elif ccy == "NZD":
             fr = "3M BKBM"
+        else:
+            conn.close()
+            return None
         tenor_str = f"{int(round(tenor_y))}Y"
         cur.execute("""
             SELECT date, rate FROM swap_rates
@@ -32794,6 +32803,7 @@ def _render_eur_open_adjustment_panel():
             _vh_conn = get_db_connection()
             if _vh_conn:
                 _vh_cur = _vh_conn.cursor()
+                _vh_cur.execute("SET statement_timeout = '5s'")
                 # Try the strict LDN label first
                 _vh_cur.execute("""
                     SELECT snapshot_date, label, atm_vols FROM vol_history
@@ -32885,6 +32895,7 @@ def _render_eur_open_adjustment_panel():
                 _sdr_conn = get_db_connection()
                 if _sdr_conn:
                     _sdr_cur = _sdr_conn.cursor()
+                    _sdr_cur.execute("SET statement_timeout = '5s'")
                     _sdr_cur.execute("""
                         SELECT option_type_decoded, COUNT(*) as cnt,
                                SUM(COALESCE(notional_leg1, 0)) as total_not
