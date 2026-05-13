@@ -33194,17 +33194,17 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                     _prior_df = _prior_df[["Expiry"] + [c for c in _prior_df.columns if c != "Expiry"]]
                 st.session_state["vol_editor"]["base"]["EUR"] = _prior_df.copy()
 
-                # Step 3: also update vol_data[EUR][atm] so Vol Config tab
-                # surface display picks it up immediately.
-                if "vol_data" not in st.session_state:
-                    st.session_state["vol_data"] = {}
-                if "EUR" not in st.session_state["vol_data"]:
-                    st.session_state["vol_data"]["EUR"] = {}
-                st.session_state["vol_data"]["EUR"]["atm"] = _df_new.copy()
-
-                # Step 4: bump _atm_hash_EUR so downstream caches invalidate
-                _h = st.session_state.get("_atm_hash_EUR", 0)
-                st.session_state["_atm_hash_EUR"] = _h + 1
+                # Step 3: write the new surface to vol_data via set_ccy_vol_data
+                # so downstream caches (atm_prem_matrix, caplet_vol_curve_EUR,
+                # _atm_cfs_cache_key, _atm_hash_EUR) all invalidate properly.
+                # Preserve existing SABR params if present.
+                _existing_eur = st.session_state.get("vol_data", {}).get("EUR", {})
+                set_ccy_vol_data("EUR", _df_new.copy(),
+                                 _existing_eur.get("alpha"),
+                                 _existing_eur.get("beta"),
+                                 _existing_eur.get("rho"),
+                                 _existing_eur.get("nu"))
+                st.session_state["_vol_loaded_EUR"] = True
 
                 st.session_state["_eur_open_applied_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
                 st.success(
