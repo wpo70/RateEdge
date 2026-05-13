@@ -14147,11 +14147,11 @@ def caps_floors_tab(vol_mode: str):
                 "cf_spr_3y1y":15.0, "cf_spr_4y1y":18.0, "cf_spr_5y2y":30.0,
                 "cf_spr_7y3y":40.0, "cf_spr_10y2y":30.0, "cf_spr_12y3y":60.0,
                 "cf_spr_15v20":-5.0},
-        # v1105i: EUR baseline
-        "EUR": {"cf_spr_3m1y":5.0,  "cf_spr_1y1y":8.0,  "cf_spr_2y1y":10.0,
-                "cf_spr_3y1y":13.0, "cf_spr_4y1y":15.0, "cf_spr_5y2y":30.0,
-                "cf_spr_7y3y":40.0, "cf_spr_10y2y":25.0, "cf_spr_12y3y":60.0,
-                "cf_spr_15v20":-3.0, "cf_spr_20v30":-3.0},
+        # v1305o: EUR baseline — user's current production wedge levels
+        "EUR": {"cf_spr_3m1y":3.0,  "cf_spr_1y1y":9.5,  "cf_spr_2y1y":10.0,
+                "cf_spr_3y1y":11.0, "cf_spr_4y1y":12.5, "cf_spr_5y2y":38.5,
+                "cf_spr_7y3y":78.5, "cf_spr_10y2y":55.0, "cf_spr_12y3y":82.0,
+                "cf_spr_15v20":-5.0, "cf_spr_20v30":-5.0},
     }
     _prev_ccy = st.session_state.get("_cf_last_active_ccy")
     if _prev_ccy != ccy:
@@ -25129,7 +25129,7 @@ def rv_tab():
                                    "Breakeven range = rate move where P&L = 0 (straddle sellers only).")
     if _rv_active == 4:
         st.markdown("### Cap/Floor RV Trade Recommendations")
-        _cf_ref_rate = "BBSW" if ccy == "AUD" else ("SOFR" if ccy == "USD" else "BKBM" if ccy == "NZD" else "Rate")
+        _cf_ref_rate = "BBSW" if ccy == "AUD" else ("SOFR" if ccy == "USD" else "BKBM" if ccy == "NZD" else "EURIBOR 3M" if ccy == "EUR" else "Rate")
         st.caption(f"Wedge RV, caplet vol vs realised, listed/OTC arb, forward path analysis.")
 
         if curve is None:
@@ -25179,7 +25179,10 @@ def rv_tab():
                                "USD": {"3m1y": -3.0, "1y1y": 12.0, "2y1y": 15.0, "3y1y": 19.0,
                                        "4y1y": 22.0, "5y2y": 40.0, "7y3y": 60.0},
                                "NZD": {"3m1y": 10.0, "1y1y": 11.5, "2y1y": 13.0, "3y1y": 17.5,
-                                       "4y1y": 20.0, "5y2y": 45.0, "7y3y": 50.0}}
+                                       "4y1y": 20.0, "5y2y": 45.0, "7y3y": 50.0},
+                               # v1305o: EUR baseline — user's current production wedge levels
+                               "EUR": {"3m1y": 3.0,  "1y1y": 9.5,  "2y1y": 10.0, "3y1y": 11.0,
+                                       "4y1y": 12.5, "5y2y": 38.5, "7y3y": 78.5}}
             _wedge_def = _wedge_defaults.get(ccy, _wedge_defaults["USD"])
             _wedge_labels = {"3m1y": "3m×1Y", "1y1y": "1×2", "2y1y": "2×3",
                              "3y1y": "3×4", "4y1y": "4×5", "5y2y": "5×7", "7y3y": "7×10"}
@@ -25324,6 +25327,7 @@ def rv_tab():
                 "AUD": {"mean": 0.194, "std": 0.080},
                 "USD": {"mean": 0.060, "std": 0.040},  # USD typically flatter
                 "NZD": {"mean": 0.150, "std": 0.070},
+                "EUR": {"mean": 0.080, "std": 0.050},  # EUR typically flat-to-modest steepener
             }
             _2s5s_cfg = _2s5s_defaults.get(ccy, {"mean": 0.100, "std": 0.060})
             curve_slope_2s5s = _par_rate_qq(5) - _par_rate_qq(2)
