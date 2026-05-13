@@ -27450,13 +27450,19 @@ def main():
         )
         st.session_state["theme_name"] = theme_choice
 
-        # v1205q: one-time migration — normalize stored "EUR (PENDING)" → "EUR" so the
+        # v1305q: one-time migration — normalize stored "EUR (PENDING)" → "EUR" so the
         # index lookup against the new ALL_CURRENCIES (which has plain "EUR") works.
         _stored_ccy = st.session_state.get("sidebar_ccy")
         if _stored_ccy and "(PENDING)" in str(_stored_ccy):
             _normalized = str(_stored_ccy).split(" ")[0]
             if _normalized in ALL_CURRENCIES:
                 st.session_state["sidebar_ccy"] = _normalized
+
+        # v1405b: force USD on fresh app load. _app_init_done flag persists
+        # within a Streamlit session; if missing, this is a cold start.
+        if not st.session_state.get("_app_init_done"):
+            st.session_state["sidebar_ccy"] = "USD"
+            st.session_state["_app_init_done"] = True
 
         # Currency — default to USD
         _ccy_idx = ALL_CURRENCIES.index(st.session_state.get("sidebar_ccy", "USD")) if st.session_state.get("sidebar_ccy", "USD") in ALL_CURRENCIES else ALL_CURRENCIES.index("USD")
