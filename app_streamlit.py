@@ -23336,7 +23336,8 @@ def rv_tab():
             _rv_tn_strs  = ["2Y", "5Y", "10Y", "15Y", "20Y"]
             _rv_exp_lbls = ["1m", "3m", "6m", "1y", "2y"]
 
-            _rv_precompute = st.session_state.get("_rv_precompute_cache")
+            _rv_precompute_key = f"_rv_precompute_cache_{ccy}"
+            _rv_precompute = st.session_state.get(_rv_precompute_key)
             if st.session_state.get(_rv_ideas_key) and _rv_precompute is None:
                 try:
                     _realised    = {tn: _compute_realised_vol_db(ccy, tn, 21) for tn in _rv_tenors}
@@ -23344,7 +23345,7 @@ def rv_tab():
                     _fv_stats    = _compute_fwd_vol_surface_stats(ccy)
                     _meetings    = {e: _meetings_in_window(ccy, e) for e in _rv_exp_lbls}
                     _move_val    = _fetch_move_index() if ccy == "USD" else None
-                    st.session_state["_rv_precompute_cache"] = {
+                    st.session_state[_rv_precompute_key] = {
                         "realised": _realised, "ratio_stats": _ratio_stats,
                         "fv_stats": _fv_stats, "meetings": _meetings, "move_val": _move_val
                     }
@@ -24773,7 +24774,7 @@ def rv_tab():
                     # ── Controls row ────────────────────────────────────────
                     _hz_c1, _hz_c2, _hz_c3, _hz_c4 = st.columns([2, 2, 2, 2])
                     with _hz_c1:
-                        _hz_notional = st.number_input("Notional (AUD mm)", min_value=1.0,
+                        _hz_notional = st.number_input(f"Notional ({ccy} mm)", min_value=1.0,
                                                         max_value=5000.0, value=100.0, step=25.0,
                                                         key="hz_notional")
                     with _hz_c2:
@@ -30411,13 +30412,19 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
         curr_ratio = v1m / v1y
         v1m_adj = v1m - _n_mtgs("1m") * _prem_per
         rs = ratio_stats.get(tn_str)
-        if rs and rs.get("std", 0) > 0.01:
+        _z_basis = "history"  # default for accurate Rationale wording
+        if rs and rs.get("std", 0) > 0.01 and rs.get("n", 0) >= 30:
             _rs_std_f = max(rs["std"], 0.012)
             z_ratio = (curr_ratio - rs["mean"]) / _rs_std_f
             z_ratio = max(min(z_ratio, 5.0), -5.0)
         else:
+            # Fallback: theoretical √T fair vs realised premium
+            # Cap z at ±5σ so low-history ccy (e.g. EUR with <30 obs)
+            # doesn't produce spurious Z=19.82 outputs.
             gamma_fair = v1y / math.sqrt(12)
             z_ratio = (v1m_adj - gamma_fair) / max(gamma_fair * 0.15, 1.0)
+            z_ratio = max(min(z_ratio, 5.0), -5.0)
+            _z_basis = "√T-fair (insufficient history)"
         vrp_1m = round(v1m_adj / rv_21d, 2) if rv_21d and rv_21d > 0 else None
         # v0505e: fire on z-score alone (>1.5), VRP confirms and boosts score
         _vrp_confirms_rich = vrp_1m is not None and vrp_1m > 1.20
@@ -30431,7 +30438,7 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                 "Direction": "Sell vol",
                 "Trade": f"Sell 1m×{tn}Y straddle",
                 "Signal": f"Z={z_ratio:+.2f}" + (f" | VRP={vrp_1m:.2f}" if vrp_1m else ""),
-                "Rationale": f"1m vol {v1m:.0f}bp rich by {z_ratio:.1f}σ vs history" +
+                "Rationale": f"1m vol {v1m:.0f}bp rich by {z_ratio:.1f}σ vs {_z_basis}" +
                              (f", VRP {vrp_1m:.2f}× realised" if vrp_1m else ""),
                 "Risk": "Large near-term move; CB surprise",
                 "e1": "1m", "e2": "1y", "tn": tn_str, "tn_y": tn,
@@ -30443,7 +30450,7 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                 "Direction": "Buy vol",
                 "Trade": f"Buy 1m×{tn}Y straddle",
                 "Signal": f"Z={z_ratio:+.2f}" + (f" | VRP={vrp_1m:.2f}" if vrp_1m else ""),
-                "Rationale": f"1m vol {v1m:.0f}bp cheap by {abs(z_ratio):.1f}σ" +
+                "Rationale": f"1m vol {v1m:.0f}bp cheap by {abs(z_ratio):.1f}σ vs {_z_basis}" +
                              (f", VRP only {vrp_1m:.2f}× realised" if vrp_1m else ""),
                 "Risk": "Theta decay; vol stays suppressed",
                 "e1": "1m", "e2": "1y", "tn": tn_str, "tn_y": tn,
