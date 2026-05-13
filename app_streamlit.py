@@ -15295,6 +15295,14 @@ def caps_floors_tab(vol_mode: str):
                 st.session_state.pop("_caplet_curve_key", None)
                 st.session_state.pop("_atm_cfs_cache_key", None)
                 st.session_state.pop("_atm_cfs_rows_cache", None)
+                # v1305i: EUR-only — also bust the OTC build cache + chart
+                # caches so Calculate always forces a full rebuild for EUR.
+                # AUD/USD keep their existing behavior (locked).
+                if ccy == "EUR":
+                    st.session_state.pop("_cfs_otc_build_cache", None)
+                    st.session_state.pop("_cfs_chart_sig", None)
+                    st.session_state.pop("_cfs_chart_fig", None)
+                    st.session_state.pop("_cfs_chart_tbl", None)
                 st.rerun()
             if br.button("🔄 Refresh Swaptions", key="gen_swpt_prem", type="primary"):
                 # Mark this render so the Listed bootstrap pre-calc block
