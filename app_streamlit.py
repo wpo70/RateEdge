@@ -27791,11 +27791,15 @@ def main():
     ]
     # v2904a: SOD tab routing by currency
     # AUD SOD code is LOCKED — do not modify sod_report_tab() without explicit per-session approval
+    # v1305q: EUR also uses sod_report_tab (EUR Open Vol Adjustment panel)
     _sidebar_ccy = st.session_state.get("sidebar_ccy", "AUD")
     if _sidebar_ccy == "USD":
         st.session_state["tab_show_usd_sod"] = True
         st.session_state["tab_show_sod"] = False
     elif _sidebar_ccy == "AUD":
+        st.session_state["tab_show_usd_sod"] = False
+        st.session_state["tab_show_sod"] = True
+    elif _sidebar_ccy == "EUR":
         st.session_state["tab_show_usd_sod"] = False
         st.session_state["tab_show_sod"] = True
     else:
