@@ -22078,9 +22078,11 @@ def rv_tab():
             _rv_fwd_matrix = st.session_state.get("usd_fwd_matrix", {}).get("SOFR OIS")
         elif ccy == "EUR":
             _eur_fwds = st.session_state.get("eur_fwd_matrix", {})
-            _rv_fwd_matrix = (_eur_fwds.get("EURIBOR 6M")
-                              or _eur_fwds.get("EURIBOR 3M")
-                              or _eur_fwds.get("ESTR"))
+            _rv_fwd_matrix = _eur_fwds.get("EURIBOR 6M")
+            if _rv_fwd_matrix is None or (hasattr(_rv_fwd_matrix, "empty") and _rv_fwd_matrix.empty):
+                _rv_fwd_matrix = _eur_fwds.get("EURIBOR 3M")
+            if _rv_fwd_matrix is None or (hasattr(_rv_fwd_matrix, "empty") and _rv_fwd_matrix.empty):
+                _rv_fwd_matrix = _eur_fwds.get("ESTR")
         else:
             _rv_fwd_matrix = st.session_state.get("fwd_matrix", {}).get(ccy)
         def _fwd_rate(t1, t2):
