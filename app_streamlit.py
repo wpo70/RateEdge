@@ -24292,7 +24292,7 @@ def rv_tab():
             # the RV tab and USD SOD tab always show identical ideas.
             if st.session_state.get(_rv_ideas_key):
                 _vrs = _compute_vol_ratio_stats_db(ccy) if ccy == "USD" else {}
-                ideas = _scan_rv_ideas_usd(atm, curve, _realised, _ratio_stats, _fv_stats, _meetings, _move_val, _vrs)
+                ideas = _scan_rv_ideas_usd(atm, curve, _realised, _ratio_stats, _fv_stats, _meetings, _move_val, _vrs, ccy=ccy)
 
             # Cache for SOD report
             if ideas:
@@ -30243,18 +30243,20 @@ def vol_lookup_tab():
 # Called from USD SOD tab. Does NOT touch AUD code.
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings, move_val, vol_ratio_stats=None):
-    """Generate ranked trade ideas for USD. Returns list of dicts sorted by Score descending.
+def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings, move_val, vol_ratio_stats=None, ccy="USD"):
+    """Generate ranked trade ideas. Returns list of dicts sorted by Score descending.
+    Despite the function name, works for any ccy when the caller passes ccy=
+    and the corresponding atm/curve_df/realised/etc inputs.
     atm: working ATM surface DataFrame
-    curve_df: SOFR curve DataFrame with MaturityY/ZeroRatePct
+    curve_df: ccy curve DataFrame with MaturityY/ZeroRatePct
     realised: {tenor_y: realised_vol_bp} from _compute_realised_vol_db
     ratio_stats: from _load_vol_ratio_stats_db
     fv_stats: from _compute_fwd_vol_surface_stats
     meetings: {exp_label: [dates] or int}
     move_val: MOVE index float or None
+    ccy: 'USD' / 'AUD' / 'EUR' / 'NZD' — drives CB-meeting premium lookup
     """
     ideas = []
-    ccy = "USD"
     _prem_per = _CB_MEETING_PREMIUM_BP.get(ccy, 4.5)
 
     def _n_mtgs(exp_lbl):
