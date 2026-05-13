@@ -32776,6 +32776,91 @@ def _render_eur_open_adjustment_panel():
     """EUR Open Vol Adjustment panel — called from sod_report_tab when ccy=EUR.
     Reads prior EOD 1700 LDN close, evaluates MOVE/SDR/realised/RV triggers,
     proposes per-cell adjustments. Writes to vol_editor[EUR] only on Approve."""
+
+    # ── Trigger explanation (read-only reference) ─────────────────
+    with st.expander("ℹ️ How the EUR Open triggers work", expanded=False):
+        st.markdown("""
+**Logic in plain terms:** start from yesterday's EUR close (the `EOD 1700 LDN` snapshot). Walk
+through five overnight triggers. Each trigger that fires contributes a small bp adjustment
+to short-end (1m) and belly (≥1y) cells. Net is hard-capped at ±2bp short / ±1bp belly so
+even multiple triggers can't blow up the surface. Nothing applies until you click
+**Approve & Apply to Vol Editor**.
+
+---
+
+**1. Event Risk (manual checkbox)** — Tick this if ECB / Fed / CPI / NFP / payrolls / NFP
+hit overnight or are scheduled for the European morning. Triggers a flat **+1.0bp short, +0.5bp belly**.
+Use sparingly — only when you know vol should be repriced because of a known event.
+
+**2. MOVE Gap** *(default threshold: 5 pts)* — ICE BofAML MOVE Index measures US Treasuries
+implied vol. Pulls today's close vs prior close. If absolute delta > threshold:
+- MOVE up: lift EUR by **+0.5bp short / +0.3bp belly** (global rates vol regime up)
+- MOVE down: lower EUR by **-0.5bp short / -0.3bp belly**
+
+Rationale: large US rates vol moves bleed into EUR rates vol within a day. Small MOVE
+moves get ignored — that's normal noise.
+
+**3. SDR Straddle Flow** *(default threshold: €500mm 24h)* — Queries DTCC SDR for EUR-only
+swaption trades in the last 24h. Calculates total payer + receiver notional and the
+P/R skew percentage. If **total > €500mm** AND **skew < 30%** (i.e. roughly balanced,
+indicating straddle buying not directional):
+- Lift EUR by **+0.5bp short / +0.3bp belly** (customer demanding vol)
+
+If flow is below threshold OR too directional (skew >30%), no adjustment. Heavy directional
+payer-only or receiver-only flow is a different signal — not addressed here.
+
+**4. Realised Vol Gap** *(default threshold: 1.0bp)* — Compares EUR 5-day realised vol
+vs 21-day realised vol on the EURIBOR 6M 2Y par swap rate. Delta = 5d − 21d.
+- If 5d realised has gapped up vs 21d by more than threshold: lift implied by
+  **+(0.5×delta)bp short / +(0.3×delta)bp belly** (vol regime shifting higher)
+- If 5d collapsed below 21d: trim implied by the same scaled amount
+
+Catches realised regime shifts that haven't fully propagated into implied yet.
+
+**5. RV Top Ideas** *(default threshold: composite score ≥80)* — Pulls the cached
+EUR RV scanner output (`_rv_ideas_cache`), filters to the top 3 ideas with score ≥80.
+Tallies their Buy vol vs Sell vol bias:
+- Net Buy bias: **+0.5bp short / +0.3bp belly**
+- Net Sell bias: **-0.5bp short / -0.3bp belly**
+- Mixed bias: no adjustment
+
+Quality gate — only high-conviction RV composites move the open. Sub-80 scores are noise.
+
+---
+
+**Decay across the surface:**
+| Expiry | Short-end multiplier | Belly multiplier |
+|---|---|---|
+| 1m  | 1.0× (full short_bp)  | — |
+| 3m  | 0.7× short_bp          | — |
+| 6m  | 0.4× short_bp          | — |
+| ≥1y | —                      | full belly_bp |
+
+So an event-driven +1.0bp short translates to: 1m +1.0, 3m +0.7, 6m +0.4, longer dates use
+the belly figure (+0.5 in the event case). Short-end shocks die off; belly moves
+parallel-shift the back end.
+
+---
+
+**Cells touched** *(your set, 19 cells)*:
+- 1m × 2Y / 5Y / 10Y / 20Y
+- 3m × 1Y / 10Y / 30Y
+- 1y × 1Y / 5Y / 10Y / 30Y
+- 5y × 1Y / 5Y / 30Y
+- 10y × 1Y / 10Y / 30Y
+- 20y × 1Y / 5Y
+
+Cells outside this set carry over from prior close unchanged.
+
+---
+
+**Sanity caps:**
+- Net short-end adjustment: capped at **±2.0bp**
+- Net belly adjustment: capped at **±1.0bp**
+
+If all 5 triggers fire and agree on direction, you're still bounded.
+""")
+
     # ── Configurable triggers (sidebar-style, inline) ─────────────
     _trig_cols = st.columns(4)
     with _trig_cols[0]:
@@ -33065,30 +33150,67 @@ def _render_eur_open_adjustment_panel():
                          key="_eur_open_apply",
                          type="primary",
                          disabled=(not _adj_rows or (_net_short_bp == 0 and _net_belly_bp == 0))):
-                # Build new vol surface in vol_editor format and write
-                _eur_editor = st.session_state.get("vol_editor", {}).get("EUR")
-                if _eur_editor is None:
-                    # Seed from prior close
-                    _eur_editor = _prior_close.copy()
-                # Apply adjustments
-                _ed_vals = _eur_editor.get("values", [])
-                _ed_map = {(r.get("Expiry") or r.get("expiry") or "").lower(): r for r in _ed_vals}
-                for _exp, _tn in _EUR_OPEN_CELLS:
-                    _prior_v = _prior_map.get(_exp.lower(), {}).get(_tn)
-                    if _prior_v is None:
-                        continue
-                    _d = _decay.get(_exp, 0.0)
-                    if _exp in ("1m", "3m", "6m"):
-                        _bp_adj = round(_net_short_bp * _d, 2)
-                    else:
-                        _bp_adj = round(_net_belly_bp, 2)
-                    _new_v = round(float(_prior_v) + _bp_adj, 2)
-                    _row_obj = _ed_map.get(_exp.lower())
-                    if _row_obj is not None:
-                        _row_obj[_tn] = _new_v
-                st.session_state.setdefault("vol_editor", {})["EUR"] = _eur_editor
+                # v1405d: vol_editor expects DataFrame stored at
+                # vol_editor["working"]["EUR"] (and base/history etc).
+                # Was writing to vol_editor["EUR"] directly — invisible to
+                # the Vol Editor tab and the publish flow.
+                #
+                # Step 1: build DataFrame from prior_close + adjustments
+                _prior_vals = _prior_close.get("values", [])
+                _rows_out = []
+                for _r in _prior_vals:
+                    _new_row = dict(_r)  # copy
+                    _exp_k = (_new_row.get("Expiry") or _new_row.get("expiry") or "").lower()
+                    if "Expiry" not in _new_row and "expiry" in _new_row:
+                        _new_row["Expiry"] = _new_row.pop("expiry")
+                    # Apply adjustments to this row's cells if in _EUR_OPEN_CELLS
+                    for _exp, _tn in _EUR_OPEN_CELLS:
+                        if _exp.lower() != _exp_k:
+                            continue
+                        _prior_v = _prior_map.get(_exp.lower(), {}).get(_tn)
+                        if _prior_v is None:
+                            continue
+                        _d = _decay.get(_exp, 0.0)
+                        if _exp in ("1m", "3m", "6m"):
+                            _bp_adj = round(_net_short_bp * _d, 2)
+                        else:
+                            _bp_adj = round(_net_belly_bp, 2)
+                        _new_row[_tn] = round(float(_prior_v) + _bp_adj, 2)
+                    _rows_out.append(_new_row)
+                _df_new = pd.DataFrame(_rows_out)
+                if "Expiry" in _df_new.columns:
+                    _df_new = _df_new[["Expiry"] + [c for c in _df_new.columns if c != "Expiry"]]
+
+                # Step 2: write to vol_editor.working[EUR] + base[EUR]
+                if "vol_editor" not in st.session_state:
+                    st.session_state["vol_editor"] = {
+                        "working": {}, "base": {}, "history": {},
+                        "future": {}, "redo_stack": {}, "selected_cell": {},
+                    }
+                st.session_state["vol_editor"]["working"]["EUR"] = _df_new.copy()
+                # Set base = prior_close (so Vol Editor shows diffs vs prior)
+                _prior_df = pd.DataFrame(_prior_vals)
+                if "Expiry" in _prior_df.columns:
+                    _prior_df = _prior_df[["Expiry"] + [c for c in _prior_df.columns if c != "Expiry"]]
+                st.session_state["vol_editor"]["base"]["EUR"] = _prior_df.copy()
+
+                # Step 3: also update vol_data[EUR][atm] so Vol Config tab
+                # surface display picks it up immediately.
+                if "vol_data" not in st.session_state:
+                    st.session_state["vol_data"] = {}
+                if "EUR" not in st.session_state["vol_data"]:
+                    st.session_state["vol_data"]["EUR"] = {}
+                st.session_state["vol_data"]["EUR"]["atm"] = _df_new.copy()
+
+                # Step 4: bump _atm_hash_EUR so downstream caches invalidate
+                _h = st.session_state.get("_atm_hash_EUR", 0)
+                st.session_state["_atm_hash_EUR"] = _h + 1
+
                 st.session_state["_eur_open_applied_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
-                st.success(f"✓ Applied {len(_adj_rows)} cells to vol_editor[EUR]. Review in Vol Config tab and publish when ready.")
+                st.success(
+                    f"✓ Applied {len(_adj_rows)} cells to vol_editor.working[EUR]. "
+                    "Open the **Vol Editor** tab — surface is loaded and ready to publish."
+                )
         with _apply_col2:
             _last = st.session_state.get("_eur_open_applied_at")
             if _last:
