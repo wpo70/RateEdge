@@ -32788,27 +32788,51 @@ def _render_eur_open_adjustment_panel():
     _prior_close = None
     _prior_close_date = None
     _prior_close_label = None
+    _diag_all_labels = []
     try:
         if HAS_POSTGRES:
             _vh_conn = get_db_connection()
             if _vh_conn:
                 _vh_cur = _vh_conn.cursor()
+                # Try the strict LDN label first
                 _vh_cur.execute("""
                     SELECT snapshot_date, label, atm_vols FROM vol_history
                     WHERE currency='EUR' AND user_id='shared'
-                      AND label LIKE 'EOD%%LDN%%'
+                      AND label LIKE %s
                     ORDER BY snapshot_date DESC LIMIT 1
-                """)
+                """, ('%LDN%',))
                 _vr = _vh_cur.fetchone()
                 if _vr:
                     _prior_close_date, _prior_close_label, _prior_close = _vr[0], _vr[1], _vr[2]
+                else:
+                    # Fallback: any EUR snapshot
+                    _vh_cur.execute("""
+                        SELECT snapshot_date, label, atm_vols FROM vol_history
+                        WHERE currency='EUR' AND user_id='shared'
+                        ORDER BY snapshot_date DESC LIMIT 1
+                    """)
+                    _vr = _vh_cur.fetchone()
+                    if _vr:
+                        _prior_close_date, _prior_close_label, _prior_close = _vr[0], _vr[1], _vr[2]
+                # Always grab last 10 labels for diagnostic display
+                _vh_cur.execute("""
+                    SELECT snapshot_date, label FROM vol_history
+                    WHERE currency='EUR' AND user_id='shared'
+                    ORDER BY snapshot_date DESC LIMIT 10
+                """)
+                _diag_all_labels = _vh_cur.fetchall()
                 _vh_conn.close()
     except Exception as _e:
         st.warning(f"Could not load prior EUR close: {_e}")
 
     if not _prior_close:
-        st.info("No prior 'EOD 1700 LDN' EUR snapshot found in vol_history. "
-                "Publish an EUR close first to enable open adjustment.")
+        st.info("No EUR snapshot found in vol_history. Publish an EUR close first to enable open adjustment.")
+        if _diag_all_labels:
+            st.caption("Recent EUR snapshots in DB (for diagnostic):")
+            st.dataframe(pd.DataFrame(_diag_all_labels, columns=["snapshot_date", "label"]),
+                         use_container_width=True, hide_index=True)
+        else:
+            st.caption("`vol_history` has zero EUR rows for `user_id='shared'`.")
     else:
         st.markdown(f"**Prior close:** `{_prior_close_label}` ({_prior_close_date})")
 
