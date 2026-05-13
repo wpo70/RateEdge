@@ -15155,8 +15155,8 @@ def caps_floors_tab(vol_mode: str):
                 new_spread_values["cf_spr_15v20"] = _spread_15v20_new
 
                 # ── Vol spread row for 20y → 30y extension (not a wedge) ──
-                # Only rendered for AUD and USD; NZD stops at 20Y.
-                if ccy in ("AUD", "USD"):
+                # Rendered for AUD, USD, EUR; NZD stops at 20Y.
+                if ccy in ("AUD", "USD", "EUR"):
                     _vs_cols30 = st.columns(CW)
                     _vs_cols30[0].markdown(f"<div style='{_fs};color:#f59e0b'>20y vs 30y Vol Spd</div>", unsafe_allow_html=True)
                     _spread_20v30_last = st.session_state.get("cf_spr_20v30", -5.0)
@@ -15846,12 +15846,9 @@ def caps_floors_tab(vol_mode: str):
         # Default active to OTC until widgets render and we pick
         caplet_vol_curve = _otc_curve_built or {t: 35.0 for t in [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0]}
 
-        # v2104b: Extend AUD caplet curve to 30Y using 20v30 spread, so the
-        # "Resulting Caplet Vol Curve" chart shows the full 30Y extension that
-        # already exists in the ATM CFS Straddles table. The extension applies
-        # the 20v30 spread onto the 20Y flat value.
-        # Only for AUD (USD handled in the USD-specific block below; NZD ends at 20Y).
-        if ccy == "AUD" and caplet_vol_curve:
+        # v1305e: Extend AUD/EUR caplet curve to 30Y using 20v30 spread.
+        # USD handled in its own block below. NZD ends at 20Y.
+        if ccy in ("AUD", "EUR") and caplet_vol_curve:
             try:
                 _keys_sorted = sorted(caplet_vol_curve.keys())
                 _max_t_now = _keys_sorted[-1] if _keys_sorted else 0
@@ -16775,7 +16772,7 @@ def caps_floors_tab(vol_mode: str):
                 (7, "5y2y"), (10, "7y3y"), (12, "10y2y"), (15, "12y3y"),
                 (20, "ext_15v20"),
             ]
-            if ccy in ("AUD", "USD"):
+            if ccy in ("AUD", "USD", "EUR"):
                 _CFS_MAP.append((30, "ext_20v30"))
             _cfs_tdata = st.session_state.get("cfs_table_data", {})
             _caplet_vc = st.session_state.get(f"caplet_vol_curve_{ccy}")
