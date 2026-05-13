@@ -21302,7 +21302,7 @@ _CB_MEETINGS_BASE = {
     ],
 }
 # Per-meeting vol premium assumption (bp to strip before comparing to realised)
-_CB_MEETING_PREMIUM_BP = {"AUD": 3.0, "USD": 4.5, "NZD": 3.5}
+_CB_MEETING_PREMIUM_BP = {"AUD": 3.0, "USD": 4.5, "NZD": 3.5, "EUR": 3.5}
 
 
 def _get_cb_meetings(ccy: str) -> list:
@@ -30260,6 +30260,35 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
     ideas = []
     _prem_per = _CB_MEETING_PREMIUM_BP.get(ccy, 4.5)
 
+    # v1305n: per-currency signal gating. Each signal name maps to the set of
+    # currencies it applies to. Use _is_enabled() to check before computing.
+    # US-only signals: any signal that depends on US-specific market data
+    # (MOVE, VIX, SOFR-FF basis) or events (FOMC). Others run for any ccy
+    # with sufficient history.
+    _SIGNAL_GATES = {
+        "Forward Vol RV":         {"USD", "AUD", "EUR", "NZD"},
+        "Vol-of-Vol":             {"USD", "AUD", "EUR", "NZD"},
+        "Gamma/Theta":            {"USD", "AUD", "EUR", "NZD"},
+        "FOMC Gamma":             {"USD"},
+        "MOVE Divergence":        {"USD"},
+        "VIX/MOVE Ratio":         {"USD"},
+        "VIX/Swaption":           {"USD"},
+        "Tenor Butterfly":        {"USD", "AUD", "EUR", "NZD"},
+        "Percentile Extreme":     {"USD", "AUD", "EUR", "NZD"},
+        "Vol Carry":              {"USD", "AUD", "EUR", "NZD"},
+        "Swap Spread Stress":     {"USD"},   # SOFR-FF basis = US dealer funding
+        "Conditional Vol":        {"USD", "AUD", "EUR", "NZD"},
+        "SDR Flow Signal":        {"USD", "AUD", "EUR", "NZD"},
+        "SDR Straddle Flow":      {"USD", "AUD", "EUR", "NZD"},
+        "Meeting Premium":        {"USD", "AUD", "EUR", "NZD"},  # CB-specific name set below
+    }
+    def _enabled(sig_name):
+        return ccy in _SIGNAL_GATES.get(sig_name, set())
+    # Minimum vol_history observations required for historical-z, percentile,
+    # and regression-based signals. Below this, signal is skipped entirely
+    # (not displayed) rather than producing a low-quality output.
+    _MIN_HISTORY_OBS = 30
+
     def _n_mtgs(exp_lbl):
         m = meetings.get(exp_lbl, [])
         return m if isinstance(m, int) else len(m)
@@ -30279,7 +30308,7 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
         return (r2 * t2 - r1 * t1) / (t2 - t1)
 
     # ── 1. Forward Vol RV (calendar spread z-scores) ──────────────────────
-    if fv_stats and atm is not None:
+    if _enabled("Forward Vol RV") and fv_stats and atm is not None:
         EXP_PAIRS = [
             ("1m","3m",1/12,0.25), ("3m","6m",0.25,0.5),
             ("6m","1y",0.5,1.0), ("1y","2y",1.0,2.0),
@@ -30402,7 +30431,8 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                 })
 
     # ── 5. Gamma/Theta (1m vs 1y ratio + VRP, meeting-adjusted) ──────────
-    for tn in [2, 5, 10]:
+    if _enabled("Gamma/Theta"):
+      for tn in [2, 5, 10]:
         tn_str = f"{tn}Y"
         v1m = get_matrix_value(atm, "1m", float(tn))
         v1y = get_matrix_value(atm, "1y", float(tn))
@@ -30595,7 +30625,9 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                     })
 
     # ── 10. USD-specific: FOMC Gamma, MOVE Divergence, VIX/MOVE, VIX/Swaption ─
-    try:
+    # v1305m: gated to USD only — MOVE/VIX are US-specific bond/equity vol indices
+    if ccy == "USD":
+      try:
         _vix_hist = _load_vix_move_history("VIX", 60)
         _move_hist = _load_vix_move_history("MOVE", 60)
         _vix_close = float(_vix_hist["close"].iloc[-1]) if len(_vix_hist) > 0 else None
@@ -30683,14 +30715,14 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                         "Risk": "VIX may normalise without contagion to rates",
                         "e1": "1m", "e2": "1m", "tn": "5Y", "tn_y": 5,
                     })
-    except Exception:
+      except Exception:
         pass  # Skip USD-specific if data unavailable
 
     # ── 13. Tenor Butterfly (tenor dimension) ─────────────────────────────
     # Most common vol RV trade: 2Y/5Y/10Y fly, 2Y/5Y/20Y fly at each expiry
     # Recalibrated v0505g: threshold 1.5→5bp, multiplier ×8→×4, cap 80→65
     # Redundancy filter: if two flies share the same belly (exp+mid tenor), keep widest only
-    if atm is not None:
+    if _enabled("Tenor Butterfly") and atm is not None:
         _TENOR_FLY_STRUCTS = [
             (2, 5, 10, "2/5/10"),
             (2, 5, 20, "2/5/20"),
@@ -30738,19 +30770,19 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
     # ── 14. Historical Percentile Ranking ─────────────────────────────────
     # Where is current vol vs its range over last N snapshots?
     # <10th pctile = screaming cheap, >90th = screaming rich — regardless of z-score
-    if fv_stats and atm is not None:
+    if _enabled("Percentile Extreme") and fv_stats and atm is not None:
         try:
             conn_pct = get_db_connection()
             if conn_pct:
                 cur_pct = conn_pct.cursor()
                 cur_pct.execute("""
                     SELECT atm_vols FROM vol_history
-                    WHERE currency='USD' AND user_id='shared'
+                    WHERE currency=%s AND user_id='shared'
                     ORDER BY snapshot_date DESC LIMIT 120
-                """, )
+                """, (ccy,))
                 _pct_rows = cur_pct.fetchall()
                 conn_pct.close()
-                if _pct_rows and len(_pct_rows) >= 20:
+                if _pct_rows and len(_pct_rows) >= _MIN_HISTORY_OBS:
                     _pct_history = {}  # (exp, tenor) -> [vol values]
                     for (_atm_json,) in _pct_rows:
                         if not _atm_json:
@@ -30805,7 +30837,7 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
     # A trade can look "cheap" on vol level but bleed from negative carry.
     # Carry = difference between current vol and vol at shorter expiry (rolldown on vol surface).
     # Positive carry = vol increases as you approach expiry (backwardation = good for longs).
-    if atm is not None:
+    if _enabled("Vol Carry") and atm is not None:
         _CARRY_PAIRS = [("3m", "1m"), ("6m", "3m"), ("1y", "6m"), ("2y", "1y")]
         for tn in [2, 5, 10]:
             for long_e, short_e in _CARRY_PAIRS:
@@ -30843,7 +30875,8 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
 
     # ── 16. Swap Spread / SOFR-FF Basis as Vol Predictor ──────────────────
     # Widening SOFR-FF basis = dealer balance sheet stress = vol should reprice higher
-    if curve_df is not None:
+    # v1305n: gated via signal table — USD only
+    if _enabled("Swap Spread Stress") and curve_df is not None:
         try:
             _basis_data = st.session_state.get("config_basis", {}).get("USD", {}).get("sofr_ff_basis")
             if _basis_data is not None and not _basis_data.empty:
@@ -30885,7 +30918,15 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
     # ── 17. Conditional Vol (rate-level dependent) ────────────────────────
     # Vol should be higher when rates are at extremes. Regress vol vs rate level from history.
     # If current vol is below the regression line, it's cheap conditional on rates.
-    if atm is not None and curve_df is not None:
+    # v1305m: was hardcoded to USD/SOFR. Now uses passed-in ccy.
+    _cv_floating_rate = {
+        "USD": "SOFR",
+        "AUD": "6M BBSW",
+        "EUR": "EURIBOR 6M",
+        "NZD": "3M BKBM",
+    }.get(ccy, "SOFR")
+    _cv_min_history = _MIN_HISTORY_OBS  # require enough obs so regression isn't noise
+    if _enabled("Conditional Vol") and atm is not None and curve_df is not None:
         try:
             conn_cv = get_db_connection()
             if conn_cv:
@@ -30893,27 +30934,27 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                 # Load last 120 vol snapshots
                 cur_cv.execute("""
                     SELECT snapshot_date, atm_vols FROM vol_history
-                    WHERE currency='USD' AND user_id='shared'
+                    WHERE currency=%s AND user_id='shared'
                     ORDER BY snapshot_date DESC LIMIT 120
-                """)
+                """, (ccy,))
                 _cv_rows = cur_cv.fetchall()
 
-                # Batch load all SOFR rates for relevant tenors and dates
+                # Batch load all rates for relevant tenors and dates
                 _cv_dates = [str(r[0])[:10] for r in _cv_rows if r[1]]
                 _cv_tenor_map = {"2Y": 2.0, "5Y": 5.0, "10Y": 10.0}
                 _cv_rates_db = {}  # (date, tenor) -> rate
                 if _cv_dates:
                     cur_cv.execute("""
                         SELECT date::text, tenor, rate FROM swap_rates
-                        WHERE currency='USD' AND floating_rate='SOFR'
+                        WHERE currency=%s AND floating_rate=%s
                           AND tenor IN ('2Y','5Y','10Y')
                           AND date >= %s AND date <= %s
-                    """, (min(_cv_dates), max(_cv_dates)))
+                    """, (ccy, _cv_floating_rate, min(_cv_dates), max(_cv_dates)))
                     for _d, _t, _r in cur_cv.fetchall():
                         _cv_rates_db[(str(_d), _t)] = float(_r)
                 conn_cv.close()
 
-                if _cv_rows and len(_cv_rows) >= 20:
+                if _cv_rows and len(_cv_rows) >= _cv_min_history:
                     for _cv_exp, _cv_tn, _cv_tn_y in [("3m","5Y",5.0), ("1y","10Y",10.0), ("3m","2Y",2.0)]:
                         _cv_pairs = []
                         for _cv_date, _cv_atm in _cv_rows:
@@ -30960,7 +31001,7 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                                             "Direction": "Buy vol",
                                             "Trade": f"Buy {_cv_exp}×{_cv_tn} — vol below rate-conditional fair",
                                             "Signal": f"Vol {_cv_curr_vol:.1f}bp vs fair {_cv_fair:.1f}bp at rate {_cv_curr_rate:.3f}% (z={_cv_z:+.1f}σ)",
-                                            "Rationale": f"Given SOFR {_cv_tn} at {_cv_curr_rate:.3f}%, historical regression "
+                                            "Rationale": f"Given {ccy} curve {_cv_tn} at {_cv_curr_rate:.3f}%, historical regression "
                                                          f"implies fair vol of {_cv_fair:.1f}bp. Current {_cv_curr_vol:.1f}bp is "
                                                          f"{abs(_cv_z):.1f}σ below — vol cheap conditional on rate level.",
                                             "Risk": "Regression may not hold in regime changes; limited history",
@@ -30974,7 +31015,7 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                                             "Direction": "Sell vol",
                                             "Trade": f"Sell {_cv_exp}×{_cv_tn} — vol above rate-conditional fair",
                                             "Signal": f"Vol {_cv_curr_vol:.1f}bp vs fair {_cv_fair:.1f}bp at rate {_cv_curr_rate:.3f}% (z={_cv_z:+.1f}σ)",
-                                            "Rationale": f"Given SOFR {_cv_tn} at {_cv_curr_rate:.3f}%, historical regression "
+                                            "Rationale": f"Given {ccy} curve {_cv_tn} at {_cv_curr_rate:.3f}%, historical regression "
                                                          f"implies fair vol of {_cv_fair:.1f}bp. Current {_cv_curr_vol:.1f}bp is "
                                                          f"{abs(_cv_z):.1f}σ above — vol rich conditional on rate level.",
                                             "Risk": "Vol may be pricing event risk not captured by regression",
@@ -30986,7 +31027,8 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
     # ── 21. SDR Flow as Vol Predictor ─────────────────────────────────────
     # Heavy directional flow in DTCC → vol should move
     # Heavy straddle flow → demand for vol → near-term vol spike
-    try:
+    if _enabled("SDR Flow Signal") or _enabled("SDR Straddle Flow"):
+      try:
         conn_sdr = get_db_connection()
         if conn_sdr:
             cur_sdr = conn_sdr.cursor()
@@ -30996,9 +31038,10 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                 FROM dtcc_sdr
                 WHERE action_type='NEWT'
                   AND asset_class='IR'
+                  AND currency=%s
                   AND execution_timestamp >= NOW() - INTERVAL '24 hours'
                 GROUP BY option_type_decoded
-            """)
+            """, (ccy,))
             _sdr_flow = {row[0]: {"count": row[1], "notional": float(row[2] or 0)}
                          for row in cur_sdr.fetchall()}
             conn_sdr.close()
@@ -31045,22 +31088,23 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                         "Risk": "Could be hedging activity, not new risk positions",
                         "e1": "1m", "e2": "1m", "tn": "5Y", "tn_y": 5,
                     })
-    except Exception:
+      except Exception:
         pass
 
     # ── 27. Vol-of-Vol (rates vol momentum) ───────────────────────────────
     # How much is swaption vol itself moving day-to-day?
     # High vol-of-vol = vol expanding, momentum → buy gamma
     # Low vol-of-vol = vol compressing, mean-reverting → sell gamma
-    try:
+    if _enabled("Vol-of-Vol"):
+      try:
         conn_vv = get_db_connection()
         if conn_vv:
             cur_vv = conn_vv.cursor()
             cur_vv.execute("""
                 SELECT snapshot_date, atm_vols FROM vol_history
-                WHERE currency='USD' AND user_id='shared'
+                WHERE currency=%s AND user_id='shared'
                 ORDER BY snapshot_date DESC LIMIT 30
-            """)
+            """, (ccy,))
             _vv_rows = cur_vv.fetchall()
             conn_vv.close()
 
@@ -31110,11 +31154,12 @@ def _scan_rv_ideas_usd(atm, curve_df, realised, ratio_stats, fv_stats, meetings,
                                 "Risk": "Calm before storm; sudden event can break compression",
                                 "e1": _vv_exp, "e2": _vv_exp, "tn": _vv_tn, "tn_y": float(_vv_tn.replace("Y","")),
                             })
-    except Exception:
+      except Exception:
         pass
 
     # ── 11. MOVE context adjustment ───────────────────────────────────────
-    if move_val and move_val > 120:
+    # v1305n: USD-only — MOVE is a US Treasuries vol index
+    if ccy == "USD" and move_val and move_val > 120:
         for idea in ideas:
             if idea["Direction"] == "Sell vol":
                 idea["Risk"] += f" | MOVE elevated at {move_val:.0f}"
