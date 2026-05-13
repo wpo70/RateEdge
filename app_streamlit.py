@@ -15846,21 +15846,25 @@ def caps_floors_tab(vol_mode: str):
         # Default active to OTC until widgets render and we pick
         caplet_vol_curve = _otc_curve_built or {t: 35.0 for t in [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0]}
 
-        # v1305e: Extend AUD/EUR caplet curve to 30Y using 20v30 spread.
-        # USD handled in its own block below. NZD ends at 20Y.
+        # v1305f: Add 20Y and 30Y anchor points to caplet curve for AUD/EUR.
+        # Just append the anchors — the chart's CubicSpline interpolates
+        # through them along with the 1Y..15Y bootstrapped anchors. Same
+        # pattern as the existing 1Y..15Y anchors; no pre-filled grid.
+        # USD handled in its own block below (different shape). NZD ends at 20Y.
         if ccy in ("AUD", "EUR") and caplet_vol_curve:
             try:
                 _keys_sorted = sorted(caplet_vol_curve.keys())
-                _max_t_now = _keys_sorted[-1] if _keys_sorted else 0
-                # Only extend if curve tops out at ~20Y (don't re-extend)
-                if _max_t_now <= 20.01 and _max_t_now >= 19.9:
-                    _vol_20 = caplet_vol_curve[_max_t_now]
+                _vol_15 = caplet_vol_curve.get(15.0)
+                if _vol_15 is None and _keys_sorted:
+                    _nearest_15 = min(_keys_sorted, key=lambda k: abs(k - 15.0))
+                    _vol_15 = caplet_vol_curve[_nearest_15]
+                if _vol_15 is not None:
+                    _spd_15v20 = float(st.session_state.get("cf_spr_15v20", -5.0))
                     _spd_20v30 = float(st.session_state.get("cf_spr_20v30", -5.0))
+                    _vol_20 = max(_vol_15 + _spd_15v20, 1.0)
                     _vol_30 = max(_vol_20 + _spd_20v30, 1.0)
-                    _t_ext = round(_max_t_now + 0.25, 2)
-                    while _t_ext <= 30.01:
-                        caplet_vol_curve[round(_t_ext, 2)] = _vol_30
-                        _t_ext += 0.25
+                    caplet_vol_curve[20.0] = _vol_20
+                    caplet_vol_curve[30.0] = _vol_30
             except Exception:
                 pass
 
