@@ -15066,9 +15066,13 @@ def caps_floors_tab(vol_mode: str):
                         fs = "font-size:0.80rem;padding-top:6px"
                         rc[0].markdown(f"<div style='{fs}'>{wedge_lbl}</div>", unsafe_allow_html=True)
                     rc[1].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{last_val:.1f}</div>", unsafe_allow_html=True)
-                    # Restored from v1704j (locked working baseline): value=cur_val
-                    # — without it, widget flickered and reverted on rapid clicks.
-                    new_val = rc[2].number_input("", value=cur_val, key=_wkey,
+                    # v1305h: do NOT pass value= when key is in session_state.
+                    # When both are passed AND they disagree, Streamlit resets
+                    # widget to value=, silently dropping the user's typed value.
+                    # Pre-seed via session_state and let number_input read by key only.
+                    if _wkey not in st.session_state:
+                        st.session_state[_wkey] = float(cur_val)
+                    new_val = rc[2].number_input("", key=_wkey,
                                                   format="%.1f", step=0.5,
                                                   label_visibility="collapsed",
                                                   disabled=_row_skipped)
@@ -15846,11 +15850,10 @@ def caps_floors_tab(vol_mode: str):
         # Default active to OTC until widgets render and we pick
         caplet_vol_curve = _otc_curve_built or {t: 35.0 for t in [0.25, 0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 10.0]}
 
-        # v1305f: Add 20Y and 30Y anchor points to caplet curve for AUD/EUR.
-        # Just append the anchors — the chart's CubicSpline interpolates
-        # through them along with the 1Y..15Y bootstrapped anchors. Same
-        # pattern as the existing 1Y..15Y anchors; no pre-filled grid.
-        # USD handled in its own block below (different shape). NZD ends at 20Y.
+        # v1305g: Extend AUD/EUR caplet curve to 30Y. Mirror USD's
+        # _extend_usd_curve_to_30y: linear interpolation between 15Y, 20Y,
+        # 30Y anchors at 0.25Y resolution so the spline doesn't oscillate
+        # across the 5Y/10Y gaps. USD handled in its own block below.
         if ccy in ("AUD", "EUR") and caplet_vol_curve:
             try:
                 _keys_sorted = sorted(caplet_vol_curve.keys())
@@ -15863,8 +15866,20 @@ def caps_floors_tab(vol_mode: str):
                     _spd_20v30 = float(st.session_state.get("cf_spr_20v30", -5.0))
                     _vol_20 = max(_vol_15 + _spd_15v20, 1.0)
                     _vol_30 = max(_vol_20 + _spd_20v30, 1.0)
-                    caplet_vol_curve[20.0] = _vol_20
-                    caplet_vol_curve[30.0] = _vol_30
+                    # 15Y → 20Y linear ramp at 0.25Y
+                    _t_ext = 15.25
+                    while _t_ext <= 20.01:
+                        _frac = (_t_ext - 15.0) / 5.0
+                        caplet_vol_curve[round(_t_ext, 2)] = max(
+                            _vol_15 + _frac * (_vol_20 - _vol_15), 1.0)
+                        _t_ext += 0.25
+                    # 20Y → 30Y linear ramp at 0.25Y
+                    _t_ext = 20.25
+                    while _t_ext <= 30.01:
+                        _frac = (_t_ext - 20.0) / 10.0
+                        caplet_vol_curve[round(_t_ext, 2)] = max(
+                            _vol_20 + _frac * (_vol_30 - _vol_20), 1.0)
+                        _t_ext += 0.25
             except Exception:
                 pass
 
