@@ -752,6 +752,10 @@ SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR"]
 # any internal lookups (NZD references in scanner gates, etc.) still resolve.
 # v1405w: NZD removed from sidebar entirely (was "NZD (PENDING)").
 ALL_CURRENCIES = ["AUD", "USD", "EUR", "GBP (PENDING)", "JPY (PENDING)", "CAD (PENDING)"]
+# v1405x: explicit set of ccys to hide from UI dropdowns/filters/status displays.
+# Anything in SUPPORTED_CURRENCIES but NOT in ALL_CURRENCIES (as a non-PENDING entry)
+# should be in here. Backend code that needs NZD data still uses SUPPORTED_CURRENCIES.
+_HIDDEN_SIDEBAR_CCYS = {"NZD"}
 
 
 # ============================
@@ -8196,7 +8200,8 @@ def vol_config_tab():
     # v0705l: ccy filter for status cards. Default "All" shows AUD/USD/EUR.
     # v0705n: drop index= so session_state persists across full reruns (e.g. after vol load).
     # v1405j: filter out PENDING-hidden currencies (NZD) from status display.
-    _hidden_ccys = {_c.split(" ")[0] for _c in ALL_CURRENCIES if "(PENDING)" in str(_c)}
+    # v1405x: also filter explicit _HIDDEN_SIDEBAR_CCYS (e.g. NZD when removed from sidebar entirely).
+    _hidden_ccys = {_c.split(" ")[0] for _c in ALL_CURRENCIES if "(PENDING)" in str(_c)} | _HIDDEN_SIDEBAR_CCYS
     _status_ccys_all = [c for c in SUPPORTED_CURRENCIES if c not in _hidden_ccys]
     _status_filter = st.selectbox(
         "Show currency",
@@ -8346,7 +8351,7 @@ def vol_config_tab():
             
             col1, col2 = st.columns(2)
             with col1:
-                snap_ccy = st.selectbox("Currency", SUPPORTED_CURRENCIES, key="snap_ccy")
+                snap_ccy = st.selectbox("Currency", [c for c in SUPPORTED_CURRENCIES if c not in _HIDDEN_SIDEBAR_CCYS], key="snap_ccy")
             with col2:
                 from datetime import datetime as _dt_sl, timezone as _tz_sl, timedelta as _td_sl
                 _utc_now = _dt_sl.now(_tz_sl.utc)
@@ -8386,7 +8391,9 @@ def vol_config_tab():
         
         if tab_manage:
             st.markdown("#### Saved Snapshots")
-            manage_ccy = st.selectbox("Filter by Currency", ["All"] + list(SUPPORTED_CURRENCIES), key="manage_snap_ccy")
+            # v1405x: filter out hidden sidebar ccys from manage snapshots dropdown
+            _manage_ccys = [c for c in SUPPORTED_CURRENCIES if c not in _HIDDEN_SIDEBAR_CCYS]
+            manage_ccy = st.selectbox("Filter by Currency", ["All"] + _manage_ccys, key="manage_snap_ccy")
             user_id = st.session_state.get("username", "default")
             filter_ccy = None if manage_ccy == "All" else manage_ccy
 
@@ -19738,7 +19745,11 @@ def _vol_surface_editor_legacy():
         st.error("Install streamlit-plotly-events to use the interactive 3D editor: pip install streamlit-plotly-events")
         return
 
-    ccy = st.selectbox("Currency", SUPPORTED_CURRENCIES, index=SUPPORTED_CURRENCIES.index(st.session_state.get("sidebar_ccy","AUD")) if st.session_state.get("sidebar_ccy","AUD") in SUPPORTED_CURRENCIES else 0, key="vol_ccy")
+    _legacy_ccy_options = [c for c in SUPPORTED_CURRENCIES if c not in _HIDDEN_SIDEBAR_CCYS]
+    _legacy_default = st.session_state.get("sidebar_ccy", "AUD")
+    if _legacy_default not in _legacy_ccy_options:
+        _legacy_default = _legacy_ccy_options[0] if _legacy_ccy_options else "AUD"
+    ccy = st.selectbox("Currency", _legacy_ccy_options, index=_legacy_ccy_options.index(_legacy_default) if _legacy_default in _legacy_ccy_options else 0, key="vol_ccy")
     atm = get_working_atm_surface(ccy)
     if atm is None or atm.empty:
         st.info("No ATM vol surface loaded for this currency yet.")
@@ -19900,9 +19911,10 @@ def multi_ccy_tab(vol_mode: str):
 
     col1, col2 = st.columns(2)
     with col1:
-        ccy1 = st.selectbox("Currency 1", SUPPORTED_CURRENCIES, index=0, key="mc_ccy1")
+        _mc_options = [c for c in SUPPORTED_CURRENCIES if c not in _HIDDEN_SIDEBAR_CCYS]
+        ccy1 = st.selectbox("Currency 1", _mc_options, index=0, key="mc_ccy1")
     with col2:
-        ccy2 = st.selectbox("Currency 2", SUPPORTED_CURRENCIES, index=1, key="mc_ccy2")
+        ccy2 = st.selectbox("Currency 2", _mc_options, index=1 if len(_mc_options) > 1 else 0, key="mc_ccy2")
 
     expiry = st.selectbox(
         "Expiry",
@@ -33232,45 +33244,27 @@ If all 5 triggers fire and agree on direction, you're still bounded.
 
         # v1405n: Pivot Δbp into a matrix (rows = expiries, cols = tenors)
         # for compact heat-map display. Anchors get a bullet glyph appended.
+        # v1405y: build pivot from ALL surface cells (not just touched ones),
+        # with 0.0 for untouched cells. This eliminates NaN/None from the
+        # pivot entirely — formatter only deals with floats.
         if _adj_rows:
-            _mat_df = pd.DataFrame(_adj_rows)
-            # Sort expiries by their grid index (so 1w, 2w, 1m, ... not alphabetical)
-            _mat_df["_exp_ord"] = _mat_df["Expiry"].map(lambda e: _exp_idx_map.get(e.lower(), 999))
-            _mat_df["_tn_ord"] = _mat_df["Tenor"].map(lambda t: _ten_idx_map.get(t, 999))
-            # Build pivot of Δbp (numeric) and another of anchor flags
-            _delta_pivot = _mat_df.pivot_table(
-                index=["_exp_ord", "Expiry"], columns=["_tn_ord", "Tenor"],
-                values="Δbp", aggfunc="first"
-            )
-            # Drop the helper sort levels so display is clean
-            _delta_pivot.index = _delta_pivot.index.droplevel(0)
-            _delta_pivot.columns = _delta_pivot.columns.droplevel(0)
-            # Convert string Δbp ("+0.59") to float for styler.
-            # Return np.nan (not Python None) so Styler.format() picks them up
-            # as NA and applies na_rep correctly.
-            def _to_float(_v):
-                if isinstance(_v, str) and _v not in ("", "—"):
-                    try:
-                        return float(_v)
-                    except ValueError:
-                        return np.nan
-                if isinstance(_v, (int, float)):
-                    return _v
-                return np.nan
-            try:
-                _delta_num = _delta_pivot.map(_to_float)
-            except AttributeError:
-                # Fallback for old pandas
-                _delta_num = _delta_pivot.applymap(_to_float)
-            # Force float dtype so missing cells are real NaN, not object/None
-            # Two-stage: replace any Python None first, then cast
-            _delta_num = _delta_num.where(_delta_num.notna(), other=np.nan)
-            try:
-                _delta_num = _delta_num.astype(float)
-            except (TypeError, ValueError):
-                # If any cell can't coerce, force-convert via to_numeric on each col
-                for _c in _delta_num.columns:
-                    _delta_num[_c] = pd.to_numeric(_delta_num[_c], errors="coerce")
+            # Build full pivot using _all_expiries × _all_tenors grid
+            _full_data = {}
+            for _e_k in _all_expiries:
+                _row = {}
+                for _tn in _all_tenors:
+                    # Only include cells that exist in prior_close (skip true gaps)
+                    if _tn in _prior_map.get(_e_k, {}):
+                        _row[_tn] = float(_cell_adj.get((_e_k, _tn), 0.0))
+                _full_data[_e_k] = _row
+            _delta_num = pd.DataFrame.from_dict(_full_data, orient="index")
+            # Ensure column order follows tenor grid order
+            _ordered_tenors = [t for t in _all_tenors if t in _delta_num.columns]
+            _delta_num = _delta_num[_ordered_tenors]
+            # Index name for display
+            _delta_num.index.name = "Expiry"
+            # Force float dtype and fill any NaN (cells without prior_map entry) with 0
+            _delta_num = _delta_num.astype(float).fillna(0.0)
 
             # Anchor mask aligned to pivot
             _anchor_mask = pd.DataFrame(
