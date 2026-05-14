@@ -32886,6 +32886,29 @@ If all 5 triggers fire and agree on direction, you're still bounded.
             step=0.5, key="_eur_trig_rl",
             help="Min 5d realised vol change vs prior 5d window")
 
+    # v1405m: Gaussian smoothing controls for SOD shift propagation.
+    # σ=0 → only the 19 anchor cells move. σ>0 → adjustment bleeds into
+    # neighbouring cells with weight = exp(-0.5×((d_exp/σ_exp)² + (d_ten/σ_ten)²)).
+    # Two independent sigmas so expiry-direction and tenor-direction smoothing
+    # can be tuned separately (typically you want more spread in tenor than expiry).
+    _smooth_cols = st.columns([2, 2, 4])
+    with _smooth_cols[0]:
+        _sm_sigma_exp = st.slider(
+            "Smoothing σ (expiry)", min_value=0.0, max_value=3.0, value=1.0, step=0.1,
+            key="_eur_sm_exp",
+            help="Standard deviation in expiry-step units. 0 = no smoothing (only anchor cells). "
+                 "1.0 = direct neighbours get ~60% of adjustment, 2 steps ~14%. 2.0 = wider spread.")
+    with _smooth_cols[1]:
+        _sm_sigma_ten = st.slider(
+            "Smoothing σ (tenor)", min_value=0.0, max_value=3.0, value=1.0, step=0.1,
+            key="_eur_sm_ten",
+            help="Standard deviation in tenor-column-step units. Same falloff curve as expiry σ.")
+    with _smooth_cols[2]:
+        st.caption(
+            "**Smoothing**: anchor cells get full adjustment; surrounding cells get a "
+            "fraction by 2D Gaussian falloff. Overlapping anchor halos sum. "
+            "σ=0 → exact 19 cells only.")
+
     # ── Pull prior close from vol_history (EUR, latest 'EOD 1700 LDN') ─
     _prior_close = None
     _prior_close_date = None
@@ -33106,27 +33129,105 @@ If all 5 triggers fire and agree on direction, you're still bounded.
         _decay = {"1m": 1.0, "3m": 0.7, "6m": 0.4, "1y": 0.0, "2y": 0.0,
                   "5y": 0.0, "10y": 0.0, "20y": 0.0}
 
-        _adj_rows = []
+        # v1405m: Gaussian-spread adjustment computation.
+        # Build per-anchor bp adjustments first, then propagate to ALL surface
+        # cells using 2D Gaussian falloff in (expiry, tenor) grid coordinates.
+        # σ=0 → only anchors get adjusted (legacy behavior).
+        # σ>0 → halo of decreasing weight around each anchor; halos sum.
+
+        # Anchor bp adjustments
+        _anchor_adj = {}  # (exp_lower, tenor) -> bp_adj
         for _exp, _tn in _EUR_OPEN_CELLS:
-            _prior_v = _prior_map.get(_exp.lower(), {}).get(_tn)
-            if _prior_v is None:
+            if _prior_map.get(_exp.lower(), {}).get(_tn) is None:
                 continue
             _d = _decay.get(_exp, 0.0)
-            # Short-end vols use short_bp decayed; ≥1y use belly_bp
             if _exp in ("1m", "3m", "6m"):
-                _bp_adj = round(_net_short_bp * _d, 2)
+                _bp_a = round(_net_short_bp * _d, 2)
             else:
-                _bp_adj = round(_net_belly_bp, 2)
+                _bp_a = round(_net_belly_bp, 2)
+            _anchor_adj[(_exp.lower(), _tn)] = _bp_a
+
+        # Surface grid coords: index expiries and tenors so we can compute distance
+        # Build expiry order from prior_close (lowercase keys)
+        _all_expiries = list(_prior_map.keys())  # already lowercase
+        _exp_idx_map = {_e: _i for _i, _e in enumerate(_all_expiries)}
+        # Build tenor order from union of tenor columns in prior_close
+        _all_tenors_set = set()
+        for _e_k in _all_expiries:
+            _all_tenors_set.update(_prior_map[_e_k].keys())
+        # Sort tenors by their numeric Y value
+        def _tenor_y(_t):
+            try:
+                return float(str(_t).rstrip("Y").rstrip("y"))
+            except Exception:
+                return 999.0
+        _all_tenors = sorted(_all_tenors_set, key=_tenor_y)
+        _ten_idx_map = {_t: _i for _i, _t in enumerate(_all_tenors)}
+
+        # Compute net adjustment per cell on full surface via Gaussian falloff
+        _cell_adj = {}  # (exp_lower, tenor) -> net bp_adj (summed across anchors)
+        _eps = 1e-9
+        for _e_k in _all_expiries:
+            _ei = _exp_idx_map[_e_k]
+            for _tn in _all_tenors:
+                if _tn not in _prior_map.get(_e_k, {}):
+                    continue
+                _ti = _ten_idx_map[_tn]
+                _total_bp = 0.0
+                for (_a_exp, _a_tn), _a_bp in _anchor_adj.items():
+                    if _a_exp not in _exp_idx_map or _a_tn not in _ten_idx_map:
+                        continue
+                    _ae_i = _exp_idx_map[_a_exp]
+                    _at_i = _ten_idx_map[_a_tn]
+                    _d_e = abs(_ei - _ae_i)
+                    _d_t = abs(_ti - _at_i)
+                    if _sm_sigma_exp <= _eps and _sm_sigma_ten <= _eps:
+                        # No smoothing: anchor only contributes to itself
+                        if _d_e == 0 and _d_t == 0:
+                            _total_bp += _a_bp
+                    else:
+                        # Gaussian falloff in both dimensions (independent sigmas)
+                        _se = max(_sm_sigma_exp, _eps)
+                        _st = max(_sm_sigma_ten, _eps)
+                        _w = math.exp(-0.5 * ((_d_e / _se) ** 2 + (_d_t / _st) ** 2))
+                        if _w < 0.01:
+                            continue  # cut off below 1% to keep table tractable
+                        _total_bp += _a_bp * _w
+                if abs(_total_bp) >= 0.005:  # ignore sub-half-bp noise
+                    _cell_adj[(_e_k, _tn)] = round(_total_bp, 2)
+
+        # Build preview rows from _cell_adj
+        _adj_rows = []
+        # Order: by expiry index then tenor index (so 1w cells appear before 1y etc)
+        _sorted_cells = sorted(
+            _cell_adj.keys(),
+            key=lambda k: (_exp_idx_map.get(k[0], 999), _ten_idx_map.get(k[1], 999))
+        )
+        for _e_k, _tn in _sorted_cells:
+            _prior_v = _prior_map.get(_e_k, {}).get(_tn)
+            if _prior_v is None:
+                continue
+            _bp_adj = _cell_adj[(_e_k, _tn)]
             _new_v = round(float(_prior_v) + _bp_adj, 2)
+            # Mark anchor cells in the display
+            _is_anchor = (_e_k, _tn) in _anchor_adj
             _adj_rows.append({
-                "Expiry": _exp,
+                "Expiry": _e_k,
                 "Tenor": _tn,
                 "Prior": f"{_prior_v:.2f}",
                 "Δbp": f"{_bp_adj:+.2f}",
                 "Proposed": f"{_new_v:.2f}",
+                "Anchor": "●" if _is_anchor else "",
             })
 
-        st.markdown(f"#### Proposed Open — net {_net_short_bp:+.1f}bp short / {_net_belly_bp:+.1f}bp belly (capped at ±2/±1)")
+        # Expose _cell_adj for the Apply handler so it doesn't recompute
+        # (it uses the same Gaussian logic from current_atm not prior_map though)
+
+        st.markdown(
+            f"#### Proposed Open — net {_net_short_bp:+.1f}bp short / {_net_belly_bp:+.1f}bp belly "
+            f"(capped at ±2/±1) — σ_exp={_sm_sigma_exp:.1f}, σ_ten={_sm_sigma_ten:.1f} → "
+            f"{len(_adj_rows)} cells touched ({len(_anchor_adj)} anchors)"
+        )
         st.dataframe(pd.DataFrame(_adj_rows), use_container_width=True, hide_index=True)
 
         # ── Auto-generated commentary ──────────────────────────
@@ -33168,28 +33269,26 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                     _working = _base_df.copy()
                     _exp_lower = _working["Expiry"].astype(str).str.lower().tolist()
                     _diag_log = []
-                    for _exp, _tn in _EUR_OPEN_CELLS:
+                    # v1405m: use _cell_adj (Gaussian-spread) instead of just anchors
+                    for (_e_k, _tn), _bp_adj in _cell_adj.items():
                         if _tn not in _working.columns:
-                            _diag_log.append(f"SKIP {_exp}×{_tn}: tenor column '{_tn}' not in surface")
+                            _diag_log.append(f"SKIP {_e_k}×{_tn}: tenor column not in surface")
                             continue
                         try:
-                            _row_idx = _exp_lower.index(_exp.lower())
+                            _row_idx = _exp_lower.index(_e_k)
                         except ValueError:
-                            _diag_log.append(f"SKIP {_exp}×{_tn}: expiry '{_exp}' not found in {_exp_lower}")
+                            _diag_log.append(f"SKIP {_e_k}×{_tn}: expiry not found")
                             continue
                         try:
                             _curr_v = float(_working.at[_row_idx, _tn])
                         except (KeyError, ValueError, TypeError) as _ex:
-                            _diag_log.append(f"SKIP {_exp}×{_tn}: read err {_ex}")
+                            _diag_log.append(f"SKIP {_e_k}×{_tn}: read err {_ex}")
                             continue
-                        _d = _decay.get(_exp, 0.0)
-                        if _exp in ("1m", "3m", "6m"):
-                            _bp_adj = round(_net_short_bp * _d, 2)
-                        else:
-                            _bp_adj = round(_net_belly_bp, 2)
                         _new_v = round(_curr_v + _bp_adj, 2)
                         _working.at[_row_idx, _tn] = _new_v
-                        _diag_log.append(f"OK   {_exp}×{_tn}: {_curr_v:.2f} → {_new_v:.2f} ({_bp_adj:+.2f}bp)")
+                        _is_anchor = (_e_k, _tn) in _anchor_adj
+                        _tag = "ANCHOR" if _is_anchor else "halo  "
+                        _diag_log.append(f"OK {_tag} {_e_k}×{_tn}: {_curr_v:.2f} → {_new_v:.2f} ({_bp_adj:+.2f}bp)")
 
                     # Write vol_editor (base + working) like AUD does.
                     # CRITICAL: do NOT write to vol_data["EUR"]["atm"] here.
@@ -33218,10 +33317,13 @@ If all 5 triggers fire and agree on direction, you're still bounded.
 
                     st.session_state["_eur_open_applied_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
                     st.session_state["_eur_open_diag_log"] = _diag_log
-                    _ok_count = sum(1 for ln in _diag_log if ln.startswith("OK"))
+                    _ok_anchor = sum(1 for ln in _diag_log if "ANCHOR" in ln)
+                    _ok_halo = sum(1 for ln in _diag_log if "halo" in ln)
                     _skip_count = sum(1 for ln in _diag_log if ln.startswith("SKIP"))
                     st.success(
-                        f"✅ EUR open loaded into Vol Editor — {_ok_count} cells adjusted, "
+                        f"✅ EUR open loaded into Vol Editor — "
+                        f"{_ok_anchor} anchor + {_ok_halo} halo cells adjusted "
+                        f"(σ_exp={_sm_sigma_exp:.1f}, σ_ten={_sm_sigma_ten:.1f}), "
                         f"{_skip_count} skipped. Open Vol Editor tab to review and publish."
                     )
         with _apply_col2:
