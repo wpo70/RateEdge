@@ -33419,6 +33419,23 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                                "view_mode", "smoothing", "paste_data", "future"]:
                         if _k not in ve:
                             ve[_k] = {}
+                    # v1405t: defensive validation before writing to vol_editor.
+                    # Ensure _working has identical columns/index/dtypes to _base_df
+                    # so the editor module's publish path can serialize cleanly.
+                    try:
+                        # Force same column order
+                        _working = _working[_base_df.columns.tolist()]
+                        # Force same index
+                        _working.index = _base_df.index
+                        # Final dtype enforcement (object→float coercion just in case)
+                        for _col in _working.columns:
+                            if _col == "Expiry":
+                                continue
+                            _working[_col] = pd.to_numeric(_working[_col], errors="coerce").astype(float)
+                    except Exception as _val_err:
+                        st.error(f"EUR working surface validation failed: {_val_err}")
+                        return
+
                     ve["base"]["EUR"] = _base_df.copy()
                     ve["working"]["EUR"] = _working.copy()
                     ve["history"]["EUR"] = []
@@ -33427,6 +33444,25 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                         ve["sod_loaded"] = {}
                     ve["sod_loaded"]["EUR"] = True
                     st.session_state["vol_editor_auto_load"] = True
+
+                    # v1405t: also publish the working surface into vol_data atm
+                    # immediately. The editor's internal Publish flow will read
+                    # this when it calls save_vol_snapshot. Matches the USD SOD
+                    # "Load to Vol Editor" pattern which writes directly to
+                    # vol_data[ccy]["atm"] (see L31650 in USD SOD tab).
+                    _existing_eur = st.session_state.get("vol_data", {}).get("EUR", {})
+                    st.session_state.setdefault("vol_data", {})["EUR"] = {
+                        "atm": _working.copy(),
+                        "alpha": _existing_eur.get("alpha"),
+                        "beta": _existing_eur.get("beta"),
+                        "rho": _existing_eur.get("rho"),
+                        "nu": _existing_eur.get("nu"),
+                    }
+                    _h = st.session_state.get("_atm_hash_EUR", 0)
+                    st.session_state["_atm_hash_EUR"] = _h + 1
+                    st.session_state.get("atm_prem_matrix", {}).pop("EUR", None)
+                    st.session_state.pop("caplet_vol_curve_EUR", None)
+                    st.session_state.pop("_caplet_curve_key", None)
 
                     st.session_state["_eur_open_applied_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
                     st.session_state["_eur_open_diag_log"] = _diag_log
