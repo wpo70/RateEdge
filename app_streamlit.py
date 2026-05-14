@@ -29752,16 +29752,21 @@ def vol_lookup_tab():
         st.info("Paste a message above to parse swaption requests.")
         return
 
-    # Parse: find all expiry-tenor pairs. Regex tolerates case and whitespace.
-    _vl_pattern = _re_vl.compile(r"\b(\d+\s*[wWmMyY])\s*(\d+\s*[yY])\b")
+    # Parse: find all expiry-tenor pairs.
+    # v1505d: only match whitespace within a single line ([ \t]+ not \s*) so
+    # adjacent rows like "5Y\n1M" don't get glued into a fake "5y1m" swaption.
+    # Allow compound expiry like "1Y6M" (= 1.5y).
+    _vl_pattern = _re_vl.compile(r"\b((?:\d+[yY])?\d+[wWmMyY])[ \t]+(\d+[yY])\b")
     _vl_raw_matches = _vl_pattern.findall(_vl_text)
     # v1505c: also detect standalone Ny tokens (cap requests). Find them in
     # text that's NOT already part of a swaption match.
-    # Remove swaption matches from text first to avoid double-counting.
-    _vl_text_caps_scan = _vl_text
-    for _e_match, _t_match in _vl_raw_matches:
-        _vl_text_caps_scan = _vl_text_caps_scan.replace(f"{_e_match}{_t_match}", " ", 1)
-        _vl_text_caps_scan = _vl_text_caps_scan.replace(f"{_e_match} {_t_match}", " ", 1)
+    # v1505d: use regex.sub to strip ALL matched swaption pairs (handles tabs,
+    # multiple spaces, mixed casing). Literal .replace was missing pairs where
+    # the original spacing in the source differed from the captured groups.
+    _vl_text_caps_scan = _vl_pattern.sub(" ", _vl_text)
+    # Also remove em-dash patterns like "2Y —" that look like standalone Y tokens
+    # but are actually placeholder/missing-tenor lines (user has "2Y	—" in paste).
+    _vl_text_caps_scan = _re_vl.sub(r"(\d+\s*[yY])\s*[—–-]", " ", _vl_text_caps_scan)
     # Standalone year tokens (e.g. "1y", "2y", "10y") — match whole-word year only
     _vl_cap_pattern = _re_vl.compile(r"\b(\d+)\s*[yY]\b")
     _vl_cap_raw = _vl_cap_pattern.findall(_vl_text_caps_scan)
@@ -29794,6 +29799,10 @@ def vol_lookup_tab():
     # Helper: expiry string → years
     def _vl_expiry_years(s):
         import re as _re2
+        # v1505d: handle compound expiry "1y6m" = 1.5y, "2y3m" = 2.25y
+        _m_compound = _re2.match(r"(\d+)y(\d+)m", s)
+        if _m_compound:
+            return float(_m_compound.group(1)) + int(_m_compound.group(2)) / 12.0
         _m = _re2.match(r"(\d+)([wmy])", s)
         if not _m:
             return None
@@ -29804,6 +29813,21 @@ def vol_lookup_tab():
         if _u == "m":
             return _n / 12.0
         return float(_n)  # y
+
+    # v1505e: normalise compound expiries like 1y6m → 18m for surface lookups.
+    # ATM surface row labels use compact form (1m, 3m, 6m, 18m, 1y, 2y, ...),
+    # so "1y6m" needs to be remapped to "18m" before get_matrix_value() or
+    # vol_history lookup will return None.
+    def _vl_canonical_expiry(s):
+        import re as _re3
+        _m_compound = _re3.match(r"(\d+)y(\d+)m", s)
+        if _m_compound:
+            _total_m = int(_m_compound.group(1)) * 12 + int(_m_compound.group(2))
+            # Standard short-form: if multiple of 12 → Ny, else Nm
+            if _total_m % 12 == 0:
+                return f"{_total_m // 12}y"
+            return f"{_total_m}m"
+        return s
 
     # Helper: tenor string → years (always y)
     def _vl_tenor_years(s):
@@ -30177,21 +30201,23 @@ def vol_lookup_tab():
                 continue
 
             # Current vol from live surface
+            # v1505e: use canonical expiry for surface lookups (1y6m → 18m).
+            _en_canon = _vl_canonical_expiry(_en)
             try:
-                _vol_now = _vl_scalar(get_matrix_value(_atm_surf, _en, _ten_y))
+                _vol_now = _vl_scalar(get_matrix_value(_atm_surf, _en_canon, _ten_y))
             except Exception:
                 _vol_now = None
             try:
-                _fwd = _vl_scalar(_vl_fwd(_exp_y, _ten_y, _en))
+                _fwd = _vl_scalar(_vl_fwd(_exp_y, _ten_y, _en_canon))
             except Exception:
                 _fwd = None
-            _stradd_bp = _vl_straddle_bp(_vol_now, _exp_y, _ten_y, _en)
+            _stradd_bp = _vl_straddle_bp(_vol_now, _exp_y, _ten_y, _en_canon)
             _stradd_dollar = (_stradd_bp * _vl_notional * 100.0) if _stradd_bp is not None else None
             # 7-day avg (exclude today if it's in the history too)
             _7d_vals = []
             for _sd, _vals in _history_surfaces[:7]:
                 try:
-                    _v = _vl_scalar(_vl_lookup_in_values(_vals, _en, _tn))
+                    _v = _vl_scalar(_vl_lookup_in_values(_vals, _en_canon, _tn))
                     if _v is not None:
                         _7d_vals.append(_v)
                 except Exception:
@@ -30199,7 +30225,7 @@ def vol_lookup_tab():
             _7d_avg = float(np.mean(_7d_vals)) if _7d_vals else None
             # T-1 change
             try:
-                _vol_t1 = _vl_scalar(_vl_lookup_in_values(_t1_surface, _en, _tn)) if _t1_surface else None
+                _vol_t1 = _vl_scalar(_vl_lookup_in_values(_t1_surface, _en_canon, _tn)) if _t1_surface else None
             except Exception:
                 _vol_t1 = None
             _delta_t1 = (_vol_now - _vol_t1) if (_vol_now is not None and _vol_t1 is not None) else None
@@ -30213,7 +30239,7 @@ def vol_lookup_tab():
                     return "—"
 
             _vl_rows.append({
-                "Request":   f"{_en}{_tn}",
+                "Request":   f"{_en_canon}{_tn}",
                 "Fwd %":     _fmt(_fwd, ".3f"),
                 "Vol bp":    _fmt(_vol_now, ".2f"),
                 "Stradd bp": _fmt(_stradd_bp, ".1f"),
