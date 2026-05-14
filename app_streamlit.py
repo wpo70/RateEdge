@@ -12786,7 +12786,7 @@ def swaptions_tab(vol_mode: str):
     # Check if pending currency selected
     # v0805c: EUR is now supported in the swaption pricer — bypass the PENDING warning.
     if "PENDING" in ccy_select and ccy != "EUR":
-        st.warning(f"├ö├àÔöé {ccy} pricing coming soon. Currently supported: AUD, NZD, USD, EUR")
+        st.warning(f"⚠️ {ccy} pricing coming soon. Currently supported: AUD, USD, EUR")
         return
     
     # ── USD sub-nav: OTC Swaption Vols vs SR3 Listed Vols ─────────────
@@ -14036,7 +14036,7 @@ def caps_floors_tab(vol_mode: str):
     # Check if pending currency selected
     # v1105i: EUR allowed through to use parallel EUR CFS path (build_caplet_vol_curve_eur)
     if "PENDING" in ccy_select and ccy != "EUR":
-        st.warning(f"├ö├àÔöé {ccy} pricing coming soon. Currently supported: AUD, NZD, USD, EUR")
+        st.warning(f"⚠️ {ccy} pricing coming soon. Currently supported: AUD, USD, EUR")
         return
 
     # ═══════════════════════════════════════════════════════════════════
@@ -17609,7 +17609,7 @@ def exotics_tab(vol_mode: str):
     if ccy_select not in ALL_CURRENCIES: ccy_select = "AUD"
     ccy = ccy_select.split(" ")[0]
     if "PENDING" in ccy_select:
-        st.warning(f"├ö├àÔöé {ccy} pricing coming soon. Currently supported: AUD, NZD, USD")
+        st.warning(f"⚠️ {ccy} pricing coming soon. Currently supported: AUD, USD, EUR")
         return
 
     curve     = get_ccy_curve(ccy)
@@ -29334,8 +29334,17 @@ def midcurve_tab():
     }
 
     # Currency from sidebar (v0505h)
-    ccy = st.session_state.get("sidebar_ccy", "AUD")
-    if ccy not in ["AUD", "USD", "NZD"]: ccy = "AUD"
+    # v1405z: include EUR; handle PENDING explicitly with warning instead of silent AUD fallback
+    ccy_select = st.session_state.get("sidebar_ccy", "AUD")
+    if ccy_select not in ALL_CURRENCIES:
+        ccy_select = "AUD"
+    ccy = ccy_select.split(" ")[0]
+    if "PENDING" in ccy_select:
+        st.warning(f"⚠️ {ccy} pricing coming soon. Currently supported: AUD, USD, EUR")
+        return
+    if ccy not in ("AUD", "USD", "EUR"):
+        st.warning(f"⚠️ {ccy} midcurve pricing not yet available.")
+        return
 
     # Get vol surface and curve
     _vol_data = st.session_state.get("vol_data", {}).get(ccy, {})
