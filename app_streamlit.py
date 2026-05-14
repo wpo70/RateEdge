@@ -750,7 +750,8 @@ HAS_TICKET_TAB = True
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
 # any internal lookups (NZD references in scanner gates, etc.) still resolve.
-ALL_CURRENCIES = ["AUD", "USD", "EUR", "NZD (PENDING)", "GBP (PENDING)", "JPY (PENDING)", "CAD (PENDING)"]
+# v1405w: NZD removed from sidebar entirely (was "NZD (PENDING)").
+ALL_CURRENCIES = ["AUD", "USD", "EUR", "GBP (PENDING)", "JPY (PENDING)", "CAD (PENDING)"]
 
 
 # ============================
@@ -37541,11 +37542,10 @@ RateEdge Options Platform""",
 
     else:
         # ── Non-USD — timezone follows sidebar ccy ─────────────────────
-        # v1405v: AUD → Sydney, EUR → London, NZD → Auckland
+        # v1405v: AUD → Sydney, EUR → London
         _ccy_tz_map = {
             "AUD": ("Australia/Sydney", lambda off: "AEST" if off == 36000 else "AEDT"),
             "EUR": ("Europe/London",    lambda off: "GMT"  if off == 0     else "BST"),
-            "NZD": ("Pacific/Auckland", lambda off: "NZST" if off == 43200 else "NZDT"),
         }
         _tz_name, _tz_lbl_fn = _ccy_tz_map.get(_sidebar_ccy_snap, _ccy_tz_map["AUD"])
         _local_now = _dt_snap.datetime.now(ZoneInfo(_tz_name))
