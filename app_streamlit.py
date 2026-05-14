@@ -33244,22 +33244,25 @@ If all 5 triggers fire and agree on direction, you're still bounded.
             # Drop the helper sort levels so display is clean
             _delta_pivot.index = _delta_pivot.index.droplevel(0)
             _delta_pivot.columns = _delta_pivot.columns.droplevel(0)
-            # Convert string Δbp ("+0.59") to float for styler
-            # (DataFrame.applymap deprecated in pandas 2.1+, removed in 3.0; use .map)
+            # Convert string Δbp ("+0.59") to float for styler.
+            # Return np.nan (not Python None) so Styler.format() picks them up
+            # as NA and applies na_rep correctly.
             def _to_float(_v):
                 if isinstance(_v, str) and _v not in ("", "—"):
                     try:
                         return float(_v)
                     except ValueError:
-                        return None
+                        return np.nan
                 if isinstance(_v, (int, float)):
                     return _v
-                return None
+                return np.nan
             try:
                 _delta_num = _delta_pivot.map(_to_float)
             except AttributeError:
                 # Fallback for old pandas
                 _delta_num = _delta_pivot.applymap(_to_float)
+            # Force float dtype so missing cells are real NaN, not object/None
+            _delta_num = _delta_num.astype(float)
 
             # Anchor mask aligned to pivot
             _anchor_mask = pd.DataFrame(
@@ -33358,6 +33361,19 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                     if "Expiry" not in _base_df.columns:
                         _base_df = _base_df.reset_index()
                         _base_df.columns = ["Expiry"] + list(_base_df.columns[1:])
+                    # v1405s: force clean RangeIndex (not whatever was carried over from
+                    # the source) so .at[row_idx, col] writes to predictable rows.
+                    _base_df = _base_df.reset_index(drop=True)
+                    # Force tenor columns to float so writes don't degrade column dtype
+                    # to object, which causes the publish/save_vol_snapshot path to
+                    # produce malformed JSON via to_dict(orient='records').
+                    for _col in _base_df.columns:
+                        if _col == "Expiry":
+                            continue
+                        try:
+                            _base_df[_col] = pd.to_numeric(_base_df[_col], errors="coerce").astype(float)
+                        except Exception:
+                            pass
 
                     # Build working = copy of base with 19 cells shifted
                     _working = _base_df.copy()
@@ -33375,6 +33391,9 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                             continue
                         try:
                             _curr_v = float(_working.at[_row_idx, _tn])
+                            if math.isnan(_curr_v):
+                                _diag_log.append(f"SKIP {_e_k}×{_tn}: prior value is NaN")
+                                continue
                         except (KeyError, ValueError, TypeError) as _ex:
                             _diag_log.append(f"SKIP {_e_k}×{_tn}: read err {_ex}")
                             continue
