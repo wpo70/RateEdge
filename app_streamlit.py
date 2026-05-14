@@ -8192,9 +8192,11 @@ def vol_config_tab():
         except Exception:
             pass
 
-    # v0705l: ccy filter for status cards. Default "All" shows AUD/NZD/USD/EUR.
+    # v0705l: ccy filter for status cards. Default "All" shows AUD/USD/EUR.
     # v0705n: drop index= so session_state persists across full reruns (e.g. after vol load).
-    _status_ccys_all = list(SUPPORTED_CURRENCIES)
+    # v1405j: filter out PENDING-hidden currencies (NZD) from status display.
+    _hidden_ccys = {_c.split(" ")[0] for _c in ALL_CURRENCIES if "(PENDING)" in str(_c)}
+    _status_ccys_all = [c for c in SUPPORTED_CURRENCIES if c not in _hidden_ccys]
     _status_filter = st.selectbox(
         "Show currency",
         ["All"] + _status_ccys_all,
