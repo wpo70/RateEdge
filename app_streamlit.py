@@ -33150,25 +33150,26 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                          key="_eur_open_apply",
                          type="primary",
                          disabled=(not _adj_rows or (_net_short_bp == 0 and _net_belly_bp == 0))):
-                # v1405g: USD SOD pattern. Vol Editor reads vol_data[ccy]["atm"]
-                # via get_working_atm_surface(). Write the adjusted surface there.
+                # v1405h: VERBATIM AUD SOD pattern from L34213+.
+                # base = current vol_data EUR atm surface (= what's currently published)
+                # working = base with the 19 cells adjusted by SOD triggers
+                # DO NOT touch vol_data — editor compares working vs base for Δ highlights
 
-                # Build adjusted surface DataFrame
+                # Build _ve_df: DataFrame of the prior_close from vol_history, used
+                # as the source of "where each cell should be adjusted to"
                 _prior_vals = _prior_close.get("values", [])
-                _rows_out = []
+                _ve_rows = []
                 for _r in _prior_vals:
                     _new_row = dict(_r)
                     if "expiry" in _new_row and "Expiry" not in _new_row:
                         _new_row["Expiry"] = _new_row.pop("expiry")
-                    _rows_out.append(_new_row)
-                _working_df = pd.DataFrame(_rows_out)
-                if "Expiry" in _working_df.columns:
-                    _working_df = _working_df[["Expiry"] + [c for c in _working_df.columns if c != "Expiry"]]
+                    _ve_rows.append(_new_row)
+                _ve_df = pd.DataFrame(_ve_rows)
 
-                # Apply adjustments
-                _exp_col_lower = _working_df["Expiry"].str.lower().tolist()
+                # Apply bp adjustments to _ve_df cells (these become the working values)
+                _ve_exp_lower = _ve_df["Expiry"].str.lower().tolist()
                 for _exp, _tn in _EUR_OPEN_CELLS:
-                    if _tn not in _working_df.columns:
+                    if _tn not in _ve_df.columns:
                         continue
                     _prior_v = _prior_map.get(_exp.lower(), {}).get(_tn)
                     if _prior_v is None:
@@ -33180,23 +33181,58 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                         _bp_adj = round(_net_belly_bp, 2)
                     _new_v = round(float(_prior_v) + _bp_adj, 2)
                     try:
-                        _row_idx = _exp_col_lower.index(_exp.lower())
-                        _working_df.at[_row_idx, _tn] = _new_v
+                        _row_idx = _ve_exp_lower.index(_exp.lower())
+                        _ve_df.at[_row_idx, _tn] = _new_v
                     except ValueError:
                         continue
 
-                # Write directly to vol_data[EUR][atm] — same as USD SOD does
-                st.session_state.setdefault("vol_data", {}).setdefault("EUR", {})["atm"] = _working_df
-                st.session_state["_vol_loaded_EUR"] = True
+                # Pull current ATM surface as base — exactly like AUD does
+                _current_atm = get_working_atm_surface("EUR")
+                if _current_atm is None:
+                    st.warning("Load EUR ATM surface first before applying SOD open.")
+                else:
+                    _base_df = _current_atm.copy()
+                    if "Expiry" not in _base_df.columns:
+                        _base_df = _base_df.reset_index()
+                        _base_df.columns = ["Expiry"] + list(_base_df.columns[1:])
+                    # Merge: use _ve_df values where available, else current ATM
+                    _merged = _base_df.copy()
+                    _ve_exp_set = set(_ve_df["Expiry"].str.lower().tolist()) if "Expiry" in _ve_df.columns else set()
+                    for _ri, _row in _base_df.iterrows():
+                        _exp_lbl = str(_row["Expiry"]).lower()
+                        if _exp_lbl in _ve_exp_set:
+                            _src_row = _ve_df[_ve_df["Expiry"].str.lower() == _exp_lbl]
+                            if not _src_row.empty:
+                                for _tc in _base_df.columns[1:]:
+                                    if _tc in _ve_df.columns:
+                                        try:
+                                            _merged.at[_ri, _tc] = float(_src_row.iloc[0][_tc])
+                                        except Exception:
+                                            pass
 
-                # Bump ATM hash so caps/floors and other ATM-keyed caches invalidate
-                _h = st.session_state.get("_atm_hash_EUR", 0)
-                st.session_state["_atm_hash_EUR"] = _h + 1
+                    # Write to vol_editor — same shape AUD uses
+                    if "vol_editor" not in st.session_state:
+                        st.session_state["vol_editor"] = {"working": {}, "base": {}, "history": {},
+                                                          "future": {}, "redo_stack": {}, "view_mode": {},
+                                                          "smoothing": {}, "paste_data": {}}
+                    ve = st.session_state["vol_editor"]
+                    ve["base"]["EUR"] = _base_df.copy()
+                    ve["working"]["EUR"] = _merged.copy()
+                    for _k in ["history", "redo_stack", "view_mode", "smoothing", "paste_data"]:
+                        if _k not in ve:
+                            ve[_k] = {}
+                    ve["history"]["EUR"] = []
+                    ve["redo_stack"]["EUR"] = []
+                    if "sod_loaded" not in ve:
+                        ve["sod_loaded"] = {}
+                    ve["sod_loaded"]["EUR"] = True
+                    st.session_state["vol_editor_auto_load"] = True
 
-                st.session_state["_eur_open_applied_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
-                st.success(
-                    f"✓ Applied {len(_adj_rows)} cells. Go to **Vol Editor** tab to review and publish."
-                )
+                    st.session_state["_eur_open_applied_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+                    st.success(
+                        f"✅ EUR open loaded into Vol Editor ({len(_adj_rows)} cells adjusted). "
+                        "Go to Vol Editor tab to review and publish."
+                    )
         with _apply_col2:
             _last = st.session_state.get("_eur_open_applied_at")
             if _last:
