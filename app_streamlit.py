@@ -29701,10 +29701,9 @@ def vol_lookup_tab():
     )
 
     # Currency comes from the sidebar's global selector (sidebar_ccy).
-    # Supported for vol lookup: USD / AUD / NZD. Fall back to AUD if sidebar
-    # value is something else.
+    # v1505a: include EUR. Fall back to AUD if sidebar is PENDING or unknown.
     _vl_ccy = st.session_state.get("sidebar_ccy", "AUD")
-    if _vl_ccy not in ("USD", "AUD", "NZD"):
+    if _vl_ccy not in ("USD", "AUD", "EUR"):
         _vl_ccy = "AUD"
 
     _vlc1, _vlc2 = st.columns([3, 1])
@@ -29918,14 +29917,57 @@ def vol_lookup_tab():
             return None
 
     def _vl_fwd(exp_y, ten_y, exp_str):
-        """Forward swap rate (%) — direct lookup from fwd_matrix[ccy]."""
-        return _matrix_lookup(_fwd_mat, exp_str, ten_y)
+        """Forward swap rate (%) — direct lookup from fwd_matrix[ccy] with
+        on-the-fly fallback if the matrix isn't loaded."""
+        _v = _matrix_lookup(_fwd_mat, exp_str, ten_y)
+        if _v is not None:
+            return _v
+        # v1505a: fallback — compute fwd swap rate from curve directly.
+        # Forward swap rate ≈ (D(T1) - D(T2)) / Σ τ_i × D(T_i) × 100
+        try:
+            _curve = st.session_state.get("config_curves", {}).get(_vl_ccy)
+            if _curve is None or (hasattr(_curve, "empty") and _curve.empty):
+                _curve = get_ccy_curve(_vl_ccy)
+            if _curve is None or _curve.empty:
+                return None
+            from scipy.interpolate import CubicSpline as _CS_vl
+            _cx = _curve.iloc[:, 0].values.astype(float)
+            _cy = _curve.iloc[:, 1].values.astype(float) / 100.0
+            _order = np.argsort(_cx)
+            _cx, _cy = _cx[_order], _cy[_order]
+            _cs = _CS_vl(_cx, _cy)
+            # Discount factor from continuously-compounded zero rate
+            _T1 = float(exp_y)
+            _T2 = float(exp_y) + float(ten_y)
+            # Use par rate interpolation directly for forward swap rate proxy:
+            #   F(T1,T2) ≈ (par(T2) × T2 - par(T1) × T1) / (T2 - T1)
+            _r1 = float(_cs(_T1))
+            _r2 = float(_cs(_T2))
+            _fwd_swap = (_r2 * _T2 - _r1 * _T1) / (_T2 - _T1)
+            return round(_fwd_swap * 100.0, 4)
+        except Exception:
+            return None
 
     def _vl_straddle_bp(vol_bp_unused, exp_y_unused, ten_y, exp_str):
         """ATM straddle premium (bp) — direct lookup from
-        atm_prem_matrix[ccy]['prem']. Signature keeps vol_bp/exp_y args for
-        compatibility but ignores them (we read the matrix value)."""
-        return _matrix_lookup(_prem_mat, exp_str, ten_y)
+        atm_prem_matrix[ccy]['prem'] with on-the-fly fallback."""
+        _v = _matrix_lookup(_prem_mat, exp_str, ten_y)
+        if _v is not None:
+            return _v
+        # v1505a: fallback — Bachelier ATM straddle approximation
+        #   Stradd bp ≈ σ × √(2T_exp/π) × T_tenor
+        # Uses current ATM surface DataFrame via get_matrix_value().
+        try:
+            _vol_bp = get_matrix_value(_atm_surf, exp_str, float(ten_y))
+            if _vol_bp is None or float(exp_y_unused) <= 0:
+                return None
+            _vol_bp = float(_vol_bp)
+            if _vol_bp != _vol_bp:  # NaN
+                return None
+            _stradd = _vol_bp * math.sqrt(2.0 * float(exp_y_unused) / math.pi) * float(ten_y)
+            return round(_stradd, 2)
+        except Exception:
+            return None
 
     # Straddle premium bp (Bachelier ATM, 2-sided).
     # For a payer+receiver straddle on a forward swap:
