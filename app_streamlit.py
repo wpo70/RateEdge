@@ -37540,21 +37540,33 @@ RateEdge Options Platform""",
                 st.error("❌ USD snapshot save failed.")
 
     else:
-        # ── AUD / other — Sydney time buttons ──────────────────────────
+        # ── Non-USD — timezone follows sidebar ccy ─────────────────────
+        # v1405v: AUD → Sydney, EUR → London, NZD → Auckland
+        _ccy_tz_map = {
+            "AUD": ("Australia/Sydney", lambda off: "AEST" if off == 36000 else "AEDT"),
+            "EUR": ("Europe/London",    lambda off: "GMT"  if off == 0     else "BST"),
+            "NZD": ("Pacific/Auckland", lambda off: "NZST" if off == 43200 else "NZDT"),
+        }
+        _tz_name, _tz_lbl_fn = _ccy_tz_map.get(_sidebar_ccy_snap, _ccy_tz_map["AUD"])
+        _local_now = _dt_snap.datetime.now(ZoneInfo(_tz_name))
+        _local_lbl = _tz_lbl_fn(_local_now.utcoffset().total_seconds())
+        _local_ts_str = _local_now.strftime(f"%d-%b-%Y %H:%M {_local_lbl}")
+        _local_date_str = _local_now.strftime("%d-%b-%Y")
+
         _sb1, _sb2, _sb3 = st.columns(3)
         _snap_type = None
         with _sb1:
-            if st.button(f"🌙 EOD {_date_str}", key="snap_eod", use_container_width=True):
+            if st.button(f"🌙 EOD {_local_date_str}", key="snap_eod", use_container_width=True):
                 _snap_type = "EOD"
         with _sb2:
-            if st.button(f"🌅 SOD {_date_str}", key="snap_sod", use_container_width=True):
+            if st.button(f"🌅 SOD {_local_date_str}", key="snap_sod", use_container_width=True):
                 _snap_type = "SOD"
         with _sb3:
-            if st.button(f"⏱ Intraday {_syd_now.strftime('%H:%M')}", key="snap_intraday", use_container_width=True):
+            if st.button(f"⏱ Intraday {_local_now.strftime('%H:%M')} {_local_lbl}", key="snap_intraday", use_container_width=True):
                 _snap_type = "Intraday"
 
         if _snap_type:
-            _label = f"{_ccys_str} {_ts_str}" if _snap_type == "Intraday" else f"{_ccys_str} {_snap_type} {_ts_str}"
+            _label = f"{_ccys_str} {_local_ts_str}" if _snap_type == "Intraday" else f"{_ccys_str} {_snap_type} {_local_ts_str}"
             if not HAS_POSTGRES:
                 st.error("Database not connected.")
             elif not export_currencies:
