@@ -33228,11 +33228,26 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                     ve["sod_loaded"]["EUR"] = True
                     st.session_state["vol_editor_auto_load"] = True
 
+                    # v1405i: also push working into vol_data[EUR][atm] so the
+                    # editor's displayed surface IS the adjusted one. Without this,
+                    # the editor renders the unchanged published atm and the user
+                    # only sees Δ overlays (which depend on the editor module's
+                    # display path being aware of working vs base diff).
+                    # base ("prior to SOD") stays in ve["base"]["EUR"] for the
+                    # editor's Δ overlay if it supports one.
+                    st.session_state.setdefault("vol_data", {}).setdefault("EUR", {})["atm"] = _merged.copy()
+                    _h = st.session_state.get("_atm_hash_EUR", 0)
+                    st.session_state["_atm_hash_EUR"] = _h + 1
+                    # Bust ATM-derived caches
+                    st.session_state.get("atm_prem_matrix", {}).pop("EUR", None)
+                    st.session_state.pop("caplet_vol_curve_EUR", None)
+
                     st.session_state["_eur_open_applied_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
                     st.success(
                         f"✅ EUR open loaded into Vol Editor ({len(_adj_rows)} cells adjusted). "
                         "Go to Vol Editor tab to review and publish."
                     )
+                    st.rerun()
         with _apply_col2:
             _last = st.session_state.get("_eur_open_applied_at")
             if _last:
