@@ -33262,7 +33262,14 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                 # Fallback for old pandas
                 _delta_num = _delta_pivot.applymap(_to_float)
             # Force float dtype so missing cells are real NaN, not object/None
-            _delta_num = _delta_num.astype(float)
+            # Two-stage: replace any Python None first, then cast
+            _delta_num = _delta_num.where(_delta_num.notna(), other=np.nan)
+            try:
+                _delta_num = _delta_num.astype(float)
+            except (TypeError, ValueError):
+                # If any cell can't coerce, force-convert via to_numeric on each col
+                for _c in _delta_num.columns:
+                    _delta_num[_c] = pd.to_numeric(_delta_num[_c], errors="coerce")
 
             # Anchor mask aligned to pivot
             _anchor_mask = pd.DataFrame(
@@ -33296,9 +33303,19 @@ If all 5 triggers fire and agree on direction, you're still bounded.
             # Build the styled frame
             # (Styler.applymap renamed to Styler.map in pandas 2.1+)
             def _fmt(v):
-                if pd.isna(v) or v == 0:
+                if v is None:
                     return "—"
-                return f"{v:+.2f}"
+                try:
+                    if pd.isna(v):
+                        return "—"
+                except (TypeError, ValueError):
+                    return "—"
+                if v == 0:
+                    return "—"
+                try:
+                    return f"{float(v):+.2f}"
+                except (TypeError, ValueError):
+                    return "—"
             try:
                 _styler = _delta_num.style.map(_heatmap_style).format(_fmt, na_rep="—")
             except AttributeError:
