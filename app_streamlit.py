@@ -29772,10 +29772,19 @@ def vol_lookup_tab():
     _vl_cap_raw = _vl_cap_pattern.findall(_vl_text_caps_scan)
 
     # Normalise: lowercase, strip spaces. Build unified list with kind tag.
+    # v1505f: dedup on canonical expiry form so "1y6m 5y" and "18m 5y" don't
+    # produce two rows for the same swaption.
+    def _vl_canon(s):
+        import re as _re_c
+        _m = _re_c.match(r"(\d+)y(\d+)m", s)
+        if _m:
+            _total_m = int(_m.group(1)) * 12 + int(_m.group(2))
+            return f"{_total_m // 12}y" if _total_m % 12 == 0 else f"{_total_m}m"
+        return s
     _vl_pairs = []  # list of (kind, expiry_or_none, tenor_str)
     _seen = set()
     for _e, _t in _vl_raw_matches:
-        _en = _e.lower().replace(" ", "")
+        _en = _vl_canon(_e.lower().replace(" ", ""))
         _tn = _t.lower().replace(" ", "")
         _key = ("swaption", _en, _tn)
         if _key not in _seen:
