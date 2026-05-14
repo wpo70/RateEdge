@@ -33429,10 +33429,6 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                 with st.expander(f"📋 Last apply log ({len(_prev_log)} entries)", expanded=False):
                     for _ln in _prev_log:
                         st.code(_ln, language=None)
-        with _apply_col2:
-            _last = st.session_state.get("_eur_open_applied_at")
-            if _last:
-                st.caption(f"Last applied: {_last}")
 
 
 @st.fragment
