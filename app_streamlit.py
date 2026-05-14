@@ -33292,14 +33292,14 @@ If all 5 triggers fire and agree on direction, you're still bounded.
 
             # Build the styled frame
             # (Styler.applymap renamed to Styler.map in pandas 2.1+)
+            def _fmt(v):
+                if pd.isna(v) or v == 0:
+                    return "—"
+                return f"{v:+.2f}"
             try:
-                _styler = _delta_num.style.map(_heatmap_style).format(
-                    lambda v: f"{v:+.2f}" if pd.notna(v) and v != 0 else "—"
-                )
+                _styler = _delta_num.style.map(_heatmap_style).format(_fmt, na_rep="—")
             except AttributeError:
-                _styler = _delta_num.style.applymap(_heatmap_style).format(
-                    lambda v: f"{v:+.2f}" if pd.notna(v) and v != 0 else "—"
-                )
+                _styler = _delta_num.style.applymap(_heatmap_style).format(_fmt, na_rep="—")
 
             # Add anchor border via apply (returns a DataFrame of styles)
             def _border_overlay(_df):
