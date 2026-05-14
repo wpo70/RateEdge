@@ -33245,9 +33245,21 @@ If all 5 triggers fire and agree on direction, you're still bounded.
             _delta_pivot.index = _delta_pivot.index.droplevel(0)
             _delta_pivot.columns = _delta_pivot.columns.droplevel(0)
             # Convert string Δbp ("+0.59") to float for styler
-            _delta_num = _delta_pivot.applymap(
-                lambda v: float(v) if isinstance(v, str) and v not in ("", "—") else (v if isinstance(v, (int, float)) else None)
-            )
+            # (DataFrame.applymap deprecated in pandas 2.1+, removed in 3.0; use .map)
+            def _to_float(_v):
+                if isinstance(_v, str) and _v not in ("", "—"):
+                    try:
+                        return float(_v)
+                    except ValueError:
+                        return None
+                if isinstance(_v, (int, float)):
+                    return _v
+                return None
+            try:
+                _delta_num = _delta_pivot.map(_to_float)
+            except AttributeError:
+                # Fallback for old pandas
+                _delta_num = _delta_pivot.applymap(_to_float)
 
             # Anchor mask aligned to pivot
             _anchor_mask = pd.DataFrame(
@@ -33279,9 +33291,15 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                 pass
 
             # Build the styled frame
-            _styler = _delta_num.style.applymap(_heatmap_style).format(
-                lambda v: f"{v:+.2f}" if pd.notna(v) and v != 0 else "—"
-            )
+            # (Styler.applymap renamed to Styler.map in pandas 2.1+)
+            try:
+                _styler = _delta_num.style.map(_heatmap_style).format(
+                    lambda v: f"{v:+.2f}" if pd.notna(v) and v != 0 else "—"
+                )
+            except AttributeError:
+                _styler = _delta_num.style.applymap(_heatmap_style).format(
+                    lambda v: f"{v:+.2f}" if pd.notna(v) and v != 0 else "—"
+                )
 
             # Add anchor border via apply (returns a DataFrame of styles)
             def _border_overlay(_df):
