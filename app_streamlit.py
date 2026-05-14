@@ -17766,6 +17766,20 @@ def exotics_tab(vol_mode: str):
                 return vals_[0][1] if so_T < vals_[0][0] else vals_[-1][1]
             st.session_state["so_vl2"] = float(round(_pre_vol(long_y), 1))
             st.session_state["so_vs2"] = float(round(_pre_vol(short_y), 1))
+            # v1505b: reseed correlation from config for the new tenor pair
+            def _nearest_tenor_pre(y_):
+                mapping_pre = {1:"1Y",2:"2Y",3:"3Y",4:"4Y",5:"5Y",7:"7Y",10:"10Y",
+                               12:"12Y",15:"15Y",20:"20Y",25:"25Y",30:"30Y"}
+                return mapping_pre[min(mapping_pre.keys(), key=lambda k: abs(k - y_))]
+            try:
+                _rho_new = get_correlation(_nearest_tenor_pre(long_y), _nearest_tenor_pre(short_y))
+                st.session_state["so_rho"] = round(float(_rho_new), 3)
+            except Exception:
+                pass
+            # v1505b: force one rerun so all downstream calculations
+            # (vol_long_bp, vol_short_bp, rho, K_spread_bp, premium math)
+            # pick up the new session_state values written above.
+            st.rerun()
 
         with vc1:
             # Pull vol from ATM surface   —   try exact expiry then interpolate between neighbours
@@ -29694,10 +29708,10 @@ def vol_lookup_tab():
 
     st.markdown("### 🔍 Vol Lookup")
     st.caption(
-        "Paste raw text (chat, email, BBG output). Tool extracts any swaption "
-        "expiry-tenor pairs like `1m3y`, `3m5y`, `6m20y`, `5y5y` and returns "
-        "fwd, ATM vol, straddle premium, 7-day avg vol, and change vs T-1. "
-        "Expiries: w/m/y. Tenors: y only."
+        "Paste raw text (chat, email, BBG output). Tool extracts swaption "
+        "expiry-tenor pairs like `1m3y`, `3m5y`, `6m20y` AND standalone year "
+        "tokens like `1y`, `2y`, `5y` as cap requests (CFS ATM vol). "
+        "Returns fwd, ATM vol, straddle premium, 7-day avg vol, and change vs T-1."
     )
 
     # Currency comes from the sidebar's global selector (sidebar_ccy).
@@ -29731,7 +29745,7 @@ def vol_lookup_tab():
         "Paste text here",
         height=150,
         key="vl_input",
-        placeholder="10:55:47 1m3y\n3m5y\n6m20y\n1y1y\n5y5y",
+        placeholder="10:55:47 1m3y\n3m5y\n6m20y\n1y1y\n5y5y\n\n# Standalone year tokens = cap requests (CFS ATM)\n1y\n2y\n5y",
     )
 
     if not _vl_text.strip():
@@ -29741,22 +29755,41 @@ def vol_lookup_tab():
     # Parse: find all expiry-tenor pairs. Regex tolerates case and whitespace.
     _vl_pattern = _re_vl.compile(r"\b(\d+\s*[wWmMyY])\s*(\d+\s*[yY])\b")
     _vl_raw_matches = _vl_pattern.findall(_vl_text)
-    # Normalise: lowercase, strip spaces
-    _vl_pairs = []
+    # v1505c: also detect standalone Ny tokens (cap requests). Find them in
+    # text that's NOT already part of a swaption match.
+    # Remove swaption matches from text first to avoid double-counting.
+    _vl_text_caps_scan = _vl_text
+    for _e_match, _t_match in _vl_raw_matches:
+        _vl_text_caps_scan = _vl_text_caps_scan.replace(f"{_e_match}{_t_match}", " ", 1)
+        _vl_text_caps_scan = _vl_text_caps_scan.replace(f"{_e_match} {_t_match}", " ", 1)
+    # Standalone year tokens (e.g. "1y", "2y", "10y") — match whole-word year only
+    _vl_cap_pattern = _re_vl.compile(r"\b(\d+)\s*[yY]\b")
+    _vl_cap_raw = _vl_cap_pattern.findall(_vl_text_caps_scan)
+
+    # Normalise: lowercase, strip spaces. Build unified list with kind tag.
+    _vl_pairs = []  # list of (kind, expiry_or_none, tenor_str)
     _seen = set()
     for _e, _t in _vl_raw_matches:
         _en = _e.lower().replace(" ", "")
         _tn = _t.lower().replace(" ", "")
-        _key = (_en, _tn)
+        _key = ("swaption", _en, _tn)
         if _key not in _seen:
             _seen.add(_key)
-            _vl_pairs.append((_en, _tn))
+            _vl_pairs.append(_key)
+    for _ystr in _vl_cap_raw:
+        _tn = f"{_ystr}y"
+        _key = ("cap", None, _tn)
+        if _key not in _seen:
+            _seen.add(_key)
+            _vl_pairs.append(_key)
 
     if not _vl_pairs:
-        st.warning("No swaption pairs found (e.g. `1m3y`, `3m5y`). Check input format.")
+        st.warning("No swaption pairs or cap tenors found (e.g. `1m3y`, `3m5y`, `1y`, `2y`). Check input format.")
         return
 
-    st.caption(f"Found **{len(_vl_pairs)}** unique pair(s) in {_vl_ccy}")
+    _n_swap = sum(1 for k, _, _ in _vl_pairs if k == "swaption")
+    _n_cap = sum(1 for k, _, _ in _vl_pairs if k == "cap")
+    st.caption(f"Found **{len(_vl_pairs)}** unique request(s) in {_vl_ccy} — {_n_swap} swaption(s), {_n_cap} cap(s)")
 
     # Helper: expiry string → years
     def _vl_expiry_years(s):
@@ -29974,20 +30007,64 @@ def vol_lookup_tab():
     #   Premium($) = σ × √(2 × T_exp / π) × Annuity × Notional
     # Where Annuity ≈ Σ τ_i × DF_i, which for level-par purposes is
     # approximately tenor_y when discounting is ignored (par rate world).
+    # v1505c: load CFS caplet vol curve for cap requests
+    _vl_cfs_curve = None
+    if _n_cap > 0:
+        _vl_cfs_curve = st.session_state.get(f"caplet_vol_curve_{_vl_ccy}")
+        if not _vl_cfs_curve:
+            # Try OTC curve from last CFS calc
+            _vl_cfs_curve = st.session_state.get("_cfs_otc_curve")
+        if not _vl_cfs_curve:
+            # Build inline from current ATM surface
+            try:
+                _vl_cfs_curve = build_caplet_vol_curve(_vl_ccy, _atm_surf)
+            except Exception as _cfs_err:
+                _vl_cfs_curve = None
+                st.caption(f"⚠ Could not build CFS curve: {_cfs_err}")
+
+    def _vl_cfs_vol(ten_y):
+        """Look up CFS ATM caplet vol from {maturity_y: vol_bp} dict. Interpolates
+        if exact tenor isn't an anchor."""
+        if not _vl_cfs_curve:
+            return None
+        try:
+            _ty = float(ten_y)
+            # Direct hit
+            if _ty in _vl_cfs_curve:
+                return float(_vl_cfs_curve[_ty])
+            # Round to 0.25 grid
+            _round = round(_ty * 4) / 4
+            if _round in _vl_cfs_curve:
+                return float(_vl_cfs_curve[_round])
+            # Linear interp between nearest anchors
+            _keys = sorted(_vl_cfs_curve.keys())
+            for _i in range(len(_keys) - 1):
+                _k0, _k1 = _keys[_i], _keys[_i + 1]
+                if _k0 <= _ty <= _k1:
+                    _v0, _v1 = float(_vl_cfs_curve[_k0]), float(_vl_cfs_curve[_k1])
+                    _alpha = (_ty - _k0) / (_k1 - _k0) if _k1 > _k0 else 0
+                    return _v0 + _alpha * (_v1 - _v0)
+            # Extrapolate from edge
+            if _ty < _keys[0]:
+                return float(_vl_cfs_curve[_keys[0]])
+            return float(_vl_cfs_curve[_keys[-1]])
+        except Exception:
+            return None
+
     # Premium in bp of notional × Annuity factor:
     # Build output rows
     _vl_rows = []
-    for _en, _tn in _vl_pairs:
+    for _kind, _en, _tn in _vl_pairs:
         try:
-            _exp_y = _vl_expiry_years(_en)
             _ten_y = _vl_tenor_years(_tn)
-            if _exp_y is None or _ten_y is None:
+            if _ten_y is None:
                 _vl_rows.append({
-                    "Request": f"{_en}{_tn}",
+                    "Request": _tn if _kind == "cap" else f"{_en}{_tn}",
                     "Fwd %": "—", "Vol bp": "—", "Stradd bp": "—",
                     "Stradd $": "—", "7d Avg": "—", "Δ T-1": "—",
                 })
                 continue
+
             # Helper: coerce any Series/np type to plain float or None
             def _vl_scalar(v):
                 if v is None:
@@ -30003,6 +30080,101 @@ def vol_lookup_tab():
                     return fv
                 except Exception:
                     return None
+
+            if _kind == "cap":
+                # ── CFS cap row ────────────────────────────────────
+                # Cap on N-year: ATM strike = forward N-year swap rate from spot,
+                # vol = CFS ATM caplet vol at maturity N years.
+                _exp_y = 0.0  # spot start
+                _vol_now = _vl_cfs_vol(_ten_y)
+                # Fwd for cap = par swap rate at N years (curve lookup at point N)
+                try:
+                    _curve = st.session_state.get("config_curves", {}).get(_vl_ccy)
+                    if _curve is None or (hasattr(_curve, "empty") and _curve.empty):
+                        _curve = get_ccy_curve(_vl_ccy)
+                    if _curve is not None and not _curve.empty:
+                        from scipy.interpolate import CubicSpline as _CS_cap
+                        _cx = _curve.iloc[:, 0].values.astype(float)
+                        _cy = _curve.iloc[:, 1].values.astype(float)
+                        _order = np.argsort(_cx)
+                        _cs = _CS_cap(_cx[_order], _cy[_order])
+                        _fwd = round(float(_cs(_ten_y)), 4)
+                    else:
+                        _fwd = None
+                except Exception:
+                    _fwd = None
+                # Cap straddle premium ≈ σ_cfs × √(2T/π) × T × notional adj
+                # Using full life T = ten_y for cap; this is a coarse approximation
+                # (proper cap pricing sums caplets along the schedule).
+                _stradd_bp = None
+                if _vol_now is not None and _ten_y > 0:
+                    try:
+                        _stradd_bp = float(_vol_now) * math.sqrt(2.0 * float(_ten_y) / math.pi) * float(_ten_y)
+                        _stradd_bp = round(_stradd_bp, 2)
+                    except Exception:
+                        _stradd_bp = None
+                _stradd_dollar = (_stradd_bp * _vl_notional * 100.0) if _stradd_bp is not None else None
+
+                # 7-day avg CFS vol — build CFS curve from each historical surface
+                _7d_vals = []
+                for _sd, _vals in _history_surfaces[:7]:
+                    try:
+                        # Reconstruct a temporary DataFrame for build_caplet_vol_curve
+                        _tmp_df = pd.DataFrame(_vals)
+                        _tmp_curve = build_caplet_vol_curve(_vl_ccy, _tmp_df)
+                        if _tmp_curve:
+                            _ty = float(_ten_y)
+                            _round = round(_ty * 4) / 4
+                            _v = _tmp_curve.get(_round) or _tmp_curve.get(_ty)
+                            if _v:
+                                _7d_vals.append(float(_v))
+                    except Exception:
+                        pass
+                _7d_avg = float(np.mean(_7d_vals)) if _7d_vals else None
+                # T-1 change
+                _vol_t1 = None
+                if _t1_surface:
+                    try:
+                        _t1_df = pd.DataFrame(_t1_surface)
+                        _t1_curve = build_caplet_vol_curve(_vl_ccy, _t1_df)
+                        if _t1_curve:
+                            _ty = float(_ten_y)
+                            _round = round(_ty * 4) / 4
+                            _vol_t1 = _t1_curve.get(_round) or _t1_curve.get(_ty)
+                            if _vol_t1:
+                                _vol_t1 = float(_vol_t1)
+                    except Exception:
+                        _vol_t1 = None
+                _delta_t1 = (_vol_now - _vol_t1) if (_vol_now is not None and _vol_t1 is not None) else None
+
+                def _fmt(val, spec):
+                    if val is None:
+                        return "—"
+                    try:
+                        return format(float(val), spec)
+                    except Exception:
+                        return "—"
+
+                _vl_rows.append({
+                    "Request":   f"Cap {_tn.upper()}",
+                    "Fwd %":     _fmt(_fwd, ".3f"),
+                    "Vol bp":    _fmt(_vol_now, ".2f"),
+                    "Stradd bp": _fmt(_stradd_bp, ".1f"),
+                    "Stradd $":  _fmt(_stradd_dollar, ",.0f"),
+                    "7d Avg":    _fmt(_7d_avg, ".2f"),
+                    "Δ T-1":     _fmt(_delta_t1, "+.2f"),
+                })
+                continue
+
+            # ── Swaption row (existing path) ────────────────────────
+            _exp_y = _vl_expiry_years(_en)
+            if _exp_y is None:
+                _vl_rows.append({
+                    "Request": f"{_en}{_tn}",
+                    "Fwd %": "—", "Vol bp": "—", "Stradd bp": "—",
+                    "Stradd $": "—", "7d Avg": "—", "Δ T-1": "—",
+                })
+                continue
 
             # Current vol from live surface
             try:
@@ -30050,8 +30222,9 @@ def vol_lookup_tab():
                 "Δ T-1":     _fmt(_delta_t1, "+.2f"),
             })
         except Exception as _row_err:
+            _req_lbl = (f"Cap {_tn.upper()}" if _kind == "cap" else f"{_en}{_tn}")
             _vl_rows.append({
-                "Request": f"{_en}{_tn}",
+                "Request": _req_lbl,
                 "Fwd %": "ERR", "Vol bp": "ERR", "Stradd bp": "ERR",
                 "Stradd $": "ERR", "7d Avg": "ERR", "Δ T-1": f"ERR ({type(_row_err).__name__})",
             })
@@ -30131,9 +30304,13 @@ def vol_lookup_tab():
         return
 
     # Build matrix: rows = pairs, cols = vol on each historical date (oldest→newest)
+    # v1505c: only swaption pairs are eligible for beta regression — caps use a
+    # different vol source (CFS curve) and don't fit the swaption-vs-swaption model.
     _hist_window_rev = list(reversed(_hist_window))  # oldest first for chronological Δ
     _pair_series = {}
-    for _en, _tn in _vl_pairs:
+    for _kind, _en, _tn in _vl_pairs:
+        if _kind != "swaption":
+            continue
         _series = []
         for _sd, _vals in _hist_window_rev:
             _v = _vl_lookup_in_values(_vals, _en, _tn)
@@ -30235,7 +30412,10 @@ def vol_lookup_tab():
     # ── Section A: pick two pairs, show β + R² + daily pairs ──
     st.markdown("**Pick any two — detailed view**")
     _bcol1, _bcol2, _bcol3 = st.columns([2, 2, 3])
-    _pair_labels = [f"{_en}{_tn}" for _en, _tn in _vl_pairs]
+    _pair_labels = [f"{_en}{_tn}" for _kind, _en, _tn in _vl_pairs if _kind == "swaption"]
+    if len(_pair_labels) < 2:
+        st.caption("Beta regression needs at least 2 swaption pairs. Caps only / single pair detected — skipping beta analysis.")
+        return
     with _bcol1:
         _pair_x = st.selectbox("X (independent)", _pair_labels, index=0, key="vl_beta_x")
     with _bcol2:
