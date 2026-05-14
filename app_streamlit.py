@@ -33228,7 +33228,83 @@ If all 5 triggers fire and agree on direction, you're still bounded.
             f"(capped at ±2/±1) — σ_exp={_sm_sigma_exp:.1f}, σ_ten={_sm_sigma_ten:.1f} → "
             f"{len(_adj_rows)} cells touched ({len(_anchor_adj)} anchors)"
         )
-        st.dataframe(pd.DataFrame(_adj_rows), use_container_width=True, hide_index=True)
+
+        # v1405n: Pivot Δbp into a matrix (rows = expiries, cols = tenors)
+        # for compact heat-map display. Anchors get a bullet glyph appended.
+        if _adj_rows:
+            _mat_df = pd.DataFrame(_adj_rows)
+            # Sort expiries by their grid index (so 1w, 2w, 1m, ... not alphabetical)
+            _mat_df["_exp_ord"] = _mat_df["Expiry"].map(lambda e: _exp_idx_map.get(e.lower(), 999))
+            _mat_df["_tn_ord"] = _mat_df["Tenor"].map(lambda t: _ten_idx_map.get(t, 999))
+            # Build pivot of Δbp (numeric) and another of anchor flags
+            _delta_pivot = _mat_df.pivot_table(
+                index=["_exp_ord", "Expiry"], columns=["_tn_ord", "Tenor"],
+                values="Δbp", aggfunc="first"
+            )
+            # Drop the helper sort levels so display is clean
+            _delta_pivot.index = _delta_pivot.index.droplevel(0)
+            _delta_pivot.columns = _delta_pivot.columns.droplevel(0)
+            # Convert string Δbp ("+0.59") to float for styler
+            _delta_num = _delta_pivot.applymap(
+                lambda v: float(v) if isinstance(v, str) and v not in ("", "—") else (v if isinstance(v, (int, float)) else None)
+            )
+
+            # Anchor mask aligned to pivot
+            _anchor_mask = pd.DataFrame(
+                False, index=_delta_num.index, columns=_delta_num.columns
+            )
+            for (_ae, _at) in _anchor_adj.keys():
+                if _at in _anchor_mask.columns and _ae in _anchor_mask.index:
+                    _anchor_mask.at[_ae, _at] = True
+
+            # Compute symmetric vmin/vmax for green/red gradient
+            _vmax = max(_delta_num.abs().max().max() or 0.0, 0.1)
+
+            def _heatmap_style(_v):
+                if pd.isna(_v) or _v == 0:
+                    return "background-color: transparent; color: #94a3b8;"
+                # Normalize to [-1, 1]
+                _norm = max(min(_v / _vmax, 1.0), -1.0)
+                if _norm > 0:
+                    # Green tint, alpha ~ intensity
+                    _alpha = 0.15 + 0.45 * abs(_norm)
+                    return f"background-color: rgba(34, 197, 94, {_alpha:.2f}); color: #052e16;"
+                else:
+                    # Red tint
+                    _alpha = 0.15 + 0.45 * abs(_norm)
+                    return f"background-color: rgba(239, 68, 68, {_alpha:.2f}); color: #450a0a;"
+
+            def _anchor_border_style(_, _ri, _ci):
+                # Streamlit's Styler.applymap_index doesn't help; use apply with axis=None
+                pass
+
+            # Build the styled frame
+            _styler = _delta_num.style.applymap(_heatmap_style).format(
+                lambda v: f"{v:+.2f}" if pd.notna(v) and v != 0 else "—"
+            )
+
+            # Add anchor border via apply (returns a DataFrame of styles)
+            def _border_overlay(_df):
+                _out = pd.DataFrame("", index=_df.index, columns=_df.columns)
+                for _r in _df.index:
+                    for _c in _df.columns:
+                        if _r in _anchor_mask.index and _c in _anchor_mask.columns and _anchor_mask.at[_r, _c]:
+                            _out.at[_r, _c] = "border: 2px solid #fbbf24; font-weight: 700;"
+                return _out
+            _styler = _styler.apply(_border_overlay, axis=None)
+
+            st.caption(
+                "Heat map: 🟢 = vol increase, 🔴 = vol decrease, intensity by |Δbp|. "
+                "**Gold border** = anchor cell (direct SOD trigger). No border = halo (Gaussian spread)."
+            )
+            st.dataframe(_styler, use_container_width=True)
+
+            # Also show as raw table in expander for quick review
+            with st.expander("📋 Full list view", expanded=False):
+                _list_df = pd.DataFrame(_adj_rows)[["Expiry","Tenor","Prior","Δbp","Proposed","Anchor"]]
+                st.dataframe(_list_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No cells to adjust (all triggers below threshold).")
 
         # ── Auto-generated commentary ──────────────────────────
         _comm_parts = []
