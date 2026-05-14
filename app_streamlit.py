@@ -33152,77 +33152,63 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                          key="_eur_open_apply",
                          type="primary",
                          disabled=(not _adj_rows or (_net_short_bp == 0 and _net_belly_bp == 0))):
-                # v1405h: VERBATIM AUD SOD pattern from L34213+.
-                # base = current vol_data EUR atm surface (= what's currently published)
-                # working = base with the 19 cells adjusted by SOD triggers
-                # DO NOT touch vol_data — editor compares working vs base for Δ highlights
-
-                # Build _ve_df: DataFrame of the prior_close from vol_history, used
-                # as the source of "where each cell should be adjusted to"
-                _prior_vals = _prior_close.get("values", [])
-                _ve_rows = []
-                for _r in _prior_vals:
-                    _new_row = dict(_r)
-                    if "expiry" in _new_row and "Expiry" not in _new_row:
-                        _new_row["Expiry"] = _new_row.pop("expiry")
-                    _ve_rows.append(_new_row)
-                _ve_df = pd.DataFrame(_ve_rows)
-
-                # Apply bp adjustments to _ve_df cells (these become the working values)
-                _ve_exp_lower = _ve_df["Expiry"].str.lower().tolist()
-                for _exp, _tn in _EUR_OPEN_CELLS:
-                    if _tn not in _ve_df.columns:
-                        continue
-                    _prior_v = _prior_map.get(_exp.lower(), {}).get(_tn)
-                    if _prior_v is None:
-                        continue
-                    _d = _decay.get(_exp, 0.0)
-                    if _exp in ("1m", "3m", "6m"):
-                        _bp_adj = round(_net_short_bp * _d, 2)
-                    else:
-                        _bp_adj = round(_net_belly_bp, 2)
-                    _new_v = round(float(_prior_v) + _bp_adj, 2)
-                    try:
-                        _row_idx = _ve_exp_lower.index(_exp.lower())
-                        _ve_df.at[_row_idx, _tn] = _new_v
-                    except ValueError:
-                        continue
-
-                # Pull current ATM surface as base — exactly like AUD does
+                # v1405l: full AUD-style write — vol_editor (base + working) AND
+                # vol_data atm. Plus _atm_hash bump. Plus diagnostic log.
                 _current_atm = get_working_atm_surface("EUR")
                 if _current_atm is None:
                     st.warning("Load EUR ATM surface first before applying SOD open.")
                 else:
+                    # Build base = current published surface, with Expiry as a column
                     _base_df = _current_atm.copy()
                     if "Expiry" not in _base_df.columns:
                         _base_df = _base_df.reset_index()
                         _base_df.columns = ["Expiry"] + list(_base_df.columns[1:])
-                    # Merge: use _ve_df values where available, else current ATM
-                    _merged = _base_df.copy()
-                    _ve_exp_set = set(_ve_df["Expiry"].str.lower().tolist()) if "Expiry" in _ve_df.columns else set()
-                    for _ri, _row in _base_df.iterrows():
-                        _exp_lbl = str(_row["Expiry"]).lower()
-                        if _exp_lbl in _ve_exp_set:
-                            _src_row = _ve_df[_ve_df["Expiry"].str.lower() == _exp_lbl]
-                            if not _src_row.empty:
-                                for _tc in _base_df.columns[1:]:
-                                    if _tc in _ve_df.columns:
-                                        try:
-                                            _merged.at[_ri, _tc] = float(_src_row.iloc[0][_tc])
-                                        except Exception:
-                                            pass
 
-                    # Write to vol_editor — same shape AUD uses
+                    # Build working = copy of base with 19 cells shifted
+                    _working = _base_df.copy()
+                    _exp_lower = _working["Expiry"].astype(str).str.lower().tolist()
+                    _diag_log = []
+                    for _exp, _tn in _EUR_OPEN_CELLS:
+                        if _tn not in _working.columns:
+                            _diag_log.append(f"SKIP {_exp}×{_tn}: tenor column '{_tn}' not in surface")
+                            continue
+                        try:
+                            _row_idx = _exp_lower.index(_exp.lower())
+                        except ValueError:
+                            _diag_log.append(f"SKIP {_exp}×{_tn}: expiry '{_exp}' not found in {_exp_lower}")
+                            continue
+                        try:
+                            _curr_v = float(_working.at[_row_idx, _tn])
+                        except (KeyError, ValueError, TypeError) as _ex:
+                            _diag_log.append(f"SKIP {_exp}×{_tn}: read err {_ex}")
+                            continue
+                        _d = _decay.get(_exp, 0.0)
+                        if _exp in ("1m", "3m", "6m"):
+                            _bp_adj = round(_net_short_bp * _d, 2)
+                        else:
+                            _bp_adj = round(_net_belly_bp, 2)
+                        _new_v = round(_curr_v + _bp_adj, 2)
+                        _working.at[_row_idx, _tn] = _new_v
+                        _diag_log.append(f"OK   {_exp}×{_tn}: {_curr_v:.2f} → {_new_v:.2f} ({_bp_adj:+.2f}bp)")
+
+                    # Write vol_editor (base + working) like AUD does.
+                    # CRITICAL: do NOT write to vol_data["EUR"]["atm"] here.
+                    # The editor pulls atm from vol_data AND reads working+base
+                    # from vol_editor. If we overwrite vol_data["EUR"]["atm"]
+                    # with working, then base (= vol_data atm at editor open)
+                    # equals working → Δ = 0 → nothing shows up. AUD doesn't
+                    # touch vol_data and that's why AUD shows red Δ everywhere.
                     if "vol_editor" not in st.session_state:
                         st.session_state["vol_editor"] = {"working": {}, "base": {}, "history": {},
                                                           "future": {}, "redo_stack": {}, "view_mode": {},
                                                           "smoothing": {}, "paste_data": {}}
                     ve = st.session_state["vol_editor"]
-                    ve["base"]["EUR"] = _base_df.copy()
-                    ve["working"]["EUR"] = _merged.copy()
-                    for _k in ["history", "redo_stack", "view_mode", "smoothing", "paste_data"]:
+                    for _k in ["working", "base", "history", "redo_stack",
+                               "view_mode", "smoothing", "paste_data", "future"]:
                         if _k not in ve:
                             ve[_k] = {}
+                    ve["base"]["EUR"] = _base_df.copy()
+                    ve["working"]["EUR"] = _working.copy()
                     ve["history"]["EUR"] = []
                     ve["redo_stack"]["EUR"] = []
                     if "sod_loaded" not in ve:
@@ -33230,26 +33216,23 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                     ve["sod_loaded"]["EUR"] = True
                     st.session_state["vol_editor_auto_load"] = True
 
-                    # v1405i: also push working into vol_data[EUR][atm] so the
-                    # editor's displayed surface IS the adjusted one. Without this,
-                    # the editor renders the unchanged published atm and the user
-                    # only sees Δ overlays (which depend on the editor module's
-                    # display path being aware of working vs base diff).
-                    # base ("prior to SOD") stays in ve["base"]["EUR"] for the
-                    # editor's Δ overlay if it supports one.
-                    st.session_state.setdefault("vol_data", {}).setdefault("EUR", {})["atm"] = _merged.copy()
-                    _h = st.session_state.get("_atm_hash_EUR", 0)
-                    st.session_state["_atm_hash_EUR"] = _h + 1
-                    # Bust ATM-derived caches
-                    st.session_state.get("atm_prem_matrix", {}).pop("EUR", None)
-                    st.session_state.pop("caplet_vol_curve_EUR", None)
-
                     st.session_state["_eur_open_applied_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+                    st.session_state["_eur_open_diag_log"] = _diag_log
+                    _ok_count = sum(1 for ln in _diag_log if ln.startswith("OK"))
+                    _skip_count = sum(1 for ln in _diag_log if ln.startswith("SKIP"))
                     st.success(
-                        f"✅ EUR open loaded into Vol Editor ({len(_adj_rows)} cells adjusted). "
-                        "Go to Vol Editor tab to review and publish."
+                        f"✅ EUR open loaded into Vol Editor — {_ok_count} cells adjusted, "
+                        f"{_skip_count} skipped. Open Vol Editor tab to review and publish."
                     )
-                    st.rerun()
+        with _apply_col2:
+            _last = st.session_state.get("_eur_open_applied_at")
+            if _last:
+                st.caption(f"Last applied: {_last}")
+            _prev_log = st.session_state.get("_eur_open_diag_log")
+            if _prev_log:
+                with st.expander(f"📋 Last apply log ({len(_prev_log)} entries)", expanded=False):
+                    for _ln in _prev_log:
+                        st.code(_ln, language=None)
         with _apply_col2:
             _last = st.session_state.get("_eur_open_applied_at")
             if _last:
