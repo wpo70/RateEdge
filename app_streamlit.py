@@ -19534,7 +19534,7 @@ def vol_surface_editor_tab():
     if ccy == "USD" and st.session_state.get("_sod_usd_pending_surface") is not None:
         _usd_sod_c1, _usd_sod_c2 = st.columns([2, 5])
         with _usd_sod_c1:
-            if st.button("📋 Load USD SOD Open → Editor", key="ve_load_usd_sod", type="primary"):
+            if st.button("📋 Load SOD Implied Open → Editor", key="ve_load_usd_sod", type="primary"):
                 try:
                     _imp = st.session_state["_sod_usd_pending_surface"].copy()
                     if "expiry" in _imp.columns and "Expiry" not in _imp.columns:
@@ -19559,14 +19559,14 @@ def vol_surface_editor_tab():
                 except Exception as _e:
                     st.error(f"Failed: {_e}")
         with _usd_sod_c2:
-            st.caption("Loads USD SOD-adjusted surface. Run SOD Report first.")
+            st.caption("Loads USD implied open from SOD Report. Run SOD Report first.")
 
     # v1505p: EUR equivalent — mirrors AUD pattern exactly. EUR SOD Apply
     # button sets _sod_eur_pending_surface; this button loads it into the editor.
     if ccy == "EUR" and st.session_state.get("_sod_eur_pending_surface") is not None:
         _eur_sod_c1, _eur_sod_c2 = st.columns([2, 5])
         with _eur_sod_c1:
-            if st.button("📋 Load EUR SOD Open → Editor", key="ve_load_eur_sod", type="primary"):
+            if st.button("📋 Load SOD Implied Open → Editor", key="ve_load_eur_sod", type="primary"):
                 try:
                     _imp = st.session_state["_sod_eur_pending_surface"].copy()
                     if "expiry" in _imp.columns and "Expiry" not in _imp.columns:
@@ -19591,7 +19591,7 @@ def vol_surface_editor_tab():
                 except Exception as _e:
                     st.error(f"Failed: {_e}")
         with _eur_sod_c2:
-            st.caption("Loads EUR SOD-adjusted surface. Run SOD Report first.")
+            st.caption("Loads EUR implied open from SOD Report. Run SOD Report first.")
 
     st.markdown("---")
     if atm is not None:
@@ -31992,10 +31992,28 @@ def usd_sod_tab():
             if st.button("📋 Load to Vol Editor", key="usd_sod_load_editor"):
                 try:
                     _adj_s = _build_adj_surface()
+                    # Match AUD _sod_implied_open output shape exactly: a
+                    # DataFrame with "Expiry" as the first column (not index).
+                    _io_df = _adj_s.copy()
+                    # If Expiry is already a column, just make sure it's first and named correctly
+                    _has_expiry_col = any(str(c).lower() == "expiry" for c in _io_df.columns)
+                    if _has_expiry_col:
+                        # Rename any lowercase 'expiry' to 'Expiry'
+                        for _c in _io_df.columns:
+                            if _c != "Expiry" and str(_c).lower() == "expiry":
+                                _io_df = _io_df.rename(columns={_c: "Expiry"})
+                        # Ensure Expiry is the first column
+                        if _io_df.columns[0] != "Expiry":
+                            _cols = ["Expiry"] + [c for c in _io_df.columns if c != "Expiry"]
+                            _io_df = _io_df[_cols]
+                    else:
+                        # Expiry is in the index — reset and rename
+                        _io_df = _io_df.reset_index()
+                        _io_df.columns = ["Expiry"] + list(_io_df.columns[1:])
                     # Baseline write — vol_data atm (what worked this morning)
-                    st.session_state.setdefault("vol_data", {}).setdefault("USD", {})["atm"] = _adj_s
+                    st.session_state.setdefault("vol_data", {}).setdefault("USD", {})["atm"] = _io_df.copy()
                     # Plus pending flag for editor tab to consume
-                    st.session_state["_sod_usd_pending_surface"] = _adj_s
+                    st.session_state["_sod_usd_pending_surface"] = _io_df.copy()
                     st.success("✅ Loaded estimated surface to Vol Editor.")
                 except Exception as _ex:
                     st.error(f"Load failed: {type(_ex).__name__}: {_ex}")
