@@ -33702,23 +33702,18 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                          key="_eur_open_apply",
                          type="primary",
                          disabled=(not _adj_rows or (_net_short_bp == 0 and _net_belly_bp == 0))):
-                # v1405l: full AUD-style write — vol_editor (base + working) AND
-                # vol_data atm. Plus _atm_hash bump. Plus diagnostic log.
+                # v1505w pattern (matches USD): build the adjusted surface, store
+                # in _sod_eur_pending_surface, let the editor-tab button do the
+                # actual load+rerun. Do NOT touch vol_data atm.
                 _current_atm = get_working_atm_surface("EUR")
                 if _current_atm is None:
                     st.warning("Load EUR ATM surface first before applying SOD open.")
                 else:
-                    # Build base = current published surface, with Expiry as a column
                     _base_df = _current_atm.copy()
                     if "Expiry" not in _base_df.columns:
                         _base_df = _base_df.reset_index()
                         _base_df.columns = ["Expiry"] + list(_base_df.columns[1:])
-                    # v1405s: force clean RangeIndex (not whatever was carried over from
-                    # the source) so .at[row_idx, col] writes to predictable rows.
                     _base_df = _base_df.reset_index(drop=True)
-                    # Force tenor columns to float so writes don't degrade column dtype
-                    # to object, which causes the publish/save_vol_snapshot path to
-                    # produce malformed JSON via to_dict(orient='records').
                     for _col in _base_df.columns:
                         if _col == "Expiry":
                             continue
@@ -33727,11 +33722,9 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                         except Exception:
                             pass
 
-                    # Build working = copy of base with 19 cells shifted
                     _working = _base_df.copy()
                     _exp_lower = _working["Expiry"].astype(str).str.lower().tolist()
                     _diag_log = []
-                    # v1405m: use _cell_adj (Gaussian-spread) instead of just anchors
                     for (_e_k, _tn), _bp_adj in _cell_adj.items():
                         if _tn not in _working.columns:
                             _diag_log.append(f"SKIP {_e_k}×{_tn}: tenor column not in surface")
@@ -33755,31 +33748,10 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                         _tag = "ANCHOR" if _is_anchor else "halo  "
                         _diag_log.append(f"OK {_tag} {_e_k}×{_tn}: {_curr_v:.2f} → {_new_v:.2f} ({_bp_adj:+.2f}bp)")
 
-                    # Write vol_editor (base + working) like AUD does.
-                    # CRITICAL: do NOT write to vol_data["EUR"]["atm"] here.
-                    # The editor pulls atm from vol_data AND reads working+base
-                    # from vol_editor. If we overwrite vol_data["EUR"]["atm"]
-                    # with working, then base (= vol_data atm at editor open)
-                    # equals working → Δ = 0 → nothing shows up. AUD doesn't
-                    # touch vol_data and that's why AUD shows red Δ everywhere.
-                    if "vol_editor" not in st.session_state:
-                        st.session_state["vol_editor"] = {"working": {}, "base": {}, "history": {},
-                                                          "future": {}, "redo_stack": {}, "view_mode": {},
-                                                          "smoothing": {}, "paste_data": {}}
-                    ve = st.session_state["vol_editor"]
-                    for _k in ["working", "base", "history", "redo_stack",
-                               "view_mode", "smoothing", "paste_data", "future"]:
-                        if _k not in ve:
-                            ve[_k] = {}
-                    # v1405t: defensive validation before writing to vol_editor.
-                    # Ensure _working has identical columns/index/dtypes to _base_df
-                    # so the editor module's publish path can serialize cleanly.
+                    # Force consistent column order, index, dtypes
                     try:
-                        # Force same column order
                         _working = _working[_base_df.columns.tolist()]
-                        # Force same index
                         _working.index = _base_df.index
-                        # Final dtype enforcement (object→float coercion just in case)
                         for _col in _working.columns:
                             if _col == "Expiry":
                                 continue
@@ -33788,19 +33760,11 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                         st.error(f"EUR working surface validation failed: {_val_err}")
                         return
 
-                    ve["base"]["EUR"] = _base_df.copy()
-                    ve["working"]["EUR"] = _working.copy()
-                    ve["history"]["EUR"] = []
-                    ve["redo_stack"]["EUR"] = []
-                    if "sod_loaded" not in ve:
-                        ve["sod_loaded"] = {}
-                    ve["sod_loaded"]["EUR"] = True
-                    st.session_state["vol_editor_auto_load"] = True
-
-                    # v1505m: matches AUD pattern exactly — do NOT touch vol_data.
-                    # AUD's working Load Implied Open button writes only to
-                    # vol_editor.base/working and sets sod_loaded flag. Writing
-                    # to vol_data atm makes base==working → no Δ visible.
+                    # v1505w: queue pattern — store in pending surface for editor
+                    # tab to consume. Do NOT touch vol_data atm. Do NOT write to
+                    # vol_editor directly — let editor-tab button do it (matches
+                    # USD/AUD pattern exactly).
+                    st.session_state["_sod_eur_pending_surface"] = _working.copy()
 
                     st.session_state["_eur_open_applied_at"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
                     st.session_state["_eur_open_diag_log"] = _diag_log
@@ -33808,7 +33772,7 @@ If all 5 triggers fire and agree on direction, you're still bounded.
                     _ok_halo = sum(1 for ln in _diag_log if "halo" in ln)
                     _skip_count = sum(1 for ln in _diag_log if ln.startswith("SKIP"))
                     st.success(
-                        f"✅ EUR open loaded into Vol Editor — "
+                        f"✅ Loaded estimated surface to Vol Editor — "
                         f"{_ok_anchor} anchor + {_ok_halo} halo cells adjusted "
                         f"(σ_exp={_sm_sigma_exp:.1f}, σ_ten={_sm_sigma_ten:.1f}), "
                         f"{_skip_count} skipped. Open Vol Editor tab to review and publish."
@@ -37822,7 +37786,7 @@ RateEdge Options Platform""",
         _ldn_now = _dt_snap.datetime.now(ZoneInfo("Europe/London"))
         _tky_now = _dt_snap.datetime.now(ZoneInfo("Asia/Tokyo"))
         _usd_snap = None
-        _usd_sb1, _usd_sb2, _usd_sb3, _usd_sb4 = st.columns(4)
+        _usd_sb1, _usd_sb2, _usd_sb3, _usd_sb4, _usd_sb5 = st.columns(5)
         with _usd_sb1:
             if st.button(f"🌅 SOD Tokyo\n{_tky_now.strftime('%H:%M JST')}", key="usd_snap_tky", use_container_width=True):
                 _usd_snap = f"USD SOD Tokyo {_tky_now.strftime('%d-%b-%Y %H:%M JST')}"
@@ -37831,9 +37795,12 @@ RateEdge Options Platform""",
             if st.button(f"🌅 SOD London\n{_ldn_now.strftime('%H:%M')} {_ldn_tz}", key="usd_snap_ldn", use_container_width=True):
                 _usd_snap = f"USD SOD London {_ldn_now.strftime(f'%d-%b-%Y %H:%M {_ldn_tz}')}"
         with _usd_sb3:
+            if st.button(f"⏱ Intraday NYC\n{_nyc_now.strftime('%H:%M ET')}", key="usd_snap_intraday", use_container_width=True):
+                _usd_snap = f"USD Intraday {_nyc_now.strftime('%d-%b-%Y %H:%M ET')}"
+        with _usd_sb4:
             if st.button(f"🌙 EOD NYC\n{_nyc_now.strftime('%H:%M ET')}", key="usd_snap_nyc", use_container_width=True):
                 _usd_snap = f"USD EOD NYC {_nyc_now.strftime('%d-%b-%Y %H:%M ET')}"
-        with _usd_sb4:
+        with _usd_sb5:
             if st.button("⏪ Revert to\nPrev EOD NYC", key="usd_revert_eod", use_container_width=True):
                 if HAS_POSTGRES:
                     _usd_snaps = list_vol_snapshots(user_id, "USD")
