@@ -31992,24 +31992,19 @@ def usd_sod_tab():
             if st.button("📋 Load to Vol Editor", key="usd_sod_load_editor"):
                 try:
                     _adj_s = _build_adj_surface()
-                    # Match AUD _sod_implied_open output shape exactly: a
-                    # DataFrame with "Expiry" as the first column (not index).
-                    _io_df = _adj_s.copy()
-                    # If Expiry is already a column, just make sure it's first and named correctly
-                    _has_expiry_col = any(str(c).lower() == "expiry" for c in _io_df.columns)
-                    if _has_expiry_col:
-                        # Rename any lowercase 'expiry' to 'Expiry'
-                        for _c in _io_df.columns:
-                            if _c != "Expiry" and str(_c).lower() == "expiry":
-                                _io_df = _io_df.rename(columns={_c: "Expiry"})
-                        # Ensure Expiry is the first column
-                        if _io_df.columns[0] != "Expiry":
-                            _cols = ["Expiry"] + [c for c in _io_df.columns if c != "Expiry"]
-                            _io_df = _io_df[_cols]
-                    else:
-                        # Expiry is in the index — reset and rename
-                        _io_df = _io_df.reset_index()
-                        _io_df.columns = ["Expiry"] + list(_io_df.columns[1:])
+                    # _build_adj_surface() returns a copy of _base_atm_df which
+                    # for USD has a scrambled integer index and no Expiry column.
+                    # We need to reconstruct with Expiry as first column matching
+                    # the EXPIRIES constant order. Use get_matrix_value to pull
+                    # vol-per-cell into a fresh DataFrame.
+                    _rows = []
+                    for _exp in EXPIRIES:
+                        _row = {"Expiry": _exp}
+                        for _tn in TENORS:
+                            _v = get_matrix_value(_adj_s, _exp, float(_tn))
+                            _row[f"{_tn}Y"] = _v
+                        _rows.append(_row)
+                    _io_df = pd.DataFrame(_rows)
                     # Baseline write — vol_data atm (what worked this morning)
                     st.session_state.setdefault("vol_data", {}).setdefault("USD", {})["atm"] = _io_df.copy()
                     # Plus pending flag for editor tab to consume
