@@ -19528,6 +19528,39 @@ def vol_surface_editor_tab():
                     st.error(f"Failed: {_e}")
         with _sod_c2:
             st.caption("Loads AUD implied open from SOD Report. Run SOD Report first.")
+
+    # v1505n: USD equivalent — mirrors AUD pattern. SOD page sets
+    # _sod_usd_pending_surface; this button loads it into the editor here.
+    if ccy == "USD" and st.session_state.get("_sod_usd_pending_surface") is not None:
+        _usd_sod_c1, _usd_sod_c2 = st.columns([2, 5])
+        with _usd_sod_c1:
+            if st.button("📋 Load USD SOD Open → Editor", key="ve_load_usd_sod", type="primary"):
+                try:
+                    _imp = st.session_state["_sod_usd_pending_surface"].copy()
+                    if "expiry" in _imp.columns and "Expiry" not in _imp.columns:
+                        _imp = _imp.rename(columns={"expiry": "Expiry"})
+                    if "Expiry" not in _imp.columns and _imp.index.name and _imp.index.name.lower() == "expiry":
+                        _imp = _imp.reset_index().rename(columns={_imp.index.name: "Expiry"})
+                    _imp.columns = [c if c.lower() == "expiry" else c.upper() for c in _imp.columns]
+                    _imp = _imp.rename(columns={c: "Expiry" for c in _imp.columns if c.lower() == "expiry" and c != "Expiry"})
+                    for _c in _imp.columns[1:]:
+                        _imp[_c] = pd.to_numeric(_imp[_c], errors="coerce")
+                    ve = st.session_state.setdefault("vol_editor", {"working":{},"base":{},"history":{},"redo_stack":{},"view_mode":{},"smoothing":{},"paste_data":{}})
+                    for _k in ["working","base","history","redo_stack","view_mode","smoothing","paste_data"]:
+                        if _k not in ve: ve[_k] = {}
+                    _cur = get_working_atm_surface("USD")
+                    ve["base"]["USD"] = _cur.copy() if _cur is not None else _imp.copy()
+                    ve["working"]["USD"] = _imp.copy()
+                    ve["history"]["USD"] = []
+                    ve["redo_stack"]["USD"] = []
+                    ve.setdefault("sod_loaded", {})["USD"] = True
+                    st.success("✅ USD SOD open loaded into editor.")
+                    st.rerun()
+                except Exception as _e:
+                    st.error(f"Failed: {_e}")
+        with _usd_sod_c2:
+            st.caption("Loads USD SOD-adjusted surface. Run SOD Report first.")
+
     st.markdown("---")
 
     # Normalise ATM surface before passing to vol editor
@@ -31928,51 +31961,13 @@ def usd_sod_tab():
         with _ac2:
             if st.button("📋 Load to Vol Editor", key="usd_sod_load_editor"):
                 _adj_s = _build_adj_surface()
-                # v1505m: copy of working AUD pattern at L34784. Reformat to
-                # vol_editor expected shape, merge against current ATM, write
-                # base+working with sod_loaded flag.
-                try:
-                    _ve_df = _adj_s.copy()
-                    if "Expiry" not in _ve_df.columns:
-                        _ve_df = _ve_df.reset_index()
-                        _ve_df.columns = ["Expiry"] + list(_ve_df.columns[1:])
-                    if "vol_editor" not in st.session_state:
-                        st.session_state["vol_editor"] = {"working":{}, "base":{}, "history":{}, "future":{}, "redo_stack":{}, "view_mode":{}, "smoothing":{}, "paste_data":{}}
-                    ve = st.session_state["vol_editor"]
-                    _current_atm = get_working_atm_surface("USD")
-                    if _current_atm is not None:
-                        _base_df = _current_atm.copy()
-                        if "Expiry" not in _base_df.columns:
-                            _base_df = _base_df.reset_index()
-                            _base_df.columns = ["Expiry"] + list(_base_df.columns[1:])
-                        _merged = _base_df.copy()
-                        _ve_exp_set = set(_ve_df["Expiry"].str.lower().tolist()) if "Expiry" in _ve_df.columns else set()
-                        for _ri, _row in _base_df.iterrows():
-                            _exp_lbl = str(_row["Expiry"]).lower()
-                            if _exp_lbl in _ve_exp_set:
-                                _src_row = _ve_df[_ve_df["Expiry"].str.lower()==_exp_lbl]
-                                if not _src_row.empty:
-                                    for _tc in _base_df.columns[1:]:
-                                        if _tc in _ve_df.columns:
-                                            try:
-                                                _merged.at[_ri, _tc] = float(_src_row.iloc[0][_tc])
-                                            except Exception:
-                                                pass
-                        ve["base"]["USD"] = _base_df.copy()
-                        ve["working"]["USD"] = _merged.copy()
-                        for _k in ["history", "redo_stack", "view_mode", "smoothing", "paste_data"]:
-                            if _k not in ve: ve[_k] = {}
-                        ve["history"]["USD"] = []
-                        ve["redo_stack"]["USD"] = []
-                        if "sod_loaded" not in ve:
-                            ve["sod_loaded"] = {}
-                        ve["sod_loaded"]["USD"] = True
-                        st.session_state["vol_editor_auto_load"] = True
-                        st.success("✅ Loaded estimated surface to Vol Editor. Go to Vol Editor tab to review and publish.")
-                    else:
-                        st.warning("Load USD ATM surface first before loading SOD.")
-                except Exception as _e:
-                    st.error(f"Failed to load: {_e}")
+                # v1505n: store pending surface and let the editor's own
+                # Load button consume it (mirrors AUD's _sod_implied_open
+                # pattern). The editor will show a "Load USD SOD Open → Editor"
+                # button which fires the load + rerun in-place, so the editor
+                # renders with the new surface immediately.
+                st.session_state["_sod_usd_pending_surface"] = _adj_s
+                st.success("✅ USD SOD surface queued. Go to Vol Editor tab and click 'Load USD SOD Open → Editor'.")
 
         with _ac3:
             if st.button("⏪ Revert to NYC EOD", key="usd_sod_revert"):
