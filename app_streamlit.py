@@ -31929,18 +31929,7 @@ def usd_sod_tab():
             if st.button("📋 Load to Vol Editor", key="usd_sod_load_editor"):
                 _adj_s = _build_adj_surface()
                 st.session_state.setdefault("vol_data", {}).setdefault("USD", {})["atm"] = _adj_s
-                # v1505i: clear cached working/base so editor re-seeds from the new
-                # atm. Without this, the editor's `if ccy not in _ve["working"]`
-                # seed only fires once per session and the surface freezes.
-                _ve_pop = st.session_state.get("vol_editor", {})
-                if "working" in _ve_pop:
-                    _ve_pop["working"].pop("USD", None)
-                if "base" in _ve_pop:
-                    _ve_pop["base"].pop("USD", None)
-                _h = st.session_state.get("_atm_hash_USD", 0)
-                st.session_state["_atm_hash_USD"] = _h + 1
                 st.success("✅ Loaded estimated surface to Vol Editor.")
-                st.rerun()
 
         with _ac3:
             if st.button("⏪ Revert to NYC EOD", key="usd_sod_revert"):
