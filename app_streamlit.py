@@ -31994,15 +31994,24 @@ def usd_sod_tab():
                     _adj_s = _build_adj_surface()
                     # _build_adj_surface() returns a copy of _base_atm_df which
                     # for USD has a scrambled integer index and no Expiry column.
-                    # We need to reconstruct with Expiry as first column matching
-                    # the EXPIRIES constant order. Use get_matrix_value to pull
-                    # vol-per-cell into a fresh DataFrame.
+                    # Reconstruct with Expiry as first column matching EXPIRIES
+                    # constant order. Use ALL tenor columns from the source so
+                    # column set matches what the editor expects.
+                    _source_cols = list(_adj_s.columns)
+                    # Filter out non-tenor columns (Expiry if present)
+                    _tenor_cols = [c for c in _source_cols if str(c).lower() != "expiry"]
                     _rows = []
                     for _exp in EXPIRIES:
                         _row = {"Expiry": _exp}
-                        for _tn in TENORS:
-                            _v = get_matrix_value(_adj_s, _exp, float(_tn))
-                            _row[f"{_tn}Y"] = _v
+                        for _tn_col in _tenor_cols:
+                            # Extract tenor number from column name (e.g. "1Y" → 1, "12Y" → 12)
+                            _tn_str = str(_tn_col).upper().replace("Y", "").strip()
+                            try:
+                                _tn_num = float(_tn_str)
+                                _v = get_matrix_value(_adj_s, _exp, _tn_num)
+                            except (ValueError, TypeError):
+                                _v = None
+                            _row[_tn_col] = _v
                         _rows.append(_row)
                     _io_df = pd.DataFrame(_rows)
                     # Baseline write — vol_data atm (what worked this morning)
