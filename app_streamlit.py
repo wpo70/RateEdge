@@ -32040,9 +32040,11 @@ def usd_sod_tab():
                     for _c in _io_df.columns:
                         if _c != "Expiry":
                             _io_df[_c] = pd.to_numeric(_io_df[_c], errors="coerce")
-                    # Baseline write — vol_data atm (what worked this morning)
-                    st.session_state.setdefault("vol_data", {}).setdefault("USD", {})["atm"] = _io_df.copy()
-                    # Plus pending flag for editor tab to consume
+                    # Store ONLY in pending surface — matching AUD pattern.
+                    # Do NOT write to vol_data["USD"]["atm"] — that would make
+                    # base == working in the editor-tab handler and the Δ would
+                    # not be visible. AUD's _sod_implied_open is only stored,
+                    # never propagated to vol_data.
                     st.session_state["_sod_usd_pending_surface"] = _io_df.copy()
                     st.success("✅ Loaded estimated surface to Vol Editor.")
                 except Exception as _ex:
