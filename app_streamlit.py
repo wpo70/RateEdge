@@ -31991,29 +31991,55 @@ def usd_sod_tab():
         with _ac2:
             if st.button("📋 Load to Vol Editor", key="usd_sod_load_editor"):
                 try:
+                    # Mirror AUD pattern at L34723-34729 exactly:
+                    # Start with a properly-labelled ATM surface, apply the SOD
+                    # adjustments via _build_adj_surface, then reset_index +
+                    # rename first column to "Expiry".
                     _adj_s = _build_adj_surface()
-                    # _build_adj_surface() returns a copy of _base_atm_df which
-                    # for USD has a scrambled integer index and no Expiry column.
-                    # Reconstruct with Expiry as first column matching EXPIRIES
-                    # constant order. Use ALL tenor columns from the source so
-                    # column set matches what the editor expects.
-                    _source_cols = list(_adj_s.columns)
-                    # Filter out non-tenor columns (Expiry if present)
-                    _tenor_cols = [c for c in _source_cols if str(c).lower() != "expiry"]
-                    _rows = []
-                    for _exp in EXPIRIES:
-                        _row = {"Expiry": _exp}
-                        for _tn_col in _tenor_cols:
-                            # Extract tenor number from column name (e.g. "1Y" → 1, "12Y" → 12)
-                            _tn_str = str(_tn_col).upper().replace("Y", "").strip()
-                            try:
-                                _tn_num = float(_tn_str)
-                                _v = get_matrix_value(_adj_s, _exp, _tn_num)
-                            except (ValueError, TypeError):
-                                _v = None
-                            _row[_tn_col] = _v
-                        _rows.append(_row)
-                    _io_df = pd.DataFrame(_rows)
+                    # If _adj_s already has Expiry as the index name, AUD's
+                    # exact pattern applies directly.
+                    if _adj_s.index.name and str(_adj_s.index.name).lower() == "expiry":
+                        _io_df = _adj_s.reset_index()
+                        _io_df.columns = ["Expiry"] + list(_io_df.columns[1:])
+                    elif "Expiry" in _adj_s.columns:
+                        # Already has Expiry as a column — use as-is, just ensure order
+                        _io_df = _adj_s.copy()
+                        if _io_df.columns[0] != "Expiry":
+                            _cols = ["Expiry"] + [c for c in _io_df.columns if c != "Expiry"]
+                            _io_df = _io_df[_cols]
+                    else:
+                        # Surface has integer/RangeIndex with no Expiry column.
+                        # Pull labelled surface from get_working_atm_surface and
+                        # overlay the SOD-adjusted values onto it.
+                        _labelled = get_working_atm_surface("USD")
+                        if _labelled is None:
+                            raise RuntimeError("No USD surface available to label SOD output")
+                        _io_df = _labelled.copy()
+                        if _io_df.index.name and str(_io_df.index.name).lower() == "expiry":
+                            _io_df = _io_df.reset_index()
+                            _io_df.columns = ["Expiry"] + list(_io_df.columns[1:])
+                        elif "Expiry" not in _io_df.columns:
+                            # Worst case: assume row order matches EXPIRIES constant
+                            _io_df = _io_df.reset_index(drop=True)
+                            if len(_io_df) <= len(EXPIRIES):
+                                _io_df.insert(0, "Expiry", EXPIRIES[:len(_io_df)])
+                        # Overlay adjusted values
+                        _tenor_cols = [c for c in _io_df.columns if c != "Expiry"]
+                        for _ri in range(len(_io_df)):
+                            _exp_lbl = str(_io_df.iloc[_ri]["Expiry"])
+                            for _tc in _tenor_cols:
+                                _tn_str = str(_tc).upper().replace("Y", "").strip()
+                                try:
+                                    _tn_num = float(_tn_str)
+                                    _v = get_matrix_value(_adj_s, _exp_lbl, _tn_num)
+                                    if _v is not None:
+                                        _io_df.at[_ri, _tc] = _v
+                                except (ValueError, TypeError):
+                                    pass
+                    # Coerce tenor columns to numeric
+                    for _c in _io_df.columns:
+                        if _c != "Expiry":
+                            _io_df[_c] = pd.to_numeric(_io_df[_c], errors="coerce")
                     # Baseline write — vol_data atm (what worked this morning)
                     st.session_state.setdefault("vol_data", {}).setdefault("USD", {})["atm"] = _io_df.copy()
                     # Plus pending flag for editor tab to consume
