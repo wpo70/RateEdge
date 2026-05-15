@@ -31991,62 +31991,60 @@ def usd_sod_tab():
         with _ac2:
             if st.button("📋 Load to Vol Editor", key="usd_sod_load_editor"):
                 try:
-                    # Mirror AUD pattern at L34723-34729 exactly:
-                    # Start with a properly-labelled ATM surface, apply the SOD
-                    # adjustments via _build_adj_surface, then reset_index +
-                    # rename first column to "Expiry".
-                    _adj_s = _build_adj_surface()
-                    # If _adj_s already has Expiry as the index name, AUD's
-                    # exact pattern applies directly.
-                    if _adj_s.index.name and str(_adj_s.index.name).lower() == "expiry":
-                        _io_df = _adj_s.reset_index()
+                    # _build_adj_surface() has a bug where it filters using
+                    # _s.iloc[:, 0] expecting Expiry as first column. When
+                    # _base_atm_df has tenor as first column (no Expiry column),
+                    # the filter never matches and no adjustments get applied.
+                    # Bypass: pull labelled surface from get_working_atm_surface,
+                    # apply the same beta×zone-factor formula directly.
+                    _labelled = get_working_atm_surface("USD")
+                    if _labelled is None:
+                        raise RuntimeError("No USD surface available")
+                    _io_df = _labelled.copy()
+                    # Ensure Expiry is a column
+                    if _io_df.index.name and str(_io_df.index.name).lower() == "expiry":
+                        _io_df = _io_df.reset_index()
                         _io_df.columns = ["Expiry"] + list(_io_df.columns[1:])
-                    elif "Expiry" in _adj_s.columns:
-                        # Already has Expiry as a column — use as-is, just ensure order
-                        _io_df = _adj_s.copy()
-                        if _io_df.columns[0] != "Expiry":
-                            _cols = ["Expiry"] + [c for c in _io_df.columns if c != "Expiry"]
-                            _io_df = _io_df[_cols]
-                    else:
-                        # Surface has integer/RangeIndex with no Expiry column.
-                        # Pull labelled surface from get_working_atm_surface and
-                        # overlay the SOD-adjusted values onto it.
-                        _labelled = get_working_atm_surface("USD")
-                        if _labelled is None:
-                            raise RuntimeError("No USD surface available to label SOD output")
-                        _io_df = _labelled.copy()
-                        if _io_df.index.name and str(_io_df.index.name).lower() == "expiry":
-                            _io_df = _io_df.reset_index()
-                            _io_df.columns = ["Expiry"] + list(_io_df.columns[1:])
-                        elif "Expiry" not in _io_df.columns:
-                            # Worst case: assume row order matches EXPIRIES constant
-                            _io_df = _io_df.reset_index(drop=True)
-                            if len(_io_df) <= len(EXPIRIES):
-                                _io_df.insert(0, "Expiry", EXPIRIES[:len(_io_df)])
-                        # Overlay adjusted values
-                        _tenor_cols = [c for c in _io_df.columns if c != "Expiry"]
-                        for _ri in range(len(_io_df)):
-                            _exp_lbl = str(_io_df.iloc[_ri]["Expiry"])
-                            for _tc in _tenor_cols:
-                                _tn_str = str(_tc).upper().replace("Y", "").strip()
-                                try:
-                                    _tn_num = float(_tn_str)
-                                    _v = get_matrix_value(_adj_s, _exp_lbl, _tn_num)
-                                    if _v is not None:
-                                        _io_df.at[_ri, _tc] = _v
-                                except (ValueError, TypeError):
-                                    pass
+                    elif "Expiry" not in _io_df.columns:
+                        _io_df = _io_df.reset_index(drop=True)
+                        if len(_io_df) <= len(EXPIRIES):
+                            _io_df.insert(0, "Expiry", EXPIRIES[:len(_io_df)])
+                    # Apply SOD beta×zone adjustment to each cell
+                    _tenor_cols = [c for c in _io_df.columns if c != "Expiry"]
+                    for _ri in range(len(_io_df)):
+                        _exp_lbl = str(_io_df.iloc[_ri]["Expiry"]).lower()
+                        if _exp_lbl not in EXP_YEARS:
+                            continue
+                        _exp_y = EXP_YEARS[_exp_lbl]
+                        for _tc in _tenor_cols:
+                            _tn_str = str(_tc).upper().replace("Y", "").strip()
+                            try:
+                                _tn_num = float(_tn_str)
+                            except (ValueError, TypeError):
+                                continue
+                            try:
+                                _v = float(_io_df.at[_ri, _tc])
+                                if _v != _v:  # NaN
+                                    continue
+                            except (KeyError, ValueError, TypeError):
+                                continue
+                            try:
+                                _bl, _bs, _bc = _get_betas(_exp_lbl, _tn_num)
+                                _dl, _ds, _dc = _get_zone_factors(_exp_y, _tn_num)
+                                _dv = _bl * _dl + _bs * _ds + _bc * _dc
+                                _io_df.at[_ri, _tc] = round(_v + _dv, 2)
+                            except Exception:
+                                pass
                     # Coerce tenor columns to numeric
                     for _c in _io_df.columns:
                         if _c != "Expiry":
                             _io_df[_c] = pd.to_numeric(_io_df[_c], errors="coerce")
-                    # Store ONLY in pending surface — matching AUD pattern.
-                    # Do NOT write to vol_data["USD"]["atm"] — that would make
-                    # base == working in the editor-tab handler and the Δ would
-                    # not be visible. AUD's _sod_implied_open is only stored,
-                    # never propagated to vol_data.
+                    # Store ONLY in pending surface (mirrors AUD _sod_implied_open).
+                    # Do NOT write to vol_data atm.
                     st.session_state["_sod_usd_pending_surface"] = _io_df.copy()
                     st.success("✅ Loaded estimated surface to Vol Editor.")
+                except Exception as _ex:
+                    st.error(f"Load failed: {type(_ex).__name__}: {_ex}")
                 except Exception as _ex:
                     st.error(f"Load failed: {type(_ex).__name__}: {_ex}")
 
