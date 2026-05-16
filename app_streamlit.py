@@ -31991,17 +31991,57 @@ def usd_sod_tab():
         with _ac2:
             if st.button("📋 Load to Vol Editor", key="usd_sod_load_editor"):
                 try:
-                    # _df_adj is already built above (L31881) — properly labelled
-                    # adjusted surface with Expiry as first column and TENORS×Y
-                    # cols. This is what the heatmap displays. Just use it.
-                    _io_df = _df_adj.copy()
-                    for _c in _io_df.columns:
-                        if _c != "Expiry":
-                            _io_df[_c] = pd.to_numeric(_io_df[_c], errors="coerce")
-                    # Store ONLY in pending surface (matches AUD _sod_implied_open).
-                    # Do NOT touch vol_data atm so base != working in editor.
-                    st.session_state["_sod_usd_pending_surface"] = _io_df.copy()
-                    st.success("✅ Loaded estimated surface to Vol Editor.")
+                    # COPIED LINE BY LINE from AUD source-side L33554-33583:
+                    # 1. _aud_atm is the snapshot DataFrame, Expiry-indexed (normed)
+                    # 2. _aud_atm.index lowercase, _aud_atm.columns uppercase
+                    # 3. Build _implied_open as DataFrame with same index/columns
+                    # 4. Loop direct .loc[e,t] (no interpolation)
+                    # 5. reset_index → ["Expiry"] + tenor cols
+                    # 6. Store in pending key
+                    # For USD: _base_atm_df is the equivalent of _aud_atm.
+
+                    if _base_atm_df is None:
+                        st.warning("Load USD ATM snapshot first.")
+                    else:
+                        # Replicate _norm normalisation that AUD applies
+                        _usd_atm = _base_atm_df.copy()
+                        if "Expiry" in _usd_atm.columns:
+                            _usd_atm = _usd_atm.set_index("Expiry")
+                        _usd_atm.index = pd.Index([str(x).lower().strip() for x in _usd_atm.index])
+                        _usd_atm.columns = [str(c).upper() for c in _usd_atm.columns]
+
+                        # Use actual indices/columns from the normalised snapshot
+                        _usd_exp = list(_usd_atm.index)
+                        _usd_ten = list(_usd_atm.columns)
+
+                        # Build implied_open DataFrame (matches AUD line 33564)
+                        _implied_open = pd.DataFrame(index=_usd_exp, columns=_usd_ten, dtype=float)
+
+                        # Loop direct .loc[e,t] (matches AUD line 33566-33577)
+                        for _e in _usd_exp:
+                            _exp_y_local = EXP_YEARS.get(_e, None)
+                            for _t in _usd_ten:
+                                try:
+                                    _usd_now = float(_usd_atm.loc[_e, _t])
+                                    if _usd_now != _usd_now:  # NaN
+                                        continue
+                                    if _exp_y_local is None:
+                                        _implied_open.loc[_e, _t] = round(_usd_now, 2)
+                                        continue
+                                    _tn_str = str(_t).upper().replace("Y", "").strip()
+                                    _tn_num = float(_tn_str)
+                                    _bl, _bs, _bc = _get_betas(_e, _tn_num)
+                                    _dl, _ds, _dc = _get_zone_factors(_exp_y_local, _tn_num)
+                                    _dv = _bl * _dl + _bs * _ds + _bc * _dc
+                                    _implied_open.loc[_e, _t] = round(_usd_now + _dv, 2)
+                                except Exception:
+                                    pass
+
+                        # AUD line 33581-33583 exact replica
+                        _io_df = _implied_open.reset_index()
+                        _io_df.columns = ["Expiry"] + list(_io_df.columns[1:])
+                        st.session_state["_sod_usd_pending_surface"] = _io_df.copy()
+                        st.success("✅ Loaded estimated surface to Vol Editor.")
                 except Exception as _ex:
                     st.error(f"Load failed: {type(_ex).__name__}: {_ex}")
 
@@ -38091,5 +38131,4 @@ def show_login_page():
 
 if __name__ == "__main__":
     main()
-# v1605a deploy marker
-# v1605b deploy
+# v1605d 13:11:04
