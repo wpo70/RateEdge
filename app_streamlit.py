@@ -19549,6 +19549,15 @@ def vol_surface_editor_tab():
                     for _k in ["working","base","history","redo_stack","view_mode","smoothing","paste_data"]:
                         if _k not in ve: ve[_k] = {}
                     _cur = get_working_atm_surface("USD")
+                    if _cur is not None:
+                        _cur = _cur.copy()
+                        # Match _imp normalisation: Expiry as column, uppercase tenor cols
+                        if "Expiry" not in _cur.columns and _cur.index.name and str(_cur.index.name).lower() == "expiry":
+                            _cur = _cur.reset_index().rename(columns={_cur.index.name: "Expiry"})
+                        elif "Expiry" not in _cur.columns and _cur.index.dtype == object:
+                            _cur = _cur.reset_index().rename(columns={"index": "Expiry"})
+                        _cur.columns = [c if c.lower() == "expiry" else c.upper() for c in _cur.columns]
+                        _cur = _cur.rename(columns={c: "Expiry" for c in _cur.columns if c.lower() == "expiry" and c != "Expiry"})
                     ve["base"]["USD"] = _cur.copy() if _cur is not None else _imp.copy()
                     ve["working"]["USD"] = _imp.copy()
                     ve["history"]["USD"] = []
@@ -38131,4 +38140,4 @@ def show_login_page():
 
 if __name__ == "__main__":
     main()
-# v1605d 13:11:04
+# v1605e 13:20:08
