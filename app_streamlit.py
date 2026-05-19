@@ -6610,12 +6610,12 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 default=_platform_display, key="sdr_platform",
                 label_visibility="collapsed", on_change=_save_sdr_filters)
             sel_platform = [_platform_map[l] for l in sel_platform_labels]
-            # DTCC migrated to ISO 20022 event codes: TRAD = new trade (was NEWT),
-            # ETRM = early termination, NOVA = novation, COMP = compression,
-            # CLRG = clearing, EXER = exercise. Legacy NEWT/MODI/CORR/CANC kept
-            # for older data only — current DB is 100% ISO 20022.
-            action_opts = ["TRAD", "ETRM", "NOVA", "COMP", "CLRG", "EXER", "NEWT", "MODI", "CORR", "CANC"]
-            sel_action = st.multiselect("Action", action_opts, default=["TRAD"], key="sdr_action", label_visibility="collapsed", on_change=_save_sdr_filters)
+            # action_type column uses legacy DTCC codes (NEWT=new, MODI=modify,
+            # CORR=correction, CANC=cancellation, TERM=termination, EROR/REVI).
+            # Note: event_type column has different ISO 20022 codes (TRAD/ETRM/etc)
+            # but the SDR tab filters on action_type, not event_type.
+            action_opts = ["NEWT", "MODI", "TERM", "CORR", "CANC", "EROR", "REVI"]
+            sel_action = st.multiselect("Action", action_opts, default=["NEWT", "MODI"], key="sdr_action", label_visibility="collapsed", on_change=_save_sdr_filters)
 
         st.markdown("---")
         al1, al2, al3, al4, al5 = st.columns(5)
@@ -38140,4 +38140,4 @@ def show_login_page():
 
 if __name__ == "__main__":
     main()
-# v1605g 12:40:11
+# v1605h 12:46:43
