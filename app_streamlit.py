@@ -6610,8 +6610,12 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 default=_platform_display, key="sdr_platform",
                 label_visibility="collapsed", on_change=_save_sdr_filters)
             sel_platform = [_platform_map[l] for l in sel_platform_labels]
-            action_opts = ["NEWT", "MODI", "CORR", "CANC"]
-            sel_action = st.multiselect("Action", action_opts, default=["NEWT", "MODI"], key="sdr_action", label_visibility="collapsed", on_change=_save_sdr_filters)
+            # DTCC migrated to ISO 20022 event codes: TRAD = new trade (was NEWT),
+            # ETRM = early termination, NOVA = novation, COMP = compression,
+            # CLRG = clearing, EXER = exercise. Legacy NEWT/MODI/CORR/CANC kept
+            # for older data only — current DB is 100% ISO 20022.
+            action_opts = ["TRAD", "ETRM", "NOVA", "COMP", "CLRG", "EXER", "NEWT", "MODI", "CORR", "CANC"]
+            sel_action = st.multiselect("Action", action_opts, default=["TRAD"], key="sdr_action", label_visibility="collapsed", on_change=_save_sdr_filters)
 
         st.markdown("---")
         al1, al2, al3, al4, al5 = st.columns(5)
@@ -6743,7 +6747,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
         FROM dtcc_sdr
         {where}
         ORDER BY execution_timestamp DESC
-        LIMIT 5000
+        LIMIT 50000
     """
 
     # ── Load data ─────────────────────────────────────────────────────────────
@@ -6754,6 +6758,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
     if manual_refresh:
         _load_sdr_data_cached.clear()
     df = _load_sdr_data_cached(query, tuple(params))
+
+    # Warn if results hit the row cap
+    if len(df) >= 50000:
+        st.warning(f"⚠️ Query returned 50,000 rows (the cap). Some matching trades may be missing. Narrow the date range or filters.")
 
     # ── Post-load normalization ──────────────────────────────────────────────
     if not df.empty:
@@ -38132,4 +38140,4 @@ def show_login_page():
 
 if __name__ == "__main__":
     main()
-# v1605f 13:31:10
+# v1605g 12:40:11
