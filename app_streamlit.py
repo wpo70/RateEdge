@@ -7261,6 +7261,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _paired_rows.append({
                                         "Type": _ptype,
                                         _time_col: _local_time.strftime("%d-%b %H:%M") if _local_time is not pd.NaT else "—",
+                                        "_time_dt": _local_time.to_pydatetime().replace(tzinfo=None) if _local_time is not pd.NaT else None,
                                         "CCY": _ccy_p,
                                         "Opt Expiry": _e_p,
                                         "Swp Tenor": _t_p if _t_p and _t_p not in ("—","NA","None","") else "—",
@@ -7298,6 +7299,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _single_rows.append({
                         "Type": _pc_label,
                         _time_col: _s_time.strftime("%d-%b %H:%M") if _s_time is not pd.NaT else "—",
+                        "_time_dt": _s_time.to_pydatetime().replace(tzinfo=None) if _s_time is not pd.NaT else None,
                         "CCY": str(_s_row.get("notional_ccy", "")),
                         "Opt Expiry": str(_s_row.get("opt_tenor", "—")),
                         "Swp Tenor": _s_swp if _s_swp and _s_swp not in ("—","NA","None","") else "—",
@@ -7326,6 +7328,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _exo_rows.append({
                         "Type": f"🟡 {_ot}",
                         _time_col: _e_time.strftime("%d-%b %H:%M") if _e_time is not pd.NaT else "—",
+                        "_time_dt": _e_time.to_pydatetime().replace(tzinfo=None) if _e_time is not pd.NaT else None,
                         "CCY": str(_e_row.get("notional_ccy", "")),
                         "Opt Expiry": str(_e_row.get("opt_tenor", "—")),
                         "Swp Tenor": str(_e_row.get("swp_tenor", "—")),
@@ -7376,7 +7379,15 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     ].rename(columns={"count": "Trade Count", "Platform": "Broker"})
 
                     # Hidden numeric column out of display df
-                    _all_df_display = _all_df.drop(columns=["_notional_num"], errors="ignore")
+                    # v1605i: keep screen Time as string (nice "31-Mar 18:52") but
+                    # produce a separate Excel-ready df where Time is a real datetime
+                    # so Excel auto-recognises it for filtering/sorting.
+                    _all_df_display = _all_df.drop(columns=["_notional_num", "_time_dt"], errors="ignore")
+                    _all_df_excel = _all_df.copy()
+                    if "_time_dt" in _all_df_excel.columns:
+                        _all_df_excel["Time"] = _all_df_excel["_time_dt"]
+                        _all_df_excel = _all_df_excel.drop(columns=["_time_dt"])
+                    _all_df_excel = _all_df_excel.drop(columns=["_notional_num"], errors="ignore")
 
                     # Assemble CSV: trades table → blank → broker breakdown
                     # v1205f: ship as XLSX (not CSV) so Excel column widths auto-fit on open.
@@ -7393,14 +7404,24 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _ws_csv.title = "Trades"
 
                     # Header row
-                    _hdr_cols = list(_all_df_display.columns)
+                    _hdr_cols = list(_all_df_excel.columns)
                     _ws_csv.append(_hdr_cols)
                     for _cell in _ws_csv[1]:
                         _cell.font = _Font_csv(bold=True)
 
                     # Trade rows
-                    for _, _r in _all_df_display.iterrows():
+                    for _, _r in _all_df_excel.iterrows():
                         _ws_csv.append([_r[c] for c in _hdr_cols])
+
+                    # v1605i: format the Time column as dd-mmm-yyyy hh:mm so
+                    # Excel auto-recognises it as a real date.
+                    if "Time" in _hdr_cols:
+                        _time_col_idx = _hdr_cols.index("Time") + 1
+                        from openpyxl.utils import get_column_letter as _gcl
+                        _time_letter = _gcl(_time_col_idx)
+                        for _row in _ws_csv.iter_rows(min_row=2, min_col=_time_col_idx, max_col=_time_col_idx, max_row=_ws_csv.max_row):
+                            for _cell in _row:
+                                _cell.number_format = "dd-mmm-yyyy hh:mm"
 
                     # Blank row + Broker Breakdown section
                     _ws_csv.append([])
@@ -38140,4 +38161,4 @@ def show_login_page():
 
 if __name__ == "__main__":
     main()
-# v1605h 12:46:43
+# v1605i 13:09:39
