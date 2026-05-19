@@ -7360,7 +7360,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 _all_trades = _paired_rows + _single_rows + _exo_rows
                 if _all_trades:
                     _all_df = pd.DataFrame(_all_trades)
-                    _all_df = _all_df.sort_values(_time_col, ascending=False).reset_index(drop=True)
+                    # v1605j: sort by real datetime not Time-as-string
+                    # (string sort gives "01-Apr" before "31-Mar" alphabetically)
+                    _sort_col = "_time_dt" if "_time_dt" in _all_df.columns else _time_col
+                    _all_df = _all_df.sort_values(_sort_col, ascending=False, na_position="last").reset_index(drop=True)
 
                     # v1105o: build CSV with broker % breakdown appended at the bottom.
                     # Uses hidden _notional_num column for numeric notional aggregation,
@@ -38161,4 +38164,4 @@ def show_login_page():
 
 if __name__ == "__main__":
     main()
-# v1605i 13:09:39
+# v1605j 13:21:17
