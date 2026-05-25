@@ -7665,6 +7665,37 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _em_df["signed_notional_mm"] = _em_df.apply(
                                     lambda r: r["notional_mm"] if r["direction"] == "Payer" else -r["notional_mm"], axis=1)
 
+                                # Compute actual expiry date
+                                def _add_tenor(exec_dt, tenor_str):
+                                    """Add tenor to execution date to get actual expiry."""
+                                    try:
+                                        import calendar
+                                        t = str(tenor_str).upper().strip()
+                                        if t.endswith("M"):
+                                            months = int(t[:-1])
+                                        elif t.endswith("Y"):
+                                            months = int(t[:-1]) * 12
+                                        elif t.endswith("W"):
+                                            return exec_dt + timedelta(weeks=int(t[:-1]))
+                                        elif t.endswith("D"):
+                                            return exec_dt + timedelta(days=int(t[:-1]))
+                                        else:
+                                            return exec_dt
+                                        m = exec_dt.month + months
+                                        y = exec_dt.year
+                                        while m > 12:
+                                            m -= 12
+                                            y += 1
+                                        max_day = calendar.monthrange(y, m)[1]
+                                        return date(y, m, min(exec_dt.day, max_day))
+                                    except Exception:
+                                        return exec_dt
+
+                                _em_df["expiry_date"] = _em_df.apply(
+                                    lambda r: _add_tenor(r["exec_date"], r["opt_tenor"]), axis=1)
+                                _em_df["expiry_day"] = _em_df["expiry_date"].apply(
+                                    lambda d: d.strftime("%a %d-%b") if d else "—")
+
                                 # Forward rates for ITM/OTM
                                 _fwd_rates = {}
                                 _em_curve = st.session_state.get("curves", {}).get(_em_ccy)
@@ -7715,28 +7746,137 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 _em_tgt = st.session_state.get("_em_target")
 
                 if _em_df is not None and not _em_df.empty:
-                    _em_m1, _em_m2, _em_m3, _em_m4, _em_m5 = st.columns(5)
-                    _em_m1.metric("Total Trades", len(_em_df))
-                    _n_payer = len(_em_df[_em_df["direction"] == "Payer"])
-                    _n_rcvr = len(_em_df[_em_df["direction"] == "Receiver"])
-                    _em_m2.metric("Payers", _n_payer)
-                    _em_m3.metric("Receivers", _n_rcvr)
-                    _net_mm = _em_df["signed_notional_mm"].sum()
-                    _em_m4.metric("Net Notional (mm)", f"${_net_mm:+,.0f}")
-                    _gross_mm = _em_df["notional_mm"].sum()
-                    _em_m5.metric("Gross Notional (mm)", f"${_gross_mm:,.0f}")
+                    # ── Swap tenor filter ─────────────────────────────────
+                    _all_swp_tenors = ["All"] + sorted(
+                        _em_df["swp_tenor"].dropna().unique().tolist(),
+                        key=_safe_tenor_sort)
+                    _em_fc1, _em_fc2 = st.columns([2, 6])
+                    with _em_fc1:
+                        _em_swp_filter = st.selectbox("Filter Swap Tenor", _all_swp_tenors,
+                                                       index=0, key="em_swp_filter")
+                    _em_filtered = _em_df.copy()
+                    if _em_swp_filter != "All":
+                        _em_filtered = _em_filtered[_em_filtered["swp_tenor"] == _em_swp_filter]
 
-                    # Strike Exposure by Swap Tenor
-                    st.markdown("#### Strike Exposure by Swap Tenor")
+                    if _em_filtered.empty:
+                        st.info("No trades for selected swap tenor.")
+                    else:
+                        # Summary metrics
+                        _em_m1, _em_m2, _em_m3, _em_m4, _em_m5 = st.columns(5)
+                        _em_m1.metric("Total Trades", len(_em_filtered))
+                        _n_payer = len(_em_filtered[_em_filtered["direction"] == "Payer"])
+                        _n_rcvr = len(_em_filtered[_em_filtered["direction"] == "Receiver"])
+                        _em_m2.metric("Payers", _n_payer)
+                        _em_m3.metric("Receivers", _n_rcvr)
+                        _net_mm = _em_filtered["signed_notional_mm"].sum()
+                        _em_m4.metric("Net Notional (mm)", f"${_net_mm:+,.0f}")
+                        _gross_mm = _em_filtered["notional_mm"].sum()
+                        _em_m5.metric("Gross Notional (mm)", f"${_gross_mm:,.0f}")
+
+                        # ── Daily Expiry Breakdown ────────────────────────
+                        st.markdown("#### Daily Expiry Breakdown")
+                        _expiry_days = sorted(_em_filtered["expiry_date"].unique())
+                        _em_atm = st.session_state.get("vol_data", {}).get(_em_ccy, {}).get("atm")
+
+                        for _exp_day in _expiry_days:
+                            _day_df = _em_filtered[_em_filtered["expiry_date"] == _exp_day].copy()
+                            if _day_df.empty:
+                                continue
+                            _day_label = _exp_day.strftime("%A %d-%b-%Y")
+                            _day_gross = _day_df["notional_mm"].sum()
+                            _day_net = _day_df["signed_notional_mm"].sum()
+                            _day_payers = len(_day_df[_day_df["direction"] == "Payer"])
+                            _day_rcvrs = len(_day_df[_day_df["direction"] == "Receiver"])
+
+                            # Check for economic events on this day
+                            _day_events = []
+                            for _fd in [date(2026,1,28),date(2026,3,18),date(2026,4,29),date(2026,6,17),
+                                        date(2026,7,29),date(2026,9,16),date(2026,10,28),date(2026,12,9)]:
+                                if _exp_day == _fd:
+                                    _day_events.append("🔴 FOMC")
+                            _ECON_2026_em = [
+                                (date(2026,1,10),"CPI"),(date(2026,2,12),"CPI"),(date(2026,3,11),"CPI"),
+                                (date(2026,4,14),"CPI"),(date(2026,5,13),"CPI"),(date(2026,6,10),"CPI"),
+                                (date(2026,7,14),"CPI"),(date(2026,8,12),"CPI"),(date(2026,9,15),"CPI"),
+                                (date(2026,10,13),"CPI"),(date(2026,11,12),"CPI"),(date(2026,12,10),"CPI"),
+                                (date(2026,1,9),"NFP"),(date(2026,2,6),"NFP"),(date(2026,3,6),"NFP"),
+                                (date(2026,4,3),"NFP"),(date(2026,5,8),"NFP"),(date(2026,6,5),"NFP"),
+                                (date(2026,7,2),"NFP"),(date(2026,8,7),"NFP"),(date(2026,9,4),"NFP"),
+                                (date(2026,10,2),"NFP"),(date(2026,11,6),"NFP"),(date(2026,12,4),"NFP"),
+                            ]
+                            for _ed, _en in _ECON_2026_em:
+                                if _exp_day == _ed:
+                                    _day_events.append(f"🔴 {_en}")
+                            _event_str = f" — {', '.join(_day_events)}" if _day_events else ""
+
+                            with st.expander(f"📅 {_day_label} — {len(_day_df)} trades, "
+                                             f"${_day_gross:,.0f}mm gross, net ${_day_net:+,.0f}mm "
+                                             f"(P:{_day_payers} R:{_day_rcvrs}){_event_str}", expanded=True):
+
+                                # Price each trade
+                                _priced_rows = []
+                                for _, _tr in _day_df.iterrows():
+                                    _swt = str(_tr.get("swp_tenor", ""))
+                                    _strike = _tr.get("strike_pct")
+                                    _fwd_r = _em_fwd.get(_swt)
+                                    _opt_t = str(_tr.get("opt_tenor", ""))
+                                    _dir = _tr.get("direction", "")
+                                    _not_mm = _tr.get("notional_mm", 0)
+
+                                    # Current OTM price using vol surface
+                                    _curr_prem_bp = None
+                                    _curr_pv = None
+                                    if _fwd_r is not None and pd.notna(_strike) and _em_atm is not None:
+                                        try:
+                                            _exp_y = label_to_years(_opt_t) if _opt_t else 0
+                                            _swp_y = label_to_years(_swt) if _swt else 0
+                                            _vol_bp = get_matrix_value(_em_atm, _opt_t.lower(), _swp_y)
+                                            if _vol_bp and _exp_y > 0 and _swp_y > 0:
+                                                _sigma_n = _vol_bp / 10000.0
+                                                _F = _fwd_r / 100.0
+                                                _K = _strike / 100.0
+                                                _d = (_F - _K) / (_sigma_n * math.sqrt(_exp_y)) if _sigma_n * math.sqrt(_exp_y) > 1e-10 else 0
+                                                _Nd = 0.5 * (1 + math.erf(_d / math.sqrt(2)))
+                                                _nd = math.exp(-0.5 * _d**2) / math.sqrt(2 * math.pi)
+                                                if _dir == "Payer":
+                                                    _prem_rate = (_F - _K) * _Nd + _sigma_n * math.sqrt(_exp_y) * _nd
+                                                else:
+                                                    _prem_rate = (_K - _F) * (1 - _Nd) + _sigma_n * math.sqrt(_exp_y) * _nd
+                                                _ann_approx = _swp_y * 0.85
+                                                _curr_prem_bp = _prem_rate * _ann_approx * 10000.0
+                                                _curr_pv = _prem_rate * _ann_approx * _not_mm * 1e6
+                                        except Exception:
+                                            pass
+
+                                    _priced_rows.append({
+                                        "Opt": _opt_t,
+                                        "Swp": _swt,
+                                        "Dir": _dir,
+                                        "Strike (%)": f"{_strike:.5f}" if pd.notna(_strike) else "—",
+                                        "Fwd (%)": f"{_fwd_r:.3f}" if _fwd_r else "—",
+                                        "ITM/OTM": _tr.get("moneyness", "—"),
+                                        "Notional (mm)": f"${_not_mm:,.0f}",
+                                        "Orig Prem ($)": f"${_tr.get('premium_amount', 0):,.0f}" if pd.notna(_tr.get("premium_amount")) else "—",
+                                        "Curr Prem (bp)": f"{_curr_prem_bp:.1f}" if _curr_prem_bp is not None else "—",
+                                        "Curr PV ($)": f"${_curr_pv:,.0f}" if _curr_pv is not None else "—",
+                                        "Exec Date": str(_tr.get("exec_date", "")),
+                                        "Platform": PLATFORM_NAMES.get(str(_tr.get("platform_identifier", "")), str(_tr.get("platform_identifier", ""))),
+                                    })
+
+                                _priced_df = pd.DataFrame(_priced_rows)
+                                st.dataframe(_priced_df, use_container_width=True, hide_index=True)
+
+                        # ── Strike Exposure by Swap Tenor ─────────────────
+                        st.markdown("#### Strike Exposure by Swap Tenor")
                     def _safe_tenor_sort(x):
                         try:
                             return label_to_years(str(x)) if x else 999
                         except Exception:
                             return 999
-                    _em_tenors = sorted(_em_df["swp_tenor"].dropna().unique(),
+                    _em_tenors = sorted(_em_filtered["swp_tenor"].dropna().unique(),
                                         key=_safe_tenor_sort)
                     for _swt in _em_tenors:
-                        _subset = _em_df[_em_df["swp_tenor"] == _swt].copy()
+                        _subset = _em_filtered[_em_filtered["swp_tenor"] == _swt].copy()
                         if _subset.empty:
                             continue
                         _fwd_r = _em_fwd.get(str(_swt))
@@ -7761,7 +7901,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     # Moneyness
                     st.markdown("#### Moneyness Classification")
                     st.caption("Based on current forward rates vs strike. Deep ITM = likely exercised, Deep OTM = likely expires worthless.")
-                    _money_agg = _em_df.groupby("moneyness").agg(
+                    _money_agg = _em_filtered.groupby("moneyness").agg(
                         trades=("notional_mm", "count"),
                         gross_mm=("notional_mm", "sum"),
                         net_mm=("signed_notional_mm", "sum"),
@@ -7776,7 +7916,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                     # Largest positions
                     st.markdown("#### Largest Individual Positions")
-                    _top = _em_df.nlargest(20, "notional_mm")[
+                    _top = _em_filtered.nlargest(20, "notional_mm")[
                         ["opt_tenor", "swp_tenor", "direction", "strike_pct",
                          "notional_mm", "moneyness", "exec_date", "platform_identifier"]
                     ].copy()
@@ -7789,7 +7929,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                     # By Opt Tenor
                     st.markdown("#### By Option Tenor")
-                    _ot_agg = _em_df.groupby("opt_tenor").agg(
+                    _ot_agg = _em_filtered.groupby("opt_tenor").agg(
                         trades=("notional_mm", "count"),
                         gross_mm=("notional_mm", "sum"),
                         net_mm=("signed_notional_mm", "sum"),
@@ -7847,8 +7987,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             st.caption("No major economic events in target week.")
 
                     # Full trade list
-                    with st.expander(f"All {len(_em_df)} trades", expanded=False):
-                        _show_df = _em_df[[
+                    with st.expander(f"All {len(_em_filtered)} trades", expanded=False):
+                        _show_df = _em_filtered[[
                             "opt_tenor", "swp_tenor", "direction", "strike_pct",
                             "notional_mm", "moneyness", "exec_date", "platform_identifier"
                         ]].copy()
