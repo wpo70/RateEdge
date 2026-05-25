@@ -7718,8 +7718,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _em_df["expiry_day"] = _em_df["expiry_date"].apply(
                                     lambda d: d.strftime("%a %d-%b") if d else "—")
 
-                                # Forward rates for ITM/OTM
+                                # Forward rates and annuities for ITM/OTM and pricing
                                 _fwd_rates = {}
+                                _ann_rates = {}
                                 _em_curve = st.session_state.get("curves", {}).get(_em_ccy)
                                 _em_ois = st.session_state.get("curves", {}).get(f"{_em_ccy}_OIS", _em_curve)
                                 if _em_curve is not None:
@@ -7729,6 +7730,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             _fwd, _ann, _ = forward_and_annuity_from_curve(
                                                 _em_curve, _em_ccy, 0.0, _st_y, _em_ois)
                                             _fwd_rates[str(_st)] = _fwd * 100
+                                            _ann_rates[str(_st)] = _ann
                                         except Exception:
                                             pass
 
@@ -7757,6 +7759,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _em_df["moneyness"] = _em_df.apply(_classify_itm, axis=1)
                                 st.session_state["_em_results"] = _em_df
                                 st.session_state["_em_fwd_rates"] = _fwd_rates
+                                st.session_state["_em_ann_rates"] = _ann_rates
                                 st.session_state["_em_target"] = (_em_mon, _em_fri)
 
                         except Exception as e:
@@ -7767,6 +7770,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 # ── Display results ───────────────────────────────────────
                 _em_df = st.session_state.get("_em_results")
                 _em_fwd = st.session_state.get("_em_fwd_rates", {})
+                _em_ann = st.session_state.get("_em_ann_rates", {})
                 _em_tgt = st.session_state.get("_em_target")
 
                 if _em_df is not None and not _em_df.empty:
@@ -7922,15 +7926,18 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _expiry_dt = _tr.get("expiry_date", _today)
                                     _t_remaining = max((_expiry_dt - _today).days / 365.25, 0.0001) if _expiry_dt else 0.0001
 
-                                    # Current option value using REMAINING time (not original tenor)
+                                    # Current option value using REMAINING time and REAL annuity from curve
                                     _curr_prem_bp = None
                                     _curr_pv = None
-                                    _ann_approx = None
+                                    _real_ann = _em_ann.get(_swt)
+                                    _ann_used = _real_ann if _real_ann else None
                                     if _fwd_r is not None and pd.notna(_strike) and _em_atm is not None:
                                         try:
                                             _swp_y = label_to_years(_swt) if _swt else 0
+                                            if not _ann_used and _swp_y > 0:
+                                                _ann_used = _swp_y * 0.85  # fallback only if no curve
                                             _vol_bp = get_matrix_value(_em_atm, _opt_t.lower(), _swp_y)
-                                            if _vol_bp and _t_remaining > 0 and _swp_y > 0:
+                                            if _vol_bp and _t_remaining > 0 and _swp_y > 0 and _ann_used:
                                                 _sigma_n = _vol_bp / 10000.0
                                                 _F = _fwd_r / 100.0
                                                 _K = _strike / 100.0
@@ -7941,9 +7948,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     _prem_rate = (_F - _K) * _Nd + _sigma_n * math.sqrt(_t_remaining) * _nd
                                                 else:
                                                     _prem_rate = (_K - _F) * (1 - _Nd) + _sigma_n * math.sqrt(_t_remaining) * _nd
-                                                _ann_approx = _swp_y * 0.85
-                                                _curr_prem_bp = _prem_rate * _ann_approx * 10000.0
-                                                _curr_pv = _prem_rate * _ann_approx * (_not_mm or 0) * 1e6
+                                                _curr_prem_bp = _prem_rate * _ann_used * 10000.0
+                                                _curr_pv = _prem_rate * _ann_used * (_not_mm or 0) * 1e6
                                         except Exception:
                                             pass
 
@@ -7952,15 +7958,15 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _pnl_dollar = None
                                     if _curr_prem_bp is not None and _orig_prem_bp is not None:
                                         _pnl_bp = _curr_prem_bp - _orig_prem_bp
-                                        if _notional > 0 and _ann_approx:
-                                            _pnl_dollar = _pnl_bp / 10000.0 * _ann_approx * _notional
+                                        if _notional > 0 and _ann_used:
+                                            _pnl_dollar = _pnl_bp / 10000.0 * _ann_used * _notional
 
                                     # Breakeven forward rate
                                     # Payer BE = strike + orig_prem / annuity (need fwd above this to profit)
                                     # Receiver BE = strike - orig_prem / annuity (need fwd below this to profit)
                                     _breakeven = None
-                                    if _orig_prem_bp is not None and _ann_approx and _ann_approx > 0:
-                                        _prem_as_rate = _orig_prem_bp / 10000.0 / _ann_approx
+                                    if _orig_prem_bp is not None and _ann_used and _ann_used > 0:
+                                        _prem_as_rate = _orig_prem_bp / 10000.0 / _ann_used
                                         if _dir == "Payer":
                                             _breakeven = (_strike / 100.0 + _prem_as_rate) * 100.0
                                         elif _dir == "Receiver":
@@ -7986,7 +7992,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     # = (fwd - strike) × annuity × 10000 for payer
                                     # = (strike - fwd) × annuity × 10000 for receiver
                                     _intrinsic_bp = None
-                                    if _fwd_r is not None and pd.notna(_strike) and _ann_approx:
+                                    if _fwd_r is not None and pd.notna(_strike) and _ann_used:
                                         _F = _fwd_r / 100.0
                                         _K = _strike / 100.0
                                         if _dir == "Payer":
@@ -7995,7 +8001,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             _intr_rate = max(_K - _F, 0)
                                         else:
                                             _intr_rate = 0
-                                        _intrinsic_bp = _intr_rate * _ann_approx * 10000.0
+                                        _intrinsic_bp = _intr_rate * _ann_used * 10000.0
 
                                     # Seller close-out: premium received minus current value
                                     # Positive = seller in profit, negative = seller underwater
@@ -8005,11 +8011,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                                     _dedup_flag = " *" if _is_dedup else ""
                                     _priced_rows.append({
-                                        "Opt": _opt_t,
-                                        "Swp": _swt,
+                                        "Tenor": f"{_swt} ({_opt_t})",
                                         "Dir": _dir,
                                         "Strike (%)": f"{_strike:.5f}" if pd.notna(_strike) else "—",
                                         "Fwd (%)": f"{_fwd_r:.3f}" if _fwd_r else "—",
+                                        "Ann": f"{_ann_used:.3f}" if _ann_used else "—",
                                         "Var (bp)": f"{_var_bp:.1f}" if _var_bp is not None else "—",
                                         "ITM/OTM": _moneyness,
                                         "Notional (mm)": f"{_not_mm:,.0f}" if pd.notna(_not_mm) and _not_mm > 0 else "—",
@@ -8024,7 +8030,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     })
 
                                 _priced_df = pd.DataFrame(_priced_rows)
-                                st.dataframe(_priced_df, use_container_width=True, hide_index=True)
+                                # Highlight ATM rows with faded green background
+                                def _highlight_atm(row):
+                                    if row.get("ITM/OTM") == "ATM":
+                                        return ["background-color: rgba(34, 197, 94, 0.15)"] * len(row)
+                                    return [""] * len(row)
+                                _styled = _priced_df.style.apply(_highlight_atm, axis=1)
+                                st.dataframe(_styled, use_container_width=True, hide_index=True)
                                 st.caption("* = Orig Prem halved (broker reports straddle prem on each leg). "
                                            "Intrinsic = swap value if exercised now. "
                                            "Seller Net = Orig Prem − Curr Val (positive = seller covered, negative = seller underwater). "
@@ -8079,11 +8091,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         ["opt_tenor", "swp_tenor", "direction", "strike_pct",
                          "notional_mm", "moneyness", "exec_date", "platform_identifier"]
                     ].copy()
+                    _top["Tenor"] = _top.apply(lambda r: f"{r['swp_tenor']} ({r['opt_tenor']})", axis=1)
                     _top["strike_pct"] = _top["strike_pct"].apply(lambda x: f"{x:.5f}%" if pd.notna(x) else "—")
                     _top["notional_mm"] = _top["notional_mm"].apply(lambda x: f"{x:,.0f}")
                     _top["platform_identifier"] = _top["platform_identifier"].map(
                         lambda x: PLATFORM_NAMES.get(str(x), str(x)))
-                    _top.columns = ["Opt", "Swp", "Dir", "Strike", "Notional (mm)", "Moneyness", "Exec Date", "Platform"]
+                    _top = _top[["Tenor", "direction", "strike_pct", "notional_mm", "moneyness", "exec_date", "platform_identifier"]]
+                    _top.columns = ["Tenor", "Dir", "Strike", "Notional (mm)", "Moneyness", "Exec Date", "Platform"]
                     st.dataframe(_top, use_container_width=True, hide_index=True)
 
                     # By Opt Tenor
@@ -8156,11 +8170,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             "opt_tenor", "swp_tenor", "direction", "strike_pct",
                             "notional_mm", "moneyness", "exec_date", "platform_identifier"
                         ]].copy()
+                        _show_df["Tenor"] = _show_df.apply(lambda r: f"{r['swp_tenor']} ({r['opt_tenor']})", axis=1)
                         _show_df["strike_pct"] = _show_df["strike_pct"].apply(lambda x: f"{x:.5f}%" if pd.notna(x) else "—")
                         _show_df["notional_mm"] = _show_df["notional_mm"].apply(lambda x: f"{x:,.0f}")
                         _show_df["platform_identifier"] = _show_df["platform_identifier"].map(
                             lambda x: PLATFORM_NAMES.get(str(x), str(x)))
-                        _show_df.columns = ["Opt", "Swp", "Dir", "Strike", "Notional (mm)", "Moneyness", "Exec Date", "Platform"]
+                        _show_df = _show_df[["Tenor", "direction", "strike_pct", "notional_mm", "moneyness", "exec_date", "platform_identifier"]]
+                        _show_df.columns = ["Tenor", "Dir", "Strike", "Notional (mm)", "Moneyness", "Exec Date", "Platform"]
                         st.dataframe(_show_df, use_container_width=True, hide_index=True,
                                      height=min(60 + len(_show_df) * 35, 700))
 
