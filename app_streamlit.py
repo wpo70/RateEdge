@@ -7719,10 +7719,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     lambda d: d.strftime("%a %d-%b") if d else "—")
 
                                 # Forward rates and annuities for ITM/OTM and pricing
+                                # Use config_curves — same source as swaptions pricer
                                 _fwd_rates = {}
                                 _ann_rates = {}
-                                _em_curve = st.session_state.get("curves", {}).get(_em_ccy)
-                                _em_ois = st.session_state.get("curves", {}).get(f"{_em_ccy}_OIS", _em_curve)
+                                _em_curve = st.session_state.get("config_curves", {}).get(_em_ccy)
+                                _em_ois = st.session_state.get("config_basis", {}).get(_em_ccy, {}).get("ois", _em_curve)
                                 if _em_curve is not None:
                                     for _st in _em_df["swp_tenor"].dropna().unique():
                                         try:
