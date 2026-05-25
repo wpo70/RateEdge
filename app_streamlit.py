@@ -7725,6 +7725,17 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _em_curve = st.session_state.get("config_curves", {}).get(_em_ccy)
                                 _em_ois = st.session_state.get("config_basis", {}).get(_em_ccy, {}).get("ois", _em_curve)
                                 if _em_curve is not None:
+                                    st.caption(f"✅ Curve source: config_curves[{_em_ccy}] — {len(_em_curve)} points, "
+                                               f"max maturity {_em_curve['MaturityY'].max():.1f}Y")
+                                else:
+                                    # Fallback to curves dict
+                                    _em_curve = st.session_state.get("curves", {}).get(_em_ccy)
+                                    if _em_curve is not None:
+                                        st.warning(f"⚠️ No config_curves[{_em_ccy}] — using fallback curves dict. "
+                                                   f"Commit curves on Curves tab for accurate forwards.")
+                                    else:
+                                        st.error(f"❌ No curve loaded for {_em_ccy}. Load curves first.")
+                                if _em_curve is not None:
                                     for _st in _em_df["swp_tenor"].dropna().unique():
                                         try:
                                             _st_y = label_to_years(str(_st))
