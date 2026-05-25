@@ -7899,6 +7899,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             f"(P:{_day_payers} R:{_day_rcvrs}){_event_str}")
 
                                 # Price each trade
+                                _PREM_DEDUP_MICS_EM = {"BGCD","TPSE","TSEF","TWSF","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
+                                _today = date.today()
                                 _priced_rows = []
                                 for _, _tr in _day_df.iterrows():
                                     _swt = str(_tr.get("swp_tenor", ""))
@@ -7907,34 +7909,80 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _opt_t = str(_tr.get("opt_tenor", ""))
                                     _dir = _tr.get("direction", "")
                                     _not_mm = _tr.get("notional_mm", 0)
+                                    _platform = str(_tr.get("platform_identifier", ""))
 
-                                    # Current OTM price using vol surface
+                                    # Original premium in bp — halve for dedup brokers
+                                    _orig_prem_raw = float(_tr.get("premium_amount") or 0)
+                                    _is_dedup = _platform in _PREM_DEDUP_MICS_EM
+                                    _orig_prem_adj = _orig_prem_raw / 2.0 if _is_dedup and _orig_prem_raw > 0 else _orig_prem_raw
+                                    _notional = float(_tr.get("notional_leg1") or 0)
+                                    _orig_prem_bp = (_orig_prem_adj / _notional * 10000.0) if _notional > 0 else None
+
+                                    # Remaining time to expiry
+                                    _expiry_dt = _tr.get("expiry_date", _today)
+                                    _t_remaining = max((_expiry_dt - _today).days / 365.25, 0.0001) if _expiry_dt else 0.0001
+
+                                    # Current option value using REMAINING time (not original tenor)
                                     _curr_prem_bp = None
                                     _curr_pv = None
+                                    _ann_approx = None
                                     if _fwd_r is not None and pd.notna(_strike) and _em_atm is not None:
                                         try:
-                                            _exp_y = label_to_years(_opt_t) if _opt_t else 0
                                             _swp_y = label_to_years(_swt) if _swt else 0
                                             _vol_bp = get_matrix_value(_em_atm, _opt_t.lower(), _swp_y)
-                                            if _vol_bp and _exp_y > 0 and _swp_y > 0:
+                                            if _vol_bp and _t_remaining > 0 and _swp_y > 0:
                                                 _sigma_n = _vol_bp / 10000.0
                                                 _F = _fwd_r / 100.0
                                                 _K = _strike / 100.0
-                                                _d = (_F - _K) / (_sigma_n * math.sqrt(_exp_y)) if _sigma_n * math.sqrt(_exp_y) > 1e-10 else 0
+                                                _d = (_F - _K) / (_sigma_n * math.sqrt(_t_remaining)) if _sigma_n * math.sqrt(_t_remaining) > 1e-10 else 0
                                                 _Nd = 0.5 * (1 + math.erf(_d / math.sqrt(2)))
                                                 _nd = math.exp(-0.5 * _d**2) / math.sqrt(2 * math.pi)
                                                 if _dir == "Payer":
-                                                    _prem_rate = (_F - _K) * _Nd + _sigma_n * math.sqrt(_exp_y) * _nd
+                                                    _prem_rate = (_F - _K) * _Nd + _sigma_n * math.sqrt(_t_remaining) * _nd
                                                 else:
-                                                    _prem_rate = (_K - _F) * (1 - _Nd) + _sigma_n * math.sqrt(_exp_y) * _nd
+                                                    _prem_rate = (_K - _F) * (1 - _Nd) + _sigma_n * math.sqrt(_t_remaining) * _nd
                                                 _ann_approx = _swp_y * 0.85
                                                 _curr_prem_bp = _prem_rate * _ann_approx * 10000.0
-                                                _curr_pv = _prem_rate * _ann_approx * _not_mm * 1e6
+                                                _curr_pv = _prem_rate * _ann_approx * (_not_mm or 0) * 1e6
                                         except Exception:
                                             pass
 
+                                    # P&L = current value - original cost (for buyer)
+                                    _pnl_bp = None
+                                    _pnl_dollar = None
+                                    if _curr_prem_bp is not None and _orig_prem_bp is not None:
+                                        _pnl_bp = _curr_prem_bp - _orig_prem_bp
+                                        if _notional > 0 and _ann_approx:
+                                            _pnl_dollar = _pnl_bp / 10000.0 * _ann_approx * _notional
+
+                                    # Breakeven forward rate
+                                    # Payer BE = strike + orig_prem / annuity (need fwd above this to profit)
+                                    # Receiver BE = strike - orig_prem / annuity (need fwd below this to profit)
+                                    _breakeven = None
+                                    if _orig_prem_bp is not None and _ann_approx and _ann_approx > 0:
+                                        _prem_as_rate = _orig_prem_bp / 10000.0 / _ann_approx
+                                        if _dir == "Payer":
+                                            _breakeven = (_strike / 100.0 + _prem_as_rate) * 100.0
+                                        elif _dir == "Receiver":
+                                            _breakeven = (_strike / 100.0 - _prem_as_rate) * 100.0
+
                                     _var_bp = abs(_strike - _fwd_r) * 100 if _fwd_r and pd.notna(_strike) else None
 
+                                    # Classify ITM/OTM using strike vs fwd and direction
+                                    _moneyness = "Unknown"
+                                    if _fwd_r and pd.notna(_strike):
+                                        if _dir == "Payer":
+                                            if _strike < _fwd_r:
+                                                _moneyness = "Deep ITM" if _var_bp > 25 else "ITM" if _var_bp > 5 else "ATM"
+                                            else:
+                                                _moneyness = "Deep OTM" if _var_bp > 25 else "OTM" if _var_bp > 5 else "ATM"
+                                        elif _dir == "Receiver":
+                                            if _strike > _fwd_r:
+                                                _moneyness = "Deep ITM" if _var_bp > 25 else "ITM" if _var_bp > 5 else "ATM"
+                                            else:
+                                                _moneyness = "Deep OTM" if _var_bp > 25 else "OTM" if _var_bp > 5 else "ATM"
+
+                                    _dedup_flag = " *" if _is_dedup else ""
                                     _priced_rows.append({
                                         "Opt": _opt_t,
                                         "Swp": _swt,
@@ -7942,17 +7990,23 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         "Strike (%)": f"{_strike:.5f}" if pd.notna(_strike) else "—",
                                         "Fwd (%)": f"{_fwd_r:.3f}" if _fwd_r else "—",
                                         "Var (bp)": f"{_var_bp:.1f}" if _var_bp is not None else "—",
-                                        "ITM/OTM": _tr.get("moneyness", "—"),
+                                        "ITM/OTM": _moneyness,
                                         "Notional (mm)": f"{_not_mm:,.0f}" if pd.notna(_not_mm) and _not_mm > 0 else "—",
-                                        "Orig Prem ($)": f"${_tr.get('premium_amount', 0):,.0f}" if pd.notna(_tr.get("premium_amount")) else "—",
-                                        "Curr Prem (bp)": f"{_curr_prem_bp:.1f}" if _curr_prem_bp is not None else "—",
-                                        "Curr PV ($)": f"${_curr_pv:,.0f}" if _curr_pv is not None and not math.isnan(_curr_pv) else "—",
+                                        "Orig Prem (bp)": f"{_orig_prem_bp:.1f}{_dedup_flag}" if _orig_prem_bp is not None else "—",
+                                        "Curr Val (bp)": f"{_curr_prem_bp:.1f}" if _curr_prem_bp is not None else "—",
+                                        "P&L (bp)": f"{_pnl_bp:+.1f}" if _pnl_bp is not None else "—",
+                                        "P&L ($)": f"${_pnl_dollar:+,.0f}" if _pnl_dollar is not None and not math.isnan(_pnl_dollar) else "—",
+                                        "BE Fwd (%)": f"{_breakeven:.3f}" if _breakeven is not None else "—",
+                                        "Days Left": f"{max((_expiry_dt - _today).days, 0)}" if _expiry_dt else "—",
                                         "Exec Date": str(_tr.get("exec_date", "")),
-                                        "Platform": PLATFORM_NAMES.get(str(_tr.get("platform_identifier", "")), str(_tr.get("platform_identifier", ""))),
+                                        "Platform": PLATFORM_NAMES.get(_platform, _platform),
                                     })
 
                                 _priced_df = pd.DataFrame(_priced_rows)
                                 st.dataframe(_priced_df, use_container_width=True, hide_index=True)
+                                st.caption("* = Orig Prem halved (broker reports full straddle prem on each leg). "
+                                           "BE Fwd = forward rate at which buyer breaks even. "
+                                           "P&L = Curr Val − Orig Prem (buyer's perspective).")
 
                         # ── Strike Exposure by Swap Tenor ─────────────────
                         st.markdown("#### Strike Exposure by Swap Tenor")
