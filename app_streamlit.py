@@ -7650,14 +7650,16 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 st.success(f"Found {len(_rows_em)} trades expiring ~{_em_mon.strftime('%d-%b')} to {_em_fri.strftime('%d-%b')}")
                                 _em_df = pd.DataFrame(_rows_em)
 
+                                # Convert Decimal columns to float
+                                for _dec_col in ["strike_pct", "notional_leg1", "premium_amount"]:
+                                    if _dec_col in _em_df.columns:
+                                        _em_df[_dec_col] = pd.to_numeric(_em_df[_dec_col], errors="coerce")
+
                                 # DWSF strike fix
                                 if "strike_pct" in _em_df.columns and "platform_identifier" in _em_df.columns:
                                     _dwsf_fix = (_em_df["platform_identifier"] == "DWSF") & (_em_df["strike_pct"].fillna(0) > 50)
                                     _em_df.loc[_dwsf_fix, "strike_pct"] = _em_df.loc[_dwsf_fix, "strike_pct"] / 100.0
 
-                                _em_df["strike_pct"] = pd.to_numeric(_em_df["strike_pct"], errors="coerce")
-                                _em_df["notional_leg1"] = pd.to_numeric(_em_df["notional_leg1"], errors="coerce")
-                                _em_df["premium_amount"] = pd.to_numeric(_em_df["premium_amount"], errors="coerce")
                                 _em_df["notional_mm"] = _em_df["notional_leg1"] / 1e6
                                 _em_df["direction"] = _em_df["option_type_decoded"].map({"CALL": "Payer", "PUT": "Receiver"}).fillna("Other")
                                 _em_df["signed_notional_mm"] = _em_df.apply(
