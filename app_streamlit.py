@@ -7667,12 +7667,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                                 # Forward rates for ITM/OTM
                                 _fwd_rates = {}
-                                if curve is not None:
+                                _em_curve = st.session_state.get("curves", {}).get(_em_ccy)
+                                _em_ois = st.session_state.get("curves", {}).get(f"{_em_ccy}_OIS", _em_curve)
+                                if _em_curve is not None:
                                     for _st in _em_df["swp_tenor"].dropna().unique():
                                         try:
                                             _st_y = label_to_years(str(_st))
                                             _fwd, _ann, _ = forward_and_annuity_from_curve(
-                                                curve, _em_ccy, 0.0, _st_y, ois_curve)
+                                                _em_curve, _em_ccy, 0.0, _st_y, _em_ois)
                                             _fwd_rates[str(_st)] = _fwd * 100
                                         except Exception:
                                             pass
