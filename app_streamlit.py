@@ -7728,8 +7728,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                     # Strike Exposure by Swap Tenor
                     st.markdown("#### Strike Exposure by Swap Tenor")
+                    def _safe_tenor_sort(x):
+                        try:
+                            return label_to_years(str(x)) if x else 999
+                        except Exception:
+                            return 999
                     _em_tenors = sorted(_em_df["swp_tenor"].dropna().unique(),
-                                        key=lambda x: label_to_years(str(x)) if x else 0)
+                                        key=_safe_tenor_sort)
                     for _swt in _em_tenors:
                         _subset = _em_df[_em_df["swp_tenor"] == _swt].copy()
                         if _subset.empty:
