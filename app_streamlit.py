@@ -7738,18 +7738,20 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     d = row.get("direction")
                                     if fwd is None or pd.isna(s):
                                         return "Unknown"
-                                    diff = s - fwd
+                                    diff = s - fwd  # in pct points
                                     if d == "Payer":
+                                        # Payer ITM when strike < fwd (pay less than market)
                                         if diff < -0.25: return "Deep ITM"
-                                        elif diff < 0: return "ITM"
-                                        elif diff < 0.25: return "ATM"
-                                        elif diff < 0.75: return "OTM"
+                                        elif diff < -0.05: return "ITM"
+                                        elif diff <= 0.05: return "ATM"
+                                        elif diff <= 0.25: return "OTM"
                                         else: return "Deep OTM"
-                                    else:
+                                    else:  # Receiver
+                                        # Receiver ITM when strike > fwd (receive more than market)
                                         if diff > 0.25: return "Deep ITM"
-                                        elif diff > 0: return "ITM"
-                                        elif diff > -0.25: return "ATM"
-                                        elif diff > -0.75: return "OTM"
+                                        elif diff > 0.05: return "ITM"
+                                        elif diff >= -0.05: return "ATM"
+                                        elif diff >= -0.25: return "OTM"
                                         else: return "Deep OTM"
 
                                 _em_df["moneyness"] = _em_df.apply(_classify_itm, axis=1)
@@ -7892,6 +7894,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                              f"${_day_gross:,.0f}mm gross, net ${_day_net:+,.0f}mm "
                                              f"(P:{_day_payers} R:{_day_rcvrs}){_event_str}", expanded=True):
 
+                                st.markdown(f"**📅 Expiry: {_day_label}** — {len(_day_df)} trades, "
+                                            f"${_day_gross:,.0f}mm gross, net ${_day_net:+,.0f}mm "
+                                            f"(P:{_day_payers} R:{_day_rcvrs}){_event_str}")
+
                                 # Price each trade
                                 _priced_rows = []
                                 for _, _tr in _day_df.iterrows():
@@ -7937,10 +7943,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         "Fwd (%)": f"{_fwd_r:.3f}" if _fwd_r else "—",
                                         "Var (bp)": f"{_var_bp:.1f}" if _var_bp is not None else "—",
                                         "ITM/OTM": _tr.get("moneyness", "—"),
-                                        "Notional (mm)": f"{_not_mm:,.0f}",
+                                        "Notional (mm)": f"{_not_mm:,.0f}" if pd.notna(_not_mm) and _not_mm > 0 else "—",
                                         "Orig Prem ($)": f"${_tr.get('premium_amount', 0):,.0f}" if pd.notna(_tr.get("premium_amount")) else "—",
                                         "Curr Prem (bp)": f"{_curr_prem_bp:.1f}" if _curr_prem_bp is not None else "—",
-                                        "Curr PV ($)": f"${_curr_pv:,.0f}" if _curr_pv is not None else "—",
+                                        "Curr PV ($)": f"${_curr_pv:,.0f}" if _curr_pv is not None and not math.isnan(_curr_pv) else "—",
                                         "Exec Date": str(_tr.get("exec_date", "")),
                                         "Platform": PLATFORM_NAMES.get(str(_tr.get("platform_identifier", "")), str(_tr.get("platform_identifier", ""))),
                                     })
