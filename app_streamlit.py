@@ -7781,6 +7781,24 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 _em_tgt = st.session_state.get("_em_target")
 
                 if _em_df is not None and not _em_df.empty:
+                    # ── Curve source diagnostic (always visible) ──────
+                    _diag_curve = st.session_state.get("config_curves", {}).get("USD")
+                    _diag_curves_fallback = st.session_state.get("curves", {}).get("USD")
+                    if _diag_curve is not None:
+                        try:
+                            _10y_row = _diag_curve[_diag_curve['MaturityY'].between(9.5, 10.5)]
+                            _10y_zero = f", 10Y zero={_10y_row['ZeroRatePct'].values[0]:.4f}%" if len(_10y_row) > 0 else ""
+                            st.caption(f"✅ Curve: config_curves[USD] — {len(_diag_curve)} pts{_10y_zero}")
+                        except Exception:
+                            st.caption(f"✅ Curve: config_curves[USD] — {len(_diag_curve)} pts")
+                    elif _diag_curves_fallback is not None:
+                        st.warning(f"⚠️ Using fallback curves[USD] (NOT config_curves). "
+                                   f"config_curves keys: {list(st.session_state.get('config_curves', {}).keys())}. "
+                                   f"Commit on Curves tab to fix.")
+                    else:
+                        st.error(f"❌ No USD curve in config_curves or curves. "
+                                 f"config_curves keys: {list(st.session_state.get('config_curves', {}).keys())}")
+
                     def _safe_tenor_sort(x):
                         try:
                             return label_to_years(str(x)) if x else 999
