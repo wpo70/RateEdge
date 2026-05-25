@@ -7667,7 +7667,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                                 # Compute actual expiry date
                                 def _add_tenor(exec_dt, tenor_str):
-                                    """Add tenor to execution date to get actual expiry."""
+                                    """Add tenor to execution date, roll to next business day (mod following)."""
                                     try:
                                         import calendar
                                         t = str(tenor_str).upper().strip()
@@ -7676,9 +7676,16 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         elif t.endswith("Y"):
                                             months = int(t[:-1]) * 12
                                         elif t.endswith("W"):
-                                            return exec_dt + timedelta(weeks=int(t[:-1]))
+                                            raw = exec_dt + timedelta(weeks=int(t[:-1]))
+                                            # Roll to next business day
+                                            while raw.weekday() >= 5:
+                                                raw += timedelta(days=1)
+                                            return raw
                                         elif t.endswith("D"):
-                                            return exec_dt + timedelta(days=int(t[:-1]))
+                                            raw = exec_dt + timedelta(days=int(t[:-1]))
+                                            while raw.weekday() >= 5:
+                                                raw += timedelta(days=1)
+                                            return raw
                                         else:
                                             return exec_dt
                                         m = exec_dt.month + months
@@ -7687,7 +7694,22 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             m -= 12
                                             y += 1
                                         max_day = calendar.monthrange(y, m)[1]
-                                        return date(y, m, min(exec_dt.day, max_day))
+                                        raw = date(y, m, min(exec_dt.day, max_day))
+                                        # Modified following: if weekend, roll to Monday
+                                        # Unless Monday is in the next month, then roll back to Friday
+                                        if raw.weekday() == 5:  # Saturday
+                                            fwd = raw + timedelta(days=2)  # Monday
+                                            if fwd.month != raw.month:
+                                                raw = raw - timedelta(days=1)  # Friday
+                                            else:
+                                                raw = fwd
+                                        elif raw.weekday() == 6:  # Sunday
+                                            fwd = raw + timedelta(days=1)  # Monday
+                                            if fwd.month != raw.month:
+                                                raw = raw - timedelta(days=2)  # Friday
+                                            else:
+                                                raw = fwd
+                                        return raw
                                     except Exception:
                                         return exec_dt
 
