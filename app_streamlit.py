@@ -7849,7 +7849,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _day_events.append(f"🔴 {_en}")
                             _event_str = f" — {', '.join(_day_events)}" if _day_events else ""
 
-                            with st.expander(f"📅 {_day_label} — {len(_day_df)} trades, "
+                            with st.expander(f"📅 Expiry: {_day_label} — {len(_day_df)} trades, "
                                              f"${_day_gross:,.0f}mm gross, net ${_day_net:+,.0f}mm "
                                              f"(P:{_day_payers} R:{_day_rcvrs}){_event_str}", expanded=True):
 
@@ -7895,7 +7895,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         "Strike (%)": f"{_strike:.5f}" if pd.notna(_strike) else "—",
                                         "Fwd (%)": f"{_fwd_r:.3f}" if _fwd_r else "—",
                                         "ITM/OTM": _tr.get("moneyness", "—"),
-                                        "Notional (mm)": f"${_not_mm:,.0f}",
+                                        "Notional (mm)": f"{_not_mm:,.0f}",
                                         "Orig Prem ($)": f"${_tr.get('premium_amount', 0):,.0f}" if pd.notna(_tr.get("premium_amount")) else "—",
                                         "Curr Prem (bp)": f"{_curr_prem_bp:.1f}" if _curr_prem_bp is not None else "—",
                                         "Curr PV ($)": f"${_curr_pv:,.0f}" if _curr_pv is not None else "—",
@@ -7956,7 +7956,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                          "notional_mm", "moneyness", "exec_date", "platform_identifier"]
                     ].copy()
                     _top["strike_pct"] = _top["strike_pct"].apply(lambda x: f"{x:.5f}%" if pd.notna(x) else "—")
-                    _top["notional_mm"] = _top["notional_mm"].apply(lambda x: f"${x:,.0f}")
+                    _top["notional_mm"] = _top["notional_mm"].apply(lambda x: f"{x:,.0f}")
                     _top["platform_identifier"] = _top["platform_identifier"].map(
                         lambda x: PLATFORM_NAMES.get(str(x), str(x)))
                     _top.columns = ["Opt", "Swp", "Dir", "Strike", "Notional (mm)", "Moneyness", "Exec Date", "Platform"]
@@ -8033,7 +8033,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             "notional_mm", "moneyness", "exec_date", "platform_identifier"
                         ]].copy()
                         _show_df["strike_pct"] = _show_df["strike_pct"].apply(lambda x: f"{x:.5f}%" if pd.notna(x) else "—")
-                        _show_df["notional_mm"] = _show_df["notional_mm"].apply(lambda x: f"${x:,.0f}")
+                        _show_df["notional_mm"] = _show_df["notional_mm"].apply(lambda x: f"{x:,.0f}")
                         _show_df["platform_identifier"] = _show_df["platform_identifier"].map(
                             lambda x: PLATFORM_NAMES.get(str(x), str(x)))
                         _show_df.columns = ["Opt", "Swp", "Dir", "Strike", "Notional (mm)", "Moneyness", "Exec Date", "Platform"]
