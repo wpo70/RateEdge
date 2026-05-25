@@ -7738,24 +7738,30 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 if _em_curve is not None:
                                     # Use forward matrix for consistency with pricer
                                     _fwd_mx_em = st.session_state.get("fwd_matrix", {}).get(_em_ccy)
+                                    if _fwd_mx_em is None or (hasattr(_fwd_mx_em, "empty") and _fwd_mx_em.empty):
+                                        # Auto-generate matrix from config_curves
+                                        _em_b6v3 = st.session_state.get("config_basis", {}).get(_em_ccy, {}).get("6v3")
+                                        _fwd_mx_em = generate_forward_matrix(_em_ccy, _em_curve, _em_b6v3)
+                                        if _fwd_mx_em is not None and not _fwd_mx_em.empty:
+                                            st.session_state.setdefault("fwd_matrix", {})[_em_ccy] = _fwd_mx_em
+                                            st.caption("ℹ️ Auto-generated forward matrix from config_curves")
                                     _fwd_start_days = max((_em_mon - date.today()).days + 2, 0)
                                     _fwd_start_y = _fwd_start_days / 365.25
+                                    # Build expiry label for matrix lookup
+                                    if _fwd_start_y <= 1/52 + 0.001:
+                                        _em_exp_lbl = "1w"
+                                    elif _fwd_start_y <= 2/12:
+                                        _em_exp_lbl = f"{max(1, round(_fwd_start_y * 12))}m"
+                                    elif _fwd_start_y <= 2.0:
+                                        _em_exp_lbl = f"{max(1, round(_fwd_start_y * 12))}m"
+                                    else:
+                                        _em_exp_lbl = f"{round(_fwd_start_y)}y"
                                     for _st in _em_df["swp_tenor"].dropna().unique():
                                         try:
                                             _st_y = label_to_years(str(_st))
-                                            # Try matrix first (matches pricer)
                                             _used_matrix = False
                                             if _fwd_mx_em is not None:
-                                                # Find closest expiry in matrix to fwd_start_y
-                                                _mx_expiries = ["1w","1m","2m","3m","6m","9m","1y","2y","3y","5y","7y","10y"]
-                                                _best_lbl = "1w"
-                                                _best_diff = 999
-                                                for _ml in _mx_expiries:
-                                                    _md = abs(label_to_years(_ml) - _fwd_start_y)
-                                                    if _md < _best_diff:
-                                                        _best_diff = _md
-                                                        _best_lbl = _ml
-                                                _mx_val = get_matrix_value(_fwd_mx_em, _best_lbl, _st_y)
+                                                _mx_val = get_matrix_value(_fwd_mx_em, _em_exp_lbl, _st_y)
                                                 if _mx_val is not None and _mx_val > 0:
                                                     _fwd_rates[str(_st)] = _mx_val
                                                     _used_matrix = True
@@ -7769,9 +7775,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             _ann_rates[str(_st)] = _ann
                                         except Exception:
                                             pass
-                                    _src = "matrix" if _fwd_mx_em is not None else "curve"
-                                    st.caption(f"✅ config_curves[{_em_ccy}] | Fwd source: {_src} | "
-                                               f"10Y fwd: {_fwd_rates.get('10Y', 0):.4f}%")
+                                    _src = f"matrix ({_em_exp_lbl})" if _fwd_mx_em is not None else "curve"
+                                    st.caption(f"✅ Fwd source: {_src} | "
+                                               f"10Y: {_fwd_rates.get('10Y', 0):.4f}% | "
+                                               f"30Y: {_fwd_rates.get('30Y', 0):.4f}%")
 
                                 def _classify_itm(row):
                                     fwd = _fwd_rates.get(str(row.get("swp_tenor", "")))
