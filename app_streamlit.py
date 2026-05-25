@@ -7557,7 +7557,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             # ── EXPIRY MONITOR — SDR strike exposure for upcoming expiries ──────
             st.markdown("### 📡 Expiry Monitor — Strike Exposure at Upcoming Expiries")
             st.caption("Scans 12 months of SDR trades to find options expiring in a target week. "
-                       "Shows strike clustering, net directional exposure, and OTM pricing.")
+                       "Shows strike clustering, net directional exposure, and OTM pricing. "
+                       "Bilateral (XXXX) trades excluded.")
 
             if not HAS_POSTGRES:
                 st.warning("Database required for Expiry Monitor.")
@@ -7633,7 +7634,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     f"WHERE action_type = 'NEWT' "
                                     f"AND notional_ccy = %s "
                                     f"AND opt_tenor = %s "
-                                    f"AND execution_timestamp::date BETWEEN %s AND %s"
+                                    f"AND execution_timestamp::date BETWEEN %s AND %s "
+                                    f"AND platform_identifier != 'XXXX'"
                                 )
                                 _params.extend([_em_ccy, tn, ws, we])
 
