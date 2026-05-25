@@ -7733,15 +7733,42 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     st.error(f"❌ No config_curves[{_em_ccy}]. Go to Curves tab and commit. "
                                              f"Keys available: {list(st.session_state.get('config_curves', {}).keys())}")
                                 if _em_curve is not None:
+                                    # Use forward matrix for consistency with pricer
+                                    _fwd_mx_em = st.session_state.get("fwd_matrix", {}).get(_em_ccy)
+                                    _fwd_start_days = max((_em_mon - date.today()).days + 2, 0)
+                                    _fwd_start_y = _fwd_start_days / 365.25
                                     for _st in _em_df["swp_tenor"].dropna().unique():
                                         try:
                                             _st_y = label_to_years(str(_st))
-                                            _fwd, _ann, _ = forward_and_annuity_from_curve(
-                                                _em_curve, _em_ccy, 0.0, _st_y, _em_ois)
-                                            _fwd_rates[str(_st)] = _fwd * 100
+                                            # Try matrix first (matches pricer)
+                                            _used_matrix = False
+                                            if _fwd_mx_em is not None:
+                                                # Find closest expiry in matrix to fwd_start_y
+                                                _mx_expiries = ["1w","1m","2m","3m","6m","9m","1y","2y","3y","5y","7y","10y"]
+                                                _best_lbl = "1w"
+                                                _best_diff = 999
+                                                for _ml in _mx_expiries:
+                                                    _md = abs(label_to_years(_ml) - _fwd_start_y)
+                                                    if _md < _best_diff:
+                                                        _best_diff = _md
+                                                        _best_lbl = _ml
+                                                _mx_val = get_matrix_value(_fwd_mx_em, _best_lbl, _st_y)
+                                                if _mx_val is not None and _mx_val > 0:
+                                                    _fwd_rates[str(_st)] = _mx_val
+                                                    _used_matrix = True
+                                            if not _used_matrix:
+                                                _fwd, _ann, _ = forward_and_annuity_from_curve(
+                                                    _em_curve, _em_ccy, _fwd_start_y, _st_y, _em_ois)
+                                                _fwd_rates[str(_st)] = _fwd * 100
+                                            # Always get annuity from curve
+                                            _, _ann, _ = forward_and_annuity_from_curve(
+                                                _em_curve, _em_ccy, _fwd_start_y, _st_y, _em_ois)
                                             _ann_rates[str(_st)] = _ann
                                         except Exception:
                                             pass
+                                    _src = "matrix" if _fwd_mx_em is not None else "curve"
+                                    st.caption(f"✅ config_curves[{_em_ccy}] | Fwd source: {_src} | "
+                                               f"10Y fwd: {_fwd_rates.get('10Y', 0):.4f}%")
 
                                 def _classify_itm(row):
                                     fwd = _fwd_rates.get(str(row.get("swp_tenor", "")))
@@ -13795,6 +13822,17 @@ def swaptions_tab(vol_mode: str):
         else:
             fwd, ann, _ = forward_and_annuity_from_curve(curve, ccy, expiry_y, tenor_y, ois_curve, freq_override=freq_override)
             fwd_source = "curve"
+            # v2505t: USD — override forward with matrix value for consistency
+            if ccy == "USD" and not is_midcurve:
+                _fwd_mx = st.session_state.get("fwd_matrix", {}).get(ccy)
+                if _fwd_mx is not None:
+                    try:
+                        _mx_val = get_matrix_value(_fwd_mx, expiry.lower(), tenor_y)
+                        if _mx_val is not None and _mx_val > 0:
+                            fwd = _mx_val / 100.0
+                            fwd_source = "matrix"
+                    except Exception:
+                        pass
         if basis_6v3 is not None and ccy == "AUD":
             basis_bp = interpolate_basis(basis_6v3, expiry_y + delay_y + tenor_y / 2)
             if leg_conv == "Q/Q" and tenor_y > 3.0:
