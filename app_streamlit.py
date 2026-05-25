@@ -7774,17 +7774,56 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         except Exception:
                             return 999
 
-                    # ── Swap tenor filter ─────────────────────────────────
+                    # ── Swap tenor + Strike variance filters ──────────
                     _all_swp_tenors = ["All"] + sorted(
                         _em_df["swp_tenor"].dropna().unique().tolist(),
                         key=_safe_tenor_sort)
-                    _em_fc1, _em_fc2 = st.columns([2, 6])
+                    _em_fc1, _em_fc2, _em_fc3 = st.columns([2, 3, 3])
                     with _em_fc1:
                         _em_swp_filter = st.selectbox("Filter Swap Tenor", _all_swp_tenors,
                                                        index=0, key="em_swp_filter")
+                    with _em_fc2:
+                        _STRIKE_BUCKETS = {
+                            "0-10bp (ATM/near)": (0, 10),
+                            "10-15bp": (10.01, 15),
+                            "15-25bp": (15.01, 25),
+                            "25bp+ (deep)": (25.01, 9999),
+                        }
+                        _em_strike_filter = st.multiselect("Strike Variance from Fwd (bp)",
+                            list(_STRIKE_BUCKETS.keys()),
+                            default=list(_STRIKE_BUCKETS.keys()),
+                            key="em_strike_var")
+
+                    # Compute strike variance (bp from forward)
+                    def _strike_var_bp(row):
+                        fwd = _em_fwd.get(str(row.get("swp_tenor", "")))
+                        s = row.get("strike_pct")
+                        if fwd is None or pd.isna(s):
+                            return None
+                        return abs(s - fwd) * 100  # % to bp
+
+                    _em_df["strike_var_bp"] = _em_df.apply(_strike_var_bp, axis=1)
+
                     _em_filtered = _em_df.copy()
                     if _em_swp_filter != "All":
                         _em_filtered = _em_filtered[_em_filtered["swp_tenor"] == _em_swp_filter]
+
+                    # Apply strike variance filter
+                    if _em_strike_filter and len(_em_strike_filter) < len(_STRIKE_BUCKETS):
+                        _var_mask = pd.Series(False, index=_em_filtered.index)
+                        for _bucket_name in _em_strike_filter:
+                            _lo, _hi = _STRIKE_BUCKETS[_bucket_name]
+                            _var_mask |= (
+                                (_em_filtered["strike_var_bp"].fillna(9999) >= _lo) &
+                                (_em_filtered["strike_var_bp"].fillna(9999) <= _hi)
+                            )
+                        _em_filtered = _em_filtered[_var_mask]
+
+                    with _em_fc3:
+                        if _em_filtered["strike_var_bp"].notna().any():
+                            _avg_var = _em_filtered["strike_var_bp"].mean()
+                            _atm_count = len(_em_filtered[_em_filtered["strike_var_bp"].fillna(999) <= 10])
+                            st.caption(f"Avg variance: {_avg_var:.1f}bp | ATM (≤10bp): {_atm_count} trades")
 
                     if _em_filtered.empty:
                         st.info("No trades for selected swap tenor.")
@@ -7888,12 +7927,15 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         except Exception:
                                             pass
 
+                                    _var_bp = abs(_strike - _fwd_r) * 100 if _fwd_r and pd.notna(_strike) else None
+
                                     _priced_rows.append({
                                         "Opt": _opt_t,
                                         "Swp": _swt,
                                         "Dir": _dir,
                                         "Strike (%)": f"{_strike:.5f}" if pd.notna(_strike) else "—",
                                         "Fwd (%)": f"{_fwd_r:.3f}" if _fwd_r else "—",
+                                        "Var (bp)": f"{_var_bp:.1f}" if _var_bp is not None else "—",
                                         "ITM/OTM": _tr.get("moneyness", "—"),
                                         "Notional (mm)": f"{_not_mm:,.0f}",
                                         "Orig Prem ($)": f"${_tr.get('premium_amount', 0):,.0f}" if pd.notna(_tr.get("premium_amount")) else "—",
