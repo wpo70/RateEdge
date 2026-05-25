@@ -7558,7 +7558,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             st.markdown("### 📡 Expiry Monitor — Strike Exposure at Upcoming Expiries")
             st.caption("Scans 12 months of SDR trades to find options expiring in a target week. "
                        "Shows strike clustering, net directional exposure, and OTM pricing. "
-                       "Bilateral (XXXX) trades excluded.")
+                       "Respects Platform filter above.")
 
             if not HAS_POSTGRES:
                 st.warning("Database required for Expiry Monitor.")
@@ -7623,6 +7623,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             cur = conn.cursor()
 
                             _union_parts = []
+                            _em_plat_ph = ",".join(["%s"] * len(sel_platform)) if sel_platform else "'__NONE__'"
                             _params = []
                             for tn, (ws, we) in _tenor_windows.items():
                                 _union_parts.append(
@@ -7635,9 +7636,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     f"AND notional_ccy = %s "
                                     f"AND opt_tenor = %s "
                                     f"AND execution_timestamp::date BETWEEN %s AND %s "
-                                    f"AND platform_identifier != 'XXXX'"
+                                    f"AND platform_identifier IN ({_em_plat_ph})"
                                 )
-                                _params.extend([_em_ccy, tn, ws, we])
+                                _params.extend([_em_ccy, tn, ws, we] + (sel_platform if sel_platform else []))
 
                             _full_q = " UNION ALL ".join(_union_parts) + " ORDER BY opt_tenor, exec_date"
                             cur.execute(_full_q, _params)
