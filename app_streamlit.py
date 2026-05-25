@@ -6987,7 +6987,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
     if not df.empty:
         st.markdown("---")
         st.markdown("#### 📊 Analytics")
-        _atab1, _atab2, _atab3, _atab4 = st.tabs(["Strike Heatmap", "Straddle Detection", "P/R Ratio", "Full Trade Analytics"])
+        _atab1, _atab2, _atab3, _atab4, _atab5 = st.tabs(["Strike Heatmap", "Straddle Detection", "P/R Ratio", "Full Trade Analytics", "📡 Expiry Monitor"])
 
         with _atab1:
             # ── Strike Heatmap ──────────────────────────────────────────────
@@ -7552,6 +7552,304 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _type_summary.append({"Type": _lbl, "Count": len(_rows)})
                         if _type_summary:
                             st.dataframe(pd.DataFrame(_type_summary), use_container_width=True, hide_index=True)
+
+        with _atab5:
+            # ── EXPIRY MONITOR — SDR strike exposure for upcoming expiries ──────
+            st.markdown("### 📡 Expiry Monitor — Strike Exposure at Upcoming Expiries")
+            st.caption("Scans 12 months of SDR trades to find options expiring in a target week. "
+                       "Shows strike clustering, net directional exposure, and OTM pricing.")
+
+            if not HAS_POSTGRES:
+                st.warning("Database required for Expiry Monitor.")
+            else:
+                from datetime import timedelta
+                from zoneinfo import ZoneInfo as _ZI_em
+
+                # ── Controls ─────────────────────────────────────────────
+                _em_c1, _em_c2, _em_c3 = st.columns([2, 2, 4])
+                with _em_c1:
+                    _em_target_mon = st.date_input("Target week (Monday)",
+                        value=date.today() + timedelta(days=(7 - date.today().weekday()) % 7 or 7),
+                        key="em_target_mon")
+                with _em_c2:
+                    _em_ccy = st.selectbox("Currency", ["USD"], key="em_ccy")
+
+                # Compute target week (Mon-Fri)
+                _em_mon = _em_target_mon
+                if _em_mon.weekday() != 0:
+                    _em_mon = _em_mon - timedelta(days=_em_mon.weekday())
+                _em_fri = _em_mon + timedelta(days=4)
+
+                st.markdown(f"**Target expiry window: {_em_mon.strftime('%d-%b-%Y')} to {_em_fri.strftime('%d-%b-%Y')}**")
+
+                # ── Tenor → execution window mapping ─────────────────────
+                _TENORS_MONTHS = {
+                    "1M": 1, "2M": 2, "3M": 3, "6M": 6, "9M": 9,
+                    "1Y": 12, "18M": 18, "2Y": 24,
+                }
+
+                def _sub_months(d_, months_):
+                    m = d_.month - months_
+                    y = d_.year
+                    while m <= 0:
+                        m += 12
+                        y -= 1
+                    import calendar
+                    max_day = calendar.monthrange(y, m)[1]
+                    return date(y, m, min(d_.day, max_day))
+
+                _tenor_windows = {}
+                for tn, months in _TENORS_MONTHS.items():
+                    exec_start = _sub_months(_em_mon, months)
+                    exec_end = _sub_months(_em_fri, months)
+                    exec_start_wide = exec_start - timedelta(days=2)
+                    exec_end_wide = exec_end + timedelta(days=2)
+                    _tenor_windows[tn] = (exec_start_wide, exec_end_wide)
+
+                with st.expander("Execution windows scanned", expanded=False):
+                    _tw_df = pd.DataFrame([{
+                        "Opt Tenor": tn,
+                        "Exec Window": f"{w[0].strftime('%d-%b-%Y')} to {w[1].strftime('%d-%b-%Y')}",
+                        "Approx Expiry": f"{_em_mon.strftime('%d-%b')} to {_em_fri.strftime('%d-%b')}",
+                    } for tn, w in sorted(_tenor_windows.items(), key=lambda x: _TENORS_MONTHS[x[0]])])
+                    st.dataframe(_tw_df, use_container_width=True, hide_index=True)
+
+                # ── Query ─────────────────────────────────────────────────
+                if st.button("🔍 Scan Expiring Trades", key="em_scan", type="primary"):
+                    with st.spinner("Querying 12 months of SDR data..."):
+                        try:
+                            conn = get_db_connection()
+                            cur = conn.cursor()
+
+                            _union_parts = []
+                            _params = []
+                            for tn, (ws, we) in _tenor_windows.items():
+                                _union_parts.append(
+                                    f"SELECT opt_tenor, swp_tenor, option_type_decoded, "
+                                    f"strike_pct, notional_leg1, premium_amount, "
+                                    f"execution_timestamp::date as exec_date, "
+                                    f"platform_identifier, notional_ccy "
+                                    f"FROM dtcc_sdr "
+                                    f"WHERE action_type = 'NEWT' "
+                                    f"AND notional_ccy = %s "
+                                    f"AND opt_tenor = %s "
+                                    f"AND execution_timestamp::date BETWEEN %s AND %s"
+                                )
+                                _params.extend([_em_ccy, tn, ws, we])
+
+                            _full_q = " UNION ALL ".join(_union_parts) + " ORDER BY opt_tenor, exec_date"
+                            cur.execute(_full_q, _params)
+                            _cols = [d[0] for d in cur.description]
+                            _rows_em = [dict(zip(_cols, r)) for r in cur.fetchall()]
+                            cur.close()
+                            conn.close()
+
+                            if not _rows_em:
+                                st.info("No trades found expiring in the target week.")
+                            else:
+                                st.success(f"Found {len(_rows_em)} trades expiring ~{_em_mon.strftime('%d-%b')} to {_em_fri.strftime('%d-%b')}")
+                                _em_df = pd.DataFrame(_rows_em)
+
+                                # DWSF strike fix
+                                if "strike_pct" in _em_df.columns and "platform_identifier" in _em_df.columns:
+                                    _dwsf_fix = (_em_df["platform_identifier"] == "DWSF") & (_em_df["strike_pct"].fillna(0) > 50)
+                                    _em_df.loc[_dwsf_fix, "strike_pct"] = _em_df.loc[_dwsf_fix, "strike_pct"] / 100.0
+
+                                _em_df["strike_pct"] = pd.to_numeric(_em_df["strike_pct"], errors="coerce")
+                                _em_df["notional_leg1"] = pd.to_numeric(_em_df["notional_leg1"], errors="coerce")
+                                _em_df["premium_amount"] = pd.to_numeric(_em_df["premium_amount"], errors="coerce")
+                                _em_df["notional_mm"] = _em_df["notional_leg1"] / 1e6
+                                _em_df["direction"] = _em_df["option_type_decoded"].map({"CALL": "Payer", "PUT": "Receiver"}).fillna("Other")
+                                _em_df["signed_notional_mm"] = _em_df.apply(
+                                    lambda r: r["notional_mm"] if r["direction"] == "Payer" else -r["notional_mm"], axis=1)
+
+                                # Forward rates for ITM/OTM
+                                _fwd_rates = {}
+                                if curve is not None:
+                                    for _st in _em_df["swp_tenor"].dropna().unique():
+                                        try:
+                                            _st_y = label_to_years(str(_st))
+                                            _fwd, _ann, _ = forward_and_annuity_from_curve(
+                                                curve, _em_ccy, 0.0, _st_y, ois_curve)
+                                            _fwd_rates[str(_st)] = _fwd * 100
+                                        except Exception:
+                                            pass
+
+                                def _classify_itm(row):
+                                    fwd = _fwd_rates.get(str(row.get("swp_tenor", "")))
+                                    s = row.get("strike_pct")
+                                    d = row.get("direction")
+                                    if fwd is None or pd.isna(s):
+                                        return "Unknown"
+                                    diff = s - fwd
+                                    if d == "Payer":
+                                        if diff < -0.25: return "Deep ITM"
+                                        elif diff < 0: return "ITM"
+                                        elif diff < 0.25: return "ATM"
+                                        elif diff < 0.75: return "OTM"
+                                        else: return "Deep OTM"
+                                    else:
+                                        if diff > 0.25: return "Deep ITM"
+                                        elif diff > 0: return "ITM"
+                                        elif diff > -0.25: return "ATM"
+                                        elif diff > -0.75: return "OTM"
+                                        else: return "Deep OTM"
+
+                                _em_df["moneyness"] = _em_df.apply(_classify_itm, axis=1)
+                                st.session_state["_em_results"] = _em_df
+                                st.session_state["_em_fwd_rates"] = _fwd_rates
+                                st.session_state["_em_target"] = (_em_mon, _em_fri)
+
+                        except Exception as e:
+                            st.error(f"Query failed: {e}")
+                            import traceback
+                            st.code(traceback.format_exc())
+
+                # ── Display results ───────────────────────────────────────
+                _em_df = st.session_state.get("_em_results")
+                _em_fwd = st.session_state.get("_em_fwd_rates", {})
+                _em_tgt = st.session_state.get("_em_target")
+
+                if _em_df is not None and not _em_df.empty:
+                    _em_m1, _em_m2, _em_m3, _em_m4, _em_m5 = st.columns(5)
+                    _em_m1.metric("Total Trades", len(_em_df))
+                    _n_payer = len(_em_df[_em_df["direction"] == "Payer"])
+                    _n_rcvr = len(_em_df[_em_df["direction"] == "Receiver"])
+                    _em_m2.metric("Payers", _n_payer)
+                    _em_m3.metric("Receivers", _n_rcvr)
+                    _net_mm = _em_df["signed_notional_mm"].sum()
+                    _em_m4.metric("Net Notional (mm)", f"${_net_mm:+,.0f}")
+                    _gross_mm = _em_df["notional_mm"].sum()
+                    _em_m5.metric("Gross Notional (mm)", f"${_gross_mm:,.0f}")
+
+                    # Strike Exposure by Swap Tenor
+                    st.markdown("#### Strike Exposure by Swap Tenor")
+                    _em_tenors = sorted(_em_df["swp_tenor"].dropna().unique(),
+                                        key=lambda x: label_to_years(str(x)) if x else 0)
+                    for _swt in _em_tenors:
+                        _subset = _em_df[_em_df["swp_tenor"] == _swt].copy()
+                        if _subset.empty:
+                            continue
+                        _fwd_r = _em_fwd.get(str(_swt))
+                        _fwd_lbl = f" | Fwd: {_fwd_r:.3f}%" if _fwd_r else ""
+                        st.markdown(f"**{_swt} Swap{_fwd_lbl}** — {len(_subset)} trades, "
+                                    f"${_subset['notional_mm'].sum():,.0f}mm gross")
+
+                        _subset["strike_bucket"] = (_subset["strike_pct"] * 8).round() / 8
+                        _bucket_agg = _subset.groupby("strike_bucket").agg(
+                            count=("notional_mm", "count"),
+                            payer_mm=("signed_notional_mm", lambda x: x[x > 0].sum()),
+                            rcvr_mm=("signed_notional_mm", lambda x: x[x < 0].sum()),
+                            net_mm=("signed_notional_mm", "sum"),
+                        ).reset_index()
+                        _bucket_agg.columns = ["Strike (%)", "Trades", "Payer (mm)", "Receiver (mm)", "Net (mm)"]
+                        _bucket_agg["Strike (%)"] = _bucket_agg["Strike (%)"].apply(lambda x: f"{x:.3f}")
+                        _bucket_agg["Payer (mm)"] = _bucket_agg["Payer (mm)"].apply(lambda x: f"${x:,.0f}" if x else "—")
+                        _bucket_agg["Receiver (mm)"] = _bucket_agg["Receiver (mm)"].apply(lambda x: f"${x:,.0f}" if x else "—")
+                        _bucket_agg["Net (mm)"] = _bucket_agg["Net (mm)"].apply(lambda x: f"${x:+,.0f}")
+                        st.dataframe(_bucket_agg, use_container_width=True, hide_index=True)
+
+                    # Moneyness
+                    st.markdown("#### Moneyness Classification")
+                    st.caption("Based on current forward rates vs strike. Deep ITM = likely exercised, Deep OTM = likely expires worthless.")
+                    _money_agg = _em_df.groupby("moneyness").agg(
+                        trades=("notional_mm", "count"),
+                        gross_mm=("notional_mm", "sum"),
+                        net_mm=("signed_notional_mm", "sum"),
+                    ).reset_index()
+                    _money_order = ["Deep ITM", "ITM", "ATM", "OTM", "Deep OTM", "Unknown"]
+                    _money_agg["_sort"] = _money_agg["moneyness"].map({m: i for i, m in enumerate(_money_order)})
+                    _money_agg = _money_agg.sort_values("_sort").drop(columns="_sort")
+                    _money_agg.columns = ["Moneyness", "Trades", "Gross (mm)", "Net (mm)"]
+                    _money_agg["Gross (mm)"] = _money_agg["Gross (mm)"].apply(lambda x: f"${x:,.0f}")
+                    _money_agg["Net (mm)"] = _money_agg["Net (mm)"].apply(lambda x: f"${x:+,.0f}")
+                    st.dataframe(_money_agg, use_container_width=True, hide_index=True)
+
+                    # Largest positions
+                    st.markdown("#### Largest Individual Positions")
+                    _top = _em_df.nlargest(20, "notional_mm")[
+                        ["opt_tenor", "swp_tenor", "direction", "strike_pct",
+                         "notional_mm", "moneyness", "exec_date", "platform_identifier"]
+                    ].copy()
+                    _top["strike_pct"] = _top["strike_pct"].apply(lambda x: f"{x:.5f}%" if pd.notna(x) else "—")
+                    _top["notional_mm"] = _top["notional_mm"].apply(lambda x: f"${x:,.0f}")
+                    _top["platform_identifier"] = _top["platform_identifier"].map(
+                        lambda x: PLATFORM_NAMES.get(str(x), str(x)))
+                    _top.columns = ["Opt", "Swp", "Dir", "Strike", "Notional (mm)", "Moneyness", "Exec Date", "Platform"]
+                    st.dataframe(_top, use_container_width=True, hide_index=True)
+
+                    # By Opt Tenor
+                    st.markdown("#### By Option Tenor")
+                    _ot_agg = _em_df.groupby("opt_tenor").agg(
+                        trades=("notional_mm", "count"),
+                        gross_mm=("notional_mm", "sum"),
+                        net_mm=("signed_notional_mm", "sum"),
+                        avg_strike=("strike_pct", "mean"),
+                    ).reset_index()
+                    _ot_agg = _ot_agg.sort_values("opt_tenor",
+                        key=lambda x: x.map(lambda v: _TENORS_MONTHS.get(v, 99)))
+                    _ot_agg.columns = ["Opt Tenor", "Trades", "Gross (mm)", "Net (mm)", "Avg Strike"]
+                    _ot_agg["Gross (mm)"] = _ot_agg["Gross (mm)"].apply(lambda x: f"${x:,.0f}")
+                    _ot_agg["Net (mm)"] = _ot_agg["Net (mm)"].apply(lambda x: f"${x:+,.0f}")
+                    _ot_agg["Avg Strike"] = _ot_agg["Avg Strike"].apply(lambda x: f"{x:.3f}%" if pd.notna(x) else "—")
+                    st.dataframe(_ot_agg, use_container_width=True, hide_index=True)
+
+                    # Economic Calendar
+                    if _em_tgt:
+                        st.markdown("#### Economic Calendar — Target Week")
+                        _em_mon_t, _em_fri_t = _em_tgt
+                        _FOMC_2026 = [date(2026,1,28), date(2026,3,18), date(2026,4,29),
+                                      date(2026,6,17), date(2026,7,29), date(2026,9,16),
+                                      date(2026,10,28), date(2026,12,9)]
+                        _ECON_2026 = [
+                            (date(2026,1,10),"CPI"),(date(2026,2,12),"CPI"),(date(2026,3,11),"CPI"),
+                            (date(2026,4,14),"CPI"),(date(2026,5,13),"CPI"),(date(2026,6,10),"CPI"),
+                            (date(2026,7,14),"CPI"),(date(2026,8,12),"CPI"),(date(2026,9,15),"CPI"),
+                            (date(2026,10,13),"CPI"),(date(2026,11,12),"CPI"),(date(2026,12,10),"CPI"),
+                            (date(2026,1,9),"NFP"),(date(2026,2,6),"NFP"),(date(2026,3,6),"NFP"),
+                            (date(2026,4,3),"NFP"),(date(2026,5,8),"NFP"),(date(2026,6,5),"NFP"),
+                            (date(2026,7,2),"NFP"),(date(2026,8,7),"NFP"),(date(2026,9,4),"NFP"),
+                            (date(2026,10,2),"NFP"),(date(2026,11,6),"NFP"),(date(2026,12,4),"NFP"),
+                            (date(2026,1,29),"GDP"),(date(2026,3,26),"GDP"),(date(2026,4,29),"GDP"),
+                            (date(2026,6,25),"GDP"),(date(2026,7,30),"GDP"),(date(2026,9,30),"GDP"),
+                            (date(2026,10,29),"GDP"),(date(2026,12,23),"GDP"),
+                            (date(2026,1,5),"ISM Mfg"),(date(2026,2,2),"ISM Mfg"),(date(2026,3,2),"ISM Mfg"),
+                            (date(2026,4,1),"ISM Mfg"),(date(2026,5,1),"ISM Mfg"),(date(2026,6,1),"ISM Mfg"),
+                            (date(2026,7,1),"ISM Mfg"),(date(2026,8,3),"ISM Mfg"),(date(2026,9,1),"ISM Mfg"),
+                            (date(2026,10,1),"ISM Mfg"),(date(2026,11,2),"ISM Mfg"),(date(2026,12,1),"ISM Mfg"),
+                        ]
+
+                        _week_events = []
+                        for _fd in _FOMC_2026:
+                            if _em_mon_t <= _fd <= _em_fri_t:
+                                _week_events.append((_fd, "FOMC", "🔴 HIGH"))
+                        for _ed, _en in _ECON_2026:
+                            if _em_mon_t <= _ed <= _em_fri_t:
+                                _imp = "🔴 HIGH" if _en in ("CPI", "NFP") else "🟡 MED"
+                                _week_events.append((_ed, _en, _imp))
+
+                        if _week_events:
+                            _ev_df = pd.DataFrame(_week_events, columns=["Date", "Event", "Impact"])
+                            _ev_df["Date"] = _ev_df["Date"].apply(lambda x: x.strftime("%a %d-%b"))
+                            st.dataframe(_ev_df, use_container_width=True, hide_index=True)
+                            st.warning(f"⚠️ {len(_week_events)} economic event(s) in target week — "
+                                       f"positions have elevated gamma. Watch for dealer hedging flow.")
+                        else:
+                            st.caption("No major economic events in target week.")
+
+                    # Full trade list
+                    with st.expander(f"All {len(_em_df)} trades", expanded=False):
+                        _show_df = _em_df[[
+                            "opt_tenor", "swp_tenor", "direction", "strike_pct",
+                            "notional_mm", "moneyness", "exec_date", "platform_identifier"
+                        ]].copy()
+                        _show_df["strike_pct"] = _show_df["strike_pct"].apply(lambda x: f"{x:.5f}%" if pd.notna(x) else "—")
+                        _show_df["notional_mm"] = _show_df["notional_mm"].apply(lambda x: f"${x:,.0f}")
+                        _show_df["platform_identifier"] = _show_df["platform_identifier"].map(
+                            lambda x: PLATFORM_NAMES.get(str(x), str(x)))
+                        _show_df.columns = ["Opt", "Swp", "Dir", "Strike", "Notional (mm)", "Moneyness", "Exec Date", "Platform"]
+                        st.dataframe(_show_df, use_container_width=True, hide_index=True,
+                                     height=min(60 + len(_show_df) * 35, 700))
 
     # ── Auto-refresh ──────────────────────────────────────────────────────────
     _refresh_map = {"Off": 0, "30s": 30, "1 min": 60, "2 min": 120, "5 min": 300}
@@ -38164,4 +38462,3 @@ def show_login_page():
 
 if __name__ == "__main__":
     main()
-# v1605k 12:33:52
