@@ -7725,16 +7725,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _em_curve = st.session_state.get("config_curves", {}).get(_em_ccy)
                                 _em_ois = st.session_state.get("config_basis", {}).get(_em_ccy, {}).get("ois", _em_curve)
                                 if _em_curve is not None:
-                                    st.caption(f"✅ Curve source: config_curves[{_em_ccy}] — {len(_em_curve)} points, "
-                                               f"max maturity {_em_curve['MaturityY'].max():.1f}Y")
+                                    st.caption(f"✅ Curve: config_curves[{_em_ccy}] — {len(_em_curve)} pts, "
+                                               f"10Y={_em_curve[_em_curve['MaturityY'].between(9.5,10.5)]['ZeroRatePct'].values[0]:.4f}% zero" if len(_em_curve[_em_curve['MaturityY'].between(9.5,10.5)]) > 0 else f"✅ Curve: config_curves[{_em_ccy}]")
                                 else:
-                                    # Fallback to curves dict
-                                    _em_curve = st.session_state.get("curves", {}).get(_em_ccy)
-                                    if _em_curve is not None:
-                                        st.warning(f"⚠️ No config_curves[{_em_ccy}] — using fallback curves dict. "
-                                                   f"Commit curves on Curves tab for accurate forwards.")
-                                    else:
-                                        st.error(f"❌ No curve loaded for {_em_ccy}. Load curves first.")
+                                    st.error(f"❌ No config_curves[{_em_ccy}]. Go to Curves tab and commit. "
+                                             f"Keys available: {list(st.session_state.get('config_curves', {}).keys())}")
                                 if _em_curve is not None:
                                     for _st in _em_df["swp_tenor"].dropna().unique():
                                         try:
