@@ -7795,14 +7795,26 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 if _exp_day == _fd:
                                     _day_events.append("🔴 FOMC")
                             _ECON_2026_em = [
-                                (date(2026,1,10),"CPI"),(date(2026,2,12),"CPI"),(date(2026,3,11),"CPI"),
-                                (date(2026,4,14),"CPI"),(date(2026,5,13),"CPI"),(date(2026,6,10),"CPI"),
-                                (date(2026,7,14),"CPI"),(date(2026,8,12),"CPI"),(date(2026,9,15),"CPI"),
-                                (date(2026,10,13),"CPI"),(date(2026,11,12),"CPI"),(date(2026,12,10),"CPI"),
-                                (date(2026,1,9),"NFP"),(date(2026,2,6),"NFP"),(date(2026,3,6),"NFP"),
-                                (date(2026,4,3),"NFP"),(date(2026,5,8),"NFP"),(date(2026,6,5),"NFP"),
-                                (date(2026,7,2),"NFP"),(date(2026,8,7),"NFP"),(date(2026,9,4),"NFP"),
-                                (date(2026,10,2),"NFP"),(date(2026,11,6),"NFP"),(date(2026,12,4),"NFP"),
+                                # CPI — verified from BLS
+                                (date(2026,2,13),"CPI"),(date(2026,3,11),"CPI"),(date(2026,4,14),"CPI"),
+                                (date(2026,5,12),"CPI"),(date(2026,6,10),"CPI"),(date(2026,7,14),"CPI"),
+                                (date(2026,8,12),"CPI"),(date(2026,9,15),"CPI"),(date(2026,10,13),"CPI"),
+                                (date(2026,11,12),"CPI"),(date(2026,12,10),"CPI"),
+                                # NFP — verified from BLS/Colorado LMI
+                                (date(2026,2,11),"NFP"),(date(2026,3,6),"NFP"),(date(2026,4,3),"NFP"),
+                                (date(2026,5,8),"NFP"),(date(2026,6,5),"NFP"),(date(2026,7,2),"NFP"),
+                                (date(2026,8,7),"NFP"),(date(2026,9,4),"NFP"),(date(2026,10,2),"NFP"),
+                                (date(2026,11,6),"NFP"),(date(2026,12,4),"NFP"),
+                                # GDP — verified from BEA
+                                (date(2026,2,20),"GDP"),(date(2026,2,26),"GDP"),(date(2026,3,27),"GDP"),
+                                (date(2026,4,30),"GDP"),(date(2026,5,28),"GDP"),(date(2026,8,26),"GDP"),
+                                (date(2026,9,30),"GDP"),(date(2026,10,29),"GDP"),(date(2026,11,25),"GDP"),
+                                (date(2026,12,23),"GDP"),
+                                # ISM Mfg — first business day, verified from ISM
+                                (date(2026,1,5),"ISM Mfg"),(date(2026,2,2),"ISM Mfg"),(date(2026,3,2),"ISM Mfg"),
+                                (date(2026,4,1),"ISM Mfg"),(date(2026,5,1),"ISM Mfg"),(date(2026,6,1),"ISM Mfg"),
+                                (date(2026,7,1),"ISM Mfg"),(date(2026,8,3),"ISM Mfg"),(date(2026,9,1),"ISM Mfg"),
+                                (date(2026,10,1),"ISM Mfg"),(date(2026,11,2),"ISM Mfg"),(date(2026,12,1),"ISM Mfg"),
                             ]
                             for _ed, _en in _ECON_2026_em:
                                 if _exp_day == _ed:
@@ -7951,17 +7963,22 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                       date(2026,6,17), date(2026,7,29), date(2026,9,16),
                                       date(2026,10,28), date(2026,12,9)]
                         _ECON_2026 = [
-                            (date(2026,1,10),"CPI"),(date(2026,2,12),"CPI"),(date(2026,3,11),"CPI"),
-                            (date(2026,4,14),"CPI"),(date(2026,5,13),"CPI"),(date(2026,6,10),"CPI"),
-                            (date(2026,7,14),"CPI"),(date(2026,8,12),"CPI"),(date(2026,9,15),"CPI"),
-                            (date(2026,10,13),"CPI"),(date(2026,11,12),"CPI"),(date(2026,12,10),"CPI"),
-                            (date(2026,1,9),"NFP"),(date(2026,2,6),"NFP"),(date(2026,3,6),"NFP"),
-                            (date(2026,4,3),"NFP"),(date(2026,5,8),"NFP"),(date(2026,6,5),"NFP"),
-                            (date(2026,7,2),"NFP"),(date(2026,8,7),"NFP"),(date(2026,9,4),"NFP"),
-                            (date(2026,10,2),"NFP"),(date(2026,11,6),"NFP"),(date(2026,12,4),"NFP"),
-                            (date(2026,1,29),"GDP"),(date(2026,3,26),"GDP"),(date(2026,4,29),"GDP"),
-                            (date(2026,6,25),"GDP"),(date(2026,7,30),"GDP"),(date(2026,9,30),"GDP"),
-                            (date(2026,10,29),"GDP"),(date(2026,12,23),"GDP"),
+                            # CPI — verified from BLS
+                            (date(2026,2,13),"CPI"),(date(2026,3,11),"CPI"),(date(2026,4,14),"CPI"),
+                            (date(2026,5,12),"CPI"),(date(2026,6,10),"CPI"),(date(2026,7,14),"CPI"),
+                            (date(2026,8,12),"CPI"),(date(2026,9,15),"CPI"),(date(2026,10,13),"CPI"),
+                            (date(2026,11,12),"CPI"),(date(2026,12,10),"CPI"),
+                            # NFP — verified from BLS/Colorado LMI
+                            (date(2026,2,11),"NFP"),(date(2026,3,6),"NFP"),(date(2026,4,3),"NFP"),
+                            (date(2026,5,8),"NFP"),(date(2026,6,5),"NFP"),(date(2026,7,2),"NFP"),
+                            (date(2026,8,7),"NFP"),(date(2026,9,4),"NFP"),(date(2026,10,2),"NFP"),
+                            (date(2026,11,6),"NFP"),(date(2026,12,4),"NFP"),
+                            # GDP — verified from BEA
+                            (date(2026,2,20),"GDP"),(date(2026,2,26),"GDP"),(date(2026,3,27),"GDP"),
+                            (date(2026,4,30),"GDP"),(date(2026,5,28),"GDP"),(date(2026,8,26),"GDP"),
+                            (date(2026,9,30),"GDP"),(date(2026,10,29),"GDP"),(date(2026,11,25),"GDP"),
+                            (date(2026,12,23),"GDP"),
+                            # ISM Mfg — first business day, verified from ISM
                             (date(2026,1,5),"ISM Mfg"),(date(2026,2,2),"ISM Mfg"),(date(2026,3,2),"ISM Mfg"),
                             (date(2026,4,1),"ISM Mfg"),(date(2026,5,1),"ISM Mfg"),(date(2026,6,1),"ISM Mfg"),
                             (date(2026,7,1),"ISM Mfg"),(date(2026,8,3),"ISM Mfg"),(date(2026,9,1),"ISM Mfg"),
