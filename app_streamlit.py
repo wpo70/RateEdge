@@ -7746,6 +7746,12 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 _em_tgt = st.session_state.get("_em_target")
 
                 if _em_df is not None and not _em_df.empty:
+                    def _safe_tenor_sort(x):
+                        try:
+                            return label_to_years(str(x)) if x else 999
+                        except Exception:
+                            return 999
+
                     # ── Swap tenor filter ─────────────────────────────────
                     _all_swp_tenors = ["All"] + sorted(
                         _em_df["swp_tenor"].dropna().unique().tolist(),
@@ -7880,11 +7886,6 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                         # ── Strike Exposure by Swap Tenor ─────────────────
                         st.markdown("#### Strike Exposure by Swap Tenor")
-                    def _safe_tenor_sort(x):
-                        try:
-                            return label_to_years(str(x)) if x else 999
-                        except Exception:
-                            return 999
                     _em_tenors = sorted(_em_filtered["swp_tenor"].dropna().unique(),
                                         key=_safe_tenor_sort)
                     for _swt in _em_tenors:
