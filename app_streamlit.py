@@ -7724,6 +7724,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _ann_rates = {}
                                 _em_curve = st.session_state.get("config_curves", {}).get(_em_ccy)
                                 _em_ois = st.session_state.get("config_basis", {}).get(_em_ccy, {}).get("ois", _em_curve)
+                                # Clear fwd cache to avoid stale results
+                                st.session_state.pop("_fwd_ann_cache", None)
                                 if _em_curve is not None:
                                     st.caption(f"✅ Curve: config_curves[{_em_ccy}] — {len(_em_curve)} pts, "
                                                f"10Y={_em_curve[_em_curve['MaturityY'].between(9.5,10.5)]['ZeroRatePct'].values[0]:.4f}% zero" if len(_em_curve[_em_curve['MaturityY'].between(9.5,10.5)]) > 0 else f"✅ Curve: config_curves[{_em_ccy}]")
