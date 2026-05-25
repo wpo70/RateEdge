@@ -7982,6 +7982,27 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             else:
                                                 _moneyness = "Deep OTM" if _var_bp > 25 else "OTM" if _var_bp > 5 else "ATM"
 
+                                    # Intrinsic value in premium bp terms
+                                    # = (fwd - strike) × annuity × 10000 for payer
+                                    # = (strike - fwd) × annuity × 10000 for receiver
+                                    _intrinsic_bp = None
+                                    if _fwd_r is not None and pd.notna(_strike) and _ann_approx:
+                                        _F = _fwd_r / 100.0
+                                        _K = _strike / 100.0
+                                        if _dir == "Payer":
+                                            _intr_rate = max(_F - _K, 0)
+                                        elif _dir == "Receiver":
+                                            _intr_rate = max(_K - _F, 0)
+                                        else:
+                                            _intr_rate = 0
+                                        _intrinsic_bp = _intr_rate * _ann_approx * 10000.0
+
+                                    # Seller close-out: premium received minus current value
+                                    # Positive = seller in profit, negative = seller underwater
+                                    _seller_net_bp = None
+                                    if _orig_prem_bp is not None and _curr_prem_bp is not None:
+                                        _seller_net_bp = _orig_prem_bp - _curr_prem_bp
+
                                     _dedup_flag = " *" if _is_dedup else ""
                                     _priced_rows.append({
                                         "Opt": _opt_t,
@@ -7992,10 +8013,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         "Var (bp)": f"{_var_bp:.1f}" if _var_bp is not None else "—",
                                         "ITM/OTM": _moneyness,
                                         "Notional (mm)": f"{_not_mm:,.0f}" if pd.notna(_not_mm) and _not_mm > 0 else "—",
+                                        "Intrinsic (bp)": f"{_intrinsic_bp:.1f}" if _intrinsic_bp is not None else "—",
                                         "Orig Prem (bp)": f"{_orig_prem_bp:.1f}{_dedup_flag}" if _orig_prem_bp is not None else "—",
                                         "Curr Val (bp)": f"{_curr_prem_bp:.1f}" if _curr_prem_bp is not None else "—",
-                                        "P&L (bp)": f"{_pnl_bp:+.1f}" if _pnl_bp is not None else "—",
-                                        "P&L ($)": f"${_pnl_dollar:+,.0f}" if _pnl_dollar is not None and not math.isnan(_pnl_dollar) else "—",
+                                        "Seller Net (bp)": f"{_seller_net_bp:+.1f}" if _seller_net_bp is not None else "—",
                                         "BE Fwd (%)": f"{_breakeven:.3f}" if _breakeven is not None else "—",
                                         "Days Left": f"{max((_expiry_dt - _today).days, 0)}" if _expiry_dt else "—",
                                         "Exec Date": str(_tr.get("exec_date", "")),
@@ -8004,9 +8025,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                                 _priced_df = pd.DataFrame(_priced_rows)
                                 st.dataframe(_priced_df, use_container_width=True, hide_index=True)
-                                st.caption("* = Orig Prem halved (broker reports full straddle prem on each leg). "
-                                           "BE Fwd = forward rate at which buyer breaks even. "
-                                           "P&L = Curr Val − Orig Prem (buyer's perspective).")
+                                st.caption("* = Orig Prem halved (broker reports straddle prem on each leg). "
+                                           "Intrinsic = swap value if exercised now. "
+                                           "Seller Net = Orig Prem − Curr Val (positive = seller covered, negative = seller underwater). "
+                                           "BE Fwd = forward at which buyer breaks even.")
 
                         # ── Strike Exposure by Swap Tenor ─────────────────
                         st.markdown("#### Strike Exposure by Swap Tenor")
