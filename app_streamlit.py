@@ -8238,6 +8238,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         "ITM/OTM": _moneyness,
                                         "Notional (mm)": f"{_not_mm:,.0f}" if pd.notna(_not_mm) and _not_mm > 0 else "—",
                                         "Intrinsic ($)": f"{_intrinsic_dollar:,.0f}" if _intrinsic_dollar is not None else "—",
+                                        "Prem (bp)": f"{_curr_prem_bp:.1f}" if _curr_prem_bp is not None else "—",
                                         "Orig Prem (bp)": f"{_orig_prem_bp:.1f}{_dedup_flag}" if _orig_prem_bp is not None else "—",
                                         "Curr Val ($)": f"{_curr_pv:,.0f}" if _curr_pv is not None else "—",
                                         "Seller Net ($)": f"{_seller_net_dollar:+,.0f}" if _seller_net_dollar is not None else "—",
@@ -8256,9 +8257,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _styled = _priced_df.style.apply(_highlight_atm, axis=1)
                                 st.dataframe(_styled, use_container_width=True, hide_index=True)
                                 st.caption("* = Orig Prem halved (broker reports straddle prem on each leg). "
+                                           "Prem (bp) = Bachelier price at current vol surface & fwd. "
                                            "Intrinsic ($) = NPV of underlying swap if exercised now. "
-                                           "Curr Val ($) = Bachelier option value at current vol. "
-                                           "Seller Net ($) = Orig Prem − Curr Val (positive = seller covered, negative = underwater). "
+                                           "Curr Val ($) = Prem (bp) × annuity × notional. "
+                                           "Seller Net ($) = Orig Prem − Curr Val (positive = covered, negative = underwater). "
                                            "BE Fwd = forward at which buyer breaks even.")
 
                         # ── Strike Exposure by Swap Tenor ─────────────────
