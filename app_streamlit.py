@@ -7888,7 +7888,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         try:
                                             _st_y = label_to_years(_swp)
                                             _days = max((_exp_dt - date.today()).days, 0)
-                                            _exp_y = _days / 365.25
+                                            _exp_y = _days / 365.0  # match pricer (365.0, not 365.25)
                                             _exp_lbl = f"{_days}d"
                                             # Same method as pricer: forward_and_annuity_from_curve
                                             _f, _a, _ = forward_and_annuity_from_curve(
@@ -8074,6 +8074,22 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _day_payers = len(_day_df[_day_df["direction"] == "Payer"])
                             _day_rcvrs = len(_day_df[_day_df["direction"] == "Receiver"])
 
+                            # Live forward diagnostic — recompute from current curve
+                            _live_curve = st.session_state.get("config_curves", {}).get("USD")
+                            _live_fwd_diag = ""
+                            if _live_curve is not None:
+                                _days_to_exp = max((_exp_day - date.today()).days, 0)
+                                _exp_y_live = _days_to_exp / 365.0
+                                st.session_state.pop("_fwd_ann_cache", None)
+                                for _dt in sorted(_day_df["swp_tenor"].dropna().unique(), key=_safe_tenor_sort):
+                                    try:
+                                        _ty = label_to_years(str(_dt))
+                                        _f_live, _, _ = forward_and_annuity_from_curve(
+                                            _live_curve, "USD", _exp_y_live, _ty, _live_curve)
+                                        _live_fwd_diag += f" {_dt}={_f_live*100:.4f}%"
+                                    except Exception:
+                                        pass
+
                             # Check for economic events on this day
                             _day_events = []
                             for _fd in [date(2026,1,28),date(2026,3,18),date(2026,4,29),date(2026,6,17),
@@ -8114,6 +8130,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 st.markdown(f"**📅 Expiry: {_day_label}** — {len(_day_df)} trades, "
                                             f"${_day_gross:,.0f}mm gross, net ${_day_net:+,.0f}mm "
                                             f"(P:{_day_payers} R:{_day_rcvrs}){_event_str}")
+                                if _live_fwd_diag:
+                                    _days_to_exp = max((_exp_day - date.today()).days, 0)
+                                    st.caption(f"Live fwd ({_days_to_exp}d exp_y={_days_to_exp/365.0:.5f}):{_live_fwd_diag}")
 
                                 # Price each trade
                                 _PREM_DEDUP_MICS_EM = {"BGCD","TPSE","TSEF","TWSF","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
@@ -14011,6 +14030,8 @@ def swaptions_tab(vol_mode: str):
         else:
             fwd, ann, _ = forward_and_annuity_from_curve(curve, ccy, expiry_y, tenor_y, ois_curve, freq_override=freq_override)
             fwd_source = "curve"
+            # Clear cache to ensure fresh computation
+            st.session_state.pop("_fwd_ann_cache", None)
         if basis_6v3 is not None and ccy == "AUD":
             basis_bp = interpolate_basis(basis_6v3, expiry_y + delay_y + tenor_y / 2)
             if leg_conv == "Q/Q" and tenor_y > 3.0:
