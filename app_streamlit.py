@@ -7888,19 +7888,16 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         try:
                                             _st_y = label_to_years(_swp)
                                             _days = max((_exp_dt - date.today()).days, 0)
-                                            _exp_lbl = _em_exp_label(_days)
-                                            _fwd_val = None
-                                            if _fwd_mx_em is not None:
-                                                _mx_v = get_matrix_value(_fwd_mx_em, _exp_lbl, _st_y)
-                                                if _mx_v is not None and _mx_v > 0:
-                                                    _fwd_val = _mx_v
-                                            if _fwd_val is None:
-                                                _fwd_start_y = _days / 365.25
-                                                _f, _, _ = forward_and_annuity_from_curve(
-                                                    _em_curve, _em_ccy, _fwd_start_y, _st_y, _em_ois)
-                                                _fwd_val = _f * 100
-                                            # Always get annuity from curve
-                                            _fwd_start_y = _days / 365.25
+                                            _exp_y = _days / 365.25
+                                            _exp_lbl = f"{_days}d"
+                                            # Use fast_forward_rate with exact expiry for precise per-day forward
+                                            _cx = _em_curve["MaturityY"].values.astype(float)
+                                            _cy = _em_curve["ZeroRatePct"].values.astype(float) / 100.0
+                                            _sort = np.argsort(_cx)
+                                            _cx, _cy = _cx[_sort], _cy[_sort]
+                                            _fwd_val = fast_forward_rate(_cx, _cy, _exp_y, _st_y, _em_ccy) * 100
+                                            # Annuity from curve
+                                            _fwd_start_y = _exp_y
                                             _, _a, _ = forward_and_annuity_from_curve(
                                                 _em_curve, _em_ccy, _fwd_start_y, _st_y, _em_ois)
                                             return pd.Series({"_fwd": _fwd_val, "_ann": _a, "_exp_lbl": _exp_lbl})
@@ -7920,7 +7917,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         if len(_fv) > 0: _fwd_rates[str(_st)] = _fv.median()
                                         if len(_av) > 0: _ann_rates[str(_st)] = _av.median()
 
-                                    _src = "matrix (per-expiry)" if _fwd_mx_em is not None else "curve"
+                                    _src = "fast_forward_rate (per-expiry)"
                                     st.caption(f"✅ Fwd source: {_src} | "
                                                f"10Y: {_fwd_rates.get('10Y', 0):.4f}% | "
                                                f"30Y: {_fwd_rates.get('30Y', 0):.4f}%")
