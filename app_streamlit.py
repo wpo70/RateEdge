@@ -8000,6 +8000,15 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _em_df["strike_var_bp"] = _em_df.apply(_strike_var_bp, axis=1)
 
                     _em_filtered = _em_df.copy()
+                    # Exclude expired: today's expiry valid until 11am NYC, then rolls
+                    _today = date.today()
+                    try:
+                        _now_nyc = _dt_em.now(NEW_YORK_TZ)
+                        _cutoff_date = _today if _now_nyc.hour < 11 else _today + timedelta(days=1)
+                    except Exception:
+                        _cutoff_date = _today
+                    if "expiry_date" in _em_filtered.columns:
+                        _em_filtered = _em_filtered[_em_filtered["expiry_date"] >= _cutoff_date]
                     if _em_swp_filter != "All":
                         _em_filtered = _em_filtered[_em_filtered["swp_tenor"] == _em_swp_filter]
 
@@ -27840,6 +27849,7 @@ def home_tab():
             | Cash Settlement | Par rate method (ISDA 2006) |
             | Premium | Forward premium (T+2) |
             | Exercise | European |
+            | Expiry | 11:00am New York |
             | Vol Quote | Normal (bp/annum) |
             | Annuity | Actual swap curve |
             """)
@@ -27848,7 +27858,7 @@ def home_tab():
             **Underlying Swap**
             | Convention | Standard |
             |------------|----------|
-            | Fixed Leg | Semi-annual, 30/360 |
+            | Fixed Leg | Annual, Act/360 |
             | Float Leg | Quarterly, ACT/360 |
             | Float Index | SOFR (Term or compounded) |
             | Spot Lag | T+2 |
@@ -27868,6 +27878,7 @@ def home_tab():
             | Cash Settlement | Par rate, ISDA 2006 |
             | Premium | Forward premium (T+2) |
             | Exercise | European |
+            | Expiry | 11:00am Frankfurt (CET) |
             | Vol Quote | Normal (bp/annum) |
             | Annuity | Curve-based |
             """)
@@ -27878,7 +27889,7 @@ def home_tab():
             |------------|----------|
             | Fixed Leg | Annual, 30/360 |
             | Float Leg | Annual (was 6M) |
-            | Float Index | ├ö├®┬╝STR |
+            | Float Index | ESTR |
             | Spot Lag | T+2 |
             | Roll | Modified Following |
             | Calendar | TARGET |
