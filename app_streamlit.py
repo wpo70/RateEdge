@@ -7864,49 +7864,71 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     # Use forward matrix for consistency with pricer
                                     _fwd_mx_em = st.session_state.get("fwd_matrix", {}).get(_em_ccy)
                                     if _fwd_mx_em is None or (hasattr(_fwd_mx_em, "empty") and _fwd_mx_em.empty):
-                                        # Auto-generate matrix from config_curves
                                         _em_b6v3 = st.session_state.get("config_basis", {}).get(_em_ccy, {}).get("6v3")
                                         _fwd_mx_em = generate_forward_matrix(_em_ccy, _em_curve, _em_b6v3)
                                         if _fwd_mx_em is not None and not _fwd_mx_em.empty:
                                             st.session_state.setdefault("fwd_matrix", {})[_em_ccy] = _fwd_mx_em
                                             st.caption("ℹ️ Auto-generated forward matrix from config_curves")
-                                    _fwd_start_days = max((_em_mon - date.today()).days + 2, 0)
-                                    _fwd_start_y = _fwd_start_days / 365.25
-                                    # Build expiry label for matrix lookup
-                                    if _fwd_start_y <= 1/52 + 0.001:
-                                        _em_exp_lbl = "1w"
-                                    elif _fwd_start_y <= 2/12:
-                                        _em_exp_lbl = f"{max(1, round(_fwd_start_y * 12))}m"
-                                    elif _fwd_start_y <= 2.0:
-                                        _em_exp_lbl = f"{max(1, round(_fwd_start_y * 12))}m"
-                                    else:
-                                        _em_exp_lbl = f"{round(_fwd_start_y)}y"
-                                    for _st in _em_df["swp_tenor"].dropna().unique():
+
+                                    # Per-row forward + annuity based on each trade's actual expiry_date
+                                    def _em_exp_label(days_to_exp):
+                                        """Convert days-to-expiry to matrix expiry label."""
+                                        y = max(days_to_exp, 0) / 365.25
+                                        if y <= 1/52 + 0.001: return "1w"
+                                        if y <= 2/12: return f"{max(1, round(y * 12))}m"
+                                        if y <= 2.0: return f"{max(1, round(y * 12))}m"
+                                        return f"{round(y)}y"
+
+                                    def _row_fwd_ann(row):
+                                        """Compute forward rate and annuity for a single trade row."""
+                                        _swp = str(row.get("swp_tenor", ""))
+                                        _exp_dt = row.get("expiry_date")
+                                        if not _swp or _exp_dt is None:
+                                            return pd.Series({"_fwd": None, "_ann": None, "_exp_lbl": None})
                                         try:
-                                            _st_y = label_to_years(str(_st))
-                                            _used_matrix = False
+                                            _st_y = label_to_years(_swp)
+                                            _days = max((_exp_dt - date.today()).days, 0)
+                                            _exp_lbl = _em_exp_label(_days)
+                                            _fwd_val = None
                                             if _fwd_mx_em is not None:
-                                                _mx_val = get_matrix_value(_fwd_mx_em, _em_exp_lbl, _st_y)
-                                                if _mx_val is not None and _mx_val > 0:
-                                                    _fwd_rates[str(_st)] = _mx_val
-                                                    _used_matrix = True
-                                            if not _used_matrix:
-                                                _fwd, _ann, _ = forward_and_annuity_from_curve(
+                                                _mx_v = get_matrix_value(_fwd_mx_em, _exp_lbl, _st_y)
+                                                if _mx_v is not None and _mx_v > 0:
+                                                    _fwd_val = _mx_v
+                                            if _fwd_val is None:
+                                                _fwd_start_y = _days / 365.25
+                                                _f, _, _ = forward_and_annuity_from_curve(
                                                     _em_curve, _em_ccy, _fwd_start_y, _st_y, _em_ois)
-                                                _fwd_rates[str(_st)] = _fwd * 100
+                                                _fwd_val = _f * 100
                                             # Always get annuity from curve
-                                            _, _ann, _ = forward_and_annuity_from_curve(
+                                            _fwd_start_y = _days / 365.25
+                                            _, _a, _ = forward_and_annuity_from_curve(
                                                 _em_curve, _em_ccy, _fwd_start_y, _st_y, _em_ois)
-                                            _ann_rates[str(_st)] = _ann
+                                            return pd.Series({"_fwd": _fwd_val, "_ann": _a, "_exp_lbl": _exp_lbl})
                                         except Exception:
-                                            pass
-                                    _src = f"matrix ({_em_exp_lbl})" if _fwd_mx_em is not None else "curve"
+                                            return pd.Series({"_fwd": None, "_ann": None, "_exp_lbl": None})
+
+                                    _fwd_ann_df = _em_df.apply(_row_fwd_ann, axis=1)
+                                    _em_df["_fwd"] = _fwd_ann_df["_fwd"]
+                                    _em_df["_ann"] = _fwd_ann_df["_ann"]
+                                    _em_df["_exp_lbl"] = _fwd_ann_df["_exp_lbl"]
+
+                                    # Build _fwd_rates / _ann_rates dicts for backward compat (use median per tenor)
+                                    for _st in _em_df["swp_tenor"].dropna().unique():
+                                        _sub = _em_df[_em_df["swp_tenor"] == _st]
+                                        _fv = _sub["_fwd"].dropna()
+                                        _av = _sub["_ann"].dropna()
+                                        if len(_fv) > 0: _fwd_rates[str(_st)] = _fv.median()
+                                        if len(_av) > 0: _ann_rates[str(_st)] = _av.median()
+
+                                    _src = "matrix (per-expiry)" if _fwd_mx_em is not None else "curve"
                                     st.caption(f"✅ Fwd source: {_src} | "
                                                f"10Y: {_fwd_rates.get('10Y', 0):.4f}% | "
                                                f"30Y: {_fwd_rates.get('30Y', 0):.4f}%")
 
                                 def _classify_itm(row):
-                                    fwd = _fwd_rates.get(str(row.get("swp_tenor", "")))
+                                    fwd = row.get("_fwd")
+                                    if fwd is None or pd.isna(fwd):
+                                        fwd = _fwd_rates.get(str(row.get("swp_tenor", "")))
                                     s = row.get("strike_pct")
                                     d = row.get("direction")
                                     if fwd is None or pd.isna(s):
@@ -7991,7 +8013,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                     # Compute strike variance (bp from forward)
                     def _strike_var_bp(row):
-                        fwd = _em_fwd.get(str(row.get("swp_tenor", "")))
+                        fwd = row.get("_fwd")
+                        if fwd is None or pd.isna(fwd):
+                            fwd = _em_fwd.get(str(row.get("swp_tenor", "")))
                         s = row.get("strike_pct")
                         if fwd is None or pd.isna(s):
                             return None
@@ -8107,7 +8131,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 for _, _tr in _day_df.iterrows():
                                     _swt = str(_tr.get("swp_tenor", ""))
                                     _strike = _tr.get("strike_pct")
-                                    _fwd_r = _em_fwd.get(_swt)
+                                    _fwd_r = _tr.get("_fwd") if pd.notna(_tr.get("_fwd")) else _em_fwd.get(_swt)
                                     _opt_t = str(_tr.get("opt_tenor", ""))
                                     _dir = _tr.get("direction", "")
                                     _not_mm = _tr.get("notional_mm", 0)
@@ -8127,7 +8151,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     # Current option value using REMAINING time and REAL annuity from curve
                                     _curr_prem_bp = None
                                     _curr_pv = None
-                                    _real_ann = _em_ann.get(_swt)
+                                    _real_ann = _tr.get("_ann") if pd.notna(_tr.get("_ann")) else _em_ann.get(_swt)
                                     _ann_used = _real_ann if _real_ann else None
                                     if _fwd_r is not None and pd.notna(_strike) and _em_atm is not None:
                                         try:
@@ -8248,8 +8272,16 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         _subset = _em_filtered[_em_filtered["swp_tenor"] == _swt].copy()
                         if _subset.empty:
                             continue
-                        _fwd_r = _em_fwd.get(str(_swt))
-                        _fwd_lbl = f" | Fwd: {_fwd_r:.3f}%" if _fwd_r else ""
+                        _fwd_vals = _subset["_fwd"].dropna() if "_fwd" in _subset.columns else pd.Series(dtype=float)
+                        if len(_fwd_vals) > 0:
+                            _fwd_lo, _fwd_hi = _fwd_vals.min(), _fwd_vals.max()
+                            if abs(_fwd_hi - _fwd_lo) < 0.001:
+                                _fwd_lbl = f" | Fwd: {_fwd_lo:.3f}%"
+                            else:
+                                _fwd_lbl = f" | Fwd: {_fwd_lo:.3f}–{_fwd_hi:.3f}%"
+                        else:
+                            _fwd_r = _em_fwd.get(str(_swt))
+                            _fwd_lbl = f" | Fwd: {_fwd_r:.3f}%" if _fwd_r else ""
                         st.markdown(f"**{_swt} Swap{_fwd_lbl}** — {len(_subset)} trades, "
                                     f"${_subset['notional_mm'].sum():,.0f}mm gross")
 
