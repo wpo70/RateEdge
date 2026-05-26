@@ -13687,6 +13687,7 @@ def swaptions_tab(vol_mode: str):
 | **Fixed leg** | Annual, Act/360 |
 | **Float leg** | Annual, Act/360 |
 | **Exercise** | European |
+| **Expiry** | 11:00am New York |
 | **Settlement** | Cash (ICE SOFR Swap Rate) or Physical (LCH/CME) |
 | **Spot** | T+2 New York BD |
 | **Discounting** | SOFR flat |
@@ -13707,6 +13708,7 @@ def swaptions_tab(vol_mode: str):
 | **Fixed leg** | Annual, 30/360 ISDA |
 | **Float leg** | Semi-annual (6M) or quarterly (3M), Act/360 |
 | **Exercise** | European |
+| **Expiry** | 11:00am Frankfurt (CET) |
 | **Settlement** | Cash (ICESWAP2 EUR-ISDA-EURIBOR) or Physical (LCH/Eurex) |
 | **Spot** | T+2 TARGET BD |
 | **Discounting** | ESTR OIS |
