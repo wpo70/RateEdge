@@ -7660,15 +7660,18 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 st.warning("Database required for Expiry Monitor.")
             else:
                 from datetime import timedelta, datetime as _dt_em
-                from zoneinfo import ZoneInfo as _ZI_em
 
                 # ── Controls ─────────────────────────────────────────────
                 _em_c1, _em_c2, _em_c3 = st.columns([2, 2, 4])
 
                 # Effective date: after 11am EST, today's expiries are done → roll forward
-                _now_est = _dt_em.now(_ZI_em("US/Eastern"))
+                try:
+                    _now_est = _dt_em.now(NEW_YORK_TZ)
+                    _past_cutoff = _now_est.hour >= 11
+                except Exception:
+                    _past_cutoff = False  # If tz fails, don't roll
                 _eff_date = date.today()
-                if _now_est.hour >= 11 and _eff_date.weekday() < 5:
+                if _past_cutoff and _eff_date.weekday() < 5:
                     _eff_date += timedelta(days=1)
                 # Skip weekends
                 while _eff_date.weekday() >= 5:
