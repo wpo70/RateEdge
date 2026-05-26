@@ -13644,7 +13644,7 @@ def swaptions_tab(vol_mode: str):
     # USD SOFR OIS is single-curve — SOFR for both projection and discounting.
     # config_basis["USD"]["ois"] is FEDFUNDS which is WRONG for SOFR swap pricing.
     if ccy == "USD":
-        ois_curve = None
+        ois_curve = curve  # SOFR IS the OIS curve
 
     # v0805c: EUR — ESTR IS the OIS curve for EUR; config_curves['EUR'] holds ESTR.
     # ois_curve must point to ESTR for discounting; projection (EURIBOR 6M/3M) is
