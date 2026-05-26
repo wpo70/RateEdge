@@ -1558,6 +1558,9 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                     if "MaturityY" in _zc_df.columns and "ZeroRatePct" in _zc_df.columns:
                         _zc_df["MaturityY"] = _zc_df["MaturityY"].astype(float)
                         _zc_df["ZeroRatePct"] = _zc_df["ZeroRatePct"].astype(float)
+                        # Bootstrap par → zero for USD SOFR OIS
+                        if ccy == "USD":
+                            _zc_df = bootstrap_usd_sofr_ois(_zc_df)
                         st.session_state.setdefault("curves", {})[ccy] = _zc_df
                         st.session_state.setdefault("config_curves", {})[ccy] = _zc_df
                         set_timestamp("curves", ccy)
@@ -5727,6 +5730,97 @@ def bootstrap_aud_zeros_from_bbg_feed(xl: pd.ExcelFile) -> Optional[pd.DataFrame
         return None
 
 
+def bootstrap_usd_sofr_ois(par_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Bootstrap USD SOFR OIS par swap rates → continuous zero rates.
+
+    USD SOFR OIS conventions:
+      - Single curve: SOFR for both projection and discounting
+      - Annual fixed payments
+      - Day count: Act/360 (dcf ≈ 365/360 per annual period)
+      - Settlement: T+2
+
+    Input:  DataFrame with MaturityY, ZeroRatePct (which are actually par rates %)
+    Output: Same format with ZeroRatePct replaced by true bootstrapped zero rates %
+    """
+    import math
+    SPOT = 1.0 / 252.0  # Must match fast_forward_rate SPOT for consistent DFs
+    DCF_ANNUAL = 365.0 / 360.0  # Act/360 annual day count fraction
+
+    par_dict = {}
+    for _, row in par_df.iterrows():
+        mat = float(row["MaturityY"])
+        rate = float(row["ZeroRatePct"])
+        if mat > 0 and rate > 0:
+            par_dict[mat] = rate
+
+    if len(par_dict) < 3:
+        return par_df  # Not enough points to bootstrap
+
+    dfs = {0.0: 1.0, SPOT: 1.0}
+
+    def _dfi(t):
+        """Interpolate discount factor at arbitrary time t (log-linear in DF)."""
+        ts = sorted(dfs.keys())
+        dfv = [dfs[x] for x in ts]
+        if t <= ts[0]:
+            return 1.0
+        if t >= ts[-1]:
+            z = -math.log(max(dfv[-1], 1e-10)) / ts[-1]
+            return math.exp(-z * t)
+        return math.exp(float(np.interp(t, ts, np.log(np.maximum(dfv, 1e-10)))))
+
+    for T in sorted(par_dict):
+        c = par_dict[T] / 100.0  # decimal
+        te = T + SPOT  # payment date
+
+        if T <= 1.0:
+            # Short end: single period, simple compounding
+            dcf = T * DCF_ANNUAL  # Act/360
+            df_end = 1.0 / (1.0 + c * dcf)
+        else:
+            # Annual coupon bootstrap with stub handling
+            # Build payment schedule: annual at 1, 2, ..., floor(T), then stub to T
+            n_full = int(math.floor(T))
+            ann = 0.0
+            for yr in range(1, n_full):
+                ti = yr + SPOT
+                ann += DCF_ANNUAL * _dfi(ti)
+            # Check for stub: if T is not an integer, final period is shorter
+            if abs(T - n_full) < 1e-6:
+                # Clean: final coupon at T with full annual dcf
+                # n_full coupons already counted (range 1..n_full-1), last one is the solve
+                dcf_last = DCF_ANNUAL
+            else:
+                # Stub: intermediate annual coupon at n_full, then stub to T
+                # Add the n_full coupon first
+                ann += DCF_ANNUAL * _dfi(n_full + SPOT)
+                # Final stub dcf
+                dcf_last = (T - n_full) * DCF_ANNUAL
+            df_end = (1.0 - c * ann) / (1.0 + c * dcf_last)
+
+        if df_end > 0:
+            dfs[te] = df_end
+
+    # Convert bootstrapped DFs to continuous zero rates at original maturities
+    result_rows = []
+    for _, row in par_df.iterrows():
+        mat = float(row["MaturityY"])
+        if mat > 0:
+            d = _dfi(mat)
+            if d > 0:
+                zero_pct = -math.log(d) / mat * 100.0
+            else:
+                zero_pct = float(row["ZeroRatePct"])
+        else:
+            zero_pct = float(row["ZeroRatePct"])
+        new_row = row.copy()
+        new_row["ZeroRatePct"] = zero_pct
+        result_rows.append(new_row)
+
+    return pd.DataFrame(result_rows).reset_index(drop=True)
+
+
 def load_usd_sofr_from_config(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
     """
     Load USD SOFR IRS curve from BBG_Feed col A (label) + col E (MID).
@@ -6091,6 +6185,8 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                         from zoneinfo import ZoneInfo as _ZI_src3
                         from datetime import datetime as _dt_src_now3
                         curve_df["_source_date"] = _dt_src_now3.now(_ZI_src3("Australia/Sydney")).strftime("%Y-%m-%d")
+                        # Bootstrap par rates → zero rates (USD SOFR OIS single curve)
+                        curve_df = bootstrap_usd_sofr_ois(curve_df)
                 else:
                     curve_name = f"Curves_{ccy}"
                     if curve_name in xl.sheet_names:
@@ -7727,6 +7823,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _ann_rates = {}
                                 _em_curve = st.session_state.get("config_curves", {}).get(_em_ccy)
                                 _em_ois = st.session_state.get("config_basis", {}).get(_em_ccy, {}).get("ois", _em_curve)
+                                # USD SOFR OIS is single-curve — don't use FEDFUNDS for discounting
+                                if _em_ccy == "USD":
+                                    _em_ois = _em_curve
                                 # Clear fwd cache to avoid stale results
                                 st.session_state.pop("_fwd_ann_cache", None)
                                 if _em_curve is not None:
@@ -8426,6 +8525,9 @@ def vol_config_tab():
                     try:
                         _db_curve = _load_curve_from_db_latest(_db_fr, _db_ccy, load_date=str(_load_date))
                         if _db_curve is not None and len(_db_curve) > 0:
+                            # Bootstrap par → zero for USD SOFR OIS
+                            if _db_ccy == "USD":
+                                _db_curve = bootstrap_usd_sofr_ois(_db_curve)
                             st.session_state.setdefault("curves", {})[_db_ccy] = _db_curve
                             st.session_state.setdefault("config_curves", {})[_db_ccy] = _db_curve
                             set_timestamp("curves", _db_ccy)
@@ -13427,6 +13529,10 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
         freq = 0.25 if tenor <= 3 else 0.5
     elif ccy == "NZD":
         freq = 0.25 if tenor <= 2 else 0.5
+    elif ccy == "USD":
+        freq = 1.0  # SOFR OIS: annual Act/360 both legs
+    elif ccy == "EUR":
+        freq = 1.0  # ESTR OIS: annual 30/360 fixed
     else:
         freq = 0.5
 
@@ -13533,6 +13639,11 @@ def swaptions_tab(vol_mode: str):
     ois_curve = _cbo if _cbo is not None else get_basis_curve(ccy, "ois")
     _cc = st.session_state.get("config_curves", {}).get(ccy)
     curve = _cc if _cc is not None else get_ccy_curve(ccy)
+
+    # USD SOFR OIS is single-curve — SOFR for both projection and discounting.
+    # config_basis["USD"]["ois"] is FEDFUNDS which is WRONG for SOFR swap pricing.
+    if ccy == "USD":
+        ois_curve = None
 
     # v0805c: EUR — ESTR IS the OIS curve for EUR; config_curves['EUR'] holds ESTR.
     # ois_curve must point to ESTR for discounting; projection (EURIBOR 6M/3M) is
