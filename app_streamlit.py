@@ -7659,14 +7659,36 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             if not HAS_POSTGRES:
                 st.warning("Database required for Expiry Monitor.")
             else:
-                from datetime import timedelta
+                from datetime import timedelta, datetime as _dt_em
                 from zoneinfo import ZoneInfo as _ZI_em
 
                 # ── Controls ─────────────────────────────────────────────
                 _em_c1, _em_c2, _em_c3 = st.columns([2, 2, 4])
+
+                # Effective date: after 11am EST, today's expiries are done → roll forward
+                _now_est = _dt_em.now(_ZI_em("US/Eastern"))
+                _eff_date = date.today()
+                if _now_est.hour >= 11 and _eff_date.weekday() < 5:
+                    _eff_date += timedelta(days=1)
+                # Skip weekends
+                while _eff_date.weekday() >= 5:
+                    _eff_date += timedelta(days=1)
+                # Default: 6 business days from effective date
+                _biz_count = 0
+                _default_date = _eff_date
+                while _biz_count < 6:
+                    _default_date += timedelta(days=1)
+                    if _default_date.weekday() < 5:
+                        _biz_count += 1
+                # Snap to Monday of that week
+                _default_mon = _default_date - timedelta(days=_default_date.weekday())
+                # Min value: Monday of effective date's week (no past weeks)
+                _min_mon = _eff_date - timedelta(days=_eff_date.weekday())
+
                 with _em_c1:
                     _em_target_mon = st.date_input("Target week (Monday)",
-                        value=date.today() + timedelta(days=(7 - date.today().weekday()) % 7 or 7),
+                        value=_default_mon,
+                        min_value=_min_mon,
                         key="em_target_mon")
                 with _em_c2:
                     _em_ccy = st.selectbox("Currency", ["USD"], key="em_ccy")
