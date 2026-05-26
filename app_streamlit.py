@@ -7890,16 +7890,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             _days = max((_exp_dt - date.today()).days, 0)
                                             _exp_y = _days / 365.25
                                             _exp_lbl = f"{_days}d"
-                                            # Use fast_forward_rate with exact expiry for precise per-day forward
-                                            _cx = _em_curve["MaturityY"].values.astype(float)
-                                            _cy = _em_curve["ZeroRatePct"].values.astype(float) / 100.0
-                                            _sort = np.argsort(_cx)
-                                            _cx, _cy = _cx[_sort], _cy[_sort]
-                                            _fwd_val = fast_forward_rate(_cx, _cy, _exp_y, _st_y, _em_ccy) * 100
-                                            # Annuity from curve
-                                            _fwd_start_y = _exp_y
-                                            _, _a, _ = forward_and_annuity_from_curve(
-                                                _em_curve, _em_ccy, _fwd_start_y, _st_y, _em_ois)
+                                            # Same method as pricer: forward_and_annuity_from_curve
+                                            _f, _a, _ = forward_and_annuity_from_curve(
+                                                _em_curve, _em_ccy, _exp_y, _st_y, _em_ois)
+                                            _fwd_val = _f * 100.0  # decimal to pct
                                             return pd.Series({"_fwd": _fwd_val, "_ann": _a, "_exp_lbl": _exp_lbl})
                                         except Exception:
                                             return pd.Series({"_fwd": None, "_ann": None, "_exp_lbl": None})
@@ -7917,7 +7911,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         if len(_fv) > 0: _fwd_rates[str(_st)] = _fv.median()
                                         if len(_av) > 0: _ann_rates[str(_st)] = _av.median()
 
-                                    _src = "fast_forward_rate (per-expiry)"
+                                    _src = "forward_and_annuity_from_curve (per-expiry)"
                                     st.caption(f"✅ Fwd source: {_src} | "
                                                f"10Y: {_fwd_rates.get('10Y', 0):.4f}% | "
                                                f"30Y: {_fwd_rates.get('30Y', 0):.4f}%")
@@ -14009,17 +14003,6 @@ def swaptions_tab(vol_mode: str):
         else:
             fwd, ann, _ = forward_and_annuity_from_curve(curve, ccy, expiry_y, tenor_y, ois_curve, freq_override=freq_override)
             fwd_source = "curve"
-            # v2505t: USD — override forward with matrix value for consistency
-            if ccy == "USD" and not is_midcurve:
-                _fwd_mx = st.session_state.get("fwd_matrix", {}).get(ccy)
-                if _fwd_mx is not None:
-                    try:
-                        _mx_val = get_matrix_value(_fwd_mx, expiry.lower(), tenor_y)
-                        if _mx_val is not None and _mx_val > 0:
-                            fwd = _mx_val / 100.0
-                            fwd_source = "matrix"
-                    except Exception:
-                        pass
         if basis_6v3 is not None and ccy == "AUD":
             basis_bp = interpolate_basis(basis_6v3, expiry_y + delay_y + tenor_y / 2)
             if leg_conv == "Q/Q" and tenor_y > 3.0:
