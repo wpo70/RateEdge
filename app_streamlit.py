@@ -14163,7 +14163,15 @@ def swaptions_tab(vol_mode: str):
         expiry_display = expiry
     with col_expdt:
         from datetime import date as _sw_date
-        _calc_dt = modified_following(_sw_date.today() + __import__('datetime').timedelta(days=int(expiry_y * 365.25)))
+        # USD swaptions expire in NYC — use NYC date for days-to-expiry
+        if ccy == "USD":
+            try:
+                _sw_today = __import__('datetime').datetime.now(NEW_YORK_TZ).date()
+            except Exception:
+                _sw_today = _sw_date.today()
+        else:
+            _sw_today = _sw_date.today()
+        _calc_dt = modified_following(_sw_today + __import__('datetime').timedelta(days=int(expiry_y * 365.25)))
         _default_dt_str = _calc_dt.strftime("%d/%m/%Y")
         _custom_dt_str = st.text_input("Expiry Date (DD/MM/YY)", value=_default_dt_str, key=f"sw_expiry_date_{expiry}")
         try:
@@ -14174,9 +14182,9 @@ def swaptions_tab(vol_mode: str):
                 try: _parsed = _swdt.strptime(_custom_dt_str.strip(), _fmt).date(); break
                 except: pass
             if _parsed and _parsed != _calc_dt:
-                expiry_y = max((_parsed - _sw_date.today()).days / 365.0, 1/365.0)
+                expiry_y = max((_parsed - _sw_today).days / 365.0, 1/365.0)
                 # Show as approximate term (e.g. "6m (06-Jul-2026)") not raw date
-                _days = (_parsed - _sw_date.today()).days
+                _days = (_parsed - _sw_today).days
                 if _days < 21: _term_lbl = f"{_days}d"
                 elif _days < 60: _term_lbl = f"{round(_days/7)}w"
                 elif _days < 335: _term_lbl = f"{round(_days/30)}m"
