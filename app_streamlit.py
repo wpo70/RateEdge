@@ -7684,16 +7684,20 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             else:
                 from datetime import timedelta, datetime as _dt_em
 
+                # NYC business date for all EM date logic
+                try:
+                    _now_nyc_em = _dt_em.now(NEW_YORK_TZ)
+                    _nyc_today = _now_nyc_em.date()
+                except Exception:
+                    _now_nyc_em = None
+                    _nyc_today = date.today()
+
                 # ── Controls ─────────────────────────────────────────────
                 _em_c1, _em_c2, _em_c3 = st.columns([2, 2, 4])
 
                 # Effective date: after 11am EST, today's expiries are done → roll forward
-                try:
-                    _now_est = _dt_em.now(NEW_YORK_TZ)
-                    _past_cutoff = _now_est.hour >= 11
-                except Exception:
-                    _past_cutoff = False  # If tz fails, don't roll
-                _eff_date = date.today()
+                _past_cutoff = _now_nyc_em is not None and _now_nyc_em.hour >= 11
+                _eff_date = _nyc_today
                 if _past_cutoff and _eff_date.weekday() < 5:
                     _eff_date += timedelta(days=1)
                 # Skip weekends
@@ -7910,7 +7914,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             return pd.Series({"_fwd": None, "_ann": None, "_exp_lbl": None})
                                         try:
                                             _st_y = label_to_years(_swp)
-                                            _days = max((_exp_dt - date.today()).days, 0)
+                                            _days = max((_exp_dt - _nyc_today).days, 0)
                                             _exp_y = _days / 365.0  # match pricer (365.0, not 365.25)
                                             _exp_lbl = f"{_days}d"
                                             # Same method as pricer: forward_and_annuity_from_curve
@@ -8039,12 +8043,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                     _em_filtered = _em_df.copy()
                     # Exclude expired: today's expiry valid until 11am NYC, then rolls
-                    _today = date.today()
-                    try:
-                        _now_nyc = _dt_em.now(NEW_YORK_TZ)
-                        _cutoff_date = _today if _now_nyc.hour < 11 else _today + timedelta(days=1)
-                    except Exception:
-                        _cutoff_date = _today
+                    _cutoff_date = _nyc_today if not _past_cutoff else _nyc_today + timedelta(days=1)
+                    # Skip weekends for cutoff
+                    while _cutoff_date.weekday() >= 5:
+                        _cutoff_date += timedelta(days=1)
                     if "expiry_date" in _em_filtered.columns:
                         _em_filtered = _em_filtered[_em_filtered["expiry_date"] >= _cutoff_date]
                     if _em_swp_filter != "All":
@@ -8101,7 +8103,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _live_curve = st.session_state.get("config_curves", {}).get("USD")
                             _live_fwd_diag = ""
                             if _live_curve is not None:
-                                _days_to_exp = max((_exp_day - date.today()).days, 0)
+                                _days_to_exp = max((_exp_day - _nyc_today).days, 0)
                                 _exp_y_live = _days_to_exp / 365.0
                                 st.session_state.pop("_fwd_ann_cache", None)
                                 for _dt in sorted(_day_df["swp_tenor"].dropna().unique(), key=_safe_tenor_sort):
@@ -8154,12 +8156,12 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             f"${_day_gross:,.0f}mm gross, net ${_day_net:+,.0f}mm "
                                             f"(P:{_day_payers} R:{_day_rcvrs}){_event_str}")
                                 if _live_fwd_diag:
-                                    _days_to_exp = max((_exp_day - date.today()).days, 0)
+                                    _days_to_exp = max((_exp_day - _nyc_today).days, 0)
                                     st.caption(f"Live fwd ({_days_to_exp}d exp_y={_days_to_exp/365.0:.5f}):{_live_fwd_diag}")
 
                                 # Price each trade
                                 _PREM_DEDUP_MICS_EM = {"BGCD","TPSE","TSEF","TWSF","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
-                                _today = date.today()
+                                _today = _nyc_today
                                 _priced_rows = []
                                 for _, _tr in _day_df.iterrows():
                                     _swt = str(_tr.get("swp_tenor", ""))
