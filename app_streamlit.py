@@ -6839,8 +6839,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             opt_tenor, swp_tenor, notional_ccy,
             upi_underlier_name, strike_pct, premium_amount,
             notional_leg1, cleared, platform_identifier,
-            event_timestamp, execution_timestamp, trade_date,
-            effective_date, expiration_date
+            event_timestamp, execution_timestamp, trade_date
         FROM dtcc_sdr
         {where}
         ORDER BY execution_timestamp DESC
@@ -7051,8 +7050,6 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 "Notional":   not1,
                 "Cleared":    r.get("cleared","—"),
                 "Platform":   PLATFORM_NAMES.get(r.get("platform_identifier",""), r.get("platform_identifier","—")),
-                "Eff Date":   str(r.get("effective_date","—") or "—"),
-                "Mat Date":   str(r.get("expiration_date","—") or "—"),
             })
 
         disp_df = pd.DataFrame(rows_html)
@@ -7349,6 +7346,34 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         _ptype = "🟤 C/F Straddle"
                                         _strike_disp = f"{_s_p:.5f}%"
                                         _prem_disp = f"Cap:{_fmt_premium(_p_prem)} + Flr:{_fmt_premium(_r_prem)} = {_fmt_premium(_comb_prem)}" if _comb_prem else "—"
+                                        # For CFS: derive forward start and tenor from dates
+                                        _eff_date  = _p.get("effective_date")
+                                        _mat_date  = _p.get("expiration_date")
+                                        _exec_date = _time_p.date() if _time_p is not pd.NaT else None
+                                        if _eff_date and _exec_date:
+                                            try:
+                                                _eff = pd.to_datetime(_eff_date).date()
+                                                _mat = pd.to_datetime(_mat_date).date() if _mat_date else None
+                                                _fwd_months = round((_eff.year - _exec_date.year)*12 + (_eff.month - _exec_date.month))
+                                                _ten_months = round((_mat.year - _eff.year)*12 + (_mat.month - _eff.month)) if _mat else None
+                                                def _mfmt(m):
+                                                    if m is None: return "—"
+                                                    y,mo = divmod(m,12)
+                                                    return f"{y}Y{mo}M" if mo else f"{y}Y"
+                                                _cfs_fwd = _mfmt(_fwd_months)
+                                                _cfs_ten = _mfmt(_ten_months)
+                                                _cfs_eff_str = str(_eff)
+                                                _cfs_mat_str = str(_mat) if _mat else "—"
+                                            except Exception:
+                                                _cfs_fwd = _e_p or "—"
+                                                _cfs_ten = "—"
+                                                _cfs_eff_str = "—"
+                                                _cfs_mat_str = "—"
+                                        else:
+                                            _cfs_fwd = _e_p or "—"
+                                            _cfs_ten = "—"
+                                            _cfs_eff_str = "—"
+                                            _cfs_mat_str = "—"
                                     elif not _same_strike and not _has_swp:
                                         _ptype = "🟣 Collar"
                                         _strike_disp = f"Cap:{_s_p:.5f}% / Flr:{_s_r:.5f}%"
@@ -7357,13 +7382,16 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         _comb_prem = _p_prem - _r_prem  # net premium (buy - sell)
                                         _comb_bp = round(_comb_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
 
+                                    _is_cfs = "C/F Straddle" in _ptype
                                     _paired_rows.append({
                                         "Type": _ptype,
                                         _time_col: _local_time.strftime("%d-%b %H:%M") if _local_time is not pd.NaT else "—",
                                         "_time_dt": _local_time.to_pydatetime().replace(tzinfo=None) if _local_time is not pd.NaT else None,
                                         "CCY": _ccy_p,
-                                        "Opt Expiry": _e_p,
-                                        "Swp Tenor": _t_p if _t_p and _t_p not in ("—","NA","None","") else "—",
+                                        "Opt Expiry": (_cfs_fwd if _is_cfs else _e_p),
+                                        "Swp Tenor":  (_cfs_ten if _is_cfs else (_t_p if _t_p and _t_p not in ("—","NA","None","") else "—")),
+                                        "Eff Date":   (_cfs_eff_str if _is_cfs else "—"),
+                                        "Mat Date":   (_cfs_mat_str if _is_cfs else "—"),
                                         "Strike": _strike_disp,
                                         "Notional": _fmt_notional(_comb_not),
                                         "Premium": _prem_disp,
@@ -7371,7 +7399,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         "P Prem BP": f"{_p_bp:.2f}" if _p_bp else "—",
                                         "R Prem BP": f"{_r_bp:.2f}" if _r_bp else "—",
                                         "Platform": PLATFORM_NAMES.get(str(_p.get("platform_identifier","")), str(_p.get("platform_identifier",""))),
-                                        "_notional_num": float(_comb_not or 0),  # v1105o: numeric for broker % breakdown
+                                        "_notional_num": float(_comb_not or 0),
                                     })
                                     break
 
