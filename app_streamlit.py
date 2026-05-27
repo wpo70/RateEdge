@@ -9012,42 +9012,53 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     # Thresholds side by side
                                     _tc1, _tc2 = st.columns(2)
                                     with _tc1:
+                                        st.markdown(f"**Payer sellers** (${_payer_total:,.0f}mm) — hurt by rates ↑")
                                         if _payer_trades:
-                                            _lines = []
                                             for _pct in [25, 50, 75]:
                                                 _target = _payer_total * _pct / 100.0
                                                 _found = False
-                                                for _sh in range(0, 51, 1):
+                                                for _sh in range(1, 51, 1):
                                                     if _count_underwater_t(_payer_trades, _sh, _be_median_fwd) >= _target:
-                                                        _lines.append(f"**{_pct}%** at +{_sh}bp → {_be_median_fwd + _sh/100:.4f}%")
+                                                        st.markdown(f"- **{_pct}% underwater** at +{_sh}bp → {_be_median_fwd + _sh/100:.4f}%")
                                                         _found = True; break
                                                 if not _found:
-                                                    _lines.append(f"**{_pct}%** beyond +50bp")
-                                            st.markdown(f"Payer sellers (${_payer_total:,.0f}mm) — rates ↑: " + " | ".join(_lines))
+                                                    _p_now = _count_underwater_t(_payer_trades, 0, _be_median_fwd)
+                                                    if _p_now >= _target:
+                                                        st.markdown(f"- **{_pct}% underwater** — already at current fwd")
+                                                    else:
+                                                        st.markdown(f"- **{_pct}% underwater** — beyond +50bp")
+                                        else:
+                                            st.caption("No payer trades with valid premiums")
                                     with _tc2:
+                                        st.markdown(f"**Receiver sellers** (${_rcvr_total:,.0f}mm) — hurt by rates ↓")
                                         if _rcvr_trades:
-                                            _lines = []
                                             for _pct in [25, 50, 75]:
                                                 _target = _rcvr_total * _pct / 100.0
                                                 _found = False
-                                                for _sh in range(0, -51, -1):
+                                                for _sh in range(-1, -51, -1):
                                                     if _count_underwater_t(_rcvr_trades, _sh, _be_median_fwd) >= _target:
-                                                        _lines.append(f"**{_pct}%** at {_sh}bp → {_be_median_fwd + _sh/100:.4f}%")
+                                                        st.markdown(f"- **{_pct}% underwater** at {_sh}bp → {_be_median_fwd + _sh/100:.4f}%")
                                                         _found = True; break
                                                 if not _found:
-                                                    _lines.append(f"**{_pct}%** beyond -50bp")
-                                            st.markdown(f"Recvr sellers (${_rcvr_total:,.0f}mm) — rates ↓: " + " | ".join(_lines))
+                                                    _r_now = _count_underwater_t(_rcvr_trades, 0, _be_median_fwd)
+                                                    if _r_now >= _target:
+                                                        st.markdown(f"- **{_pct}% underwater** — already at current fwd")
+                                                    else:
+                                                        st.markdown(f"- **{_pct}% underwater** — beyond -50bp")
+                                        else:
+                                            st.caption("No receiver trades with valid premiums")
 
-                                    # ±10bp one-liner
+                                    # Actionable one-liner
+                                    st.markdown("---")
                                     _parts = []
-                                    if _payer_trades:
+                                    if _payer_trades and _payer_total > 0:
                                         _p10 = _count_underwater_t(_payer_trades, 10, _be_median_fwd)
-                                        _parts.append(f"+10bp: ${_p10:,.0f}mm P underwater ({_p10/_payer_total*100:.0f}%)" if _payer_total > 0 else "")
-                                    if _rcvr_trades:
+                                        _parts.append(f"**Rates +10bp:** ${_p10:,.0f}mm payer underwater ({_p10/_payer_total*100:.0f}%)")
+                                    if _rcvr_trades and _rcvr_total > 0:
                                         _r10 = _count_underwater_t(_rcvr_trades, -10, _be_median_fwd)
-                                        _parts.append(f"-10bp: ${_r10:,.0f}mm R underwater ({_r10/_rcvr_total*100:.0f}%)" if _rcvr_total > 0 else "")
+                                        _parts.append(f"**Rates -10bp:** ${_r10:,.0f}mm receiver underwater ({_r10/_rcvr_total*100:.0f}%)")
                                     if _parts:
-                                        st.caption(" | ".join([p for p in _parts if p]))
+                                        st.markdown(" | ".join(_parts))
                                     st.markdown("---")
 
     # ── Auto-refresh ──────────────────────────────────────────────────────────
