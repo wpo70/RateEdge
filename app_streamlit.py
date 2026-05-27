@@ -9087,6 +9087,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     else:
                                         return (K - F) * (1 - _Nd) + _denom * _nd
 
+                                _all_sg_rows = []  # collect for Excel
+
                                 for _sg_tenor in _sg_sel_tenors:
                                     _sg_df = _em_filtered[
                                         _em_filtered["strike_pct"].notna() &
@@ -9190,10 +9192,114 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                 _bp = _bachelier_prem(_F_sh, _K, _sg_sigma, _sg_t, _s["dir"]) * _sg_ann * 10000
                                                 _row[_hdr] = f"{_bp:.1f}"
                                         _sg_rows.append(_row)
+                                        _all_sg_rows.append({"Tenor": _sg_tenor, "Fwd": f"{_sg_fwd:.4f}%",
+                                                             "Vol": f"{_sg_vol:.1f}", "Ann": f"{_sg_ann:.3f}", **_row})
 
                                     if _sg_rows:
                                         st.dataframe(pd.DataFrame(_sg_rows), use_container_width=True, hide_index=True)
                                     st.markdown("---")
+
+                                # ── Download: Positions + Suggestions ──────────
+                                if _all_sg_rows and st.button("📥 Download Positions & Suggestions", key="sg_xl_dl"):
+                                    import io as _io_sg
+                                    from openpyxl import Workbook as _WB_sg
+                                    from openpyxl.styles import Font as _Font_sg, PatternFill as _Fill_sg, Alignment as _Align_sg, Border as _Border_sg, Side as _Side_sg
+
+                                    _wb_sg = _WB_sg()
+
+                                    # ── Sheet 1: Suggestions ──
+                                    _ws1 = _wb_sg.active
+                                    _ws1.title = "Suggestions"
+                                    _hdr_font_sg = _Font_sg(name="Arial", bold=True, color="FFFFFF", size=10)
+                                    _hdr_fill_sg = _Fill_sg("solid", fgColor="1F4E79")
+                                    _norm_sg = _Font_sg(name="Arial", size=10)
+                                    _bold_sg = _Font_sg(name="Arial", bold=True, size=10)
+                                    _thin_sg = _Border_sg(
+                                        left=_Side_sg(style="thin"), right=_Side_sg(style="thin"),
+                                        top=_Side_sg(style="thin"), bottom=_Side_sg(style="thin"))
+                                    _atm_fill_sg = _Fill_sg("solid", fgColor="C6EFCE")
+
+                                    # Title
+                                    _ws1.cell(row=1, column=1,
+                                        value=f"RateEdge Trade Suggestions — {_em_mon.strftime('%d-%b')} to {_em_fri.strftime('%d-%b-%Y')}")
+                                    _ws1.cell(row=1, column=1).font = _Font_sg(name="Arial", bold=True, size=12)
+
+                                    _sg_df_xl = pd.DataFrame(_all_sg_rows)
+                                    _sg_hdrs = list(_sg_df_xl.columns)
+                                    _ws1.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(_sg_hdrs))
+                                    for ci, h in enumerate(_sg_hdrs, 1):
+                                        _c = _ws1.cell(row=2, column=ci, value=h)
+                                        _c.font = _hdr_font_sg; _c.fill = _hdr_fill_sg
+                                        _c.alignment = _Align_sg(horizontal="center"); _c.border = _thin_sg
+                                    for ri, row_data in enumerate(_sg_df_xl.itertuples(index=False), 3):
+                                        for ci, val in enumerate(row_data, 1):
+                                            _c = _ws1.cell(row=ri, column=ci, value=val)
+                                            _c.font = _norm_sg; _c.border = _thin_sg
+                                            if str(val).startswith("ATM"):
+                                                _c.font = _bold_sg
+                                    for ci in range(1, len(_sg_hdrs) + 1):
+                                        _ws1.column_dimensions[_ws1.cell(row=2, column=ci).column_letter].width = 16
+                                    _ws1.freeze_panes = "A3"
+
+                                    # ── Sheet 2: Positions ──
+                                    _ws2 = _wb_sg.create_sheet("Positions")
+                                    _pos_df = _em_filtered[
+                                        _em_filtered["swp_tenor"].isin(_sg_sel_tenors)
+                                    ].sort_values(["swp_tenor", "expiry_date", "strike_pct"]).copy()
+
+                                    _pos_cols = {
+                                        "expiry_date": "Expiry", "swp_tenor": "Swap Tenor",
+                                        "opt_tenor": "Opt Tenor", "direction": "Dir",
+                                        "strike_pct": "Strike (%)", "_fwd": "Fwd (%)",
+                                        "notional_mm": "Notional (mm)", "moneyness": "Moneyness",
+                                        "exec_date": "Exec Date", "platform_identifier": "Platform",
+                                    }
+                                    _pos_keys = [k for k in _pos_cols if k in _pos_df.columns]
+
+                                    _ws2.cell(row=1, column=1,
+                                        value=f"SDR Positions — {', '.join(_sg_sel_tenors)} — {_em_mon.strftime('%d-%b')} to {_em_fri.strftime('%d-%b-%Y')}")
+                                    _ws2.cell(row=1, column=1).font = _Font_sg(name="Arial", bold=True, size=12)
+                                    _ws2.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(_pos_keys))
+
+                                    for ci, k in enumerate(_pos_keys, 1):
+                                        _c = _ws2.cell(row=2, column=ci, value=_pos_cols[k])
+                                        _c.font = _hdr_font_sg; _c.fill = _hdr_fill_sg
+                                        _c.alignment = _Align_sg(horizontal="center"); _c.border = _thin_sg
+
+                                    for ri, (_, _pr) in enumerate(_pos_df.iterrows(), 3):
+                                        for ci, k in enumerate(_pos_keys, 1):
+                                            val = _pr.get(k, "")
+                                            if k == "expiry_date" and hasattr(val, "strftime"):
+                                                val = val.strftime("%d-%b-%Y")
+                                            elif k == "strike_pct" and pd.notna(val):
+                                                val = round(float(val), 5)
+                                            elif k == "_fwd" and pd.notna(val):
+                                                val = round(float(val), 4)
+                                            elif k == "notional_mm" and pd.notna(val):
+                                                val = round(float(val), 0)
+                                            elif k == "platform_identifier":
+                                                val = PLATFORM_NAMES.get(str(val), str(val))
+                                            _c = _ws2.cell(row=ri, column=ci, value=val)
+                                            _c.font = _norm_sg; _c.border = _thin_sg
+                                            # Green highlight ATM (≤5bp)
+                                            _var = _pr.get("strike_var_bp")
+                                            if pd.notna(_var) and _var <= 5:
+                                                _c.fill = _atm_fill_sg
+
+                                    for ci in range(1, len(_pos_keys) + 1):
+                                        _ws2.column_dimensions[_ws2.cell(row=2, column=ci).column_letter].width = 14
+                                    _ws2.freeze_panes = "A3"
+
+                                    _buf_sg = _io_sg.BytesIO()
+                                    _wb_sg.save(_buf_sg)
+                                    _buf_sg.seek(0)
+                                    st.download_button(
+                                        "⬇️ Save Excel",
+                                        data=_buf_sg.getvalue(),
+                                        file_name=f"RateEdge_Suggestions_{_em_mon.strftime('%d%b')}_{_em_fri.strftime('%d%b%Y')}.xlsx",
+                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                        key="sg_xl_save"
+                                    )
 
     # ── Auto-refresh ──────────────────────────────────────────────────────────
     _refresh_map = {"Off": 0, "30s": 30, "1 min": 60, "2 min": 120, "5 min": 300}
