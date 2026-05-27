@@ -9114,7 +9114,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _total_p = _sg_df[_sg_df["direction"] == "Payer"]["notional_mm"].sum()
                                     _total_r = _sg_df[_sg_df["direction"] == "Receiver"]["notional_mm"].sum()
 
-                                    st.markdown(f"##### {_sg_tenor} — Fwd: {_sg_fwd:.4f}% | Vol: {_sg_vol:.1f}bp | "
+                                    st.markdown(f"##### {_sg_tenor} — ATM Fwd: {_sg_fwd:.4f}% | Vol: {_sg_vol:.1f}bp | "
                                                 f"Ann: {_sg_ann:.3f} | ${_total_p:,.0f}mm P / ${_total_r:,.0f}mm R")
 
                                     # Analyse strike clustering — 2.5bp buckets
@@ -9126,7 +9126,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _suggestions.append({
                                         "strike": _atm_strike,
                                         "dir": "Straddle",
-                                        "rationale": "ATM — max gamma, most liquid",
+                                        "rationale": f"ATM (fwd {_sg_fwd:.4f}%) — max gamma, most liquid",
                                         "priority": 1,
                                     })
 
@@ -9183,7 +9183,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         }
                                         for _sh in _fwd_shifts:
                                             _F_sh = (_sg_fwd + _sh / 100.0) / 100.0
-                                            _hdr = f"Fwd{_sh:+d}" if _sh != 0 else "Fwd"
+                                            _fwd_lvl = _sg_fwd + _sh / 100.0
+                                            if _sh == 0:
+                                                _hdr = f"Prem bp @ATM {_fwd_lvl:.3f}%"
+                                            else:
+                                                _hdr = f"Prem bp @{_sh:+d} ({_fwd_lvl:.3f}%)"
                                             if _s["dir"] == "Straddle":
                                                 _p_bp = _bachelier_prem(_F_sh, _K, _sg_sigma, _sg_t, "Payer") * _sg_ann * 10000
                                                 _r_bp = _bachelier_prem(_F_sh, _K, _sg_sigma, _sg_t, "Receiver") * _sg_ann * 10000
