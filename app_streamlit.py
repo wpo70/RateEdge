@@ -8854,17 +8854,23 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         if _em_filtered.empty or "_fwd" not in _em_filtered.columns:
                             st.info("No data. Run Expiry Monitor scan first.")
                         else:
+                            _gp_all_tenors = sorted(_em_filtered["swp_tenor"].dropna().unique(), key=_safe_tenor_sort)
+                            _gp_c1, _gp_c2 = st.columns([2, 1])
+                            with _gp_c1:
+                                _gp_sel_tenors = st.multiselect("Swap tenors", _gp_all_tenors,
+                                    default=_gp_all_tenors, key="gp_tenors")
+                            with _gp_c2:
+                                _gp_bucket_size = st.selectbox("Strike bucket (bp)", [1, 2.5, 5, 10], index=1, key="gp_bucket")
+
                             _gp_df = _em_filtered[
                                 _em_filtered["strike_pct"].notna() &
                                 _em_filtered["direction"].isin(["Payer", "Receiver"]) &
-                                _em_filtered["notional_mm"].notna()
+                                _em_filtered["notional_mm"].notna() &
+                                _em_filtered["swp_tenor"].isin(_gp_sel_tenors)
                             ].copy()
                             if _gp_df.empty:
-                                st.info("No valid trades for gamma analysis.")
+                                st.info("No valid trades for selected tenors.")
                             else:
-                                # Bucket strikes to nearest 2.5bp
-                                _gp_df["strike_bucket"] = ((_gp_df["strike_pct"] * 10000).round(-1) / 10000)  # nearest 1bp
-                                _gp_bucket_size = st.selectbox("Strike bucket (bp)", [1, 2.5, 5, 10], index=1, key="gp_bucket")
                                 _gp_df["strike_bucket"] = (
                                     (_gp_df["strike_pct"] * 100 / _gp_bucket_size).round() * _gp_bucket_size / 100
                                 )
@@ -8913,12 +8919,17 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         if _em_filtered.empty or "_fwd" not in _em_filtered.columns:
                             st.info("No data. Run Expiry Monitor scan first.")
                         else:
+                            _be_all_tenors = sorted(_em_filtered["swp_tenor"].dropna().unique(), key=_safe_tenor_sort)
+                            _be_sel_tenors = st.multiselect("Swap tenors", _be_all_tenors,
+                                default=_be_all_tenors, key="be_tenors")
+
                             _be_df = _em_filtered[
                                 _em_filtered["strike_pct"].notna() &
                                 _em_filtered["direction"].isin(["Payer", "Receiver"]) &
                                 _em_filtered["_fwd"].notna() &
                                 _em_filtered["_ann"].notna() &
-                                _em_filtered["notional_mm"].notna()
+                                _em_filtered["notional_mm"].notna() &
+                                _em_filtered["swp_tenor"].isin(_be_sel_tenors)
                             ].copy()
 
                             _be_atm_vol = st.session_state.get("vol_data", {}).get(_em_ccy, {}).get("atm")
