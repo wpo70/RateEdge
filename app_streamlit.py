@@ -9238,7 +9238,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                                     # Title
                                     _ws1.cell(row=1, column=1,
-                                        value=f"RateEdge Trade Suggestions — {_em_mon.strftime('%d-%b')} to {_em_fri.strftime('%d-%b-%Y')}")
+                                        value=f"RateEdge Trade Suggestions — Expiry {_sg_date_lbl}")
                                     _ws1.cell(row=1, column=1).font = _Font_sg(name="Arial", bold=True, size=12)
 
                                     _sg_df_xl = pd.DataFrame(_all_sg_rows)
@@ -9261,8 +9261,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     # ── Sheet 2: Positions ──
                                     _ws2 = _wb_sg.create_sheet("Positions")
                                     _pos_df = _em_filtered[
-                                        _em_filtered["swp_tenor"].isin(_sg_sel_tenors)
-                                    ].sort_values(["swp_tenor", "expiry_date", "strike_pct"]).copy()
+                                        _em_filtered["swp_tenor"].isin(_sg_sel_tenors) &
+                                        (_em_filtered["expiry_date"] == _sg_date)
+                                    ].sort_values(["swp_tenor", "strike_pct"]).copy()
 
                                     _pos_cols = {
                                         "expiry_date": "Expiry", "swp_tenor": "Swap Tenor",
@@ -9274,7 +9275,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _pos_keys = [k for k in _pos_cols if k in _pos_df.columns]
 
                                     _ws2.cell(row=1, column=1,
-                                        value=f"SDR Positions — {', '.join(_sg_sel_tenors)} — {_em_mon.strftime('%d-%b')} to {_em_fri.strftime('%d-%b-%Y')}")
+                                        value=f"SDR Positions — {', '.join(_sg_sel_tenors)} — Expiry {_sg_date_lbl}")
                                     _ws2.cell(row=1, column=1).font = _Font_sg(name="Arial", bold=True, size=12)
                                     _ws2.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(_pos_keys))
 
@@ -9313,7 +9314,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     st.download_button(
                                         "⬇️ Save Excel",
                                         data=_buf_sg.getvalue(),
-                                        file_name=f"RateEdge_Suggestions_{_em_mon.strftime('%d%b')}_{_em_fri.strftime('%d%b%Y')}.xlsx",
+                                        file_name=f"RateEdge_Suggestions_{_sg_date.strftime('%d%b%Y')}.xlsx",
                                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                         key="sg_xl_save"
                                     )
