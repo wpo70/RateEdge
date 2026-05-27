@@ -7649,6 +7649,69 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             st.caption(f"💾 Last auto-saved to `{_autosaved_path}`")
 
                     st.caption(f"Times shown in **{_tz_label}**")
+
+                    # ── Price This → buttons ──────────────────────────────────
+                    # Map SDR tenor labels to pricer keys
+                    _EXPIRY_MAP = {
+                        "1w":"1w","2w":"2w","1m":"1m","1M":"1m","2m":"2m","2M":"2m",
+                        "3m":"3m","3M":"3m","6m":"6m","6M":"6m","9m":"9m","9M":"9m",
+                        "1y":"1y","1Y":"1y","18m":"18m","18M":"18m",
+                        "2y":"2y","2Y":"2y","3y":"3y","3Y":"3y",
+                        "5y":"5y","5Y":"5y","7y":"7y","7Y":"7y",
+                        "10y":"10y","10Y":"10y","12y":"12y","12Y":"12y",
+                        "15y":"15y","15Y":"15y","20y":"20y","20Y":"20y",
+                    }
+                    _TENOR_MAP = {
+                        "1Y":"1Y","2Y":"2Y","3Y":"3Y","4Y":"4Y","5Y":"5Y",
+                        "6Y":"6Y","7Y":"7Y","8Y":"8Y","9Y":"9Y","10Y":"10Y",
+                        "12Y":"12Y","15Y":"15Y","20Y":"20Y","25Y":"25Y","30Y":"30Y",
+                    }
+                    _STR_MAP = {
+                        "🔵 Straddle":"ATM Straddle","🟤 C/F Straddle":"ATM Straddle",
+                        "🟠 Strangle":"Strangle","🟣 Collar":"Risk Reversal",
+                        "Payer":"Payer","Receiver":"Receiver",
+                        "Cap":"Payer","Floor":"Receiver",
+                    }
+
+                    st.markdown("**Click to price a trade in the Swaptions pricer:**")
+                    for _ri, _row in enumerate(_all_trades[:20]):  # show top 20
+                        _rc1, _rc2, _rc3, _rc4, _rc5, _rc6 = st.columns([1.2, 0.8, 0.8, 0.8, 1.2, 0.8])
+                        _rc1.markdown(f"<small>{_row.get(_time_col,'—')}</small>", unsafe_allow_html=True)
+                        _rc2.markdown(f"<small>{_row.get('Type','').replace('🔵 ','').replace('🟤 ','').replace('🟠 ','').replace('🟣 ','')}</small>", unsafe_allow_html=True)
+                        _rc3.markdown(f"<small>{_row.get('CCY','—')} {_row.get('Opt Expiry','—')}×{_row.get('Swp Tenor','—')}</small>", unsafe_allow_html=True)
+                        _rc4.markdown(f"<small>{_row.get('Strike','—')}</small>", unsafe_allow_html=True)
+                        _rc5.markdown(f"<small>{_row.get('Notional','—')} | {_row.get('Platform','—')}</small>", unsafe_allow_html=True)
+                        if _rc6.button("Price →", key=f"_price_this_{_ri}", use_container_width=True):
+                            _exp_raw = _row.get("Opt Expiry","")
+                            _ten_raw = _row.get("Swp Tenor","")
+                            _str_raw = _row.get("Type","")
+                            _stk_raw = _row.get("Strike","")
+                            _not_raw = _row.get("Notional","")
+                            _ccy_raw = _row.get("CCY","AUD")
+                            # Map to pricer keys
+                            _exp_key = _EXPIRY_MAP.get(_exp_raw.lower(), _EXPIRY_MAP.get(_exp_raw, None))
+                            _ten_key = _TENOR_MAP.get(_ten_raw.upper(), None)
+                            _str_key = next((v for k,v in _STR_MAP.items() if k in _str_raw), "ATM Straddle")
+                            try: _stk_val = float(_stk_raw.replace("%","")) if _stk_raw and _stk_raw != "—" else None
+                            except: _stk_val = None
+                            try: _not_val = float(_not_raw.replace("M","").replace("B","").replace(",","")) * (1000 if "B" in _not_raw else 1) if _not_raw and _not_raw != "—" else None
+                            except: _not_val = None
+                            # Set pricer session state
+                            st.session_state["sidebar_ccy"] = _ccy_raw
+                            st.session_state["sw_pending_reload"] = {
+                                "expiry":       _exp_key,
+                                "tenor":        _ten_key,
+                                "structure":    _str_key,
+                                "strike":       _stk_val,
+                                "notional_mm":  _not_val,
+                            }
+                            # Switch to Swaptions tab
+                            st.session_state["tab_show_swaptions"] = True
+                            st.session_state["_active_tab_override"] = "📊 Swaptions"
+                            st.toast(f"Loading {_exp_raw}×{_ten_raw} {_str_key} into pricer…", icon="📊")
+                            st.rerun()
+
+                    st.markdown("---")
                     st.dataframe(_all_df_display, use_container_width=True, hide_index=True,
                                  height=min(60 + len(_all_df_display) * 35, 700))
                     st.caption("Straddle prem deduped for all brokers except DWSF (report full straddle prem on each leg). "
