@@ -9090,118 +9090,125 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _all_sg_rows = []  # collect for Excel
 
                                 for _sg_tenor in _sg_sel_tenors:
-                                    _sg_df = _em_filtered[
+                                    _sg_tenor_df = _em_filtered[
                                         _em_filtered["strike_pct"].notna() &
                                         _em_filtered["direction"].isin(["Payer", "Receiver"]) &
                                         _em_filtered["notional_mm"].notna() &
                                         (_em_filtered["swp_tenor"] == _sg_tenor)
                                     ].copy()
-                                    if _sg_df.empty:
+                                    if _sg_tenor_df.empty:
                                         continue
 
-                                    _sg_fwd = _sg_df["_fwd"].dropna().median()
-                                    _sg_ann = _sg_df["_ann"].dropna().median() if "_ann" in _sg_df.columns else None
-                                    _sg_swp_y = label_to_years(_sg_tenor)
-                                    _sg_opt_t = _sg_df["opt_tenor"].iloc[0] if len(_sg_df) > 0 else "1m"
-                                    _sg_vol = get_matrix_value(_sg_atm_vol, str(_sg_opt_t).lower(), _sg_swp_y)
-                                    _sg_days = _sg_df["expiry_date"].dropna().apply(lambda d: max((d - _nyc_today).days, 0)).median()
-                                    _sg_t = max((_sg_days or 1) / 365.0, 0.0001)
+                                    _sg_exp_dates = sorted(_sg_tenor_df["expiry_date"].dropna().unique())
 
-                                    if not _sg_fwd or not _sg_ann or not _sg_vol:
-                                        continue
+                                    for _sg_exp in _sg_exp_dates:
+                                        _sg_df = _sg_tenor_df[_sg_tenor_df["expiry_date"] == _sg_exp].copy()
+                                        if _sg_df.empty:
+                                            continue
 
-                                    _sg_sigma = _sg_vol / 10000.0
-                                    _total_p = _sg_df[_sg_df["direction"] == "Payer"]["notional_mm"].sum()
-                                    _total_r = _sg_df[_sg_df["direction"] == "Receiver"]["notional_mm"].sum()
+                                        _sg_fwd = _sg_df["_fwd"].dropna().median()
+                                        _sg_ann = _sg_df["_ann"].dropna().median() if "_ann" in _sg_df.columns else None
+                                        _sg_swp_y = label_to_years(_sg_tenor)
+                                        _sg_opt_t = _sg_df["opt_tenor"].iloc[0] if len(_sg_df) > 0 else "1m"
+                                        _sg_vol = get_matrix_value(_sg_atm_vol, str(_sg_opt_t).lower(), _sg_swp_y)
+                                        _sg_days = max((_sg_exp - _nyc_today).days, 0)
+                                        _sg_t = max(_sg_days / 365.0, 0.0001)
+                                        _sg_exp_lbl = _sg_exp.strftime("%a %d-%b-%Y") if hasattr(_sg_exp, "strftime") else str(_sg_exp)
 
-                                    st.markdown(f"##### {_sg_tenor} — ATM Fwd: {_sg_fwd:.4f}% | Vol: {_sg_vol:.1f}bp | "
-                                                f"Ann: {_sg_ann:.3f} | ${_total_p:,.0f}mm P / ${_total_r:,.0f}mm R")
+                                        if not _sg_fwd or not _sg_ann or not _sg_vol:
+                                            continue
 
-                                    # Analyse strike clustering — 2.5bp buckets
-                                    _sg_df["_bkt"] = ((_sg_df["strike_pct"] * 100 / 2.5).round() * 2.5 / 100)
-                                    _suggestions = []
+                                        _sg_sigma = _sg_vol / 10000.0
+                                        _total_p = _sg_df[_sg_df["direction"] == "Payer"]["notional_mm"].sum()
+                                        _total_r = _sg_df[_sg_df["direction"] == "Receiver"]["notional_mm"].sum()
 
-                                    # 1. ATM — always the most liquid point
-                                    _atm_strike = round(_sg_fwd * 100 / 2.5) * 2.5 / 100  # nearest 2.5bp
-                                    _suggestions.append({
-                                        "strike": _atm_strike,
-                                        "dir": "Straddle",
-                                        "rationale": f"ATM (fwd {_sg_fwd:.4f}%) — max gamma, most liquid",
-                                        "priority": 1,
-                                    })
+                                        st.markdown(f"##### {_sg_tenor} exp {_sg_exp_lbl} ({_sg_days}d) — "
+                                                    f"ATM Fwd: {_sg_fwd:.4f}% | Vol: {_sg_vol:.1f}bp | "
+                                                    f"Ann: {_sg_ann:.3f} | ${_total_p:,.0f}mm P / ${_total_r:,.0f}mm R")
 
-                                    # 2. Biggest net skew — suggest opposite direction
-                                    _bkt_skew = []
-                                    for _bkt in _sg_df["_bkt"].unique():
-                                        _b = _sg_df[_sg_df["_bkt"] == _bkt]
-                                        _pn = _b[_b["direction"] == "Payer"]["notional_mm"].sum()
-                                        _rn = _b[_b["direction"] == "Receiver"]["notional_mm"].sum()
-                                        _net = _pn - _rn
-                                        _bkt_skew.append({"bkt": _bkt, "p": _pn, "r": _rn, "net": _net})
+                                        # Analyse strike clustering — 2.5bp buckets
+                                        _sg_df["_bkt"] = ((_sg_df["strike_pct"] * 100 / 2.5).round() * 2.5 / 100)
+                                        _suggestions = []
 
-                                    if _bkt_skew:
-                                        # Biggest net long payers → dealers short rcvrs → suggest payer (dealers buy)
-                                        _most_p = max(_bkt_skew, key=lambda x: x["net"])
-                                        if _most_p["net"] > 0 and abs(_most_p["bkt"] - _atm_strike) > 0.01:
-                                            _suggestions.append({
-                                                "strike": _most_p["bkt"],
-                                                "dir": "Payer",
-                                                "rationale": f"Dealers short ${_most_p['r']:,.0f}mm Rcvr here — need payer hedge",
-                                                "priority": 2,
-                                            })
+                                        # 1. ATM — always the most liquid point
+                                        _atm_strike = round(_sg_fwd * 100 / 2.5) * 2.5 / 100  # nearest 2.5bp
+                                        _suggestions.append({
+                                            "strike": _atm_strike,
+                                            "dir": "Straddle",
+                                            "rationale": f"ATM (fwd {_sg_fwd:.4f}%) — max gamma, most liquid",
+                                            "priority": 1,
+                                        })
 
-                                        # Biggest net long receivers → dealers short payers → suggest receiver
-                                        _most_r = min(_bkt_skew, key=lambda x: x["net"])
-                                        if _most_r["net"] < 0 and abs(_most_r["bkt"] - _atm_strike) > 0.01:
-                                            _suggestions.append({
-                                                "strike": _most_r["bkt"],
-                                                "dir": "Receiver",
-                                                "rationale": f"Dealers short ${_most_r['p']:,.0f}mm Payer here — need receiver hedge",
-                                                "priority": 2,
-                                            })
+                                        # 2. Biggest net skew — suggest opposite direction
+                                        _bkt_skew = []
+                                        for _bkt in _sg_df["_bkt"].unique():
+                                            _b = _sg_df[_sg_df["_bkt"] == _bkt]
+                                            _pn = _b[_b["direction"] == "Payer"]["notional_mm"].sum()
+                                            _rn = _b[_b["direction"] == "Receiver"]["notional_mm"].sum()
+                                            _net = _pn - _rn
+                                            _bkt_skew.append({"bkt": _bkt, "p": _pn, "r": _rn, "net": _net})
 
-                                        # Biggest total notional — max open interest
-                                        _most_oi = max(_bkt_skew, key=lambda x: x["p"] + x["r"])
-                                        if abs(_most_oi["bkt"] - _atm_strike) > 0.01:
-                                            _oi_total = _most_oi["p"] + _most_oi["r"]
-                                            _suggestions.append({
-                                                "strike": _most_oi["bkt"],
-                                                "dir": "Straddle",
-                                                "rationale": f"Highest concentration: ${_oi_total:,.0f}mm — roll/hedge demand",
-                                                "priority": 3,
-                                            })
+                                        if _bkt_skew:
+                                            _most_p = max(_bkt_skew, key=lambda x: x["net"])
+                                            if _most_p["net"] > 0 and abs(_most_p["bkt"] - _atm_strike) > 0.01:
+                                                _suggestions.append({
+                                                    "strike": _most_p["bkt"],
+                                                    "dir": "Payer",
+                                                    "rationale": f"Dealers short ${_most_p['r']:,.0f}mm Rcvr here — need payer hedge",
+                                                    "priority": 2,
+                                                })
 
-                                    # Price each suggestion at fwd shifts
-                                    _fwd_shifts = [-10, -5, 0, 5, 10]
-                                    _sg_rows = []
-                                    for _s in sorted(_suggestions, key=lambda x: x["priority"]):
-                                        _K = _s["strike"] / 100.0
-                                        _row = {
-                                            "Trade": _s["dir"],
-                                            "Strike": f"{_s['strike']:.4f}%",
-                                            "Rationale": _s["rationale"],
-                                        }
-                                        for _sh in _fwd_shifts:
-                                            _F_sh = (_sg_fwd + _sh / 100.0) / 100.0
-                                            _fwd_lvl = _sg_fwd + _sh / 100.0
-                                            if _sh == 0:
-                                                _hdr = f"Prem bp @ATM {_fwd_lvl:.3f}%"
-                                            else:
-                                                _hdr = f"Prem bp @{_sh:+d} ({_fwd_lvl:.3f}%)"
-                                            if _s["dir"] == "Straddle":
-                                                _p_bp = _bachelier_prem(_F_sh, _K, _sg_sigma, _sg_t, "Payer") * _sg_ann * 10000
-                                                _r_bp = _bachelier_prem(_F_sh, _K, _sg_sigma, _sg_t, "Receiver") * _sg_ann * 10000
-                                                _row[_hdr] = f"{_p_bp + _r_bp:.1f}"
-                                            else:
-                                                _bp = _bachelier_prem(_F_sh, _K, _sg_sigma, _sg_t, _s["dir"]) * _sg_ann * 10000
-                                                _row[_hdr] = f"{_bp:.1f}"
-                                        _sg_rows.append(_row)
-                                        _all_sg_rows.append({"Tenor": _sg_tenor, "Fwd": f"{_sg_fwd:.4f}%",
-                                                             "Vol": f"{_sg_vol:.1f}", "Ann": f"{_sg_ann:.3f}", **_row})
+                                            _most_r = min(_bkt_skew, key=lambda x: x["net"])
+                                            if _most_r["net"] < 0 and abs(_most_r["bkt"] - _atm_strike) > 0.01:
+                                                _suggestions.append({
+                                                    "strike": _most_r["bkt"],
+                                                    "dir": "Receiver",
+                                                    "rationale": f"Dealers short ${_most_r['p']:,.0f}mm Payer here — need receiver hedge",
+                                                    "priority": 2,
+                                                })
 
-                                    if _sg_rows:
-                                        st.dataframe(pd.DataFrame(_sg_rows), use_container_width=True, hide_index=True)
-                                    st.markdown("---")
+                                            _most_oi = max(_bkt_skew, key=lambda x: x["p"] + x["r"])
+                                            if abs(_most_oi["bkt"] - _atm_strike) > 0.01:
+                                                _oi_total = _most_oi["p"] + _most_oi["r"]
+                                                _suggestions.append({
+                                                    "strike": _most_oi["bkt"],
+                                                    "dir": "Straddle",
+                                                    "rationale": f"Highest concentration: ${_oi_total:,.0f}mm — roll/hedge demand",
+                                                    "priority": 3,
+                                                })
+
+                                        # Price each suggestion at fwd shifts
+                                        _fwd_shifts = [-10, -5, 0, 5, 10]
+                                        _sg_rows = []
+                                        for _s in sorted(_suggestions, key=lambda x: x["priority"]):
+                                            _K = _s["strike"] / 100.0
+                                            _row = {
+                                                "Trade": _s["dir"],
+                                                "Strike": f"{_s['strike']:.4f}%",
+                                                "Rationale": _s["rationale"],
+                                            }
+                                            for _sh in _fwd_shifts:
+                                                _F_sh = (_sg_fwd + _sh / 100.0) / 100.0
+                                                _fwd_lvl = _sg_fwd + _sh / 100.0
+                                                if _sh == 0:
+                                                    _hdr = f"Prem bp @ATM {_fwd_lvl:.3f}%"
+                                                else:
+                                                    _hdr = f"Prem bp @{_sh:+d} ({_fwd_lvl:.3f}%)"
+                                                if _s["dir"] == "Straddle":
+                                                    _p_bp = _bachelier_prem(_F_sh, _K, _sg_sigma, _sg_t, "Payer") * _sg_ann * 10000
+                                                    _r_bp = _bachelier_prem(_F_sh, _K, _sg_sigma, _sg_t, "Receiver") * _sg_ann * 10000
+                                                    _row[_hdr] = f"{_p_bp + _r_bp:.1f}"
+                                                else:
+                                                    _bp = _bachelier_prem(_F_sh, _K, _sg_sigma, _sg_t, _s["dir"]) * _sg_ann * 10000
+                                                    _row[_hdr] = f"{_bp:.1f}"
+                                            _sg_rows.append(_row)
+                                            _all_sg_rows.append({"Tenor": _sg_tenor, "Expiry": _sg_exp_lbl,
+                                                                 "Fwd": f"{_sg_fwd:.4f}%",
+                                                                 "Vol": f"{_sg_vol:.1f}", "Ann": f"{_sg_ann:.3f}", **_row})
+
+                                        if _sg_rows:
+                                            st.dataframe(pd.DataFrame(_sg_rows), use_container_width=True, hide_index=True)
+                                        st.markdown("---")
 
                                 # ── Download: Positions + Suggestions ──────────
                                 if _all_sg_rows and st.button("📥 Download Positions & Suggestions", key="sg_xl_dl"):
