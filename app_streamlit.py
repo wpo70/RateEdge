@@ -8452,6 +8452,97 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         st.dataframe(_show_df, use_container_width=True, hide_index=True,
                                      height=min(60 + len(_show_df) * 35, 700))
 
+                    # ── Excel Download: Near-ATM Expiry Monitor ──────────────
+                    _atm_df = _em_filtered[_em_filtered["strike_var_bp"].fillna(999) <= 10].copy()
+                    if not _atm_df.empty:
+                        _xl_label = f"📥 Download Near-ATM ({len(_atm_df)} trades, 0-10bp)"
+                        if st.button(_xl_label, key="em_xl_dl"):
+                            import io as _io_em
+                            from openpyxl import Workbook as _WB_em
+                            from openpyxl.styles import Font as _Font_em, PatternFill as _Fill_em, Alignment as _Align_em, Border as _Border_em, Side as _Side_em
+
+                            _wb = _WB_em()
+                            _ws = _wb.active
+                            _ws.title = "Near-ATM Expiries"
+
+                            # Styles
+                            _hdr_font = _Font_em(name="Arial", bold=True, color="FFFFFF", size=10)
+                            _hdr_fill = _Fill_em("solid", fgColor="1F4E79")
+                            _atm_fill = _Fill_em("solid", fgColor="C6EFCE")  # green highlight 0-5bp
+                            _bold_font = _Font_em(name="Arial", bold=True, size=10)
+                            _normal_font = _Font_em(name="Arial", size=10)
+                            _thin_border = _Border_em(
+                                left=_Side_em(style="thin"), right=_Side_em(style="thin"),
+                                top=_Side_em(style="thin"), bottom=_Side_em(style="thin"))
+
+                            # Top 20 notional indices for bold
+                            _top20_idx = set(_atm_df.nlargest(20, "notional_mm").index)
+
+                            # Headers
+                            _xl_cols = ["Expiry", "Tenor", "Dir", "Strike (%)", "ATM Fwd (%)", "Var (bp)",
+                                        "Notional (mm)", "Moneyness", "Prem (bp)", "Exec Date", "Platform"]
+                            for ci, hdr in enumerate(_xl_cols, 1):
+                                _c = _ws.cell(row=1, column=ci, value=hdr)
+                                _c.font = _hdr_font
+                                _c.fill = _hdr_fill
+                                _c.alignment = _Align_em(horizontal="center")
+                                _c.border = _thin_border
+
+                            # Data rows
+                            _row_num = 2
+                            for _idx, _r in _atm_df.sort_values(["expiry_date", "swp_tenor", "strike_pct"]).iterrows():
+                                _is_top = _idx in _top20_idx
+                                _is_atm = (_r.get("strike_var_bp") or 999) <= 5
+                                _font = _bold_font if _is_top else _normal_font
+
+                                _vals = [
+                                    _r["expiry_date"].strftime("%d-%b-%Y") if _r.get("expiry_date") else "",
+                                    f"{_r.get('swp_tenor','')} ({_r.get('opt_tenor','')})",
+                                    _r.get("direction", ""),
+                                    round(float(_r.get("strike_pct", 0)), 5) if pd.notna(_r.get("strike_pct")) else "",
+                                    round(float(_r.get("_fwd", 0)), 4) if pd.notna(_r.get("_fwd")) else "",
+                                    round(float(_r.get("strike_var_bp", 0)), 1) if pd.notna(_r.get("strike_var_bp")) else "",
+                                    round(float(_r.get("notional_mm", 0)), 0) if pd.notna(_r.get("notional_mm")) else "",
+                                    _r.get("moneyness", ""),
+                                    "",  # Prem (bp) placeholder — needs vol
+                                    str(_r.get("exec_date", "")),
+                                    PLATFORM_NAMES.get(str(_r.get("platform_identifier", "")), str(_r.get("platform_identifier", ""))),
+                                ]
+                                for ci, val in enumerate(_vals, 1):
+                                    _c = _ws.cell(row=_row_num, column=ci, value=val)
+                                    _c.font = _font
+                                    _c.border = _thin_border
+                                    if _is_atm:
+                                        _c.fill = _atm_fill
+
+                                _row_num += 1
+
+                            # Column widths
+                            _widths = [12, 14, 10, 12, 12, 8, 14, 10, 10, 12, 14]
+                            for ci, w in enumerate(_widths, 1):
+                                _ws.column_dimensions[_ws.cell(row=1, column=ci).column_letter].width = w
+
+                            # Freeze header
+                            _ws.freeze_panes = "A2"
+
+                            # Title row
+                            _ws.insert_rows(1)
+                            _ws.cell(row=1, column=1, value=f"RateEdge Expiry Monitor — Near-ATM (0-10bp) — {_em_mon.strftime('%d-%b')} to {_em_fri.strftime('%d-%b-%Y')}")
+                            _ws.cell(row=1, column=1).font = _Font_em(name="Arial", bold=True, size=12)
+                            _ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(_xl_cols))
+                            _ws.freeze_panes = "A3"
+
+                            _buf = _io_em.BytesIO()
+                            _wb.save(_buf)
+                            _buf.seek(0)
+                            st.download_button(
+                                "⬇️ Save Excel",
+                                data=_buf.getvalue(),
+                                file_name=f"RateEdge_EM_NearATM_{_em_mon.strftime('%d%b')}_{_em_fri.strftime('%d%b%Y')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key="em_xl_save"
+                            )
+
     # ── Auto-refresh ──────────────────────────────────────────────────────────
     _refresh_map = {"Off": 0, "30s": 30, "1 min": 60, "2 min": 120, "5 min": 300}
     _interval = _refresh_map.get(auto_refresh, 0)
