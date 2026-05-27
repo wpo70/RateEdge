@@ -8358,16 +8358,18 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     # Largest positions
                     st.markdown("#### Largest Individual Positions")
                     _top = _em_filtered.nlargest(20, "notional_mm")[
-                        ["opt_tenor", "swp_tenor", "direction", "strike_pct",
-                         "notional_mm", "moneyness", "exec_date", "platform_identifier"]
+                        ["opt_tenor", "swp_tenor", "direction", "strike_pct", "_fwd",
+                         "notional_mm", "moneyness", "expiry_date", "exec_date", "platform_identifier"]
                     ].copy()
                     _top["Tenor"] = _top.apply(lambda r: f"{r['swp_tenor']} ({r['opt_tenor']})", axis=1)
                     _top["strike_pct"] = _top["strike_pct"].apply(lambda x: f"{x:.5f}%" if pd.notna(x) else "—")
+                    _top["_fwd"] = _top["_fwd"].apply(lambda x: f"{x:.4f}%" if pd.notna(x) else "—")
                     _top["notional_mm"] = _top["notional_mm"].apply(lambda x: f"{x:,.0f}")
+                    _top["expiry_date"] = _top["expiry_date"].apply(lambda x: x.strftime("%d-%b") if x else "—")
                     _top["platform_identifier"] = _top["platform_identifier"].map(
                         lambda x: PLATFORM_NAMES.get(str(x), str(x)))
-                    _top = _top[["Tenor", "direction", "strike_pct", "notional_mm", "moneyness", "exec_date", "platform_identifier"]]
-                    _top.columns = ["Tenor", "Dir", "Strike", "Notional (mm)", "Moneyness", "Exec Date", "Platform"]
+                    _top = _top[["Tenor", "direction", "strike_pct", "_fwd", "notional_mm", "moneyness", "expiry_date", "exec_date", "platform_identifier"]]
+                    _top.columns = ["Tenor", "Dir", "Strike", "ATM Fwd", "Notional (mm)", "Moneyness", "Expiry", "Exec Date", "Platform"]
                     st.dataframe(_top, use_container_width=True, hide_index=True)
 
                     # By Opt Tenor
