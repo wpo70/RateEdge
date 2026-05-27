@@ -8468,68 +8468,146 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             # Styles
                             _hdr_font = _Font_em(name="Arial", bold=True, color="FFFFFF", size=10)
                             _hdr_fill = _Fill_em("solid", fgColor="1F4E79")
-                            _atm_fill = _Fill_em("solid", fgColor="C6EFCE")  # green highlight 0-5bp
+                            _atm_fill = _Fill_em("solid", fgColor="C6EFCE")
                             _bold_font = _Font_em(name="Arial", bold=True, size=10)
                             _normal_font = _Font_em(name="Arial", size=10)
                             _thin_border = _Border_em(
                                 left=_Side_em(style="thin"), right=_Side_em(style="thin"),
                                 top=_Side_em(style="thin"), bottom=_Side_em(style="thin"))
 
-                            # Top 20 notional indices for bold
                             _top20_idx = set(_atm_df.nlargest(20, "notional_mm").index)
 
+                            # Compute pricing for each row (same logic as daily loop)
+                            _PREM_DEDUP_MICS_XL = {"BGCD","TPSE","TSEF","TWSF","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
+                            _em_atm_vol = st.session_state.get("vol_data", {}).get(_em_ccy, {}).get("atm")
+                            _xl_rows = []
+                            for _idx, _r in _atm_df.sort_values(["expiry_date", "swp_tenor", "strike_pct"]).iterrows():
+                                _swt = str(_r.get("swp_tenor", ""))
+                                _opt_t = str(_r.get("opt_tenor", ""))
+                                _strike = _r.get("strike_pct")
+                                _fwd_r = _r.get("_fwd") if pd.notna(_r.get("_fwd")) else _em_fwd.get(_swt)
+                                _ann_used = _r.get("_ann") if pd.notna(_r.get("_ann")) else _em_ann.get(_swt)
+                                _dir = _r.get("direction", "")
+                                _not_mm = _r.get("notional_mm", 0)
+                                _notional = float(_r.get("notional_leg1") or 0)
+                                _platform = str(_r.get("platform_identifier", ""))
+                                _exp_dt = _r.get("expiry_date")
+                                _var_bp = _r.get("strike_var_bp")
+
+                                # Original premium
+                                _orig_prem_raw = float(_r.get("premium_amount") or 0)
+                                _is_dedup = _platform in _PREM_DEDUP_MICS_XL
+                                _orig_adj = _orig_prem_raw / 2.0 if _is_dedup and _orig_prem_raw > 0 else _orig_prem_raw
+                                _orig_prem_bp = (_orig_adj / _notional * 10000.0) if _notional > 0 else None
+
+                                # Days left & time to expiry
+                                _days_left = max((_exp_dt - _nyc_today).days, 0) if _exp_dt else 0
+                                _t_rem = max(_days_left / 365.0, 0.0001)
+
+                                # Intrinsic ($)
+                                _intrinsic_dollar = None
+                                if _fwd_r and pd.notna(_strike) and _ann_used:
+                                    _F = _fwd_r / 100.0; _K = _strike / 100.0
+                                    if _dir == "Payer": _intr = max(_F - _K, 0)
+                                    elif _dir == "Receiver": _intr = max(_K - _F, 0)
+                                    else: _intr = 0
+                                    _intrinsic_dollar = _intr * _ann_used * _notional if _notional > 0 else None
+
+                                # Prem (bp) from vol surface
+                                _curr_prem_bp = None
+                                _curr_pv = None
+                                if _fwd_r and pd.notna(_strike) and _ann_used and _em_atm_vol is not None:
+                                    try:
+                                        _swp_y = label_to_years(_swt) if _swt else 0
+                                        _vol_bp = get_matrix_value(_em_atm_vol, _opt_t.lower(), _swp_y)
+                                        if _vol_bp and _t_rem > 0 and _swp_y > 0 and _ann_used:
+                                            _sigma_n = _vol_bp / 10000.0
+                                            _F2 = _fwd_r / 100.0; _K2 = _strike / 100.0
+                                            _d = (_F2 - _K2) / (_sigma_n * math.sqrt(_t_rem)) if _sigma_n * math.sqrt(_t_rem) > 1e-10 else 0
+                                            _Nd = 0.5 * (1 + math.erf(_d / math.sqrt(2)))
+                                            _nd = math.exp(-0.5 * _d**2) / math.sqrt(2 * math.pi)
+                                            if _dir == "Payer":
+                                                _prem_rate = (_F2 - _K2) * _Nd + _sigma_n * math.sqrt(_t_rem) * _nd
+                                            else:
+                                                _prem_rate = (_K2 - _F2) * (1 - _Nd) + _sigma_n * math.sqrt(_t_rem) * _nd
+                                            _curr_prem_bp = _prem_rate * _ann_used * 10000.0
+                                            _curr_pv = _prem_rate * _ann_used * _notional if _notional > 0 else None
+                                    except Exception:
+                                        pass
+
+                                # Seller Net ($)
+                                _seller_net = None
+                                if _orig_prem_bp is not None and _curr_prem_bp is not None and _notional > 0 and _ann_used:
+                                    _seller_net = (_orig_prem_bp - _curr_prem_bp) / 10000.0 * _ann_used * _notional
+
+                                # Breakeven
+                                _be = None
+                                if _orig_prem_bp is not None and _ann_used and _ann_used > 0 and pd.notna(_strike):
+                                    _K3 = _strike / 100.0; _prem_dec = _orig_prem_bp / 10000.0 / _ann_used
+                                    if _dir == "Payer": _be = (_K3 + _prem_dec) * 100
+                                    elif _dir == "Receiver": _be = (_K3 - _prem_dec) * 100
+
+                                # Moneyness
+                                _moneyness = _r.get("moneyness", "")
+
+                                _xl_rows.append({
+                                    "idx": _idx,
+                                    "expiry": _exp_dt.strftime("%d-%b-%Y") if _exp_dt else "",
+                                    "tenor": f"{_swt} ({_opt_t})",
+                                    "dir": _dir,
+                                    "strike": round(float(_strike), 5) if pd.notna(_strike) else None,
+                                    "fwd": round(float(_fwd_r), 4) if _fwd_r else None,
+                                    "ann": round(float(_ann_used), 3) if _ann_used else None,
+                                    "var_bp": round(float(_var_bp), 1) if pd.notna(_var_bp) else None,
+                                    "itm_otm": _moneyness,
+                                    "not_mm": round(float(_not_mm), 0) if pd.notna(_not_mm) else None,
+                                    "intrinsic": round(float(_intrinsic_dollar), 0) if _intrinsic_dollar else None,
+                                    "prem_bp": round(float(_curr_prem_bp), 1) if _curr_prem_bp else None,
+                                    "orig_prem_bp": round(float(_orig_prem_bp), 1) if _orig_prem_bp else None,
+                                    "curr_val": round(float(_curr_pv), 0) if _curr_pv else None,
+                                    "seller_net": round(float(_seller_net), 0) if _seller_net else None,
+                                    "be_fwd": round(float(_be), 3) if _be else None,
+                                    "days_left": _days_left,
+                                    "exec_date": str(_r.get("exec_date", "")),
+                                    "platform": PLATFORM_NAMES.get(_platform, _platform),
+                                    "_is_top": _idx in _top20_idx,
+                                    "_is_atm5": (_var_bp or 999) <= 5,
+                                })
+
                             # Headers
-                            _xl_cols = ["Expiry", "Tenor", "Dir", "Strike (%)", "ATM Fwd (%)", "Var (bp)",
-                                        "Notional (mm)", "Moneyness", "Prem (bp)", "Exec Date", "Platform"]
+                            _xl_cols = ["Expiry", "Tenor", "Dir", "Strike (%)", "Fwd (%)", "Ann",
+                                        "Var (bp)", "ITM/OTM", "Notional (mm)", "Intrinsic ($)",
+                                        "Prem (bp)", "Orig Prem (bp)", "Curr Val ($)", "Seller Net ($)",
+                                        "BE Fwd (%)", "Days Left", "Exec Date", "Platform"]
+                            _xl_keys = ["expiry", "tenor", "dir", "strike", "fwd", "ann",
+                                        "var_bp", "itm_otm", "not_mm", "intrinsic",
+                                        "prem_bp", "orig_prem_bp", "curr_val", "seller_net",
+                                        "be_fwd", "days_left", "exec_date", "platform"]
+
+                            # Title row
+                            _ws.cell(row=1, column=1, value=f"RateEdge Expiry Monitor — Near-ATM (0-10bp) — {_em_mon.strftime('%d-%b')} to {_em_fri.strftime('%d-%b-%Y')}")
+                            _ws.cell(row=1, column=1).font = _Font_em(name="Arial", bold=True, size=12)
+                            _ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(_xl_cols))
+
                             for ci, hdr in enumerate(_xl_cols, 1):
-                                _c = _ws.cell(row=1, column=ci, value=hdr)
+                                _c = _ws.cell(row=2, column=ci, value=hdr)
                                 _c.font = _hdr_font
                                 _c.fill = _hdr_fill
                                 _c.alignment = _Align_em(horizontal="center")
                                 _c.border = _thin_border
 
-                            # Data rows
-                            _row_num = 2
-                            for _idx, _r in _atm_df.sort_values(["expiry_date", "swp_tenor", "strike_pct"]).iterrows():
-                                _is_top = _idx in _top20_idx
-                                _is_atm = (_r.get("strike_var_bp") or 999) <= 5
-                                _font = _bold_font if _is_top else _normal_font
-
-                                _vals = [
-                                    _r["expiry_date"].strftime("%d-%b-%Y") if _r.get("expiry_date") else "",
-                                    f"{_r.get('swp_tenor','')} ({_r.get('opt_tenor','')})",
-                                    _r.get("direction", ""),
-                                    round(float(_r.get("strike_pct", 0)), 5) if pd.notna(_r.get("strike_pct")) else "",
-                                    round(float(_r.get("_fwd", 0)), 4) if pd.notna(_r.get("_fwd")) else "",
-                                    round(float(_r.get("strike_var_bp", 0)), 1) if pd.notna(_r.get("strike_var_bp")) else "",
-                                    round(float(_r.get("notional_mm", 0)), 0) if pd.notna(_r.get("notional_mm")) else "",
-                                    _r.get("moneyness", ""),
-                                    "",  # Prem (bp) placeholder — needs vol
-                                    str(_r.get("exec_date", "")),
-                                    PLATFORM_NAMES.get(str(_r.get("platform_identifier", "")), str(_r.get("platform_identifier", ""))),
-                                ]
-                                for ci, val in enumerate(_vals, 1):
-                                    _c = _ws.cell(row=_row_num, column=ci, value=val)
+                            for ri, _xr in enumerate(_xl_rows, 3):
+                                _font = _bold_font if _xr["_is_top"] else _normal_font
+                                for ci, key in enumerate(_xl_keys, 1):
+                                    _c = _ws.cell(row=ri, column=ci, value=_xr.get(key, ""))
                                     _c.font = _font
                                     _c.border = _thin_border
-                                    if _is_atm:
+                                    if _xr["_is_atm5"]:
                                         _c.fill = _atm_fill
 
-                                _row_num += 1
-
-                            # Column widths
-                            _widths = [12, 14, 10, 12, 12, 8, 14, 10, 10, 12, 14]
+                            _widths = [12, 14, 10, 12, 10, 8, 8, 10, 14, 14, 10, 12, 14, 14, 10, 8, 12, 14]
                             for ci, w in enumerate(_widths, 1):
-                                _ws.column_dimensions[_ws.cell(row=1, column=ci).column_letter].width = w
-
-                            # Freeze header
-                            _ws.freeze_panes = "A2"
-
-                            # Title row
-                            _ws.insert_rows(1)
-                            _ws.cell(row=1, column=1, value=f"RateEdge Expiry Monitor — Near-ATM (0-10bp) — {_em_mon.strftime('%d-%b')} to {_em_fri.strftime('%d-%b-%Y')}")
-                            _ws.cell(row=1, column=1).font = _Font_em(name="Arial", bold=True, size=12)
-                            _ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(_xl_cols))
+                                _ws.column_dimensions[_ws.cell(row=2, column=ci).column_letter].width = w
                             _ws.freeze_panes = "A3"
 
                             _buf = _io_em.BytesIO()
