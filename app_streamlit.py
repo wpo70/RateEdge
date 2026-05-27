@@ -8684,6 +8684,171 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 key="em_xl_save"
                             )
 
+                    # ── Scenario Pricer ──────────────────────────────────────────
+                    with st.expander("📊 Scenario Pricer — Price at different forwards", expanded=False):
+                        if _em_filtered.empty:
+                            st.info("No trades to scenario-price. Adjust filters above.")
+                        else:
+                            _sc_c1, _sc_c2 = st.columns([1, 1])
+                            with _sc_c1:
+                                _sc_dates = sorted(_em_filtered["expiry_date"].dropna().unique())
+                                _sc_date_strs = [d.strftime("%a %d-%b-%Y") if hasattr(d, 'strftime') else str(d) for d in _sc_dates]
+                                _sc_date_sel = st.selectbox("Expiry date", _sc_date_strs, key="sc_date")
+                                _sc_date = _sc_dates[_sc_date_strs.index(_sc_date_sel)] if _sc_date_sel in _sc_date_strs else _sc_dates[0]
+                            with _sc_c2:
+                                _sc_tenors = sorted(
+                                    _em_filtered[_em_filtered["expiry_date"] == _sc_date]["swp_tenor"].dropna().unique(),
+                                    key=_safe_tenor_sort)
+                                _sc_tenor = st.selectbox("Swap tenor", _sc_tenors, key="sc_tenor") if _sc_tenors else None
+
+                            if _sc_tenor:
+                                _sc_trades = _em_filtered[
+                                    (_em_filtered["expiry_date"] == _sc_date) &
+                                    (_em_filtered["swp_tenor"] == _sc_tenor)
+                                ].copy()
+
+                                _sc_atm_fwd = _sc_trades["_fwd"].dropna().median() if "_fwd" in _sc_trades.columns else None
+
+                                if _sc_atm_fwd:
+                                    st.caption(f"ATM Forward: **{_sc_atm_fwd:.4f}%** | {len(_sc_trades)} trades")
+
+                                    _sc_c3, _sc_c4, _sc_c5 = st.columns([1, 1, 1])
+                                    with _sc_c3:
+                                        _sc_center = st.number_input("Center fwd (%)", value=round(_sc_atm_fwd, 4),
+                                                                     format="%.4f", step=0.0025, key="sc_center")
+                                    with _sc_c4:
+                                        _sc_step = st.number_input("Step (bp)", value=2.5, step=0.5, key="sc_step")
+                                    with _sc_c5:
+                                        _sc_n = st.selectbox("# scenarios", [3, 5, 7, 9], index=1, key="sc_n")
+
+                                    _half = _sc_n // 2
+                                    _sc_fwds = [round(_sc_center + (_i - _half) * _sc_step / 100, 5)
+                                                for _i in range(_sc_n)]
+
+                                    _sc_atm_vol = st.session_state.get("vol_data", {}).get(_em_ccy, {}).get("atm")
+                                    _sc_opt_t = _sc_trades["opt_tenor"].iloc[0] if len(_sc_trades) > 0 else "1m"
+                                    _sc_swp_y = label_to_years(_sc_tenor)
+                                    _sc_vol_bp = None
+                                    if _sc_atm_vol is not None:
+                                        _sc_vol_bp = get_matrix_value(_sc_atm_vol, str(_sc_opt_t).lower(), _sc_swp_y)
+
+                                    _sc_days = max((_sc_date - _nyc_today).days, 0)
+                                    _sc_t = max(_sc_days / 365.0, 0.0001)
+                                    _sc_ann = _sc_trades["_ann"].dropna().median() if "_ann" in _sc_trades.columns else None
+
+                                    if _sc_vol_bp and _sc_ann:
+                                        _sigma_sc = _sc_vol_bp / 10000.0
+
+                                        _sc_rows = []
+                                        for _idx, _tr in _sc_trades.sort_values("strike_pct").iterrows():
+                                            _strike = _tr.get("strike_pct")
+                                            _dir = _tr.get("direction", "")
+                                            _not_mm = _tr.get("notional_mm", 0)
+                                            _notional = float(_tr.get("notional_leg1") or 0)
+                                            _platform = str(_tr.get("platform_identifier", ""))
+                                            _orig_prem_raw = float(_tr.get("premium_amount") or 0)
+                                            _is_dedup = _platform in {"BGCD","TPSE","TSEF","TWSF","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
+                                            _orig_adj = _orig_prem_raw / 2.0 if _is_dedup and _orig_prem_raw > 0 else _orig_prem_raw
+                                            _orig_bp = (_orig_adj / _notional * 10000.0) if _notional > 0 else None
+
+                                            if pd.isna(_strike) or not _dir:
+                                                continue
+
+                                            _K = _strike / 100.0
+                                            _row = {
+                                                "Strike": f"{_strike:.5f}",
+                                                "Dir": _dir,
+                                                "Not (mm)": f"{_not_mm:,.0f}" if pd.notna(_not_mm) else "—",
+                                                "Orig (bp)": f"{_orig_bp:.1f}" if _orig_bp else "—",
+                                            }
+
+                                            for _fwd_sc in _sc_fwds:
+                                                _F_sc = _fwd_sc / 100.0
+                                                _denom = _sigma_sc * math.sqrt(_sc_t)
+                                                _d = (_F_sc - _K) / _denom if _denom > 1e-10 else 0
+                                                _Nd = 0.5 * (1 + math.erf(_d / math.sqrt(2)))
+                                                _nd = math.exp(-0.5 * _d**2) / math.sqrt(2 * math.pi)
+                                                if _dir == "Payer":
+                                                    _prem = (_F_sc - _K) * _Nd + _denom * _nd
+                                                else:
+                                                    _prem = (_K - _F_sc) * (1 - _Nd) + _denom * _nd
+                                                _prem_bp = _prem * _sc_ann * 10000.0
+                                                _row[f"{_fwd_sc:.4f}"] = f"{_prem_bp:.1f}"
+
+                                            _sc_rows.append(_row)
+
+                                        if _sc_rows:
+                                            _sc_df = pd.DataFrame(_sc_rows)
+                                            st.caption(f"Vol: {_sc_vol_bp:.1f}bp | Ann: {_sc_ann:.3f} | "
+                                                       f"Days: {_sc_days} | Exp: {_sc_date.strftime('%d-%b-%Y')}")
+                                            st.dataframe(_sc_df, use_container_width=True, hide_index=True)
+
+                                            if st.button("📥 Download Scenario Excel", key="sc_xl_dl"):
+                                                import io as _io_sc
+                                                from openpyxl import Workbook as _WB_sc
+                                                from openpyxl.styles import Font as _Font_sc, PatternFill as _Fill_sc, Alignment as _Align_sc, Border as _Border_sc, Side as _Side_sc
+
+                                                _wb_sc = _WB_sc()
+                                                _ws_sc = _wb_sc.active
+                                                _ws_sc.title = "Scenario"
+
+                                                _hdr_font_sc = _Font_sc(name="Arial", bold=True, color="FFFFFF", size=10)
+                                                _hdr_fill_sc = _Fill_sc("solid", fgColor="1F4E79")
+                                                _atm_fill_sc = _Fill_sc("solid", fgColor="C6EFCE")
+                                                _norm_sc = _Font_sc(name="Arial", size=10)
+                                                _thin_sc = _Border_sc(
+                                                    left=_Side_sc(style="thin"), right=_Side_sc(style="thin"),
+                                                    top=_Side_sc(style="thin"), bottom=_Side_sc(style="thin"))
+
+                                                _ws_sc.cell(row=1, column=1,
+                                                    value=f"RateEdge Scenario — {_sc_tenor} {_sc_opt_t} exp {_sc_date.strftime('%d-%b-%Y')} | "
+                                                          f"Vol: {_sc_vol_bp:.1f}bp | Ann: {_sc_ann:.3f}")
+                                                _ws_sc.cell(row=1, column=1).font = _Font_sc(name="Arial", bold=True, size=12)
+                                                _ws_sc.merge_cells(start_row=1, start_column=1, end_row=1, end_column=4 + len(_sc_fwds))
+
+                                                _sc_hdrs = list(_sc_df.columns)
+                                                for ci, h in enumerate(_sc_hdrs, 1):
+                                                    _c = _ws_sc.cell(row=2, column=ci, value=h)
+                                                    _c.font = _hdr_font_sc
+                                                    _c.fill = _hdr_fill_sc
+                                                    _c.alignment = _Align_sc(horizontal="center")
+                                                    _c.border = _thin_sc
+                                                    try:
+                                                        if abs(float(h) - _sc_atm_fwd) < 0.0001:
+                                                            _c.fill = _Fill_sc("solid", fgColor="4472C4")
+                                                    except ValueError:
+                                                        pass
+
+                                                for ri, row_data in enumerate(_sc_df.itertuples(index=False), 3):
+                                                    for ci, val in enumerate(row_data, 1):
+                                                        _c = _ws_sc.cell(row=ri, column=ci, value=val)
+                                                        _c.font = _norm_sc
+                                                        _c.border = _thin_sc
+                                                        try:
+                                                            if abs(float(_sc_hdrs[ci-1]) - _sc_atm_fwd) < 0.0001:
+                                                                _c.fill = _atm_fill_sc
+                                                        except (ValueError, IndexError):
+                                                            pass
+
+                                                for ci in range(1, len(_sc_hdrs) + 1):
+                                                    _ws_sc.column_dimensions[_ws_sc.cell(row=2, column=ci).column_letter].width = 14
+                                                _ws_sc.freeze_panes = "A3"
+
+                                                _buf_sc = _io_sc.BytesIO()
+                                                _wb_sc.save(_buf_sc)
+                                                _buf_sc.seek(0)
+                                                st.download_button(
+                                                    "⬇️ Save Scenario Excel",
+                                                    data=_buf_sc.getvalue(),
+                                                    file_name=f"RateEdge_Scenario_{_sc_tenor}_{_sc_date.strftime('%d%b%Y')}.xlsx",
+                                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                                    key="sc_xl_save"
+                                                )
+                                    else:
+                                        st.warning("Vol surface or annuity not available for this tenor/expiry.")
+                                else:
+                                    st.info("No forward rate available for this selection.")
+
     # ── Auto-refresh ──────────────────────────────────────────────────────────
     _refresh_map = {"Off": 0, "30s": 30, "1 min": 60, "2 min": 120, "5 min": 300}
     _interval = _refresh_map.get(auto_refresh, 0)
