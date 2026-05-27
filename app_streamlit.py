@@ -6839,7 +6839,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             opt_tenor, swp_tenor, notional_ccy,
             upi_underlier_name, strike_pct, premium_amount,
             notional_leg1, cleared, platform_identifier,
-            event_timestamp, execution_timestamp, trade_date
+            event_timestamp, execution_timestamp, trade_date,
+            effective_date, expiration_date
         FROM dtcc_sdr
         {where}
         ORDER BY execution_timestamp DESC
