@@ -8849,6 +8849,168 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 else:
                                     st.info("No forward rate available for this selection.")
 
+                    # ── Dealer Gamma Pain ────────────────────────────────────────
+                    with st.expander("🎯 Net Gamma Exposure — Where do dealers need to hedge?", expanded=False):
+                        if _em_filtered.empty or "_fwd" not in _em_filtered.columns:
+                            st.info("No data. Run Expiry Monitor scan first.")
+                        else:
+                            _gp_df = _em_filtered[
+                                _em_filtered["strike_pct"].notna() &
+                                _em_filtered["direction"].isin(["Payer", "Receiver"]) &
+                                _em_filtered["notional_mm"].notna()
+                            ].copy()
+                            if _gp_df.empty:
+                                st.info("No valid trades for gamma analysis.")
+                            else:
+                                # Bucket strikes to nearest 2.5bp
+                                _gp_df["strike_bucket"] = ((_gp_df["strike_pct"] * 10000).round(-1) / 10000)  # nearest 1bp
+                                _gp_bucket_size = st.selectbox("Strike bucket (bp)", [1, 2.5, 5, 10], index=1, key="gp_bucket")
+                                _gp_df["strike_bucket"] = (
+                                    (_gp_df["strike_pct"] * 100 / _gp_bucket_size).round() * _gp_bucket_size / 100
+                                )
+
+                                _gp_ann_col = "_ann" if "_ann" in _gp_df.columns else None
+
+                                _gp_rows = []
+                                for _bkt in sorted(_gp_df["strike_bucket"].unique()):
+                                    _bkt_df = _gp_df[_gp_df["strike_bucket"] == _bkt]
+                                    _p = _bkt_df[_bkt_df["direction"] == "Payer"]
+                                    _r = _bkt_df[_bkt_df["direction"] == "Receiver"]
+                                    _p_not = _p["notional_mm"].sum()
+                                    _r_not = _r["notional_mm"].sum()
+                                    _net = _p_not - _r_not
+                                    _p_gamma = (_p["notional_mm"] * _p["_ann"].fillna(1)).sum() if _gp_ann_col else _p_not
+                                    _r_gamma = (_r["notional_mm"] * _r["_ann"].fillna(1)).sum() if _gp_ann_col else _r_not
+                                    _net_gamma = _p_gamma - _r_gamma
+                                    # Median fwd for reference
+                                    _fwd_ref = _bkt_df["_fwd"].dropna().median() if "_fwd" in _bkt_df.columns else None
+
+                                    _gp_rows.append({
+                                        "Strike": f"{_bkt:.4f}",
+                                        "Payer (mm)": f"{_p_not:,.0f}",
+                                        "Recvr (mm)": f"{_r_not:,.0f}",
+                                        "Net (mm)": f"{_net:+,.0f}",
+                                        "Net Gamma": f"{_net_gamma:+,.0f}",
+                                        "Skew": "🔴 Short Rcvr" if _net > 0 else "🔵 Short Payer" if _net < 0 else "—",
+                                        "Trades": len(_bkt_df),
+                                    })
+
+                                if _gp_rows:
+                                    _gp_result = pd.DataFrame(_gp_rows)
+                                    st.dataframe(_gp_result, use_container_width=True, hide_index=True)
+
+                                    # Summary
+                                    _total_p = _gp_df[_gp_df["direction"] == "Payer"]["notional_mm"].sum()
+                                    _total_r = _gp_df[_gp_df["direction"] == "Receiver"]["notional_mm"].sum()
+                                    _biggest_bucket = max(_gp_rows, key=lambda x: abs(float(x["Net (mm)"].replace(",", "").replace("+", ""))))
+                                    st.markdown(f"**Market skew:** ${_total_p:,.0f}mm payer vs ${_total_r:,.0f}mm receiver "
+                                                f"(net ${_total_p - _total_r:+,.0f}mm) | "
+                                                f"**Biggest concentration:** {_biggest_bucket['Strike']}% "
+                                                f"({_biggest_bucket['Skew']} {_biggest_bucket['Net (mm)']}mm)")
+
+                    # ── Breakeven Stress Test ────────────────────────────────────
+                    with st.expander("⚡ Breakeven Stress — Where do sellers go underwater?", expanded=False):
+                        if _em_filtered.empty or "_fwd" not in _em_filtered.columns:
+                            st.info("No data. Run Expiry Monitor scan first.")
+                        else:
+                            _be_df = _em_filtered[
+                                _em_filtered["strike_pct"].notna() &
+                                _em_filtered["direction"].isin(["Payer", "Receiver"]) &
+                                _em_filtered["_fwd"].notna() &
+                                _em_filtered["_ann"].notna() &
+                                _em_filtered["notional_mm"].notna()
+                            ].copy()
+
+                            _be_atm_vol = st.session_state.get("vol_data", {}).get(_em_ccy, {}).get("atm")
+
+                            if _be_df.empty or _be_atm_vol is None:
+                                st.info("Need trades with valid forwards/annuities and a vol surface loaded.")
+                            else:
+                                # Sweep forward shifts from -25bp to +25bp
+                                _be_shifts = list(range(-25, 26, 1))
+                                _be_median_fwd = _be_df["_fwd"].median()
+
+                                _flip_counts = []
+                                _total_underwater_not = []
+
+                                for _shift in _be_shifts:
+                                    _shifted_fwd_pct = _be_median_fwd + _shift / 100.0
+                                    _F_sh = _shifted_fwd_pct / 100.0
+                                    _n_underwater = 0
+                                    _underwater_not = 0.0
+
+                                    for _, _tr in _be_df.iterrows():
+                                        _K = _tr["strike_pct"] / 100.0
+                                        _dir = _tr["direction"]
+                                        _ann = _tr["_ann"]
+                                        _not_mm = _tr["notional_mm"]
+                                        _notional = float(_tr.get("notional_leg1") or 0)
+                                        _opt_t = str(_tr.get("opt_tenor", ""))
+                                        _swp_y = label_to_years(str(_tr.get("swp_tenor", ""))) if _tr.get("swp_tenor") else 0
+                                        _exp_dt = _tr.get("expiry_date")
+                                        _days = max((_exp_dt - _nyc_today).days, 0) if _exp_dt else 0
+                                        _t = max(_days / 365.0, 0.0001)
+
+                                        # Original premium
+                                        _orig_raw = float(_tr.get("premium_amount") or 0)
+                                        _plat = str(_tr.get("platform_identifier", ""))
+                                        _dedup = _plat in {"BGCD","TPSE","TSEF","TWSF","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
+                                        _orig_adj = _orig_raw / 2.0 if _dedup and _orig_raw > 0 else _orig_raw
+                                        _orig_bp = (_orig_adj / _notional * 10000.0) if _notional > 0 else None
+
+                                        if _orig_bp is None or _orig_bp <= 0:
+                                            continue
+
+                                        # Reprice at shifted forward
+                                        _vol_bp = get_matrix_value(_be_atm_vol, _opt_t.lower(), _swp_y)
+                                        if not _vol_bp or _vol_bp <= 0:
+                                            continue
+
+                                        _sigma = _vol_bp / 10000.0
+                                        _denom = _sigma * math.sqrt(_t)
+                                        _d = (_F_sh - _K) / _denom if _denom > 1e-10 else 0
+                                        _Nd = 0.5 * (1 + math.erf(_d / math.sqrt(2)))
+                                        _nd = math.exp(-0.5 * _d**2) / math.sqrt(2 * math.pi)
+                                        if _dir == "Payer":
+                                            _prem = (_F_sh - _K) * _Nd + _denom * _nd
+                                        else:
+                                            _prem = (_K - _F_sh) * (1 - _Nd) + _denom * _nd
+                                        _curr_bp = _prem * _ann * 10000.0
+
+                                        if _curr_bp > _orig_bp:
+                                            _n_underwater += 1
+                                            _underwater_not += _not_mm
+
+                                    _flip_counts.append(_n_underwater)
+                                    _total_underwater_not.append(_underwater_not)
+
+                                # Display results
+                                _stress_rows = []
+                                for i, _sh in enumerate(_be_shifts):
+                                    if _sh % 5 == 0:  # Show every 5bp
+                                        _stress_rows.append({
+                                            "Fwd Shift": f"{_sh:+d}bp",
+                                            "Fwd Level": f"{_be_median_fwd + _sh/100:.4f}%",
+                                            "Underwater": _flip_counts[i],
+                                            "UW Not (mm)": f"${_total_underwater_not[i]:,.0f}",
+                                            "% of Total": f"{_total_underwater_not[i] / _be_df['notional_mm'].sum() * 100:.0f}%" if _be_df['notional_mm'].sum() > 0 else "—",
+                                        })
+
+                                _stress_result = pd.DataFrame(_stress_rows)
+                                st.dataframe(_stress_result, use_container_width=True, hide_index=True)
+
+                                # Find pain point — steepest increase in underwater notional
+                                _diffs = [_total_underwater_not[i+1] - _total_underwater_not[i]
+                                          for i in range(len(_total_underwater_not) - 1)]
+                                if _diffs:
+                                    _max_diff_idx = max(range(len(_diffs)), key=lambda i: abs(_diffs[i]))
+                                    _pain_shift = _be_shifts[_max_diff_idx]
+                                    _pain_fwd = _be_median_fwd + _pain_shift / 100
+                                    _pain_dir = "higher" if _diffs[_max_diff_idx] > 0 else "lower"
+                                    st.markdown(f"**🎯 Hedging urgency peak:** {_pain_shift:+d}bp shift "
+                                                f"({_pain_fwd:.4f}%) — most positions flip underwater on rates moving {_pain_dir}. "
+                                                f"Dealers concentrated at this level need to hedge.")
+
     # ── Auto-refresh ──────────────────────────────────────────────────────────
     _refresh_map = {"Off": 0, "30s": 30, "1 min": 60, "2 min": 120, "5 min": 300}
     _interval = _refresh_map.get(auto_refresh, 0)
