@@ -7697,7 +7697,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             try: _not_val = float(_not_raw.replace("M","").replace("B","").replace(",","")) * (1000 if "B" in _not_raw else 1) if _not_raw and _not_raw != "—" else None
                             except: _not_val = None
                             # Set pricer session state
-                            st.session_state["sidebar_ccy"] = _ccy_raw
+                            st.session_state["_sdr_price_ccy"] = _ccy_raw  # applied before widget renders
                             st.session_state["sw_pending_reload"] = {
                                 "expiry":       _exp_key,
                                 "tenor":        _ten_key,
@@ -28920,6 +28920,10 @@ def main():
             st.session_state["_app_init_done"] = True
 
         # Currency — default to USD
+        # Apply CCY staged from SDR "Price This" button
+        _sdr_staged_ccy = st.session_state.pop("_sdr_price_ccy", None)
+        if _sdr_staged_ccy and _sdr_staged_ccy in ALL_CURRENCIES:
+            st.session_state["sidebar_ccy"] = _sdr_staged_ccy
         _ccy_idx = ALL_CURRENCIES.index(st.session_state.get("sidebar_ccy", "USD")) if st.session_state.get("sidebar_ccy", "USD") in ALL_CURRENCIES else ALL_CURRENCIES.index("USD")
         ccy = st.selectbox(
             " Currency",
