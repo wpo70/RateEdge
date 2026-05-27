@@ -7693,41 +7693,38 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _nyc_today = date.today()
 
                 # ── Controls ─────────────────────────────────────────────
-                _em_c1, _em_c2, _em_c3 = st.columns([2, 2, 4])
+                _em_c1, _em_c2 = st.columns([3, 1])
 
-                # Effective date: after 11am EST, today's expiries are done → roll forward
+                # Effective date: after 11am NYC, today's expiries are done → roll forward
                 _past_cutoff = _now_nyc_em is not None and _now_nyc_em.hour >= 11
                 _eff_date = _nyc_today
                 if _past_cutoff and _eff_date.weekday() < 5:
                     _eff_date += timedelta(days=1)
-                # Skip weekends
                 while _eff_date.weekday() >= 5:
                     _eff_date += timedelta(days=1)
+
                 # Default: 6 business days from effective date
                 _biz_count = 0
-                _default_date = _eff_date
-                while _biz_count < 6:
-                    _default_date += timedelta(days=1)
-                    if _default_date.weekday() < 5:
+                _end_date = _eff_date
+                while _biz_count < 5:
+                    _end_date += timedelta(days=1)
+                    if _end_date.weekday() < 5:
                         _biz_count += 1
-                # Snap to Monday of that week
-                _default_mon = _default_date - timedelta(days=_default_date.weekday())
-                # Min value: Monday of effective date's week (no past weeks)
-                _min_mon = _eff_date - timedelta(days=_eff_date.weekday())
 
                 with _em_c1:
-                    _em_target_mon = st.date_input("Target week (Monday)",
-                        value=_default_mon,
-                        min_value=_min_mon,
-                        key="em_target_mon")
+                    _em_range = st.date_input("Expiry window",
+                        value=(_eff_date, _end_date),
+                        min_value=_eff_date,
+                        key="em_range")
                 with _em_c2:
                     _em_ccy = st.selectbox("Currency", ["USD"], key="em_ccy")
 
-                # Compute target week (Mon-Fri)
-                _em_mon = _em_target_mon
-                if _em_mon.weekday() != 0:
-                    _em_mon = _em_mon - timedelta(days=_em_mon.weekday())
-                _em_fri = _em_mon + timedelta(days=4)
+                # Handle partial selection (user picked start but not end yet)
+                if isinstance(_em_range, (list, tuple)) and len(_em_range) == 2:
+                    _em_mon, _em_fri = _em_range[0], _em_range[1]
+                else:
+                    _em_mon = _em_range[0] if isinstance(_em_range, (list, tuple)) else _em_range
+                    _em_fri = _em_mon + timedelta(days=4)
 
                 st.markdown(f"**Target expiry window: {_em_mon.strftime('%d-%b-%Y')} to {_em_fri.strftime('%d-%b-%Y')}**")
 
