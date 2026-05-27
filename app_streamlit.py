@@ -9009,42 +9009,40 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         })
                                     st.dataframe(pd.DataFrame(_stress_rows), use_container_width=True, hide_index=True)
 
-                                    # Thresholds side by side
+                                    # Pain ladder — what flips at each level
                                     _tc1, _tc2 = st.columns(2)
                                     with _tc1:
                                         st.markdown(f"**Payer sellers** (${_payer_total:,.0f}mm) — hurt by rates ↑")
                                         if _payer_trades:
-                                            for _pct in [25, 50, 75]:
-                                                _target = _payer_total * _pct / 100.0
-                                                _found = False
-                                                for _sh in range(1, 51, 1):
-                                                    if _count_underwater_t(_payer_trades, _sh, _be_median_fwd) >= _target:
-                                                        st.markdown(f"- **{_pct}% underwater** at +{_sh}bp → {_be_median_fwd + _sh/100:.4f}%")
-                                                        _found = True; break
-                                                if not _found:
-                                                    _p_now = _count_underwater_t(_payer_trades, 0, _be_median_fwd)
-                                                    if _p_now >= _target:
-                                                        st.markdown(f"- **{_pct}% underwater** — already at current fwd")
-                                                    else:
-                                                        st.markdown(f"- **{_pct}% underwater** — beyond +50bp")
+                                            _p_prev = _count_underwater_t(_payer_trades, 0, _be_median_fwd)
+                                            _p_now_pct = _p_prev / _payer_total * 100 if _payer_total > 0 else 0
+                                            if _p_prev > 0:
+                                                st.markdown(f"- **Now:** ${_p_prev:,.0f}mm already underwater ({_p_now_pct:.0f}%)")
+                                            for _sh in [5, 10, 15, 20, 25]:
+                                                _p_at = _count_underwater_t(_payer_trades, _sh, _be_median_fwd)
+                                                _add = _p_at - _p_prev
+                                                if _add > 0:
+                                                    st.markdown(f"- **+{_sh}bp** ({_be_median_fwd + _sh/100:.4f}%): "
+                                                                f"+${_add:,.0f}mm flips → ${_p_at:,.0f}mm total "
+                                                                f"({_p_at/_payer_total*100:.0f}%)")
+                                                _p_prev = _p_at
                                         else:
                                             st.caption("No payer trades with valid premiums")
                                     with _tc2:
-                                        st.markdown(f"**Receiver sellers** (${_rcvr_total:,.0f}mm) — hurt by rates ↓")
+                                        st.markdown(f"**Recvr sellers** (${_rcvr_total:,.0f}mm) — hurt by rates ↓")
                                         if _rcvr_trades:
-                                            for _pct in [25, 50, 75]:
-                                                _target = _rcvr_total * _pct / 100.0
-                                                _found = False
-                                                for _sh in range(-1, -51, -1):
-                                                    if _count_underwater_t(_rcvr_trades, _sh, _be_median_fwd) >= _target:
-                                                        st.markdown(f"- **{_pct}% underwater** at {_sh}bp → {_be_median_fwd + _sh/100:.4f}%")
-                                                        _found = True; break
-                                                if not _found:
-                                                    _r_now = _count_underwater_t(_rcvr_trades, 0, _be_median_fwd)
-                                                    if _r_now >= _target:
-                                                        st.markdown(f"- **{_pct}% underwater** — already at current fwd")
-                                                    else:
-                                                        st.markdown(f"- **{_pct}% underwater** — beyond -50bp")
+                                            _r_prev = _count_underwater_t(_rcvr_trades, 0, _be_median_fwd)
+                                            _r_now_pct = _r_prev / _rcvr_total * 100 if _rcvr_total > 0 else 0
+                                            if _r_prev > 0:
+                                                st.markdown(f"- **Now:** ${_r_prev:,.0f}mm already underwater ({_r_now_pct:.0f}%)")
+                                            for _sh in [-5, -10, -15, -20, -25]:
+                                                _r_at = _count_underwater_t(_rcvr_trades, _sh, _be_median_fwd)
+                                                _add = _r_at - _r_prev
+                                                if _add > 0:
+                                                    st.markdown(f"- **{_sh}bp** ({_be_median_fwd + _sh/100:.4f}%): "
+                                                                f"+${_add:,.0f}mm flips → ${_r_at:,.0f}mm total "
+                                                                f"({_r_at/_rcvr_total*100:.0f}%)")
+                                                _r_prev = _r_at
                                         else:
                                             st.caption("No receiver trades with valid premiums")
 
@@ -9059,6 +9057,142 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         _parts.append(f"**Rates -10bp:** ${_r10:,.0f}mm receiver underwater ({_r10/_rcvr_total*100:.0f}%)")
                                     if _parts:
                                         st.markdown(" | ".join(_parts))
+                                    st.markdown("---")
+
+                    # ── Trade Suggestions ────────────────────────────────────────
+                    with st.expander("💡 Suggested Trades — What to ask the market", expanded=False):
+                        if _em_filtered.empty or "_fwd" not in _em_filtered.columns:
+                            st.info("No data. Run Expiry Monitor scan first.")
+                        else:
+                            _sg_all_tenors = sorted(_em_filtered["swp_tenor"].dropna().unique(), key=_safe_tenor_sort)
+                            _sg_top = (_em_filtered.groupby("swp_tenor")["notional_mm"].sum()
+                                       .nlargest(5).index.tolist())
+                            _sg_sel_tenors = st.multiselect("Swap tenors", _sg_all_tenors,
+                                default=[t for t in _sg_all_tenors if t in _sg_top], key="sg_tenors")
+
+                            _sg_atm_vol = st.session_state.get("vol_data", {}).get(_em_ccy, {}).get("atm")
+                            if _sg_atm_vol is None:
+                                st.warning("Vol surface not loaded — can't price suggestions.")
+                            else:
+                                def _bachelier_prem(F, K, sigma, t, direction):
+                                    """Bachelier premium in rate terms."""
+                                    _denom = sigma * math.sqrt(t)
+                                    if _denom < 1e-10:
+                                        return max(F - K, 0) if direction == "Payer" else max(K - F, 0)
+                                    _d = (F - K) / _denom
+                                    _Nd = 0.5 * (1 + math.erf(_d / math.sqrt(2)))
+                                    _nd = math.exp(-0.5 * _d**2) / math.sqrt(2 * math.pi)
+                                    if direction == "Payer":
+                                        return (F - K) * _Nd + _denom * _nd
+                                    else:
+                                        return (K - F) * (1 - _Nd) + _denom * _nd
+
+                                for _sg_tenor in _sg_sel_tenors:
+                                    _sg_df = _em_filtered[
+                                        _em_filtered["strike_pct"].notna() &
+                                        _em_filtered["direction"].isin(["Payer", "Receiver"]) &
+                                        _em_filtered["notional_mm"].notna() &
+                                        (_em_filtered["swp_tenor"] == _sg_tenor)
+                                    ].copy()
+                                    if _sg_df.empty:
+                                        continue
+
+                                    _sg_fwd = _sg_df["_fwd"].dropna().median()
+                                    _sg_ann = _sg_df["_ann"].dropna().median() if "_ann" in _sg_df.columns else None
+                                    _sg_swp_y = label_to_years(_sg_tenor)
+                                    _sg_opt_t = _sg_df["opt_tenor"].iloc[0] if len(_sg_df) > 0 else "1m"
+                                    _sg_vol = get_matrix_value(_sg_atm_vol, str(_sg_opt_t).lower(), _sg_swp_y)
+                                    _sg_days = _sg_df["expiry_date"].dropna().apply(lambda d: max((d - _nyc_today).days, 0)).median()
+                                    _sg_t = max((_sg_days or 1) / 365.0, 0.0001)
+
+                                    if not _sg_fwd or not _sg_ann or not _sg_vol:
+                                        continue
+
+                                    _sg_sigma = _sg_vol / 10000.0
+                                    _total_p = _sg_df[_sg_df["direction"] == "Payer"]["notional_mm"].sum()
+                                    _total_r = _sg_df[_sg_df["direction"] == "Receiver"]["notional_mm"].sum()
+
+                                    st.markdown(f"##### {_sg_tenor} — Fwd: {_sg_fwd:.4f}% | Vol: {_sg_vol:.1f}bp | "
+                                                f"Ann: {_sg_ann:.3f} | ${_total_p:,.0f}mm P / ${_total_r:,.0f}mm R")
+
+                                    # Analyse strike clustering — 2.5bp buckets
+                                    _sg_df["_bkt"] = ((_sg_df["strike_pct"] * 100 / 2.5).round() * 2.5 / 100)
+                                    _suggestions = []
+
+                                    # 1. ATM — always the most liquid point
+                                    _atm_strike = round(_sg_fwd * 100 / 2.5) * 2.5 / 100  # nearest 2.5bp
+                                    _suggestions.append({
+                                        "strike": _atm_strike,
+                                        "dir": "Straddle",
+                                        "rationale": "ATM — max gamma, most liquid",
+                                        "priority": 1,
+                                    })
+
+                                    # 2. Biggest net skew — suggest opposite direction
+                                    _bkt_skew = []
+                                    for _bkt in _sg_df["_bkt"].unique():
+                                        _b = _sg_df[_sg_df["_bkt"] == _bkt]
+                                        _pn = _b[_b["direction"] == "Payer"]["notional_mm"].sum()
+                                        _rn = _b[_b["direction"] == "Receiver"]["notional_mm"].sum()
+                                        _net = _pn - _rn
+                                        _bkt_skew.append({"bkt": _bkt, "p": _pn, "r": _rn, "net": _net})
+
+                                    if _bkt_skew:
+                                        # Biggest net long payers → dealers short rcvrs → suggest payer (dealers buy)
+                                        _most_p = max(_bkt_skew, key=lambda x: x["net"])
+                                        if _most_p["net"] > 0 and abs(_most_p["bkt"] - _atm_strike) > 0.01:
+                                            _suggestions.append({
+                                                "strike": _most_p["bkt"],
+                                                "dir": "Payer",
+                                                "rationale": f"Dealers short ${_most_p['r']:,.0f}mm Rcvr here — need payer hedge",
+                                                "priority": 2,
+                                            })
+
+                                        # Biggest net long receivers → dealers short payers → suggest receiver
+                                        _most_r = min(_bkt_skew, key=lambda x: x["net"])
+                                        if _most_r["net"] < 0 and abs(_most_r["bkt"] - _atm_strike) > 0.01:
+                                            _suggestions.append({
+                                                "strike": _most_r["bkt"],
+                                                "dir": "Receiver",
+                                                "rationale": f"Dealers short ${_most_r['p']:,.0f}mm Payer here — need receiver hedge",
+                                                "priority": 2,
+                                            })
+
+                                        # Biggest total notional — max open interest
+                                        _most_oi = max(_bkt_skew, key=lambda x: x["p"] + x["r"])
+                                        if abs(_most_oi["bkt"] - _atm_strike) > 0.01:
+                                            _oi_total = _most_oi["p"] + _most_oi["r"]
+                                            _suggestions.append({
+                                                "strike": _most_oi["bkt"],
+                                                "dir": "Straddle",
+                                                "rationale": f"Highest concentration: ${_oi_total:,.0f}mm — roll/hedge demand",
+                                                "priority": 3,
+                                            })
+
+                                    # Price each suggestion at fwd shifts
+                                    _fwd_shifts = [-10, -5, 0, 5, 10]
+                                    _sg_rows = []
+                                    for _s in sorted(_suggestions, key=lambda x: x["priority"]):
+                                        _K = _s["strike"] / 100.0
+                                        _row = {
+                                            "Trade": _s["dir"],
+                                            "Strike": f"{_s['strike']:.4f}%",
+                                            "Rationale": _s["rationale"],
+                                        }
+                                        for _sh in _fwd_shifts:
+                                            _F_sh = (_sg_fwd + _sh / 100.0) / 100.0
+                                            _hdr = f"Fwd{_sh:+d}" if _sh != 0 else "Fwd"
+                                            if _s["dir"] == "Straddle":
+                                                _p_bp = _bachelier_prem(_F_sh, _K, _sg_sigma, _sg_t, "Payer") * _sg_ann * 10000
+                                                _r_bp = _bachelier_prem(_F_sh, _K, _sg_sigma, _sg_t, "Receiver") * _sg_ann * 10000
+                                                _row[_hdr] = f"{_p_bp + _r_bp:.1f}"
+                                            else:
+                                                _bp = _bachelier_prem(_F_sh, _K, _sg_sigma, _sg_t, _s["dir"]) * _sg_ann * 10000
+                                                _row[_hdr] = f"{_bp:.1f}"
+                                        _sg_rows.append(_row)
+
+                                    if _sg_rows:
+                                        st.dataframe(pd.DataFrame(_sg_rows), use_container_width=True, hide_index=True)
                                     st.markdown("---")
 
     # ── Auto-refresh ──────────────────────────────────────────────────────────
