@@ -8930,86 +8930,135 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _be_shifts = list(range(-25, 26, 1))
                                 _be_median_fwd = _be_df["_fwd"].median()
 
-                                _flip_counts = []
-                                _total_underwater_not = []
+                                # Pre-compute per-trade: orig_bp, vol, and classify by direction
+                                _be_trades = []
+                                for _, _tr in _be_df.iterrows():
+                                    _K = _tr["strike_pct"] / 100.0
+                                    _dir = _tr["direction"]
+                                    _ann = _tr["_ann"]
+                                    _not_mm = _tr["notional_mm"]
+                                    _notional = float(_tr.get("notional_leg1") or 0)
+                                    _opt_t = str(_tr.get("opt_tenor", ""))
+                                    _swp_y = label_to_years(str(_tr.get("swp_tenor", ""))) if _tr.get("swp_tenor") else 0
+                                    _exp_dt = _tr.get("expiry_date")
+                                    _days = max((_exp_dt - _nyc_today).days, 0) if _exp_dt else 0
+                                    _t = max(_days / 365.0, 0.0001)
+                                    _orig_raw = float(_tr.get("premium_amount") or 0)
+                                    _plat = str(_tr.get("platform_identifier", ""))
+                                    _dedup = _plat in {"BGCD","TPSE","TSEF","TWSF","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
+                                    _orig_adj = _orig_raw / 2.0 if _dedup and _orig_raw > 0 else _orig_raw
+                                    _orig_bp = (_orig_adj / _notional * 10000.0) if _notional > 0 else None
+                                    if _orig_bp is None or _orig_bp <= 0:
+                                        continue
+                                    _vol_bp = get_matrix_value(_be_atm_vol, _opt_t.lower(), _swp_y)
+                                    if not _vol_bp or _vol_bp <= 0:
+                                        continue
+                                    _be_trades.append({
+                                        "K": _K, "dir": _dir, "ann": _ann, "not_mm": _not_mm,
+                                        "orig_bp": _orig_bp, "sigma": _vol_bp / 10000.0, "t": _t,
+                                        "strike_pct": _tr["strike_pct"], "swp_tenor": _tr.get("swp_tenor", ""),
+                                    })
 
-                                for _shift in _be_shifts:
-                                    _shifted_fwd_pct = _be_median_fwd + _shift / 100.0
-                                    _F_sh = _shifted_fwd_pct / 100.0
-                                    _n_underwater = 0
-                                    _underwater_not = 0.0
+                                if not _be_trades:
+                                    st.info("No trades with valid premiums for stress analysis.")
+                                else:
+                                    # Split by direction
+                                    _payer_trades = [t for t in _be_trades if t["dir"] == "Payer"]
+                                    _rcvr_trades = [t for t in _be_trades if t["dir"] == "Receiver"]
+                                    _payer_total_not = sum(t["not_mm"] for t in _payer_trades)
+                                    _rcvr_total_not = sum(t["not_mm"] for t in _rcvr_trades)
 
-                                    for _, _tr in _be_df.iterrows():
-                                        _K = _tr["strike_pct"] / 100.0
-                                        _dir = _tr["direction"]
-                                        _ann = _tr["_ann"]
-                                        _not_mm = _tr["notional_mm"]
-                                        _notional = float(_tr.get("notional_leg1") or 0)
-                                        _opt_t = str(_tr.get("opt_tenor", ""))
-                                        _swp_y = label_to_years(str(_tr.get("swp_tenor", ""))) if _tr.get("swp_tenor") else 0
-                                        _exp_dt = _tr.get("expiry_date")
-                                        _days = max((_exp_dt - _nyc_today).days, 0) if _exp_dt else 0
-                                        _t = max(_days / 365.0, 0.0001)
+                                    def _count_underwater(trades, shift_bp):
+                                        _F_sh = (_be_median_fwd + shift_bp / 100.0) / 100.0
+                                        _uw_not = 0.0
+                                        for t in trades:
+                                            _denom = t["sigma"] * math.sqrt(t["t"])
+                                            _d = (_F_sh - t["K"]) / _denom if _denom > 1e-10 else 0
+                                            _Nd = 0.5 * (1 + math.erf(_d / math.sqrt(2)))
+                                            _nd = math.exp(-0.5 * _d**2) / math.sqrt(2 * math.pi)
+                                            if t["dir"] == "Payer":
+                                                _prem = (_F_sh - t["K"]) * _Nd + _denom * _nd
+                                            else:
+                                                _prem = (t["K"] - _F_sh) * (1 - _Nd) + _denom * _nd
+                                            _curr_bp = _prem * t["ann"] * 10000.0
+                                            if _curr_bp > t["orig_bp"]:
+                                                _uw_not += t["not_mm"]
+                                        return _uw_not
 
-                                        # Original premium
-                                        _orig_raw = float(_tr.get("premium_amount") or 0)
-                                        _plat = str(_tr.get("platform_identifier", ""))
-                                        _dedup = _plat in {"BGCD","TPSE","TSEF","TWSF","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
-                                        _orig_adj = _orig_raw / 2.0 if _dedup and _orig_raw > 0 else _orig_raw
-                                        _orig_bp = (_orig_adj / _notional * 10000.0) if _notional > 0 else None
-
-                                        if _orig_bp is None or _orig_bp <= 0:
-                                            continue
-
-                                        # Reprice at shifted forward
-                                        _vol_bp = get_matrix_value(_be_atm_vol, _opt_t.lower(), _swp_y)
-                                        if not _vol_bp or _vol_bp <= 0:
-                                            continue
-
-                                        _sigma = _vol_bp / 10000.0
-                                        _denom = _sigma * math.sqrt(_t)
-                                        _d = (_F_sh - _K) / _denom if _denom > 1e-10 else 0
-                                        _Nd = 0.5 * (1 + math.erf(_d / math.sqrt(2)))
-                                        _nd = math.exp(-0.5 * _d**2) / math.sqrt(2 * math.pi)
-                                        if _dir == "Payer":
-                                            _prem = (_F_sh - _K) * _Nd + _denom * _nd
-                                        else:
-                                            _prem = (_K - _F_sh) * (1 - _Nd) + _denom * _nd
-                                        _curr_bp = _prem * _ann * 10000.0
-
-                                        if _curr_bp > _orig_bp:
-                                            _n_underwater += 1
-                                            _underwater_not += _not_mm
-
-                                    _flip_counts.append(_n_underwater)
-                                    _total_underwater_not.append(_underwater_not)
-
-                                # Display results
-                                _stress_rows = []
-                                for i, _sh in enumerate(_be_shifts):
-                                    if _sh % 5 == 0:  # Show every 5bp
+                                    # Build stress table — split by direction
+                                    _stress_rows = []
+                                    for _sh in range(-25, 26, 5):
+                                        _fwd_lvl = _be_median_fwd + _sh / 100.0
+                                        _p_uw = _count_underwater(_payer_trades, _sh)
+                                        _r_uw = _count_underwater(_rcvr_trades, _sh)
+                                        _p_pct = _p_uw / _payer_total_not * 100 if _payer_total_not > 0 else 0
+                                        _r_pct = _r_uw / _rcvr_total_not * 100 if _rcvr_total_not > 0 else 0
                                         _stress_rows.append({
-                                            "Fwd Shift": f"{_sh:+d}bp",
-                                            "Fwd Level": f"{_be_median_fwd + _sh/100:.4f}%",
-                                            "Underwater": _flip_counts[i],
-                                            "UW Not (mm)": f"${_total_underwater_not[i]:,.0f}",
-                                            "% of Total": f"{_total_underwater_not[i] / _be_df['notional_mm'].sum() * 100:.0f}%" if _be_df['notional_mm'].sum() > 0 else "—",
+                                            "Shift": f"{_sh:+d}bp",
+                                            "Fwd": f"{_fwd_lvl:.4f}%",
+                                            "Payer UW (mm)": f"${_p_uw:,.0f}",
+                                            "Payer UW %": f"{_p_pct:.0f}%",
+                                            "Recvr UW (mm)": f"${_r_uw:,.0f}",
+                                            "Recvr UW %": f"{_r_pct:.0f}%",
                                         })
 
-                                _stress_result = pd.DataFrame(_stress_rows)
-                                st.dataframe(_stress_result, use_container_width=True, hide_index=True)
+                                    st.dataframe(pd.DataFrame(_stress_rows), use_container_width=True, hide_index=True)
 
-                                # Find pain point — steepest increase in underwater notional
-                                _diffs = [_total_underwater_not[i+1] - _total_underwater_not[i]
-                                          for i in range(len(_total_underwater_not) - 1)]
-                                if _diffs:
-                                    _max_diff_idx = max(range(len(_diffs)), key=lambda i: abs(_diffs[i]))
-                                    _pain_shift = _be_shifts[_max_diff_idx]
-                                    _pain_fwd = _be_median_fwd + _pain_shift / 100
-                                    _pain_dir = "higher" if _diffs[_max_diff_idx] > 0 else "lower"
-                                    st.markdown(f"**🎯 Hedging urgency peak:** {_pain_shift:+d}bp shift "
-                                                f"({_pain_fwd:.4f}%) — most positions flip underwater on rates moving {_pain_dir}. "
-                                                f"Dealers concentrated at this level need to hedge.")
+                                    # Find threshold levels: 25%, 50%, 75% underwater by direction
+                                    def _find_threshold(trades, total_not, pcts, direction_label):
+                                        results = []
+                                        for pct in pcts:
+                                            target = total_not * pct / 100.0
+                                            for _sh in (range(0, 51, 1) if direction_label == "Payer" else range(0, -51, -1)):
+                                                if _count_underwater(trades, _sh) >= target:
+                                                    results.append((pct, _sh, _be_median_fwd + _sh / 100.0))
+                                                    break
+                                            else:
+                                                results.append((pct, None, None))
+                                        return results
+
+                                    st.markdown("---")
+                                    _thresh_c1, _thresh_c2 = st.columns(2)
+
+                                    with _thresh_c1:
+                                        st.markdown(f"**Payer sellers** (${_payer_total_not:,.0f}mm) — hurt by rates ↑")
+                                        if _payer_trades:
+                                            _p_thresh = _find_threshold(_payer_trades, _payer_total_not, [25, 50, 75], "Payer")
+                                            for _pct, _sh, _lvl in _p_thresh:
+                                                if _sh is not None:
+                                                    st.markdown(f"- **{_pct}% underwater** at +{_sh}bp → {_lvl:.4f}%")
+                                                else:
+                                                    st.markdown(f"- **{_pct}% underwater** — beyond +50bp")
+                                        else:
+                                            st.caption("No payer trades with valid premiums")
+
+                                    with _thresh_c2:
+                                        st.markdown(f"**Receiver sellers** (${_rcvr_total_not:,.0f}mm) — hurt by rates ↓")
+                                        if _rcvr_trades:
+                                            _r_thresh = _find_threshold(_rcvr_trades, _rcvr_total_not, [25, 50, 75], "Receiver")
+                                            for _pct, _sh, _lvl in _r_thresh:
+                                                if _sh is not None:
+                                                    st.markdown(f"- **{_pct}% underwater** at {_sh}bp → {_lvl:.4f}%")
+                                                else:
+                                                    st.markdown(f"- **{_pct}% underwater** — beyond -50bp")
+                                        else:
+                                            st.caption("No receiver trades with valid premiums")
+
+                                    # Actionable summary
+                                    st.markdown("---")
+                                    _summary_parts = []
+                                    if _payer_trades:
+                                        _p10 = _count_underwater(_payer_trades, 10)
+                                        _summary_parts.append(
+                                            f"**Rates +10bp:** ${_p10:,.0f}mm payer notional underwater "
+                                            f"({_p10/_payer_total_not*100:.0f}%)" if _payer_total_not > 0 else "")
+                                    if _rcvr_trades:
+                                        _r10 = _count_underwater(_rcvr_trades, -10)
+                                        _summary_parts.append(
+                                            f"**Rates -10bp:** ${_r10:,.0f}mm receiver notional underwater "
+                                            f"({_r10/_rcvr_total_not*100:.0f}%)" if _rcvr_total_not > 0 else "")
+                                    if _summary_parts:
+                                        st.markdown(" | ".join([s for s in _summary_parts if s]))
 
     # ── Auto-refresh ──────────────────────────────────────────────────────────
     _refresh_map = {"Off": 0, "30s": 30, "1 min": 60, "2 min": 120, "5 min": 300}
