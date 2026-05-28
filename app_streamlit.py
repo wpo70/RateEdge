@@ -6649,7 +6649,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
         with col1:
             st.markdown("**Date range**")
-            _sdr_yesterday = date.today() - __import__('datetime').timedelta(days=1)
+            _sdr_yesterday = datetime.now(SYDNEY_TZ).date() - __import__('datetime').timedelta(days=1)
             date_from = st.date_input(
                 "From", value=_sdr_yesterday,
                 key="sdr_date_from", label_visibility="collapsed",
