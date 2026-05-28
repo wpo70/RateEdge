@@ -29820,18 +29820,26 @@ def main():
                         label_visibility="collapsed")
     _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
 
-    # CSS: make the container fill viewport below the radio
+    # CSS: hide nav radio circles, restore for sub-page radios, size container
     st.markdown("""
     <style>
-    /* Make content container fill remaining viewport */
-    [data-testid="stVerticalBlockBorderWrapper"]:has(> div > [data-testid="stVerticalBlock"]) {
-        max-height: calc(100vh - 80px) !important;
+    /* Hide radio circles on ALL radios */
+    [data-testid="stRadio"] [role="radiogroup"] label > div:first-child {
+        display: none !important;
+    }
+    /* Show circles back for radios INSIDE the scroll container */
+    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] label > div:first-child {
+        display: flex !important;
+    }
+    /* Remove border from content container */
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        border: none !important;
     }
     </style>
     """, unsafe_allow_html=True)
 
-    # Scrollable content area — radio stays above, content scrolls
-    with st.container(height=700, border=False):
+    # Scrollable content area
+    with st.container(height=900, border=False):
         _tab_funcs[_active_idx]()
 
 
