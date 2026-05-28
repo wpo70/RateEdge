@@ -6840,7 +6840,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             upi_underlier_name, strike_pct, premium_amount,
             notional_leg1, cleared, platform_identifier,
             event_timestamp, execution_timestamp, trade_date,
-            effective_date, expiration_date
+            effective_date, expiration_date, maturity_underlier
         FROM dtcc_sdr
         {where}
         ORDER BY execution_timestamp DESC
@@ -7052,7 +7052,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 "Cleared":    r.get("cleared","—"),
                 "Platform":   PLATFORM_NAMES.get(r.get("platform_identifier",""), r.get("platform_identifier","—")),
                 "Eff Date":   str(r.get("effective_date","—") or "—"),
-                "Mat Date":   str(r.get("expiration_date","—") or "—"),
+                "Exp Date":   str(r.get("expiration_date","—") or "—"),
+                "Mat Date":   str(r.get("maturity_underlier","—") or "—"),
             })
 
         disp_df = pd.DataFrame(rows_html)
@@ -7077,6 +7078,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 "Cleared":    st.column_config.TextColumn("Clrd",       width="small"),
                 "Platform":   st.column_config.TextColumn("Platform",   width="small"),
                 "Eff Date":   st.column_config.TextColumn("Eff Date",   width="small"),
+                "Exp Date":   st.column_config.TextColumn("Exp Date",   width="small"),
                 "Mat Date":   st.column_config.TextColumn("Mat Date",   width="small"),
             },
             hide_index=True,
@@ -7314,7 +7316,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         if not _match.empty and _time_p is not pd.NaT:
                             for _ri, _r in _match.iterrows():
                                 _time_r = pd.to_datetime(_r.get("execution_timestamp") or _r.get("event_timestamp"), errors="coerce")
-                                if _time_r is not pd.NaT and abs((_time_p - _time_r).total_seconds()) <= 120:
+                                _window = 1200 if not (_t_p and _t_p not in ("—","NA","None","")) else 120
+                                if _time_r is not pd.NaT and abs((_time_p - _time_r).total_seconds()) <= _window:
                                     _matched_p_ids.add(_pi)
                                     _matched_r_ids.add(_ri)
                                     _s_r = round(float(_r.get("strike_pct") or 0), 2)
@@ -7660,8 +7663,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                     st.caption(f"Times shown in **{_tz_label}**")
 
-                    # ── Price This → buttons ──────────────────────────────────
-                    # Map SDR tenor labels to pricer keys
+                    # ── Price This → collapsible panel ────────────────────────
+                    with st.expander("📊 Price This — click a trade to load into Swaptions pricer", expanded=False):
+                     # Map SDR tenor labels to pricer keys
                     _EXPIRY_MAP = {
                         "1w":"1w","2w":"2w","1m":"1m","1M":"1m","2m":"2m","2M":"2m",
                         "3m":"3m","3M":"3m","6m":"6m","6M":"6m","9m":"9m","9M":"9m",
@@ -7721,7 +7725,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             st.toast(f"Loading {_exp_raw}×{_ten_raw} {_str_key} into pricer…", icon="📊")
                             st.rerun()
 
-                    st.markdown("---")
+                    # end Price This expander
                     st.dataframe(_all_df_display, use_container_width=True, hide_index=True,
                                  height=min(60 + len(_all_df_display) * 35, 700))
                     st.caption("Straddle prem deduped for all brokers except DWSF (report full straddle prem on each leg). "
