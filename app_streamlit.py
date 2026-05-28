@@ -29088,6 +29088,13 @@ def main():
         initial_sidebar_state="expanded"
     )
     init_session()
+
+    # CSS: hide original tab bar (clone replaces it) + push content down
+    st.markdown("""
+    <style>
+    [data-testid="stMainBlockContainer"] { padding-top: 44px !important; }
+    </style>
+    """, unsafe_allow_html=True)
     
     # Ensure all DB tables/columns exist on startup (not just on save)
     if HAS_POSTGRES and get_db_url() and not st.session_state.get("_db_init_done", False):
@@ -29822,8 +29829,9 @@ def main():
     <script>
     (function() {
         var root;
-        try { root = window.parent.document; } catch(e) { return; }
-        if (!root) return;
+        try { root = window.parent.document; } catch(e) { console.log('RE-NAV: cross-origin blocked', e); return; }
+        if (!root) { console.log('RE-NAV: no parent document'); return; }
+        console.log('RE-NAV: parent document accessed OK');
 
         var tries = 0;
         var poll = setInterval(function() {
@@ -29831,8 +29839,9 @@ def main():
             if (tries > 40) { clearInterval(poll); return; }
 
             var tabLists = root.querySelectorAll('[data-testid="stTabs"] > [role="tablist"]');
-            if (tabLists.length === 0) return;
+            if (tabLists.length === 0) { if (tries % 10 === 0) console.log('RE-NAV: waiting for tabs... try', tries); return; }
             clearInterval(poll);
+            console.log('RE-NAV: found', tabLists.length, 'tablists');
 
             var mainTL = tabLists[0];
 
@@ -29899,27 +29908,12 @@ def main():
                 }
             }
 
-            // Hide/show based on scroll (show when real tabs out of view)
-            var ticking = false;
-            function checkScroll() {
-                var r = mainTL.getBoundingClientRect();
-                bar.style.display = r.bottom < 0 ? 'flex' : 'none';
-                ticking = false;
-            }
-            function onScroll() {
-                if (!ticking) { requestAnimationFrame(checkScroll); ticking = true; }
-            }
-            window.parent.addEventListener('scroll', onScroll, {passive: true});
-            var mainScroller = root.querySelector('section.main');
-            if (mainScroller) mainScroller.addEventListener('scroll', onScroll, {passive: true});
-            var appScroller = root.querySelector('[data-testid="stAppViewContainer"]');
-            if (appScroller) appScroller.addEventListener('scroll', onScroll, {passive: true});
-            // Initial check
-            checkScroll();
+            // Always visible
+            bar.style.display = 'flex';
         }, 300);
     })();
     </script>
-    """, height=0)
+    """, height=1)
 
 
 
