@@ -29087,6 +29087,32 @@ def main():
         page_icon="📊",
         initial_sidebar_state="expanded"
     )
+
+    # ── Sticky main tab bar ────────────────────────────────────────────────
+    st.markdown("""
+    <style>
+    /* Make the main tab bar sticky when scrolling */
+    div[data-testid="stTabs"] > div[role="tablist"] {
+        position: -webkit-sticky;
+        position: sticky;
+        top: 0px;
+        z-index: 999;
+        background-color: #0e1117;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        margin-left: -1rem;
+        margin-right: -1rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
+        border-bottom: 1px solid #334155;
+    }
+    /* Light theme support */
+    [data-theme="light"] div[data-testid="stTabs"] > div[role="tablist"] {
+        background-color: #ffffff;
+        border-bottom: 1px solid #e2e8f0;
+    }
+    </style>
+    """, unsafe_allow_html=True)
     init_session()
     
     # Ensure all DB tables/columns exist on startup (not just on save)
