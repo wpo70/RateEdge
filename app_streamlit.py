@@ -29829,29 +29829,12 @@ def main():
     if _tab_override and _tab_override in _tab_names:
         st.session_state["_main_nav"] = _tab_override
 
-    st.markdown("""
-    <style>
-    [data-testid="stMainBlockContainer"] { padding-top: 0.25rem !important; }
-    [data-testid="stRadio"] [role="radiogroup"] label > div:first-child { display: none !important; }
-    [data-testid="stRadio"] [role="radiogroup"] {
-        background: #1a2332 !important; padding: 6px 0.5rem !important;
-        border-bottom: 2px solid #3b82f6 !important;
-    }
-    [data-testid="stRadio"] [role="radiogroup"] label p { color: #ffffff !important; }
-    [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stRadio"] [role="radiogroup"] label > div:first-child { display: flex !important; }
-    [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stRadio"] [role="radiogroup"] { background: transparent !important; padding: 0 !important; border-bottom: none !important; }
-    [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stRadio"] [role="radiogroup"] label p { color: inherit !important; }
-    </style>
-    """, unsafe_allow_html=True)
+    _active = st.radio("Navigation", _tab_names, horizontal=True, key="_main_nav",
+                        label_visibility="collapsed")
+    _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
 
-    @st.fragment
-    def _nav_fragment():
-        _active = st.radio("Navigation", _tab_names, horizontal=True, key="_main_nav",
-                            label_visibility="collapsed")
-        _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
+    with st.container(height=1200, border=False):
         _tab_funcs[_active_idx]()
-
-    _nav_fragment()
 
 
 
