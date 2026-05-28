@@ -29846,9 +29846,6 @@ def main():
     (function(){
         try {
             var root = window.parent.document;
-            // Kill outer scroll
-            var els = root.querySelectorAll('section.main, [data-testid="stMain"], [data-testid="stAppViewContainer"]');
-            els.forEach(function(el){ el.style.overflow = 'hidden'; });
             // Cap container to viewport
             var wrappers = root.querySelectorAll('[data-testid="stVerticalBlockBorderWrapper"]');
             wrappers.forEach(function(w){
