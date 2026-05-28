@@ -29824,11 +29824,20 @@ def main():
     if _tab_override and _tab_override in _tab_names:
         st.session_state["_main_nav"] = _tab_override
 
+    # Kill outer page scroll, push menu to top
+    st.markdown("""
+    <style>
+    [data-testid="stMainBlockContainer"] { padding-top: 0 !important; }
+    [data-testid="stAppViewBlockContainer"] { padding-top: 0 !important; }
+    section.main { overflow: hidden !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
     _active = st.radio("Navigation", _tab_names, horizontal=True, key="_main_nav",
                         label_visibility="collapsed")
     _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
 
-    with st.container(height=1200, border=False):
+    with st.container(height=2000, border=False):
         _tab_funcs[_active_idx]()
 
 
