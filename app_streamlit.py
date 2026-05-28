@@ -7365,9 +7365,17 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             def _mf(m):
                                                 if not m: return "—"
                                                 y,mo = divmod(abs(m),12)
-                                                return f"{y}Y{mo}M" if mo else f"{y}Y"
-                                            _fwd_m = (_eff.year-_exec_d.year)*12+(_eff.month-_exec_d.month) if _exec_d else None
-                                            _ten_m = (_mat.year-_eff.year)*12+(_mat.month-_eff.month) if _mat else None
+                                                # Round T+2 stubs: <=2M drop, >=10M round up
+                                                if mo <= 2: return f"{y}Y"
+                                                if mo >= 10: return f"{y+1}Y"
+                                                return f"{y}Y{mo}M"
+                                            # Use 1st of month to eliminate T+2 day slippage
+                                            from datetime import date as _dt
+                                            _eff1 = _dt(_eff.year, _eff.month, 1)
+                                            _mat1 = _dt(_mat.year, _mat.month, 1) if _mat else None
+                                            _exe1 = _dt(_exec_d.year, _exec_d.month, 1) if _exec_d else None
+                                            _fwd_m = (_eff1.year-_exe1.year)*12+(_eff1.month-_exe1.month) if _exe1 else None
+                                            _ten_m = (_mat1.year-_eff1.year)*12+(_mat1.month-_eff1.month) if _mat1 else None
                                             _opt_exp_disp = _mf(_fwd_m)
                                             _swp_ten_disp = _mf(_ten_m)
                                         except Exception:
@@ -29811,6 +29819,31 @@ def main():
         pass
 
     # ── Fixed navigation bar ──────────────────────────────────────────────
+    st.markdown("""
+    <style>
+    /* Fix the first radio widget (nav bar) to top of viewport */
+    [data-testid="stRadio"]:first-of-type {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        z-index: 999 !important;
+        background: #0e1117 !important;
+        padding: 6px 1rem !important;
+        border-bottom: 2px solid #3b82f6 !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.5) !important;
+    }
+    /* Hide the label */
+    [data-testid="stRadio"]:first-of-type label:first-of-type {
+        display: none !important;
+    }
+    /* Sidebar open → shift bar right */
+    [data-testid="stSidebar"][aria-expanded="true"] ~ * [data-testid="stRadio"]:first-of-type {
+        left: 260px !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     # Handle SDR "Price This" override
     _tab_override = st.session_state.pop("_active_tab_override", None)
     if _tab_override and _tab_override in _tab_names:
@@ -29818,28 +29851,13 @@ def main():
 
     _active = st.radio("Navigation", _tab_names, horizontal=True, key="_main_nav",
                         label_visibility="collapsed")
+
+    # Spacer below fixed bar
+    st.markdown('<div style="height:44px"></div>', unsafe_allow_html=True)
+
+    # Dispatch active tab
     _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
-
-    # CSS: hide radio circles, show them back inside container for sub-page radios
-    # + resize container to fill viewport
-    st.markdown("""
-    <style>
-    [data-testid="stRadio"] [role="radiogroup"] label > div:first-child {
-        display: none !important;
-    }
-    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] label > div:first-child {
-        display: flex !important;
-    }
-    [data-testid="stVerticalBlockBorderWrapper"] {
-        height: calc(100vh - 60px) !important;
-        max-height: calc(100vh - 60px) !important;
-        border: none !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-    with st.container(height=700, border=False):
-        _tab_funcs[_active_idx]()
+    _tab_funcs[_active_idx]()
 
 
 
