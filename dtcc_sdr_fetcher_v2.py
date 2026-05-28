@@ -173,8 +173,17 @@ def decode_type(fisn: str, embedded_option_type: str = "") -> str:
     return "OTH"
 
 def months_diff(a, b):
+    """Month difference ignoring day component — avoids T+2 stub inflation."""
     if not a or not b: return None
-    return (b.year - a.year) * 12 + (b.month - a.month)
+    # Replace day with 1 to avoid T+2 settlement date pushing into next month
+    try:
+        from datetime import date as _date
+        a1 = _date(a.year, a.month, 1)
+        b1 = _date(b.year, b.month, 1)
+        m = (b1.year - a1.year) * 12 + (b1.month - a1.month)
+        return m
+    except Exception:
+        return (b.year - a.year) * 12 + (b.month - a.month)
 
 def fmt_tenor(months) -> str:
     if months is None or months < 0: return ""
