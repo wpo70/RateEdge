@@ -29816,18 +29816,54 @@ def main():
         with tabs[_ti]:
             _tf()
 
-    # Fixed nav bar — scrolls to top where real tabs are
-    _nav_items = ' '.join(
-        f'<a href="#" style="color:#94a3b8;text-decoration:none;padding:4px 8px;font-size:12px;white-space:nowrap;">{n}</a>'
-        for n in _tab_names
+    # ── Fixed nav bar (pinned to top, clicks real tab buttons) ─────────
+    _nav_links = ''.join(
+        f'<span class="re-n" data-idx="{i}" style="padding:5px 10px;cursor:pointer;font-size:13px;'
+        f'white-space:nowrap;color:#94a3b8;">{n}</span>'
+        for i, n in enumerate(_tab_names)
     )
-    st.markdown(
-        f'<div style="position:fixed;top:0;left:0;right:0;z-index:999;background:#0e1117;'
-        f'padding:5px 0.5rem 5px 3.5rem;border-bottom:2px solid #3b82f6;'
-        f'box-shadow:0 2px 8px rgba(0,0,0,0.5);display:flex;flex-wrap:wrap;gap:2px;align-items:center;">'
-        f'{_nav_items}</div>',
-        unsafe_allow_html=True
-    )
+    st.markdown(f"""
+    <style>
+    [data-testid="stTabs"] > [role="tablist"] {{
+        height: 0 !important; overflow: hidden !important; padding: 0 !important;
+        margin: 0 !important; border: none !important;
+    }}
+    </style>
+    <div id="re-fixed-nav" style="position:fixed;top:0;left:0;right:0;z-index:99999;
+    background:#0e1117;padding:6px 0.5rem;border-bottom:2px solid #3b82f6;
+    box-shadow:0 2px 8px rgba(0,0,0,0.5);display:flex;flex-wrap:wrap;gap:2px;
+    align-items:center;">{_nav_links}</div>
+    <div style="height:42px"></div>
+    <img src="" onerror="
+    (function(){{
+        var bar=document.getElementById('re-fixed-nav');
+        if(!bar)return;
+        var items=bar.querySelectorAll('.re-n');
+        var tl=document.querySelector('[role=tablist]');
+        if(!tl)return;
+        var tabBtns=tl.querySelectorAll('button[role=tab]');
+        if(!tabBtns.length)return;
+        items.forEach(function(el){{
+            var idx=parseInt(el.dataset.idx);
+            el.addEventListener('click',function(){{
+                if(tabBtns[idx])tabBtns[idx].click();
+            }});
+        }});
+        function sync(){{
+            tabBtns=tl.querySelectorAll('button[role=tab]');
+            items.forEach(function(el){{
+                var idx=parseInt(el.dataset.idx);
+                var active=tabBtns[idx]&&tabBtns[idx].getAttribute('aria-selected')==='true';
+                el.style.color=active?'#f1f5f9':'#64748b';
+                el.style.fontWeight=active?'700':'400';
+                el.style.borderBottom=active?'2px solid #3b82f6':'2px solid transparent';
+            }});
+        }}
+        sync();
+        new MutationObserver(function(){{setTimeout(sync,50);}}).observe(tl,{{attributes:true,subtree:true,attributeFilter:['aria-selected']}});
+    }})();
+    " style="display:none"/>
+    """, unsafe_allow_html=True)
 
 
 
