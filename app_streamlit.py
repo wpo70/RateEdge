@@ -29753,9 +29753,25 @@ def main():
     # Multi-CCY is super_admin only, added separately below
     _tab_names = [n for n, k, f in _ALL_TAB_DEFS if st.session_state.get(k, True)]
     _tab_funcs = [f for n, k, f in _ALL_TAB_DEFS if st.session_state.get(k, True)]
+    _tab_keys  = [k for n, k, f in _ALL_TAB_DEFS if st.session_state.get(k, True)]
     if st.session_state.get("tab_show_multiccy", True):
         _tab_names += ["📍 Multi-CCY"]
         _tab_funcs += [lambda: multi_ccy_tab(vol_mode)]
+        _tab_keys  += ["tab_show_multiccy"]
+
+    # Build slug ↔ index mapping
+    def _slugify(name):
+        return name.lower().replace(" ", "").replace("/", "").replace("&", "")[:20]
+    _slug_map = {_slugify(n): i for i, n in enumerate(_tab_names)}
+
+    # Handle SDR "Price This" override → sets query param
+    _tab_override = st.session_state.pop("_active_tab_override", None)
+    if _tab_override and _tab_override in _tab_names:
+        st.query_params["tab"] = _slugify(_tab_override)
+
+    # Read current tab from query param
+    _cur_slug = st.query_params.get("tab", _slugify(_tab_names[0]) if _tab_names else "home")
+    _cur_idx = _slug_map.get(_cur_slug, 0)
 
     # ── SDR Trade Alerts (global — fires on any tab) ───────────────────
     # v1305b: interval bumped from 30s to 120s. Was hitting DB every 30s
@@ -29811,45 +29827,31 @@ def main():
         pass
 
     # ── Fixed navigation bar ──────────────────────────────────────────────
-    st.markdown("""
-    <style>
-    /* Fix ONLY the first stRadio among its siblings (our nav bar) */
-    :nth-child(1 of [data-testid="stRadio"]) {
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-        right: 0 !important;
-        z-index: 999 !important;
-        background: #0e1117 !important;
-        padding: 6px 1rem !important;
-        border-bottom: 2px solid #3b82f6 !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.5) !important;
-    }
-    /* Hide the label */
-    :nth-child(1 of [data-testid="stRadio"]) > label:first-of-type > div:first-child {
-        display: none !important;
-    }
-    /* Sidebar open → shift bar right */
-    [data-testid="stSidebar"][aria-expanded="true"] ~ * :nth-child(1 of [data-testid="stRadio"]) {
-        left: 260px !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-    # Handle SDR "Price This" override
-    _tab_override = st.session_state.pop("_active_tab_override", None)
-    if _tab_override and _tab_override in _tab_names:
-        st.session_state["_main_nav"] = _tab_override
-
-    _active = st.radio("Navigation", _tab_names, horizontal=True, key="_main_nav",
-                        label_visibility="collapsed")
-
-    # Spacer below fixed bar
-    st.markdown('<div style="height:44px"></div>', unsafe_allow_html=True)
+    _nav_links = []
+    for _ni, _nn in enumerate(_tab_names):
+        _ns = _slugify(_nn)
+        _is_active = (_ni == _cur_idx)
+        _style = (
+            "color:#f1f5f9;font-weight:700;border-bottom:2px solid #3b82f6;background:rgba(59,130,246,0.15);"
+            if _is_active else
+            "color:#94a3b8;font-weight:400;border-bottom:2px solid transparent;"
+        )
+        _nav_links.append(
+            f'<a href="?tab={_ns}" target="_self" '
+            f'style="text-decoration:none;padding:6px 10px;font-size:13px;white-space:nowrap;'
+            f'border-radius:4px 4px 0 0;{_style}">{_nn}</a>'
+        )
+    st.markdown(
+        f'<div style="position:fixed;top:0;left:0;right:0;z-index:99;background:#0e1117;'
+        f'padding:5px 0.5rem;border-bottom:2px solid #1e3a5f;'
+        f'box-shadow:0 2px 8px rgba(0,0,0,0.5);display:flex;flex-wrap:nowrap;gap:1px;'
+        f'align-items:center;overflow-x:auto;">{"".join(_nav_links)}</div>'
+        f'<div style="height:42px"></div>',
+        unsafe_allow_html=True
+    )
 
     # Dispatch active tab
-    _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
-    _tab_funcs[_active_idx]()
+    _tab_funcs[_cur_idx]()
 
 
 
