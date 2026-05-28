@@ -29089,31 +29089,49 @@ def main():
     )
     init_session()
 
-    # ── Floating scroll-to-top button ──────────────────────────────────
-    st.markdown('<div id="top"></div>', unsafe_allow_html=True)
-    st.markdown("""
-    <style>
-    html { scroll-behavior: smooth; }
-    </style>
-    <a href="#top" style="
-        position: fixed;
-        bottom: 20px;
-        right: 20px;
-        z-index: 9999;
-        background: #3b82f6;
-        color: white;
-        width: 44px;
-        height: 44px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 22px;
-        text-decoration: none;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-        border: none;
-    " title="Back to tabs">⬆</a>
-    """, unsafe_allow_html=True)
+    # ── Fixed nav bar (always visible, query-param based) ──────────────
+    _NAV_ITEMS_ALL = [
+        ("home", "🏡 Home", "tab_show_home"),
+        ("sdr", "📡 SDR", "tab_show_sdr"),
+        ("upload", "📋 Upload", "tab_show_upload"),
+        ("curves", "📏 Curves", "tab_show_curves"),
+        ("fwd", "📈 FWD", "tab_show_fwd"),
+        ("hva", "📊 HistVol", "tab_show_hva"),
+        ("swaptions", "📊 Swpn", "tab_show_swaptions"),
+        ("caps", "🔔 C&F", "tab_show_caps"),
+        ("blotter", "💼 Blotter", "tab_show_blotter"),
+        ("rv", "⚛️ RV", "tab_show_rv"),
+        ("vollookup", "🔍 VolLk", "tab_show_vollookup"),
+        ("exotics", "🔮 Exotic", "tab_show_exotics"),
+        ("sod", "📏 SOD", "tab_show_sod"),
+        ("usdsod", "📏 USD SOD", "tab_show_usd_sod"),
+        ("voleditor", "✅ VolEd", "tab_show_voleditor"),
+        ("volexport", "📑 VolExp", "tab_show_volexport"),
+        ("midcurve", "📐 MC", "tab_show_midcurve"),
+        ("ticket", "🎫 Ticket", "tab_show_ticket"),
+    ]
+    _cur_nav = st.query_params.get("nav", "home")
+    _nav_html_parts = []
+    for _slug, _label, _vis_key in _NAV_ITEMS_ALL:
+        if not st.session_state.get(_vis_key, True):
+            continue
+        _is_active = (_slug == _cur_nav)
+        _style = (
+            "color:#f1f5f9;font-weight:700;border-bottom:2px solid #3b82f6;" if _is_active
+            else "color:#64748b;font-weight:400;border-bottom:2px solid transparent;"
+        )
+        _nav_html_parts.append(
+            f'<a href="?nav={_slug}" style="text-decoration:none;padding:6px 8px;font-size:13px;{_style}">{_label}</a>'
+        )
+    st.markdown(
+        f"""<div style="position:fixed;top:0;left:0;right:0;z-index:9999;background:#0e1117;
+        padding:6px 0.5rem;border-bottom:2px solid #3b82f6;box-shadow:0 2px 8px rgba(0,0,0,0.5);
+        display:flex;flex-wrap:wrap;gap:2px;align-items:center;">
+        {''.join(_nav_html_parts)}
+        </div>
+        <div style="height:44px;"></div>""",
+        unsafe_allow_html=True
+    )
     
     # Ensure all DB tables/columns exist on startup (not just on save)
     if HAS_POSTGRES and get_db_url() and not st.session_state.get("_db_init_done", False):
@@ -29836,11 +29854,36 @@ def main():
     except Exception:
         pass
 
-    # Tab navigation — visual tabs, single dispatch per render
-    tabs = st.tabs(_tab_names)
-    for _ti, _tf in enumerate(_tab_funcs):
-        with tabs[_ti]:
-            _tf()
+    # Tab dispatch — query param based (nav bar is always visible)
+    _NAV_DISPATCH = {
+        "home": ("tab_show_home", home_tab),
+        "sdr": ("tab_show_sdr", sdr_live_tab),
+        "upload": ("tab_show_upload", vol_config_tab),
+        "curves": ("tab_show_curves", curves_tab),
+        "fwd": ("tab_show_fwd", fwd_analysis_tab),
+        "hva": ("tab_show_hva", backtesting_tab),
+        "swaptions": ("tab_show_swaptions", lambda: swaptions_tab(vol_mode)),
+        "caps": ("tab_show_caps", lambda: caps_floors_tab(vol_mode)),
+        "blotter": ("tab_show_blotter", portfolio_tab),
+        "rv": ("tab_show_rv", rv_tab),
+        "vollookup": ("tab_show_vollookup", vol_lookup_tab),
+        "exotics": ("tab_show_exotics", lambda: exotics_tab(vol_mode)),
+        "sod": ("tab_show_sod", sod_report_tab),
+        "usdsod": ("tab_show_usd_sod", usd_sod_tab),
+        "voleditor": ("tab_show_voleditor", vol_surface_editor_tab),
+        "volexport": ("tab_show_volexport", vol_export_tab),
+        "midcurve": ("tab_show_midcurve", midcurve_tab),
+        "ticket": ("tab_show_ticket", lambda: render_ticket_tab(st.session_state)),
+        "multiccy": ("tab_show_multiccy", lambda: multi_ccy_tab(vol_mode)),
+    }
+    # Handle SDR "Price This" override
+    _tab_override = st.session_state.pop("_active_tab_override", None)
+    if _tab_override == "📊 Swaptions":
+        st.query_params["nav"] = "swaptions"
+        _cur_nav = "swaptions"
+
+    _dispatch = _NAV_DISPATCH.get(_cur_nav, ("tab_show_home", home_tab))
+    _dispatch[1]()
 
 
 
