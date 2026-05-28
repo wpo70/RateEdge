@@ -29823,11 +29823,25 @@ def main():
     # CSS: hide radio circles, lighter nav background, fill viewport
     st.markdown("""
     <style>
+    /* Reduce top padding to push nav higher */
+    [data-testid="stMainBlockContainer"] {
+        padding-top: 0.25rem !important;
+    }
+    /* Hide radio circles on nav */
     [data-testid="stRadio"] [role="radiogroup"] label > div:first-child {
         display: none !important;
     }
+    /* Show circles back for sub-page radios */
     [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] label > div:first-child {
         display: flex !important;
+    }
+    /* White text on nav radio */
+    [data-testid="stRadio"] [role="radiogroup"] label {
+        color: #ffffff !important;
+    }
+    /* Reset text color for sub-page radios */
+    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] label {
+        color: inherit !important;
     }
     /* Lighter nav bar background */
     [data-testid="stRadio"] [role="radiogroup"] {
