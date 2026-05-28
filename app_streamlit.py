@@ -29829,7 +29829,6 @@ def main():
     <style>
     [data-testid="stMainBlockContainer"] { padding-top: 0 !important; }
     [data-testid="stAppViewBlockContainer"] { padding-top: 0 !important; }
-    section.main { overflow: hidden !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -29839,6 +29838,28 @@ def main():
 
     with st.container(height=2000, border=False):
         _tab_funcs[_active_idx]()
+
+    # JS: kill outer scroll + cap container to viewport
+    import streamlit.components.v1 as _comp
+    _comp.html("""
+    <script>
+    (function(){
+        try {
+            var root = window.parent.document;
+            // Kill outer scroll
+            var els = root.querySelectorAll('section.main, [data-testid="stMain"], [data-testid="stAppViewContainer"]');
+            els.forEach(function(el){ el.style.overflow = 'hidden'; });
+            // Cap container to viewport
+            var wrappers = root.querySelectorAll('[data-testid="stVerticalBlockBorderWrapper"]');
+            wrappers.forEach(function(w){
+                w.style.height = 'calc(100vh - 50px)';
+                w.style.maxHeight = 'calc(100vh - 50px)';
+                w.style.border = 'none';
+            });
+        } catch(e) {}
+    })();
+    </script>
+    """, height=0)
 
 
 
