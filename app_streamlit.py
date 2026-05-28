@@ -29088,75 +29088,32 @@ def main():
         initial_sidebar_state="expanded"
     )
 
-    # ── Sticky main tab bar (JS fixed clone) ──────────────────────────────
-    import streamlit.components.v1 as _comp_v1
-    _comp_v1.html("""
-    <script>
-    (function() {
-        const root = window.parent.document;
-        const checkTabs = setInterval(() => {
-            const tabLists = root.querySelectorAll('[data-testid="stTabs"] > [role="tablist"]');
-            if (tabLists.length === 0) return;
-            clearInterval(checkTabs);
-
-            const mainTabList = tabLists[0];
-            if (root.getElementById('re-sticky-tabs')) return;
-
-            const sticky = root.createElement('div');
-            sticky.id = 're-sticky-tabs';
-            sticky.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#0e1117;border-bottom:2px solid #334155;padding:6px 2rem 4px 2rem;display:none;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
-
-            function syncTabs() {
-                sticky.innerHTML = '';
-                const buttons = mainTabList.querySelectorAll('button[role="tab"]');
-                buttons.forEach((btn) => {
-                    const active = btn.getAttribute('aria-selected') === 'true';
-                    const clone = root.createElement('button');
-                    clone.textContent = btn.textContent;
-                    clone.style.cssText = 'background:none;border:none;color:' + (active ? '#f1f5f9' : '#64748b') +
-                        ';font-size:14px;font-weight:' + (active ? '700' : '400') +
-                        ';padding:6px 12px;cursor:pointer;margin-right:4px;border-bottom:' +
-                        (active ? '2px solid #3b82f6' : '2px solid transparent') + ';';
-                    clone.onclick = () => { btn.click(); };
-                    sticky.appendChild(clone);
-                });
-            }
-            syncTabs();
-            root.body.appendChild(sticky);
-
-            let ticking = false;
-            window.parent.addEventListener('scroll', () => {
-                if (!ticking) {
-                    requestAnimationFrame(() => {
-                        const r = mainTabList.getBoundingClientRect();
-                        sticky.style.display = r.bottom < 0 ? 'block' : 'none';
-                        ticking = false;
-                    });
-                    ticking = true;
-                }
-            }, {passive: true});
-
-            // Also check the main scrollable container
-            const scrollContainer = root.querySelector('section.main');
-            if (scrollContainer) {
-                scrollContainer.addEventListener('scroll', () => {
-                    if (!ticking) {
-                        requestAnimationFrame(() => {
-                            const r = mainTabList.getBoundingClientRect();
-                            sticky.style.display = r.bottom < 0 ? 'block' : 'none';
-                            ticking = false;
-                        });
-                        ticking = true;
-                    }
-                }, {passive: true});
-            }
-
-            const observer = new MutationObserver(() => syncTabs());
-            observer.observe(mainTabList, {attributes: true, subtree: true, attributeFilter: ['aria-selected']});
-        }, 500);
-    })();
-    </script>
-    """, height=0)
+    # ── Sticky main tab bar ──────────────────────────────────────────────
+    st.markdown("""
+    <style>
+    /* Force overflow visible on all ancestors so sticky works */
+    section.main,
+    section.main > div,
+    section.main > div > div,
+    section.main > div > div > div,
+    [data-testid="stAppViewContainer"],
+    [data-testid="stAppViewBlockContainer"],
+    [data-testid="stVerticalBlock"],
+    [data-testid="stMainBlockContainer"] {
+        overflow: visible !important;
+    }
+    /* Sticky on first tablist */
+    div[data-testid="stTabs"] > div[role="tablist"] {
+        position: -webkit-sticky !important;
+        position: sticky !important;
+        top: 0px !important;
+        z-index: 999 !important;
+        background-color: #0e1117 !important;
+        padding: 8px 0 6px 0 !important;
+        border-bottom: 2px solid #334155 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
     init_session()
     
     # Ensure all DB tables/columns exist on startup (not just on save)
