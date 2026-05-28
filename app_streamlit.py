@@ -29810,36 +29810,61 @@ def main():
     except Exception:
         pass
 
-    # ── Navigation bar + scrollable content ──────────────────────────────
+    # ── Navigation bar ──────────────────────────────────────────────────
     # Handle SDR "Price This" override
     _tab_override = st.session_state.pop("_active_tab_override", None)
     if _tab_override and _tab_override in _tab_names:
         st.session_state["_main_nav"] = _tab_override
 
-    _active = st.radio("Navigation", _tab_names, horizontal=True, key="_main_nav",
-                        label_visibility="collapsed")
-    _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
-
-    # CSS: hide nav radio circles, restore for sub-page radios, size container
+    # CSS: fix nav radio to top, un-fix sub-page radios
     st.markdown("""
     <style>
-    /* Hide radio circles on ALL radios */
+    /* Fix ALL radios to top */
+    [data-testid="stRadio"] > div > [role="radiogroup"] {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        z-index: 999 !important;
+        background: #0e1117 !important;
+        padding: 8px 1rem !important;
+        border-bottom: 2px solid #3b82f6 !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.4) !important;
+        width: 100% !important;
+    }
+    /* Hide radio circles on fixed nav */
     [data-testid="stRadio"] [role="radiogroup"] label > div:first-child {
         display: none !important;
     }
-    /* Show circles back for radios INSIDE the scroll container */
-    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] label > div:first-child {
-        display: flex !important;
+    /* UN-FIX radios inside nested blocks (sub-page radios) */
+    [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stRadio"] > div > [role="radiogroup"] {
+        position: relative !important;
+        top: auto !important;
+        left: auto !important;
+        right: auto !important;
+        z-index: auto !important;
+        background: transparent !important;
+        padding: 0 !important;
+        border-bottom: none !important;
+        box-shadow: none !important;
+        width: auto !important;
     }
-    /* Remove border from content container */
-    [data-testid="stVerticalBlockBorderWrapper"] {
-        border: none !important;
+    /* Show circles back on sub-page radios */
+    [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stRadio"] [role="radiogroup"] label > div:first-child {
+        display: flex !important;
     }
     </style>
     """, unsafe_allow_html=True)
 
-    # Scrollable content area
-    with st.container(height=900, border=False):
+    _active = st.radio("Navigation", _tab_names, horizontal=True, key="_main_nav",
+                        label_visibility="collapsed")
+    _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
+
+    # Spacer below fixed nav
+    st.markdown('<div style="height:44px"></div>', unsafe_allow_html=True)
+
+    # Content in a container (creates nested stVerticalBlock — sub-page radios won't get fixed CSS)
+    with st.container():
         _tab_funcs[_active_idx]()
 
 
