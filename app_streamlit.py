@@ -29087,8 +29087,33 @@ def main():
         page_icon="📊",
         initial_sidebar_state="expanded"
     )
-
     init_session()
+
+    # ── Floating scroll-to-top button ──────────────────────────────────
+    st.markdown('<div id="top"></div>', unsafe_allow_html=True)
+    st.markdown("""
+    <style>
+    html { scroll-behavior: smooth; }
+    </style>
+    <a href="#top" style="
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 9999;
+        background: #3b82f6;
+        color: white;
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 22px;
+        text-decoration: none;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+        border: none;
+    " title="Back to tabs">⬆</a>
+    """, unsafe_allow_html=True)
     
     # Ensure all DB tables/columns exist on startup (not just on save)
     if HAS_POSTGRES and get_db_url() and not st.session_state.get("_db_init_done", False):
@@ -29348,44 +29373,9 @@ def main():
             unsafe_allow_html=True,
         )
         
-        # ── Tab Navigation ─────────────────────────────────────────
-        st.markdown("---")
-        _nav_tab_defs = st.session_state.get("_nav_tab_names", [])
-        if not _nav_tab_defs:
-            # First render fallback — show core tabs
-            _nav_tab_defs = ["🏡 Home", "📡 SDR Live", "📏 Curves", "📊 Swaptions",
-                             "🔔 Caps & Floors", "📈 FWD IRS Analysis"]
-        _nav_default = st.session_state.get("_active_tab", _nav_tab_defs[0])
-        _nav_idx = _nav_tab_defs.index(_nav_default) if _nav_default in _nav_tab_defs else 0
-        _selected_nav = st.radio("Navigation", _nav_tab_defs, index=_nav_idx,
-                                  key="_sidebar_nav", label_visibility="collapsed")
-        st.session_state["_active_tab"] = _selected_nav
-
-        # Currency — always visible (frequent action)
-        # v1305q: one-time migration — normalize stored "EUR (PENDING)" → "EUR"
-        _stored_ccy = st.session_state.get("sidebar_ccy")
-        if _stored_ccy and "(PENDING)" in str(_stored_ccy):
-            _normalized = str(_stored_ccy).split(" ")[0]
-            if _normalized in ALL_CURRENCIES:
-                st.session_state["sidebar_ccy"] = _normalized
-        if not st.session_state.get("_app_init_done"):
-            st.session_state["sidebar_ccy"] = "USD"
-            st.session_state["_app_init_done"] = True
-        _sdr_staged_ccy = st.session_state.pop("_sdr_price_ccy", None)
-        if _sdr_staged_ccy and _sdr_staged_ccy in ALL_CURRENCIES:
-            st.session_state["sidebar_ccy"] = _sdr_staged_ccy
-        _ccy_idx = ALL_CURRENCIES.index(st.session_state.get("sidebar_ccy", "USD")) if st.session_state.get("sidebar_ccy", "USD") in ALL_CURRENCIES else ALL_CURRENCIES.index("USD")
-        ccy = st.selectbox(" Currency", ALL_CURRENCIES, index=_ccy_idx, key="sidebar_ccy")
-        _ccy_for_load = str(ccy).split(" ")[0]
-        _loader = st.session_state.get("_load_ccy_curves_fn")
-        if _loader and HAS_POSTGRES:
-            _prev_sidebar_ccy = st.session_state.get("_prev_sidebar_ccy")
-            _prev_norm = str(_prev_sidebar_ccy).split(" ")[0] if _prev_sidebar_ccy else None
-            if _prev_norm is not None and _prev_norm != _ccy_for_load:
-                _loader(_ccy_for_load, force=True)
-            st.session_state["_prev_sidebar_ccy"] = ccy
-
-        # SDR status — compact
+        st.markdown("###  Settings")
+        
+        # ── SDR Fetcher status (always visible) ─────────────────────
         try:
             _sdr_last, _sdr_cnt, _sdr_total = _sdr_status_cached()
             if _sdr_last:
@@ -29396,69 +29386,102 @@ def main():
                 if _sdr_age > 1:
                     st.error(f"🔴 SDR stopped ({_sdr_age:.0f}h ago)")
                 else:
-                    st.caption(f"🟢 SDR live — {_sdr_cnt:,}/24h")
+                    st.caption(f"🟢 SDR live — {_sdr_cnt:,} trades/24h")
             elif _sdr_total and _sdr_total > 0:
                 st.error("🔴 SDR stopped")
         except Exception:
             pass
+        
+        # Theme
+        theme_choice = st.selectbox(
+            " Theme",
+            ["Dealer Dark", "Clean Light"],
+            index=0 if st.session_state.get("theme_name", "Dealer Dark") == "Dealer Dark" else 1,
+            key="sidebar_theme",
+        )
+        st.session_state["theme_name"] = theme_choice
 
-        st.markdown("---")
+        # v1305q: one-time migration — normalize stored "EUR (PENDING)" → "EUR" so the
+        # index lookup against the new ALL_CURRENCIES (which has plain "EUR") works.
+        _stored_ccy = st.session_state.get("sidebar_ccy")
+        if _stored_ccy and "(PENDING)" in str(_stored_ccy):
+            _normalized = str(_stored_ccy).split(" ")[0]
+            if _normalized in ALL_CURRENCIES:
+                st.session_state["sidebar_ccy"] = _normalized
 
-        # ── Settings (collapsible) ─────────────────────────────────
-        with st.expander("⚙️ Settings", expanded=False):
-            # Theme
-            theme_choice = st.selectbox(
-                " Theme",
-                ["Dealer Dark", "Clean Light"],
-                index=0 if st.session_state.get("theme_name", "Dealer Dark") == "Dealer Dark" else 1,
-                key="sidebar_theme",
-            )
-            st.session_state["theme_name"] = theme_choice
+        # v1405b: force USD on fresh app load. _app_init_done flag persists
+        # within a Streamlit session; if missing, this is a cold start.
+        if not st.session_state.get("_app_init_done"):
+            st.session_state["sidebar_ccy"] = "USD"
+            st.session_state["_app_init_done"] = True
 
-            # Vol mode
-            vol_mode = st.selectbox(
-                " Vol Mode",
-                ["Normal (bp)", "Black (lognormal)"],
-                index=0,
-                key="sidebar_volmode",
-            )
+        # Currency — default to USD
+        # Apply CCY staged from SDR "Price This" button
+        _sdr_staged_ccy = st.session_state.pop("_sdr_price_ccy", None)
+        if _sdr_staged_ccy and _sdr_staged_ccy in ALL_CURRENCIES:
+            st.session_state["sidebar_ccy"] = _sdr_staged_ccy
+        _ccy_idx = ALL_CURRENCIES.index(st.session_state.get("sidebar_ccy", "USD")) if st.session_state.get("sidebar_ccy", "USD") in ALL_CURRENCIES else ALL_CURRENCIES.index("USD")
+        ccy = st.selectbox(
+            " Currency",
+            ALL_CURRENCIES,
+            index=_ccy_idx,
+            key="sidebar_ccy",
+        )
+        # v2904e: refresh curves from DB when currency actually changes
+        # v0705m: normalize "EUR (PENDING)" → "EUR" so _curve_map lookup succeeds
+        _ccy_for_load = str(ccy).split(" ")[0]
+        _loader = st.session_state.get("_load_ccy_curves_fn")
+        if _loader and HAS_POSTGRES:
+            _prev_sidebar_ccy = st.session_state.get("_prev_sidebar_ccy")
+            _prev_norm = str(_prev_sidebar_ccy).split(" ")[0] if _prev_sidebar_ccy else None
+            if _prev_norm is not None and _prev_norm != _ccy_for_load:
+                _loader(_ccy_for_load, force=True)
+            st.session_state["_prev_sidebar_ccy"] = ccy
+        
+        # Vol mode
+        vol_mode = st.selectbox(
+            " Vol Mode",
+            ["Normal (bp)", "Black (lognormal)"],
+            index=0,
+            key="sidebar_volmode",
+        )
 
-            # Tab visibility
-            with st.expander("🗂️ Show/Hide Tabs", expanded=False):
-                _ALL_TABS = [
-                    ("🏡 Home", "tab_show_home"),
-                    ("📡 SDR Live", "tab_show_sdr"),
-                    ("📋 IRS / Vol Upload", "tab_show_upload"),
-                    ("📏 Curves", "tab_show_curves"),
-                    ("📊 Historical VOL Analysis", "tab_show_hva"),
-                    ("📈 FWD IRS Analysis", "tab_show_fwd"),
-                    ("📊 Swaptions", "tab_show_swaptions"),
-                    ("🔔 Caps & Floors", "tab_show_caps"),
-                    ("💼 Trade Blotter", "tab_show_blotter"),
-                    ("⚛️ RV / Calendar", "tab_show_rv"),
-                    ("🔮 Exotics", "tab_show_exotics"),
-                    ("📏 SOD Report", "tab_show_sod"),
-                    ("✅ Vol Editor", "tab_show_voleditor"),
-                    ("📑 Vol Export", "tab_show_volexport"),
-                    ("📐 Midcurve & Curve Options", "tab_show_midcurve"),
-                    ("📍 Multi-CCY", "tab_show_multiccy"),
-                    ("🎫 Trade Ticket", "tab_show_ticket"),
-                ]
-                _tab_changed = False
-                for _tname, _tkey in _ALL_TABS:
-                    if _tkey not in st.session_state:
-                        st.session_state[_tkey] = True
-                    _prev_val = st.session_state[_tkey]
-                    st.session_state[_tkey] = st.checkbox(_tname, value=st.session_state[_tkey], key=f"cb_{_tkey}")
-                    if st.session_state[_tkey] != _prev_val:
-                        _tab_changed = True
-    
-                # Auto-save to DB whenever a checkbox changes
-                if _tab_changed and st.session_state.get("authenticated") and HAS_POSTGRES:
-                    try:
-                        _tab_prefs_save = {k: st.session_state.get(k, True) for _, k in _ALL_TABS}
-                        save_user_config(st.session_state.get("username",""), "tab_prefs", "AUD", _tab_prefs_save)
-                    except Exception: pass
+        # Tab visibility
+        with st.expander("🗂️ Show/Hide Tabs", expanded=False):
+            _ALL_TABS = [
+                ("🏡 Home", "tab_show_home"),
+                ("📡 SDR Live", "tab_show_sdr"),
+                ("📋 IRS / Vol Upload", "tab_show_upload"),
+                ("📏 Curves", "tab_show_curves"),
+                ("📊 Historical VOL Analysis", "tab_show_hva"),
+                ("📈 FWD IRS Analysis", "tab_show_fwd"),
+                ("📊 Swaptions", "tab_show_swaptions"),
+                ("🔔 Caps & Floors", "tab_show_caps"),
+                ("💼 Trade Blotter", "tab_show_blotter"),
+                ("⚛️ RV / Calendar", "tab_show_rv"),
+                ("🔮 Exotics", "tab_show_exotics"),
+                ("📏 SOD Report", "tab_show_sod"),
+                ("✅ Vol Editor", "tab_show_voleditor"),
+                ("📑 Vol Export", "tab_show_volexport"),
+                ("📐 Midcurve & Curve Options", "tab_show_midcurve"),
+                ("📍 Multi-CCY", "tab_show_multiccy"),
+                ("🎫 Trade Ticket", "tab_show_ticket"),
+            ]
+            _tab_changed = False
+            for _tname, _tkey in _ALL_TABS:
+                if _tkey not in st.session_state:
+                    st.session_state[_tkey] = True
+                _prev_val = st.session_state[_tkey]
+                st.session_state[_tkey] = st.checkbox(_tname, value=st.session_state[_tkey], key=f"cb_{_tkey}")
+                if st.session_state[_tkey] != _prev_val:
+                    _tab_changed = True
+
+            # Auto-save to DB whenever a checkbox changes
+            if _tab_changed and st.session_state.get("authenticated") and HAS_POSTGRES:
+                try:
+                    _tab_prefs_save = {k: st.session_state.get(k, True) for _, k in _ALL_TABS}
+                    save_user_config(st.session_state.get("username",""), "tab_prefs", "AUD", _tab_prefs_save)
+                except Exception: pass
 
         
         st.markdown("---")
@@ -29760,9 +29783,6 @@ def main():
         _tab_names += ["📍 Multi-CCY"]
         _tab_funcs += [lambda: multi_ccy_tab(vol_mode)]
 
-    # Store for sidebar navigation
-    st.session_state["_nav_tab_names"] = _tab_names
-
     # ── SDR Trade Alerts (global — fires on any tab) ───────────────────
     # v1305b: interval bumped from 30s to 120s. Was hitting DB every 30s
     # on every tab and causing random ~50-200ms hangs while typing in
@@ -29816,16 +29836,11 @@ def main():
     except Exception:
         pass
 
-    # Tab navigation — sidebar radio dispatch (replaces st.tabs for sticky nav)
-    _tab_override = st.session_state.pop("_active_tab_override", None)
-    if _tab_override and _tab_override in _tab_names:
-        st.session_state["_sidebar_nav"] = _tab_override
-        st.session_state["_active_tab"] = _tab_override
-    _active_tab = st.session_state.get("_active_tab", _tab_names[0] if _tab_names else "🏡 Home")
-    if _active_tab not in _tab_names:
-        _active_tab = _tab_names[0] if _tab_names else "🏡 Home"
-    _active_idx = _tab_names.index(_active_tab) if _active_tab in _tab_names else 0
-    _tab_funcs[_active_idx]()
+    # Tab navigation — visual tabs, single dispatch per render
+    tabs = st.tabs(_tab_names)
+    for _ti, _tf in enumerate(_tab_funcs):
+        with tabs[_ti]:
+            _tf()
 
 
 
