@@ -29856,6 +29856,29 @@ def main():
                 w.style.maxHeight = 'calc(100vh - 50px)';
                 w.style.border = 'none';
             });
+            // Style main nav radio (first stRadio on page, outside container)
+            var allRadios = root.querySelectorAll('[data-testid="stRadio"]');
+            if (allRadios.length > 0) {
+                var navRadio = allRadios[0];
+                // Lighter background
+                var rg = navRadio.querySelector('[role="radiogroup"]');
+                if (rg) {
+                    rg.style.background = '#1a2332';
+                    rg.style.padding = '6px 0.5rem';
+                    rg.style.borderBottom = '2px solid #3b82f6';
+                    rg.style.borderRadius = '0';
+                }
+                // Hide circles + white text on main nav only
+                var labels = navRadio.querySelectorAll('[role="radiogroup"] label');
+                labels.forEach(function(lbl){
+                    // Hide circle (first child div)
+                    var circle = lbl.querySelector('div:first-child');
+                    if (circle) circle.style.display = 'none';
+                    // White text
+                    var p = lbl.querySelector('p');
+                    if (p) p.style.color = '#ffffff';
+                });
+            }
         } catch(e) {}
     })();
     </script>
