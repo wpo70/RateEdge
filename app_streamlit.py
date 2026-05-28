@@ -29813,8 +29813,8 @@ def main():
     # ── Fixed navigation bar ──────────────────────────────────────────────
     st.markdown("""
     <style>
-    /* Fix the first radio widget (nav bar) to top of viewport */
-    [data-testid="stRadio"]:first-of-type {
+    /* Fix ONLY the first stRadio among its siblings (our nav bar) */
+    :nth-child(1 of [data-testid="stRadio"]) {
         position: fixed !important;
         top: 0 !important;
         left: 0 !important;
@@ -29826,11 +29826,11 @@ def main():
         box-shadow: 0 2px 8px rgba(0,0,0,0.5) !important;
     }
     /* Hide the label */
-    [data-testid="stRadio"]:first-of-type label:first-of-type {
+    :nth-child(1 of [data-testid="stRadio"]) > label:first-of-type > div:first-child {
         display: none !important;
     }
     /* Sidebar open → shift bar right */
-    [data-testid="stSidebar"][aria-expanded="true"] ~ * [data-testid="stRadio"]:first-of-type {
+    [data-testid="stSidebar"][aria-expanded="true"] ~ * :nth-child(1 of [data-testid="stRadio"]) {
         left: 260px !important;
     }
     </style>
