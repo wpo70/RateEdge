@@ -29810,24 +29810,46 @@ def main():
     except Exception:
         pass
 
-    # Tab navigation — visual tabs, single dispatch per render
-    tabs = st.tabs(_tab_names)
-    for _ti, _tf in enumerate(_tab_funcs):
-        with tabs[_ti]:
-            _tf()
+    # ── Fixed navigation bar ──────────────────────────────────────────────
+    st.markdown("""
+    <style>
+    /* Fix the first radio widget (nav bar) to top of viewport */
+    [data-testid="stRadio"]:first-of-type {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        z-index: 999 !important;
+        background: #0e1117 !important;
+        padding: 6px 1rem !important;
+        border-bottom: 2px solid #3b82f6 !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.5) !important;
+    }
+    /* Hide the label */
+    [data-testid="stRadio"]:first-of-type label:first-of-type {
+        display: none !important;
+    }
+    /* Sidebar open → shift bar right */
+    [data-testid="stSidebar"][aria-expanded="true"] ~ * [data-testid="stRadio"]:first-of-type {
+        left: 260px !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
-    # Fixed nav bar — scrolls to top where real tabs are
-    _nav_items = ' '.join(
-        f'<a href="#" style="color:#94a3b8;text-decoration:none;padding:4px 8px;font-size:12px;white-space:nowrap;">{n}</a>'
-        for n in _tab_names
-    )
-    st.markdown(
-        f'<div style="position:fixed;top:0;left:0;right:0;z-index:999;background:#0e1117;'
-        f'padding:5px 0.5rem 5px 3.5rem;border-bottom:2px solid #3b82f6;'
-        f'box-shadow:0 2px 8px rgba(0,0,0,0.5);display:flex;flex-wrap:wrap;gap:2px;align-items:center;">'
-        f'{_nav_items}</div>',
-        unsafe_allow_html=True
-    )
+    # Handle SDR "Price This" override
+    _tab_override = st.session_state.pop("_active_tab_override", None)
+    if _tab_override and _tab_override in _tab_names:
+        st.session_state["_main_nav"] = _tab_override
+
+    _active = st.radio("Navigation", _tab_names, horizontal=True, key="_main_nav",
+                        label_visibility="collapsed")
+
+    # Spacer below fixed bar
+    st.markdown('<div style="height:44px"></div>', unsafe_allow_html=True)
+
+    # Dispatch active tab
+    _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
+    _tab_funcs[_active_idx]()
 
 
 
