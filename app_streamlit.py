@@ -29088,32 +29088,6 @@ def main():
         initial_sidebar_state="expanded"
     )
 
-    # ── Sticky main tab bar ──────────────────────────────────────────────
-    st.markdown("""
-    <style>
-    /* Force overflow visible on all ancestors so sticky works */
-    section.main,
-    section.main > div,
-    section.main > div > div,
-    section.main > div > div > div,
-    [data-testid="stAppViewContainer"],
-    [data-testid="stAppViewBlockContainer"],
-    [data-testid="stVerticalBlock"],
-    [data-testid="stMainBlockContainer"] {
-        overflow: visible !important;
-    }
-    /* Sticky on first tablist */
-    div[data-testid="stTabs"] > div[role="tablist"] {
-        position: -webkit-sticky !important;
-        position: sticky !important;
-        top: 0px !important;
-        z-index: 999 !important;
-        background-color: #0e1117 !important;
-        padding: 8px 0 6px 0 !important;
-        border-bottom: 2px solid #334155 !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
     init_session()
     
     # Ensure all DB tables/columns exist on startup (not just on save)
@@ -29374,6 +29348,20 @@ def main():
             unsafe_allow_html=True,
         )
         
+        # ── Tab Navigation ─────────────────────────────────────────
+        st.markdown("---")
+        _nav_tab_defs = st.session_state.get("_nav_tab_names", [])
+        if not _nav_tab_defs:
+            # First render fallback — show core tabs
+            _nav_tab_defs = ["🏡 Home", "📡 SDR Live", "📏 Curves", "📊 Swaptions",
+                             "🔔 Caps & Floors", "📈 FWD IRS Analysis"]
+        _nav_default = st.session_state.get("_active_tab", _nav_tab_defs[0])
+        _nav_idx = _nav_tab_defs.index(_nav_default) if _nav_default in _nav_tab_defs else 0
+        _selected_nav = st.radio("Navigation", _nav_tab_defs, index=_nav_idx,
+                                  key="_sidebar_nav", label_visibility="collapsed")
+        st.session_state["_active_tab"] = _selected_nav
+        st.markdown("---")
+
         st.markdown("###  Settings")
         
         # ── SDR Fetcher status (always visible) ─────────────────────
@@ -29784,6 +29772,9 @@ def main():
         _tab_names += ["📍 Multi-CCY"]
         _tab_funcs += [lambda: multi_ccy_tab(vol_mode)]
 
+    # Store for sidebar navigation
+    st.session_state["_nav_tab_names"] = _tab_names
+
     # ── SDR Trade Alerts (global — fires on any tab) ───────────────────
     # v1305b: interval bumped from 30s to 120s. Was hitting DB every 30s
     # on every tab and causing random ~50-200ms hangs while typing in
@@ -29837,11 +29828,16 @@ def main():
     except Exception:
         pass
 
-    # Tab navigation — visual tabs, single dispatch per render
-    tabs = st.tabs(_tab_names)
-    for _ti, _tf in enumerate(_tab_funcs):
-        with tabs[_ti]:
-            _tf()
+    # Tab navigation — sidebar radio dispatch (replaces st.tabs for sticky nav)
+    _tab_override = st.session_state.pop("_active_tab_override", None)
+    if _tab_override and _tab_override in _tab_names:
+        st.session_state["_sidebar_nav"] = _tab_override
+        st.session_state["_active_tab"] = _tab_override
+    _active_tab = st.session_state.get("_active_tab", _tab_names[0] if _tab_names else "🏡 Home")
+    if _active_tab not in _tab_names:
+        _active_tab = _tab_names[0] if _tab_names else "🏡 Home"
+    _active_idx = _tab_names.index(_active_tab) if _active_tab in _tab_names else 0
+    _tab_funcs[_active_idx]()
 
 
 
