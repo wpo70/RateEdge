@@ -29810,40 +29810,60 @@ def main():
     except Exception:
         pass
 
-    # Tab navigation — fixed horizontal radio at top
-    # Marker div lets CSS target the next sibling (the radio widget)
-    st.markdown("""
-    <div id="re-nav-anchor"></div>
+    # Tab navigation — visual tabs, single dispatch per render
+    tabs = st.tabs(_tab_names)
+    for _ti, _tf in enumerate(_tab_funcs):
+        with tabs[_ti]:
+            _tf()
+
+    # ── Fixed nav bar (pinned to top, clicks real tab buttons) ─────────
+    _nav_links = ''.join(
+        f'<span class="re-n" data-idx="{i}" style="padding:5px 10px;cursor:pointer;font-size:13px;'
+        f'white-space:nowrap;color:#94a3b8;">{n}</span>'
+        for i, n in enumerate(_tab_names)
+    )
+    st.markdown(f"""
     <style>
-    #re-nav-anchor { height: 0; margin: 0; padding: 0; }
-    #re-nav-anchor + div {
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-        right: 0 !important;
-        z-index: 99999 !important;
-        background: #0e1117 !important;
-        padding: 8px 1rem 4px 1rem !important;
-        border-bottom: 2px solid #3b82f6 !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.5) !important;
-    }
-    #re-nav-anchor + div label { display: none !important; }
+    [data-testid="stTabs"] > [role="tablist"] {{
+        height: 0 !important; overflow: hidden !important; padding: 0 !important;
+        margin: 0 !important; border: none !important;
+    }}
     </style>
+    <div id="re-fixed-nav" style="position:fixed;top:0;left:0;right:0;z-index:99999;
+    background:#0e1117;padding:6px 0.5rem;border-bottom:2px solid #3b82f6;
+    box-shadow:0 2px 8px rgba(0,0,0,0.5);display:flex;flex-wrap:wrap;gap:2px;
+    align-items:center;">{_nav_links}</div>
+    <div style="height:42px"></div>
+    <img src="" onerror="
+    (function(){{
+        var bar=document.getElementById('re-fixed-nav');
+        if(!bar)return;
+        var items=bar.querySelectorAll('.re-n');
+        var tl=document.querySelector('[role=tablist]');
+        if(!tl)return;
+        var tabBtns=tl.querySelectorAll('button[role=tab]');
+        if(!tabBtns.length)return;
+        items.forEach(function(el){{
+            var idx=parseInt(el.dataset.idx);
+            el.addEventListener('click',function(){{
+                if(tabBtns[idx])tabBtns[idx].click();
+            }});
+        }});
+        function sync(){{
+            tabBtns=tl.querySelectorAll('button[role=tab]');
+            items.forEach(function(el){{
+                var idx=parseInt(el.dataset.idx);
+                var active=tabBtns[idx]&&tabBtns[idx].getAttribute('aria-selected')==='true';
+                el.style.color=active?'#f1f5f9':'#64748b';
+                el.style.fontWeight=active?'700':'400';
+                el.style.borderBottom=active?'2px solid #3b82f6':'2px solid transparent';
+            }});
+        }}
+        sync();
+        new MutationObserver(function(){{setTimeout(sync,50);}}).observe(tl,{{attributes:true,subtree:true,attributeFilter:['aria-selected']}});
+    }})();
+    " style="display:none"/>
     """, unsafe_allow_html=True)
-
-    # Handle SDR "Price This" override
-    _tab_override = st.session_state.pop("_active_tab_override", None)
-    if _tab_override and _tab_override in _tab_names:
-        st.session_state["_main_nav"] = _tab_override
-
-    _active = st.radio("nav", _tab_names, horizontal=True, key="_main_nav",
-                        label_visibility="collapsed")
-
-    # Spacer so content doesn't hide behind fixed bar
-    st.markdown('<div style="height:40px"></div>', unsafe_allow_html=True)
-
-    _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
-    _tab_funcs[_active_idx]()
 
 
 
