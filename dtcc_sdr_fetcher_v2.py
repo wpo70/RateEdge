@@ -181,10 +181,12 @@ def fmt_tenor(months) -> str:
     if months < 1:  return "<1M"
     if months < 12: return f"{months}M"
     y, m = divmod(months, 12)
-    # Round stub months — business day conventions cause 1-2 day slippage
-    # which shows as an extra month. Round to nearest whole year if stub <= 2M.
-    if m <= 2:
-        return f"{y}Y"
+    # Business day stubs:
+    # m <= 2  → round down (e.g. 10Y1M → 10Y)
+    # m >= 10 → round up   (e.g. 1Y11M → 2Y)
+    # else    → keep genuine broken tenor (e.g. 1Y6M = 18M)
+    if m <= 2:   return f"{y}Y"
+    if m >= 10:  return f"{y+1}Y"
     return f"{y}Y{m}M"
 
 def parse_date_str(s):
