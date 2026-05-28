@@ -7665,8 +7665,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                     # ── Price This → collapsible panel ────────────────────────
                     with st.expander("📊 Price This — click a trade to load into Swaptions pricer", expanded=False):
-                     # Map SDR tenor labels to pricer keys
-                    _EXPIRY_MAP = {
+                        # Map SDR tenor labels to pricer keys
+                        _EXPIRY_MAP = {
                         "1w":"1w","2w":"2w","1m":"1m","1M":"1m","2m":"2m","2M":"2m",
                         "3m":"3m","3M":"3m","6m":"6m","6M":"6m","9m":"9m","9M":"9m",
                         "1y":"1y","1Y":"1y","18m":"18m","18M":"18m",
@@ -29824,11 +29824,34 @@ def main():
     except Exception:
         pass
 
-    # Tab navigation — visual tabs, single dispatch per render
-    tabs = st.tabs(_tab_names)
-    for _ti, _tf in enumerate(_tab_funcs):
-        with tabs[_ti]:
-            _tf()
+    # ── Navigation ──────────────────────────────────────────────────────
+    _tab_override = st.session_state.pop("_active_tab_override", None)
+    if _tab_override and _tab_override in _tab_names:
+        st.session_state["_main_nav"] = _tab_override
+
+    st.markdown("""
+    <style>
+    [data-testid="stMainBlockContainer"] { padding-top: 0.25rem !important; }
+    [data-testid="stRadio"] [role="radiogroup"] label > div:first-child { display: none !important; }
+    [data-testid="stRadio"] [role="radiogroup"] {
+        background: #1a2332 !important; padding: 6px 0.5rem !important;
+        border-bottom: 2px solid #3b82f6 !important;
+    }
+    [data-testid="stRadio"] [role="radiogroup"] label p { color: #ffffff !important; }
+    [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stRadio"] [role="radiogroup"] label > div:first-child { display: flex !important; }
+    [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stRadio"] [role="radiogroup"] { background: transparent !important; padding: 0 !important; border-bottom: none !important; }
+    [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stRadio"] [role="radiogroup"] label p { color: inherit !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    @st.fragment
+    def _nav_fragment():
+        _active = st.radio("Navigation", _tab_names, horizontal=True, key="_main_nav",
+                            label_visibility="collapsed")
+        _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
+        _tab_funcs[_active_idx]()
+
+    _nav_fragment()
 
 
 
