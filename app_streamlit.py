@@ -29820,46 +29820,11 @@ def main():
     except Exception:
         pass
 
-    # ── CSS: sticky tabs inside scroll container, viewport height ────────
-    st.markdown("""
-    <style>
-    /* Reduce top padding */
-    [data-testid="stMainBlockContainer"] {
-        padding-top: 0.25rem !important;
-    }
-    /* Remove container border */
-    [data-testid="stVerticalBlockBorderWrapper"] {
-        border: none !important;
-    }
-    /* Container fills viewport */
-    [data-testid="stVerticalBlockBorderWrapper"],
-    [data-testid="stVerticalBlockBorderWrapper"] > div,
-    [data-testid="stVerticalBlockBorderWrapper"] > div > div[style*="height"] {
-        height: calc(100vh - 20px) !important;
-        max-height: calc(100vh - 20px) !important;
-    }
-    /* Sticky tablist INSIDE the scroll container */
-    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stTabs"] > [role="tablist"] {
-        position: sticky !important;
-        top: 0 !important;
-        z-index: 10 !important;
-        background: #1a2332 !important;
-        padding: 6px 0.5rem !important;
-        border-bottom: 2px solid #3b82f6 !important;
-    }
-    /* White text on main tab buttons */
-    [data-testid="stVerticalBlockBorderWrapper"] > div > div > [data-testid="stVerticalBlock"] > div:first-child [data-testid="stTabs"] > [role="tablist"] button {
-        color: #ffffff !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-    # Scrollable container — tabs inside, sticky at top
-    with st.container(height=1200, border=False):
-        tabs = st.tabs(_tab_names)
-        for _ti, _tf in enumerate(_tab_funcs):
-            with tabs[_ti]:
-                _tf()
+    # Tab navigation — visual tabs, single dispatch per render
+    tabs = st.tabs(_tab_names)
+    for _ti, _tf in enumerate(_tab_funcs):
+        with tabs[_ti]:
+            _tf()
 
 
 
