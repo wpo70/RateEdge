@@ -29820,18 +29820,16 @@ def main():
                         label_visibility="collapsed")
     _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
 
-    # CSS: hide circles, fill viewport, remove border
+    # CSS: hide radio circles, show them back inside container for sub-page radios
+    # + resize container to fill viewport
     st.markdown("""
     <style>
-    /* Hide radio circles */
     [data-testid="stRadio"] [role="radiogroup"] label > div:first-child {
         display: none !important;
     }
-    /* Show circles back inside scrollable container (sub-page radios) */
     [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] label > div:first-child {
         display: flex !important;
     }
-    /* Content container fills viewport, no border */
     [data-testid="stVerticalBlockBorderWrapper"] {
         height: calc(100vh - 60px) !important;
         max-height: calc(100vh - 60px) !important;
@@ -29840,8 +29838,7 @@ def main():
     </style>
     """, unsafe_allow_html=True)
 
-    # Scrollable content — radio stays above
-    with st.container(height=3000, border=False):
+    with st.container(height=700, border=False):
         _tab_funcs[_active_idx]()
 
 
