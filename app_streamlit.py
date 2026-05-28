@@ -29088,13 +29088,6 @@ def main():
         initial_sidebar_state="expanded"
     )
     init_session()
-
-    # CSS: hide original tab bar (clone replaces it) + push content down
-    st.markdown("""
-    <style>
-    [data-testid="stMainBlockContainer"] { padding-top: 44px !important; }
-    </style>
-    """, unsafe_allow_html=True)
     
     # Ensure all DB tables/columns exist on startup (not just on save)
     if HAS_POSTGRES and get_db_url() and not st.session_state.get("_db_init_done", False):
@@ -29817,103 +29810,40 @@ def main():
     except Exception:
         pass
 
-    # Tab navigation — visual tabs, single dispatch per render
-    tabs = st.tabs(_tab_names)
-    for _ti, _tf in enumerate(_tab_funcs):
-        with tabs[_ti]:
-            _tf()
+    # Tab navigation — fixed horizontal radio at top
+    # Marker div lets CSS target the next sibling (the radio widget)
+    st.markdown("""
+    <div id="re-nav-anchor"></div>
+    <style>
+    #re-nav-anchor { height: 0; margin: 0; padding: 0; }
+    #re-nav-anchor + div {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        z-index: 99999 !important;
+        background: #0e1117 !important;
+        padding: 8px 1rem 4px 1rem !important;
+        border-bottom: 2px solid #3b82f6 !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.5) !important;
+    }
+    #re-nav-anchor + div label { display: none !important; }
+    </style>
+    """, unsafe_allow_html=True)
 
-    # ── Fixed nav clone (JS clicks real tabs — no page reload) ─────────
-    import streamlit.components.v1 as _comp_nav
-    _comp_nav.html("""
-    <script>
-    (function() {
-        var root;
-        try { root = window.parent.document; } catch(e) { console.log('RE-NAV: cross-origin blocked', e); return; }
-        if (!root) { console.log('RE-NAV: no parent document'); return; }
-        console.log('RE-NAV: parent document accessed OK');
+    # Handle SDR "Price This" override
+    _tab_override = st.session_state.pop("_active_tab_override", None)
+    if _tab_override and _tab_override in _tab_names:
+        st.session_state["_main_nav"] = _tab_override
 
-        var tries = 0;
-        var poll = setInterval(function() {
-            tries++;
-            if (tries > 40) { clearInterval(poll); return; }
+    _active = st.radio("nav", _tab_names, horizontal=True, key="_main_nav",
+                        label_visibility="collapsed")
 
-            var tabLists = root.querySelectorAll('[data-testid="stTabs"] > [role="tablist"]');
-            if (tabLists.length === 0) { if (tries % 10 === 0) console.log('RE-NAV: waiting for tabs... try', tries); return; }
-            clearInterval(poll);
-            console.log('RE-NAV: found', tabLists.length, 'tablists');
+    # Spacer so content doesn't hide behind fixed bar
+    st.markdown('<div style="height:40px"></div>', unsafe_allow_html=True)
 
-            var mainTL = tabLists[0];
-
-            // Remove old clone if exists
-            var old = root.getElementById('re-fixed-nav');
-            if (old) old.remove();
-
-            // Create fixed bar
-            var bar = root.createElement('div');
-            bar.id = 're-fixed-nav';
-            bar.style.cssText = 'position:fixed;top:0;right:0;z-index:99999;background:#0e1117;padding:6px 12px;border-bottom:2px solid #3b82f6;box-shadow:0 2px 8px rgba(0,0,0,0.5);display:flex;flex-wrap:wrap;gap:2px;align-items:center;left:0;';
-
-            function buildNav() {
-                bar.innerHTML = '';
-                var btns = mainTL.querySelectorAll('button[role="tab"]');
-                btns.forEach(function(btn, i) {
-                    var active = btn.getAttribute('aria-selected') === 'true';
-                    var clone = root.createElement('button');
-                    clone.textContent = btn.textContent;
-                    clone.style.cssText = 'background:none;border:none;cursor:pointer;padding:5px 10px;font-size:13px;white-space:nowrap;' +
-                        'color:' + (active ? '#f1f5f9' : '#64748b') + ';' +
-                        'font-weight:' + (active ? '700' : '400') + ';' +
-                        'border-bottom:2px solid ' + (active ? '#3b82f6' : 'transparent') + ';';
-                    clone.addEventListener('click', function() {
-                        btn.click();
-                        root.documentElement.scrollTop = 0;
-                        root.body.scrollTop = 0;
-                        var main = root.querySelector('section.main');
-                        if (main) main.scrollTop = 0;
-                        var sc = root.querySelector('[data-testid="stAppViewContainer"]');
-                        if (sc) sc.scrollTop = 0;
-                        setTimeout(buildNav, 100);
-                    });
-                    bar.appendChild(clone);
-                });
-
-                // Adjust left margin for sidebar
-                var sb = root.querySelector('[data-testid="stSidebar"]');
-                if (sb) {
-                    var collapsed = sb.getAttribute('aria-expanded') === 'false' ||
-                                    sb.querySelector('[data-testid="stSidebarCollapsedControl"]') !== null;
-                    bar.style.left = collapsed ? '0px' : (sb.offsetWidth || 245) + 'px';
-                } else {
-                    bar.style.left = '0px';
-                }
-            }
-
-            buildNav();
-            root.body.appendChild(bar);
-
-            // Watch for tab changes and sidebar toggle
-            var obs = new MutationObserver(function() { setTimeout(buildNav, 50); });
-            obs.observe(mainTL, {attributes: true, subtree: true, attributeFilter: ['aria-selected']});
-
-            // Watch sidebar
-            var sbEl = root.querySelector('[data-testid="stSidebar"]');
-            if (sbEl) {
-                var sbObs = new MutationObserver(function() { setTimeout(buildNav, 50); });
-                sbObs.observe(sbEl, {attributes: true, attributeFilter: ['aria-expanded']});
-                // Also watch for resize
-                if (typeof ResizeObserver !== 'undefined') {
-                    var ro = new ResizeObserver(function() { setTimeout(buildNav, 50); });
-                    ro.observe(sbEl);
-                }
-            }
-
-            // Always visible
-            bar.style.display = 'flex';
-        }, 300);
-    })();
-    </script>
-    """, height=1)
+    _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
+    _tab_funcs[_active_idx]()
 
 
 
