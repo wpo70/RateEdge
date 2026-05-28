@@ -7051,6 +7051,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 "Notional":   not1,
                 "Cleared":    r.get("cleared","—"),
                 "Platform":   PLATFORM_NAMES.get(r.get("platform_identifier",""), r.get("platform_identifier","—")),
+                "Eff Date":   str(r.get("effective_date","—") or "—"),
+                "Mat Date":   str(r.get("expiration_date","—") or "—"),
             })
 
         disp_df = pd.DataFrame(rows_html)
@@ -7074,6 +7076,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 "Notional":   st.column_config.TextColumn("Notional",   width="small"),
                 "Cleared":    st.column_config.TextColumn("Clrd",       width="small"),
                 "Platform":   st.column_config.TextColumn("Platform",   width="small"),
+                "Eff Date":   st.column_config.TextColumn("Eff Date",   width="small"),
+                "Mat Date":   st.column_config.TextColumn("Mat Date",   width="small"),
             },
             hide_index=True,
         )
@@ -7365,9 +7369,15 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             def _mf(m):
                                                 if not m: return "—"
                                                 y,mo = divmod(abs(m),12)
-                                                return f"{y}Y{mo}M" if mo else f"{y}Y"
-                                            _fwd_m = (_eff.year-_exec_d.year)*12+(_eff.month-_exec_d.month) if _exec_d else None
-                                            _ten_m = (_mat.year-_eff.year)*12+(_mat.month-_eff.month) if _mat else None
+                                                if mo <= 2: return f"{y}Y"
+                                                if mo >= 10: return f"{y+1}Y"
+                                                return f"{y}Y{mo}M"
+                                            from datetime import date as _dt
+                                            _eff1 = _dt(_eff.year, _eff.month, 1)
+                                            _mat1 = _dt(_mat.year, _mat.month, 1) if _mat else None
+                                            _exe1 = _dt(_exec_d.year, _exec_d.month, 1) if _exec_d else None
+                                            _fwd_m = (_eff1.year-_exe1.year)*12+(_eff1.month-_exe1.month) if _exe1 else None
+                                            _ten_m = (_mat1.year-_eff1.year)*12+(_mat1.month-_eff1.month) if _mat1 else None
                                             _opt_exp_disp = _mf(_fwd_m)
                                             _swp_ten_disp = _mf(_ten_m)
                                         except Exception:
@@ -29810,62 +29820,46 @@ def main():
     except Exception:
         pass
 
-    # ── Fixed navigation bar ──────────────────────────────────────────────
-    # Handle SDR "Price This" override
-    _tab_override = st.session_state.pop("_active_tab_override", None)
-    if _tab_override and _tab_override in _tab_names:
-        st.session_state["_main_nav"] = _tab_override
-
-    _active = st.radio("Navigation", _tab_names, horizontal=True, key="_main_nav",
-                        label_visibility="collapsed")
-    _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
-
-    # CSS: hide radio circles, lighter nav background, fill viewport
+    # ── CSS: sticky tabs inside scroll container, viewport height ────────
     st.markdown("""
     <style>
-    /* Reduce top padding to push nav higher */
+    /* Reduce top padding */
     [data-testid="stMainBlockContainer"] {
         padding-top: 0.25rem !important;
-    }
-    /* Hide radio circles on nav */
-    [data-testid="stRadio"] [role="radiogroup"] label > div:first-child {
-        display: none !important;
-    }
-    /* Show circles back for sub-page radios */
-    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] label > div:first-child {
-        display: flex !important;
-    }
-    /* White text on nav radio */
-    [data-testid="stRadio"] [role="radiogroup"] label {
-        color: #ffffff !important;
-    }
-    /* Reset text color for sub-page radios */
-    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] label {
-        color: inherit !important;
-    }
-    /* Lighter nav bar background */
-    [data-testid="stRadio"] [role="radiogroup"] {
-        background: #1a2332 !important;
-        padding: 8px 0.5rem !important;
-        border-bottom: 2px solid #3b82f6 !important;
-        border-radius: 0 !important;
     }
     /* Remove container border */
     [data-testid="stVerticalBlockBorderWrapper"] {
         border: none !important;
     }
-    /* Override container height to viewport */
+    /* Container fills viewport */
     [data-testid="stVerticalBlockBorderWrapper"],
     [data-testid="stVerticalBlockBorderWrapper"] > div,
     [data-testid="stVerticalBlockBorderWrapper"] > div > div[style*="height"] {
-        height: calc(100vh - 60px) !important;
-        max-height: calc(100vh - 60px) !important;
+        height: calc(100vh - 20px) !important;
+        max-height: calc(100vh - 20px) !important;
+    }
+    /* Sticky tablist INSIDE the scroll container */
+    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stTabs"] > [role="tablist"] {
+        position: sticky !important;
+        top: 0 !important;
+        z-index: 10 !important;
+        background: #1a2332 !important;
+        padding: 6px 0.5rem !important;
+        border-bottom: 2px solid #3b82f6 !important;
+    }
+    /* White text on main tab buttons */
+    [data-testid="stVerticalBlockBorderWrapper"] > div > div > [data-testid="stVerticalBlock"] > div:first-child [data-testid="stTabs"] > [role="tablist"] button {
+        color: #ffffff !important;
     }
     </style>
     """, unsafe_allow_html=True)
 
+    # Scrollable container — tabs inside, sticky at top
     with st.container(height=1200, border=False):
-        _tab_funcs[_active_idx]()
+        tabs = st.tabs(_tab_names)
+        for _ti, _tf in enumerate(_tab_funcs):
+            with tabs[_ti]:
+                _tf()
 
 
 
