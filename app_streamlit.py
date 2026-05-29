@@ -29829,6 +29829,14 @@ def main():
     <style>
     [data-testid="stMainBlockContainer"] { padding-top: 0 !important; }
     [data-testid="stAppViewBlockContainer"] { padding-top: 0 !important; }
+    /* Nav radio: hide circles, white text, lighter bg */
+    [data-testid="stRadio"] [role="radiogroup"] label > div:first-child { display: none !important; }
+    [data-testid="stRadio"] [role="radiogroup"] label p { color: #ffffff !important; }
+    [data-testid="stRadio"] [role="radiogroup"] { background: #1a2332 !important; padding: 6px 0.5rem !important; border-bottom: 2px solid #3b82f6 !important; }
+    /* Reset sub-page radios inside container */
+    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] label > div:first-child { display: flex !important; }
+    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] label p { color: inherit !important; }
+    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] { background: transparent !important; padding: 0 !important; border-bottom: none !important; }
     </style>
     """, unsafe_allow_html=True)
 
