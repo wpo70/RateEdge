@@ -29825,69 +29825,12 @@ def main():
     if _tab_override and _tab_override in _tab_names:
         st.session_state["_main_nav"] = _tab_override
 
-    # Kill outer page scroll, push menu to top
-    st.markdown("""
-    <style>
-    [data-testid="stMainBlockContainer"] { padding-top: 0 !important; }
-    [data-testid="stAppViewBlockContainer"] { padding-top: 0 !important; }
-    /* Nav radio: hide circles, white text, lighter bg */
-    [data-testid="stRadio"] [role="radiogroup"] label > div:first-child { display: none !important; }
-    [data-testid="stRadio"] [role="radiogroup"] label p { color: #ffffff !important; }
-    [data-testid="stRadio"] [role="radiogroup"] { background: #1a2332 !important; padding: 6px 0.5rem !important; border-bottom: 2px solid #3b82f6 !important; }
-    /* Reset sub-page radios inside container */
-    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] label > div:first-child { display: flex !important; }
-    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] label p { color: inherit !important; }
-    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] { background: transparent !important; padding: 0 !important; border-bottom: none !important; }
-    </style>
-    """, unsafe_allow_html=True)
-
     _active = st.radio("Navigation", _tab_names, horizontal=True, key="_main_nav",
                         label_visibility="collapsed")
     _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
 
-    with st.container(height=2000, border=False):
+    with st.container(height=1200, border=False):
         _tab_funcs[_active_idx]()
-
-    # JS: kill outer scroll + cap container to viewport
-    import streamlit.components.v1 as _comp
-    _comp.html("""
-    <script>
-    (function(){
-        try {
-            var root = window.parent.document;
-            // Kill outer scroll
-            var els = root.querySelectorAll('section.main, [data-testid="stMain"], [data-testid="stAppViewContainer"]');
-            els.forEach(function(el){ el.style.overflow = 'hidden'; });
-            // Cap container to viewport
-            var wrappers = root.querySelectorAll('[data-testid="stVerticalBlockBorderWrapper"]');
-            wrappers.forEach(function(w){
-                w.style.height = 'calc(100vh - 50px)';
-                w.style.maxHeight = 'calc(100vh - 50px)';
-                w.style.border = 'none';
-            });
-            // Style main nav radio (first stRadio on page, outside container)
-            var allRadios = root.querySelectorAll('[data-testid="stRadio"]');
-            if (allRadios.length > 0) {
-                var navRadio = allRadios[0];
-                var rg = navRadio.querySelector('[role="radiogroup"]');
-                if (rg) {
-                    rg.style.background = '#1a2332';
-                    rg.style.padding = '6px 0.5rem';
-                    rg.style.borderBottom = '2px solid #3b82f6';
-                    rg.style.borderRadius = '0';
-                }
-                var labels = navRadio.querySelectorAll('[role="radiogroup"] label');
-                labels.forEach(function(lbl){
-                    var circle = lbl.querySelector('div:first-child');
-                    if (circle) circle.style.display = 'none';
-                    var p = lbl.querySelector('p');
-                    if (p) p.style.color = '#ffffff';
-                });
-            }
-        } catch(e) {}
-    })();
-    </script>
-    """, height=0)
 
 
 
