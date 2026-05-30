@@ -29859,16 +29859,6 @@ def main():
             if (tries > 50) { clearInterval(poll); return; }
             try {
                 var root = window.parent.document;
-                // Kill outer scroll
-                var els = root.querySelectorAll('section.main, [data-testid="stMain"], [data-testid="stAppViewContainer"]');
-                els.forEach(function(el){ el.style.overflow = 'hidden'; });
-                // Cap container to viewport
-                var wrappers = root.querySelectorAll('[data-testid="stVerticalBlockBorderWrapper"]');
-                wrappers.forEach(function(w){
-                    w.style.height = 'calc(100vh - 50px)';
-                    w.style.maxHeight = 'calc(100vh - 50px)';
-                    w.style.border = 'none';
-                });
                 var navRadio = root.querySelector('[data-testid="stRadio"]');
                 if (!navRadio) return;
                 var labels = navRadio.querySelectorAll('[role="radiogroup"] label');
