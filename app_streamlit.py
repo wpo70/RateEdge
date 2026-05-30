@@ -6586,9 +6586,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
         st.session_state.pop("sdr_ccy", None)  # force AUD default on next render
         st.session_state["sdr_filters_loaded"] = True
 
-    # Always override dates — use Sydney TZ yesterday/today regardless of saved state
-    st.session_state["sdr_date_to"]   = datetime.now(SYDNEY_TZ).date()
-    st.session_state["sdr_date_from"] = datetime.now(SYDNEY_TZ).date() - __import__('datetime').timedelta(days=1)
+    # Set default dates only if not already in session_state (user hasn't changed them)
+    if "sdr_date_to" not in st.session_state:
+        st.session_state["sdr_date_to"]   = datetime.now(SYDNEY_TZ).date()
+    if "sdr_date_from" not in st.session_state:
+        st.session_state["sdr_date_from"] = datetime.now(SYDNEY_TZ).date() - __import__('datetime').timedelta(days=1)
 
     # ── Check table exists ────────────────────────────────────────────────────
     def table_exists(conn) -> bool:
