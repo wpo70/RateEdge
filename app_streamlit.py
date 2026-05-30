@@ -29827,6 +29827,14 @@ def main():
 
     _active = st.radio("Navigation", _tab_names, horizontal=True, key="_main_nav",
                         label_visibility="collapsed")
+
+    # Hide radio circles on nav only
+    st.markdown("""
+    <style>
+    [data-testid="stRadio"] [role="radiogroup"] label > div:first-child { display: none !important; }
+    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] label > div:first-child { display: flex !important; }
+    </style>
+    """, unsafe_allow_html=True)
     _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
 
     with st.container(height=1200, border=False):
