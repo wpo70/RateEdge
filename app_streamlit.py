@@ -29859,6 +29859,13 @@ def main():
             if (tries > 50) { clearInterval(poll); return; }
             try {
                 var root = window.parent.document;
+                // Cap FIRST container wrapper to viewport
+                var wrappers = root.querySelectorAll('[data-testid="stVerticalBlockBorderWrapper"]');
+                if (wrappers.length > 0) {
+                    wrappers[0].style.height = 'calc(100vh - 50px)';
+                    wrappers[0].style.maxHeight = 'calc(100vh - 50px)';
+                    wrappers[0].style.border = 'none';
+                }
                 var navRadio = root.querySelector('[data-testid="stRadio"]');
                 if (!navRadio) return;
                 var labels = navRadio.querySelectorAll('[role="radiogroup"] label');
