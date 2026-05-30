@@ -7326,11 +7326,18 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _s_r = round(float(_r.get("strike_pct") or 0), 2)
                                     _p_prem = float(_p.get("premium_amount") or 0)
                                     _r_prem = float(_r.get("premium_amount") or 0)
-                                    # Brokers (all except DWSF) report full straddle prem on each leg
+
+                                    # Classify first — dedup only applies to same-strike (straddles)
+                                    _same_strike = abs(_s_p - _s_r) < 0.01
+                                    _has_swp = bool(_t_p and _t_p not in ("—","NA","None",""))
+
+                                    # Brokers report full straddle prem on EACH leg — but only dedup same-strike
+                                    # Strangles/RRs have genuinely different prems; deduping corrupts them
                                     _PREM_DEDUP_MICS = {"BGCD","TPSE","TSEF","TWSF","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
                                     _broker_mic = str(_p.get("platform_identifier", ""))
-                                    _prem_deduped = _broker_mic in _PREM_DEDUP_MICS and _p_prem > 0 and _r_prem > 0
+                                    _prem_deduped = _same_strike and _broker_mic in _PREM_DEDUP_MICS and _p_prem > 0 and _r_prem > 0
                                     if _prem_deduped:
+                                        # Both legs report full combined prem — take max, split 50/50
                                         _comb_prem = max(_p_prem, _r_prem)
                                         _p_prem = _comb_prem / 2.0
                                         _r_prem = _comb_prem / 2.0
@@ -7340,19 +7347,22 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _comb_bp = round(_comb_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
                                     _p_bp = round(_p_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
                                     _r_bp = round(_r_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
+                                    # Net leg prem — near zero suggests R/R (one leg sold)
+                                    _net_prem = abs(_p_prem - _r_prem)
+                                    _net_bp = round(_net_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
                                     _local_time = _to_local(_time_p)
 
-                                    # Classify: same strike = straddle, diff strike with swp_tenor = strangle, no swp_tenor = collar
-                                    _same_strike = abs(_s_p - _s_r) < 0.01
-                                    _has_swp = bool(_t_p and _t_p not in ("—","NA","None",""))
                                     if _same_strike and _has_swp:
                                         _ptype = "🔵 Straddle"
                                         _strike_disp = f"{_s_p:.5f}%"
                                         _prem_disp = f"{_fmt_premium(_comb_prem)}" if _comb_prem else "—"
                                     elif not _same_strike and _has_swp:
-                                        _ptype = "🟠 Strangle"
+                                        # RR flag: net prem < 30% of total → one leg likely sold
+                                        _rr_flag = " ⚠️ poss. R/R" if _comb_prem > 0 and (_net_prem / _comb_prem) < 0.30 else ""
+                                        _ptype = f"🟠 Strangle{_rr_flag}"
                                         _strike_disp = f"P:{_s_p:.5f}% / R:{_s_r:.5f}%"
-                                        _prem_disp = f"P:{_fmt_premium(_p_prem)} + R:{_fmt_premium(_r_prem)} = {_fmt_premium(_comb_prem)}" if _comb_prem else "—"
+                                        _net_str = f"  net {_net_bp:.1f}bp" if _net_bp else ""
+                                        _prem_disp = f"P:{_fmt_premium(_p_prem)} / R:{_fmt_premium(_r_prem)} = {_fmt_premium(_comb_prem)}{_net_str}" if _comb_prem else "—"
                                     elif _same_strike and not _has_swp:
                                         _ptype = "🟤 C/F Straddle"
                                         _strike_disp = f"{_s_p:.5f}%"
@@ -7406,6 +7416,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         "Nett Prem BP": f"{_comb_bp:.2f}" if _comb_bp else "—",
                                         "P Prem BP": f"{_p_bp:.2f}" if _p_bp else "—",
                                         "R Prem BP": f"{_r_bp:.2f}" if _r_bp else "—",
+                                        "Net Leg BP": f"{_net_bp:.2f}" if _net_bp else "—",
                                         "Platform": PLATFORM_NAMES.get(str(_p.get("platform_identifier","")), str(_p.get("platform_identifier",""))),
                                         "_notional_num": float(_comb_not or 0),  # v1105o: numeric for broker % breakdown
                                     })
