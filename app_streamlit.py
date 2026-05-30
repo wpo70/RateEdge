@@ -29853,25 +29853,22 @@ def main():
     _comp.html("""
     <script>
     (function(){
-        var tries = 0;
-        var poll = setInterval(function(){
-            tries++;
-            if (tries > 50) { clearInterval(poll); return; }
-            try {
-                var root = window.parent.document;
-                // Cap FIRST container wrapper to viewport
-                var wrappers = root.querySelectorAll('[data-testid="stVerticalBlockBorderWrapper"]');
-                if (wrappers.length > 0) {
-                    wrappers[0].style.height = 'calc(100vh - 50px)';
-                    wrappers[0].style.maxHeight = 'calc(100vh - 50px)';
-                    wrappers[0].style.border = 'none';
-                }
-                var navRadio = root.querySelector('[data-testid="stRadio"]');
-                if (!navRadio) return;
-                var labels = navRadio.querySelectorAll('[role="radiogroup"] label');
-                if (labels.length === 0) return;
-                clearInterval(poll);
-                // Background
+        try {
+            var root = window.parent.document;
+            // Kill outer scroll
+            var els = root.querySelectorAll('section.main, [data-testid="stMain"], [data-testid="stAppViewContainer"]');
+            els.forEach(function(el){ el.style.overflow = 'hidden'; });
+            // Cap container to viewport
+            var wrappers = root.querySelectorAll('[data-testid="stVerticalBlockBorderWrapper"]');
+            wrappers.forEach(function(w){
+                w.style.height = 'calc(100vh - 50px)';
+                w.style.maxHeight = 'calc(100vh - 50px)';
+                w.style.border = 'none';
+            });
+            // Style main nav radio (first stRadio on page, outside container)
+            var allRadios = root.querySelectorAll('[data-testid="stRadio"]');
+            if (allRadios.length > 0) {
+                var navRadio = allRadios[0];
                 var rg = navRadio.querySelector('[role="radiogroup"]');
                 if (rg) {
                     rg.style.background = '#1a2332';
@@ -29879,15 +29876,15 @@ def main():
                     rg.style.borderBottom = '2px solid #3b82f6';
                     rg.style.borderRadius = '0';
                 }
-                // Hide circles + white text
+                var labels = navRadio.querySelectorAll('[role="radiogroup"] label');
                 labels.forEach(function(lbl){
                     var circle = lbl.querySelector('div:first-child');
                     if (circle) circle.style.display = 'none';
                     var p = lbl.querySelector('p');
                     if (p) p.style.color = '#ffffff';
                 });
-            } catch(e) {}
-        }, 200);
+            }
+        } catch(e) {}
     })();
     </script>
     """, height=0)
