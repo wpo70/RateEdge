@@ -6580,14 +6580,15 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         st.session_state[_k] = _v
         except Exception:
             pass
-        # Always force these defaults — never restore stale saved values
-        st.session_state["sdr_date_to"]          = datetime.now(SYDNEY_TZ).date()
-        st.session_state["sdr_date_from"]        = datetime.now(SYDNEY_TZ).date().replace(day=1)
         st.session_state["sdr_action"]           = ["NEWT", "MODI"]
         st.session_state["sdr_refresh_interval"] = "30s"
         st.session_state.pop("sdr_alert_ccy", None)
         st.session_state.pop("sdr_ccy", None)  # force AUD default on next render
         st.session_state["sdr_filters_loaded"] = True
+
+    # Always override dates — use Sydney TZ yesterday/today regardless of saved state
+    st.session_state["sdr_date_to"]   = datetime.now(SYDNEY_TZ).date()
+    st.session_state["sdr_date_from"] = datetime.now(SYDNEY_TZ).date() - __import__('datetime').timedelta(days=1)
 
     # ── Check table exists ────────────────────────────────────────────────────
     def table_exists(conn) -> bool:
@@ -6649,7 +6650,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
         with col1:
             st.markdown("**Date range**")
-            _sdr_yesterday = date.today() - __import__('datetime').timedelta(days=1)
+            _sdr_yesterday = datetime.now(SYDNEY_TZ).date() - __import__('datetime').timedelta(days=1)
             date_from = st.date_input(
                 "From", value=_sdr_yesterday,
                 key="sdr_date_from", label_visibility="collapsed",
@@ -29829,6 +29830,14 @@ def main():
     <style>
     [data-testid="stMainBlockContainer"] { padding-top: 0 !important; }
     [data-testid="stAppViewBlockContainer"] { padding-top: 0 !important; }
+    /* Nav radio: hide circles, white text, lighter bg */
+    [data-testid="stRadio"] [role="radiogroup"] label > div:first-child { display: none !important; }
+    [data-testid="stRadio"] [role="radiogroup"] label p { color: #ffffff !important; }
+    [data-testid="stRadio"] [role="radiogroup"] { background: #1a2332 !important; padding: 6px 0.5rem !important; border-bottom: 2px solid #3b82f6 !important; }
+    /* Reset sub-page radios inside container */
+    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] label > div:first-child { display: flex !important; }
+    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] label p { color: inherit !important; }
+    [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stRadio"] [role="radiogroup"] { background: transparent !important; padding: 0 !important; border-bottom: none !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -29844,23 +29853,28 @@ def main():
     _comp.html("""
     <script>
     (function(){
-        try {
-            var root = window.parent.document;
-            // Kill outer scroll
-            var els = root.querySelectorAll('section.main, [data-testid="stMain"], [data-testid="stAppViewContainer"]');
-            els.forEach(function(el){ el.style.overflow = 'hidden'; });
-            // Cap container to viewport
-            var wrappers = root.querySelectorAll('[data-testid="stVerticalBlockBorderWrapper"]');
-            wrappers.forEach(function(w){
-                w.style.height = 'calc(100vh - 50px)';
-                w.style.maxHeight = 'calc(100vh - 50px)';
-                w.style.border = 'none';
-            });
-            // Style main nav radio (first stRadio on page, outside container)
-            var allRadios = root.querySelectorAll('[data-testid="stRadio"]');
-            if (allRadios.length > 0) {
-                var navRadio = allRadios[0];
-                // Lighter background
+        var tries = 0;
+        var poll = setInterval(function(){
+            tries++;
+            if (tries > 50) { clearInterval(poll); return; }
+            try {
+                var root = window.parent.document;
+                // Kill outer scroll
+                var els = root.querySelectorAll('section.main, [data-testid="stMain"], [data-testid="stAppViewContainer"]');
+                els.forEach(function(el){ el.style.overflow = 'hidden'; });
+                // Cap container to viewport
+                var wrappers = root.querySelectorAll('[data-testid="stVerticalBlockBorderWrapper"]');
+                wrappers.forEach(function(w){
+                    w.style.height = 'calc(100vh - 50px)';
+                    w.style.maxHeight = 'calc(100vh - 50px)';
+                    w.style.border = 'none';
+                });
+                var navRadio = root.querySelector('[data-testid="stRadio"]');
+                if (!navRadio) return;
+                var labels = navRadio.querySelectorAll('[role="radiogroup"] label');
+                if (labels.length === 0) return;
+                clearInterval(poll);
+                // Background
                 var rg = navRadio.querySelector('[role="radiogroup"]');
                 if (rg) {
                     rg.style.background = '#1a2332';
@@ -29868,18 +29882,15 @@ def main():
                     rg.style.borderBottom = '2px solid #3b82f6';
                     rg.style.borderRadius = '0';
                 }
-                // Hide circles + white text on main nav only
-                var labels = navRadio.querySelectorAll('[role="radiogroup"] label');
+                // Hide circles + white text
                 labels.forEach(function(lbl){
-                    // Hide circle (first child div)
                     var circle = lbl.querySelector('div:first-child');
                     if (circle) circle.style.display = 'none';
-                    // White text
                     var p = lbl.querySelector('p');
                     if (p) p.style.color = '#ffffff';
                 });
-            }
-        } catch(e) {}
+            } catch(e) {}
+        }, 200);
     })();
     </script>
     """, height=0)
