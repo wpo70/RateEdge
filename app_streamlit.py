@@ -8831,10 +8831,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             _vc4 = get_matrix_value(_em_atm4, _ec4, label_to_years("10Y"))
                                             if _vc4: _ali4.append(f"  ATM vol {_ec4}x10Y: {_vc4:.1f}bp")
                                     except Exception: pass
-                                _sys4 = "You are a senior USD rates options strategist."
-                                _usr4 = ("In 3-4 sentences max, summarise USD swaption expiry positioning "
-                                         "from this SDR data. Key strikes vs forwards, dominant direction, "
-                                         "largest bucket. Terse rates desk style.\n\n"
+                                _sys4 = ("You are a senior USD rates options desk head. "
+                                         "Terse, analytical, no filler. Reference specific strikes, tenors, notionals.")
+                                _usr4 = ("Two short paragraphs, no intro sentence, start with the data. "
+                                         "Para 1: where is expiring open interest concentrated by strike and tenor, "
+                                         "how does it sit vs current forwards, and what does the payer/receiver skew "
+                                         "tell you about positioning into expiry. "
+                                         "Para 2: vol surface context relevant for this expiry window, "
+                                         "and what the desk should watch.\n\n"
                                          + "\n".join(_ali4))
                                 try:
                                     import urllib.request as _ur4, json as _js4
@@ -8843,7 +8847,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     except Exception: pass
                                     if not _ak4: _ak4 = os.environ.get("ANTHROPIC_API_KEY")
                                     if _ak4:
-                                        _bd4 = _js4.dumps({"model":"claude-sonnet-4-6","max_tokens":200,"system":_sys4,"messages":[{"role":"user","content":_usr4}]}).encode()
+                                        _bd4 = _js4.dumps({"model":"claude-sonnet-4-6","max_tokens":350,"system":_sys4,"messages":[{"role":"user","content":_usr4}]}).encode()
                                         _rq4 = _ur4.Request("https://api.anthropic.com/v1/messages",data=_bd4,method="POST",headers={"x-api-key":_ak4,"anthropic-version":"2023-06-01","content-type":"application/json"})
                                         with st.spinner("Analysing..."):
                                             with _ur4.urlopen(_rq4, timeout=30) as _rp4: _rs4 = _js4.loads(_rp4.read().decode())
