@@ -8776,9 +8776,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _pivot_net = _pivot_net.reindex(sorted(_pivot_net.columns, key=_tnr_s), axis=1)
                                 _pivot_net = _pivot_net.reindex(
                                     sorted(_pivot_net.index, key=lambda x: -float(x.replace('%',''))), axis=0)
-                                # vmin=0: negatives and zero both map to white; positives show red intensity
+                                # RdYlGn: green=net payer, red=net receiver, white=zero
                                 _net_styled = _pivot_net.style.background_gradient(
-                                    cmap="Reds", axis=None, vmin=0
+                                    cmap="RdYlGn", axis=None
                                 ).format(lambda v: f"+{v:,.0f}" if v > 0 else (f"{v:,.0f}" if v < 0 else "0"))
                                 st.dataframe(_net_styled, use_container_width=True,
                                              height=min(500, 40 + len(_pivot_net) * 35))
