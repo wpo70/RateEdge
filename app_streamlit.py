@@ -9003,8 +9003,18 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _doc.build(_story)
                                 _pdf_bytes = _pdf_buf.getvalue()
                                 _fn3 = f"RateEdge_EM_{_eff_date.strftime('%d%b%Y') if _eff_date else 'report'}.pdf"
-                                st.download_button("Download PDF", data=_pdf_bytes, file_name=_fn3, mime="application/pdf", key="em_pdf_dl")
+                                # Stash bytes so the download button survives the rerun
+                                # (a nested download_button inside `if st.button` vanishes on
+                                # the click-run and the download never fires).
+                                st.session_state["_em_pdf_bytes"] = _pdf_bytes
+                                st.session_state["_em_pdf_fn"] = _fn3
                             except Exception as _pdfe: st.error(f"PDF error: {_pdfe}"); import traceback; st.code(traceback.format_exc())
+
+                        # Persistent download — rendered unconditionally from session_state
+                        if st.session_state.get("_em_pdf_bytes"):
+                            st.download_button("⬇ Download PDF", data=st.session_state["_em_pdf_bytes"],
+                                file_name=st.session_state.get("_em_pdf_fn", "RateEdge_EM.pdf"),
+                                mime="application/pdf", key="em_pdf_dl")
 
                         # ── Daily Expiry Breakdown ────────────────────────
                         st.markdown("#### Daily Expiry Breakdown")
@@ -9536,10 +9546,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _buf = _io_em.BytesIO()
                             _wb.save(_buf)
                             _buf.seek(0)
+                            st.session_state["_em_xl_bytes"] = _buf.getvalue()
+                            st.session_state["_em_xl_fn"] = f"RateEdge_EM_NearATM_{_em_mon.strftime('%d%b')}_{_em_fri.strftime('%d%b%Y')}.xlsx"
+
+                        if st.session_state.get("_em_xl_bytes"):
                             st.download_button(
                                 "⬇️ Save Excel",
-                                data=_buf.getvalue(),
-                                file_name=f"RateEdge_EM_NearATM_{_em_mon.strftime('%d%b')}_{_em_fri.strftime('%d%b%Y')}.xlsx",
+                                data=st.session_state["_em_xl_bytes"],
+                                file_name=st.session_state.get("_em_xl_fn", "RateEdge_EM_NearATM.xlsx"),
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                 key="em_xl_save"
                             )
@@ -9697,10 +9711,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                 _buf_sc = _io_sc.BytesIO()
                                                 _wb_sc.save(_buf_sc)
                                                 _buf_sc.seek(0)
+                                                st.session_state["_sc_xl_bytes"] = _buf_sc.getvalue()
+                                                st.session_state["_sc_xl_fn"] = f"RateEdge_Scenario_{_sc_tenor}_{_sc_date.strftime('%d%b%Y')}.xlsx"
+
+                                            if st.session_state.get("_sc_xl_bytes"):
                                                 st.download_button(
                                                     "⬇️ Save Scenario Excel",
-                                                    data=_buf_sc.getvalue(),
-                                                    file_name=f"RateEdge_Scenario_{_sc_tenor}_{_sc_date.strftime('%d%b%Y')}.xlsx",
+                                                    data=st.session_state["_sc_xl_bytes"],
+                                                    file_name=st.session_state.get("_sc_xl_fn", "RateEdge_Scenario.xlsx"),
                                                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                                     key="sc_xl_save"
                                                 )
@@ -10175,10 +10193,18 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _buf_sg = _io_sg.BytesIO()
                                     _wb_sg.save(_buf_sg)
                                     _buf_sg.seek(0)
+                                    # Stash bytes so the download button persists across the
+                                    # rerun the download click triggers (nested download_button
+                                    # inside `if st.button` disappears before the download fires).
+                                    st.session_state["_sg_xl_bytes"] = _buf_sg.getvalue()
+                                    st.session_state["_sg_xl_fn"] = f"RateEdge_Suggestions_{_sg_date.strftime('%d%b%Y')}.xlsx"
+
+                                # Persistent download — rendered unconditionally from session_state
+                                if st.session_state.get("_sg_xl_bytes"):
                                     st.download_button(
                                         "⬇️ Save Excel",
-                                        data=_buf_sg.getvalue(),
-                                        file_name=f"RateEdge_Suggestions_{_sg_date.strftime('%d%b%Y')}.xlsx",
+                                        data=st.session_state["_sg_xl_bytes"],
+                                        file_name=st.session_state.get("_sg_xl_fn", "RateEdge_Suggestions.xlsx"),
                                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                         key="sg_xl_save"
                                     )
