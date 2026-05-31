@@ -8756,40 +8756,96 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _ms = _re3.match(r"(\d+)Y", str(t))
                                     return int(_ms.group(1)) if _ms else 999
 
-                                # Heatmap 1: Net direction — Payer (+) red, Receiver (−) shown as negative
-                                st.markdown("**Net Directional Exposure ($M) — Payer (+) / Receiver (−)**")
-                                _pivot_net = _hem_base.pivot_table(
+                                # Payer (Reds) | Receiver (Blues) side by side
+                                _pivot_payer = _hem_base[_hem_base["direction"]=="Payer"].pivot_table(
                                     index="strike_label", columns="swp_tenor",
-                                    values="signed_m", aggfunc="sum", fill_value=0
-                                )
-                                _pivot_net = _pivot_net.reindex(sorted(_pivot_net.columns, key=_tnr_s), axis=1)
-                                _pivot_net = _pivot_net.reindex(
-                                    sorted(_pivot_net.index, key=lambda x: -float(x.replace('%',''))), axis=0)
-                                # RdYlGn: green=net payer, red=net receiver, white=zero
-                                _net_styled = _pivot_net.style.background_gradient(
-                                    cmap="RdYlGn", axis=None
-                                ).format(lambda v: f"+{v:,.0f}" if v > 0 else (f"{v:,.0f}" if v < 0 else "0"))
-                                st.dataframe(_net_styled, use_container_width=True,
-                                             height=min(500, 40 + len(_pivot_net) * 35))
-                                st.caption("Reds intensity = magnitude | + = net payer | − = net receiver | 25bp buckets")
-
-                                # Heatmap 2: Total concentration
-                                st.markdown("**Strike Concentration ($M total notional)**")
+                                    values="notional_m", aggfunc="sum", fill_value=0)
+                                _pivot_recvr = _hem_base[_hem_base["direction"]=="Receiver"].pivot_table(
+                                    index="strike_label", columns="swp_tenor",
+                                    values="notional_m", aggfunc="sum", fill_value=0)
+                                _all_stk = sorted(
+                                    set(list(_pivot_payer.index)+list(_pivot_recvr.index)),
+                                    key=lambda x: -float(x.replace("%","")))
+                                _all_ten = sorted(
+                                    set(list(_pivot_payer.columns)+list(_pivot_recvr.columns)),
+                                    key=_tnr_s)
+                                _pivot_payer = _pivot_payer.reindex(index=_all_stk, columns=_all_ten, fill_value=0)
+                                _pivot_recvr = _pivot_recvr.reindex(index=_all_stk, columns=_all_ten, fill_value=0)
+                                _hm_h = min(500, 40 + len(_all_stk) * 35)
+                                _hm_p_col, _hm_r_col = st.columns(2)
+                                with _hm_p_col:
+                                    st.markdown("**Payer Exposure ($M)**")
+                                    st.dataframe(
+                                        _pivot_payer.style.background_gradient(cmap="Reds", axis=None).format("{:,.0f}"),
+                                        use_container_width=True, height=_hm_h)
+                                with _hm_r_col:
+                                    st.markdown("**Receiver Exposure ($M)**")
+                                    st.dataframe(
+                                        _pivot_recvr.style.background_gradient(cmap="Blues", axis=None).format("{:,.0f}"),
+                                        use_container_width=True, height=_hm_h)
+                                st.markdown("**Strike Concentration ($M total)**")
                                 _pivot_conc = _hem_base.pivot_table(
                                     index="strike_label", columns="swp_tenor",
-                                    values="notional_m", aggfunc="sum", fill_value=0
-                                )
-                                _pivot_conc = _pivot_conc.reindex(sorted(_pivot_conc.columns, key=_tnr_s), axis=1)
-                                _pivot_conc = _pivot_conc.reindex(
-                                    sorted(_pivot_conc.index, key=lambda x: -float(x.replace('%',''))), axis=0)
-                                _conc_styled = _pivot_conc.style.background_gradient(
-                                    cmap="Reds", axis=None).format("{:,.0f}")
-                                st.dataframe(_conc_styled, use_container_width=True,
-                                             height=min(500, 40 + len(_pivot_conc) * 35))
-                                st.caption(f"Rows = 25bp strike buckets · Columns = swap tenor · "
-                                           f"{len(_hem_base)} trades ±50bp from ATM | "
-                                           f"{_eff_date.strftime('%d-%b') if _eff_date else '?'} "
-                                           f"to {_hem_cutoff.strftime('%d-%b') if _hem_cutoff else '?'}")
+                                    values="notional_m", aggfunc="sum", fill_value=0)
+                                _pivot_conc = _pivot_conc.reindex(index=_all_stk, columns=_all_ten, fill_value=0)
+                                st.dataframe(
+                                    _pivot_conc.style.background_gradient(cmap="Reds", axis=None).format("{:,.0f}"),
+                                    use_container_width=True, height=_hm_h)
+                                _hem_ds = (_eff_date.strftime("%d-%b") if _eff_date else "?")
+                                _hem_de = (_hem_cutoff.strftime("%d-%b") if _hem_cutoff else "?")
+                                st.caption(f"25bp buckets x tenor | {len(_hem_base)} trades +-50bp ATM | {_hem_ds} to {_hem_de}")
+                                st.markdown("---")
+                                st.markdown("**AI Positioning Commentary**")
+                                if st.button("Generate Commentary", key="em_ai_btn", type="secondary"):
+                                    _ai_ls = [
+                                        f"Window: {_hem_ds} to {_hem_de}",
+                                        f"Trades: {len(_hem_base)}",
+                                        f"Total payer: ${_pivot_payer.values.sum():,.0f}M",
+                                        f"Total receiver: ${_pivot_recvr.values.sum():,.0f}M",
+                                    ]
+                                    for _lb2, _pv2 in [("Payer",_pivot_payer),("Receiver",_pivot_recvr)]:
+                                        _fl2 = _pv2.stack().sort_values(ascending=False)
+                                        for (_s2,_t2),_v2 in _fl2[_fl2>0].head(3).items():
+                                            _ai_ls.append(f"  Top {_lb2}: {_s2} x {_t2} = ${_v2:,.0f}M")
+                                    _ai_ls.append("Forwards:")
+                                    for _tf,_ff in sorted(_em_fwd.items(), key=lambda x: label_to_years(x[0])):
+                                        _ai_ls.append(f"  {_tf}: {_ff:.4f}%")
+                                    _sys = "You are a senior USD rates options strategist."
+                                    _usr = (
+                                        "Write a concise 1-2 paragraph start-of-week positioning commentary "
+                                        "based on DTCC SDR expiry data. Cover strike concentration vs forwards, "
+                                        "payer/receiver skew, key buckets, and expiry risk. "
+                                        "Be specific. Professional rates desk voice.\n\n"
+                                        + "\n".join(_ai_ls)
+                                    )
+                                    try:
+                                        import urllib.request as _ur_e, json as _js_e
+                                        _ak = None
+                                        try: _ak = st.secrets.get("ANTHROPIC_API_KEY")
+                                        except Exception: pass
+                                        if not _ak: _ak = os.environ.get("ANTHROPIC_API_KEY")
+                                        if _ak:
+                                            _bd = _js_e.dumps({"model":"claude-sonnet-4-6","max_tokens":600,
+                                                "system":_sys,"messages":[{"role":"user","content":_usr}]}).encode()
+                                            _rq = _ur_e.Request("https://api.anthropic.com/v1/messages",
+                                                data=_bd, method="POST",
+                                                headers={"x-api-key":_ak,"anthropic-version":"2023-06-01",
+                                                         "content-type":"application/json"})
+                                            with st.spinner("Analysing..."):
+                                                with _ur_e.urlopen(_rq, timeout=30) as _rp:
+                                                    _rs = _js_e.loads(_rp.read().decode())
+                                            _tx = " ".join(b.get("text","") for b in _rs.get("content",[]) if b.get("type")=="text").strip()
+                                            if _tx: st.session_state["_em_comm"] = _tx
+                                            else: st.warning("Empty response.")
+                                        else: st.error("No ANTHROPIC_API_KEY.")
+                                    except Exception as _ae: st.error(f"API error: {_ae}")
+                                _ec = st.session_state.get("_em_comm")
+                                if _ec:
+                                    st.markdown(_ec)
+                                    if st.button("Clear", key="em_comm_clear"):
+                                        st.session_state.pop("_em_comm", None)
+                                        st.rerun()
+
                             except Exception as _hem_err:
                                 st.warning(f"Heatmap render error: {_hem_err}")
 
