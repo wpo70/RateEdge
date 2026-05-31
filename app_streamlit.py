@@ -12172,11 +12172,12 @@ def curves_tab():
                 _anc = list(_adf_disp.columns)
                 for _c in _anc:
                     _adf_disp[_c] = pd.to_numeric(_adf_disp[_c], errors="coerce")
+                _atm_h = min(820, 40 + len(_adf_disp) * 35)
                 if show_atm_hm:
                     st.dataframe(_adf_disp.style.format("{:.2f}", na_rep="—", subset=_anc).background_gradient("RdYlGn_r", axis=None, subset=_anc),
-                                 use_container_width=True, height=820)
+                                 use_container_width=True, height=_atm_h)
                 else:
-                    st.dataframe(_adf_disp.style.format("{:.2f}", na_rep="—", subset=_anc), use_container_width=True, height=820)
+                    st.dataframe(_adf_disp.style.format("{:.2f}", na_rep="—", subset=_anc), use_container_width=True, height=_atm_h)
             else:
                 st.info("Click **▶ Generate ATM Matrix**")
 
