@@ -29393,30 +29393,22 @@ def main():
         
         st.markdown("###  Settings")
         
-        # ── SDR Fetcher status — heartbeat = cron health, not DTCC trade activity ──
+        # ── SDR Fetcher status — cron/fetcher health only, no trade-time references ──
         try:
             _sb_hb_last, _ = _sdr_heartbeat_cached()
-            _sdr_last, _sdr_cnt, _sdr_total = _sdr_status_cached()
             if _sb_hb_last:
                 _sb_hb_ts = pd.Timestamp(_sb_hb_last)
                 if _sb_hb_ts.tzinfo is None:
                     _sb_hb_ts = _sb_hb_ts.tz_localize('UTC')
                 _sb_hb_age = (pd.Timestamp.now(tz='UTC') - _sb_hb_ts).total_seconds() / 60
                 if _sb_hb_age < 10:
-                    st.success(f"🟢 SDR running — {_sdr_cnt:,} trades/24h")
+                    st.success("🟢 SDR connected")
                 elif _sb_hb_age < 30:
-                    st.warning(f"🟡 SDR delayed — last poll {_sb_hb_age:.0f}m ago")
+                    st.warning(f"🟡 SDR delayed ({_sb_hb_age:.0f}m)")
                 else:
-                    st.error(f"🔴 SDR stopped — last poll {_sb_hb_age:.0f}m ago")
-            elif _sdr_last:
-                # Heartbeat table not yet created (fetcher pre-v3) — fall back gracefully
-                _sdr_ts = pd.Timestamp(_sdr_last)
-                if _sdr_ts.tzinfo is None:
-                    _sdr_ts = _sdr_ts.tz_localize('UTC')
-                _sdr_age = (pd.Timestamp.now(tz='UTC') - _sdr_ts).total_seconds() / 3600
-                st.caption(f"🟡 SDR — last trade {_sdr_age:.1f}h ago (upgrade fetcher for live status)")
-            elif _sdr_total and _sdr_total > 0:
-                st.error("🔴 SDR stopped")
+                    st.error(f"🔴 SDR disconnected ({_sb_hb_age:.0f}m)")
+            else:
+                st.warning("🟡 SDR — awaiting heartbeat")
         except Exception:
             pass
         
