@@ -6433,6 +6433,7 @@ def publish_vol(ccy: str):
 # ============================
 
 
+@st.fragment
 def sdr_live_tab():
     """DTCC SDR Live — IRO Blotter with alert notifications."""
 
@@ -7816,7 +7817,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     st.session_state["tab_show_swaptions"] = True
                                     st.session_state["_active_tab_override"] = "📊 Swaptions"
                                     st.toast(f"Loading {_exp_raw}×{_ten_raw} {_str_key} into pricer…", icon="📊")
-                                    st.rerun()
+                                    st.rerun(scope="app")
 
                     # end Price This expander
                     st.dataframe(_all_df_display, use_container_width=True, hide_index=True,
@@ -8244,7 +8245,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     "fit_rows": _fit_rows, "show_dr": _show_dr, "show_dn": _show_dn,
                                                     "n_buckets": len(_fit_results), "blend_w": _blend_w,
                                                 }
-                                                st.rerun()  # rerun so preview renders outside button block
+                                                st.rerun(scope="app")  # rerun so preview renders outside button block
 
                                         # Preview + Apply — rendered outside button block so it persists across reruns
                                         if st.session_state.get("_sdr_sabr_blended"):
@@ -8867,7 +8868,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 st.text_area("", value=st.session_state["_em_copy"], height=100, key="em_copy_area", label_visibility="collapsed")
                             if st.button("Clear", key="em_comm_clear"):
                                 st.session_state.pop("_em_comm", None)
-                                st.rerun()
+                                st.rerun(scope="app")
 
                         st.markdown("---")
 
@@ -10241,7 +10242,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
         if _now_rf - _last_rf >= _interval:
             st.session_state["_sdr_last_refresh"] = _now_rf
             _load_sdr_data_cached.clear()
-            st.rerun()
+            st.rerun(scope="app")
         else:
             _remaining = max(0, int(_interval - (_now_rf - _last_rf)))
             st.caption(f"🔄 Next refresh in ~{_remaining}s")
