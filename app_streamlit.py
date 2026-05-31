@@ -1098,6 +1098,7 @@ def _sdr_status_cached():
     return None, 0, 0
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def _sdr_heartbeat_cached():
     """Read fetcher heartbeat — reflects cron/fetcher health, not DTCC trade activity."""
     try:
