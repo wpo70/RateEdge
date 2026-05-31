@@ -8776,17 +8776,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _pivot_net = _pivot_net.reindex(sorted(_pivot_net.columns, key=_tnr_s), axis=1)
                                 _pivot_net = _pivot_net.reindex(
                                     sorted(_pivot_net.index, key=lambda x: -float(x.replace('%',''))), axis=0)
-                                # Reds on absolute value — intensity shows magnitude regardless of sign
-                                _pivot_net_abs = _pivot_net.abs()
-                                _net_styled = _pivot_net_abs.style.background_gradient(
-                                    cmap="Reds", axis=None).format(
-                                    lambda v: f"+{v:,.0f}" if _pivot_net.loc[_pivot_net_abs.index[_pivot_net_abs.values.tolist().index([row for row in _pivot_net_abs.values.tolist() if v in row][0])], _pivot_net_abs.columns[_pivot_net_abs.values.tolist()[0].index(v)]] >= 0 else f"-{v:,.0f}"
-                                    if v != 0 else "0"
-                                )
-                                # Simpler: just format the original pivot with Reds on abs
+                                # vmin=0: negatives and zero both map to white; positives show red intensity
                                 _net_styled = _pivot_net.style.background_gradient(
-                                    cmap="Reds", gmap=_pivot_net.abs(), axis=None
-                                ).format("{:+,.0f}")
+                                    cmap="Reds", axis=None, vmin=0
+                                ).format(lambda v: f"+{v:,.0f}" if v > 0 else (f"{v:,.0f}" if v < 0 else "0"))
                                 st.dataframe(_net_styled, use_container_width=True,
                                              height=min(500, 40 + len(_pivot_net) * 35))
                                 st.caption("Reds intensity = magnitude | + = net payer | − = net receiver | 25bp buckets")
