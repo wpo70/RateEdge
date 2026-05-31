@@ -8221,19 +8221,15 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     st.dataframe(pd.DataFrame(_bl_prev["fit_rows"]), use_container_width=True, hide_index=True)
                                 _mc1, _mc2 = st.columns(2)
                                 with _mc1:
+                                    st.caption("Δρ = change in rho — the skew parameter. Negative rho = payer skew (vol higher for payers than receivers). More negative = steeper payer skew.")
                                     st.markdown("**Δρ (blended)**")
                                     if _bl_prev.get("show_dr"):
                                         st.dataframe(pd.DataFrame(_bl_prev["show_dr"]).set_index("Expiry"), use_container_width=True)
                                 with _mc2:
+                                    st.caption("Δν = change in nu — vol of vol, the smile curvature parameter. Higher nu = more pronounced wings (both OTM payers and receivers richer vs ATM). Controls how fast vol rises as you move away from ATM.")
                                     st.markdown("**Δν (blended)**")
                                     if _bl_prev.get("show_dn"):
                                         st.dataframe(pd.DataFrame(_bl_prev["show_dn"]).set_index("Expiry"), use_container_width=True)
-                                st.caption(
-                                    "Δρ = change in rho — skew parameter. Negative rho = payer skew "
-                                    "(vol higher for payers than receivers). More negative = steeper payer skew. "
-                                    "Δν = change in nu — vol of vol / smile curvature. Higher nu = more pronounced "
-                                    "wings (OTM payers and receivers richer vs ATM)."
-                                )
                                 st.success(f"Preview ready — {_bl_prev.get('n_buckets','?')} buckets fitted, "
                                            f"blend weight {_bl_prev.get('blend_w',0):.0%}. "
                                            f"Apply here or in Vol Editor Expert section.")
