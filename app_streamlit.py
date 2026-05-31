@@ -9729,8 +9729,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                 _buf_sc.seek(0)
                                                 st.session_state["_sc_xl_bytes"] = _buf_sc.getvalue()
                                                 st.session_state["_sc_xl_fn"] = f"RateEdge_Scenario_{_sc_tenor}_{_sc_date.strftime('%d%b%Y')}.xlsx"
+                                                st.session_state["_sc_xl_key"] = f"{_sc_tenor}_{_sc_date}"
 
-                                            if st.session_state.get("_sc_xl_bytes"):
+                                            # Only for the currently selected tenor+date (hide stale stash)
+                                            if st.session_state.get("_sc_xl_bytes") and st.session_state.get("_sc_xl_key") == f"{_sc_tenor}_{_sc_date}":
                                                 st.download_button(
                                                     "⬇️ Save Scenario Excel",
                                                     data=st.session_state["_sc_xl_bytes"],
@@ -10214,9 +10216,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     # inside `if st.button` disappears before the download fires).
                                     st.session_state["_sg_xl_bytes"] = _buf_sg.getvalue()
                                     st.session_state["_sg_xl_fn"] = f"RateEdge_Suggestions_{_sg_date.strftime('%d%b%Y')}.xlsx"
+                                    st.session_state["_sg_xl_date"] = str(_sg_date)
 
-                                # Persistent download — rendered unconditionally from session_state
-                                if st.session_state.get("_sg_xl_bytes"):
+                                # Persistent download — only for the CURRENTLY selected date.
+                                # Stash is tagged with the date it was built for; if the user
+                                # changed the date dropdown, the stale file is hidden until they
+                                # rebuild (was serving e.g. Monday's file after selecting Friday).
+                                if st.session_state.get("_sg_xl_bytes") and st.session_state.get("_sg_xl_date") == str(_sg_date):
                                     st.download_button(
                                         "⬇️ Save Excel",
                                         data=st.session_state["_sg_xl_bytes"],
