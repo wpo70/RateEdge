@@ -7798,181 +7798,6 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         if _type_summary:
                             st.dataframe(pd.DataFrame(_type_summary), use_container_width=True, hide_index=True)
 
-
-        with st.expander("📐 SDR SABR Analytics — USD", expanded=False):
-            st.caption(
-                "Compares market-implied normal vol (Bachelier inversion from SDR strangles) "
-                "against stored SABR smile. Highlights buckets where SABR skew diverges from market. "
-                "F sourced from same-session USD straddles where available."
-            )
-            _sabr_vd  = st.session_state.get("vol_data", {}).get("USD", {})
-            _sabr_adf = _sabr_vd.get("alpha")
-            _sabr_bdf = _sabr_vd.get("beta")
-            _sabr_rdf = _sabr_vd.get("rho")
-            _sabr_ndf = _sabr_vd.get("nu")
-            _sabr_lbl = _sabr_vd.get("label", "—")
-
-            if _sabr_adf is None:
-                st.warning("No USD SABR surface loaded — load a vol snapshot on the Vol Editor tab first.")
-            else:
-                _usd_sg = [r for r in _paired_rows
-                           if "Strangle" in r.get("Type", "") and r.get("CCY") == "USD"]
-
-                if not _usd_sg:
-                    st.info("No USD strangles in current date range — widen the date filter to see results.")
-                else:
-                    # ATM forward from USD straddles in same session
-                    _atm_map = {}
-                    for _sr in _paired_rows:
-                        if _sr.get("Type") == "🔵 Straddle" and _sr.get("CCY") == "USD":
-                            _bk = (_sr.get("Opt Expiry", ""), _sr.get("Swp Tenor", ""))
-                            try:
-                                _atm_k = float(str(_sr.get("Strike", "0")).replace("%", "")) / 100.0
-                                _atm_map.setdefault(_bk, []).append(_atm_k)
-                            except Exception:
-                                pass
-                    _atm_F = {k: sum(v) / len(v) for k, v in _atm_map.items()}
-
-                    def _bch_invert_sabr(prem_bp, F, K, T, is_payer):
-                        if prem_bp <= 0 or T <= 0 or F <= 0 or K <= 0:
-                            return None
-                        prem_r = prem_bp / 10000.0
-                        def _err(sig):
-                            if sig <= 1e-9: return -prem_r
-                            d   = (F - K) / (sig * math.sqrt(T))
-                            nd  = 0.5 * (1 + math.erf(d / math.sqrt(2)))
-                            npd = math.exp(-0.5 * d * d) / math.sqrt(2 * math.pi)
-                            val = ((F - K) * nd + sig * math.sqrt(T) * npd) if is_payer                                   else ((K - F) * (1 - nd) + sig * math.sqrt(T) * npd)
-                            return val - prem_r
-                        lo, hi = 1e-7, 0.15
-                        try:
-                            if _err(hi) < 0: return None
-                            for _ in range(100):
-                                mid = (lo + hi) / 2.0
-                                if _err(mid) < 0: lo = mid
-                                else: hi = mid
-                                if hi - lo < 1e-9: break
-                            return mid * 10000.0
-                        except Exception:
-                            return None
-
-                    def _sabr_param(df, exp_lbl, ten_lbl):
-                        if df is None: return None
-                        try:
-                            _row = df[df["Expiry"].str.lower().str.strip() == exp_lbl.lower().strip()]
-                            if _row.empty: return None
-                            for _tc in df.columns:
-                                if _tc != "Expiry" and _tc.lower().strip() == ten_lbl.lower().strip():
-                                    v = _row[_tc].iloc[0]
-                                    return float(v) if v is not None else None
-                        except Exception:
-                            pass
-                        return None
-
-                    _bucket_map = {}
-                    for _sg in _usd_sg:
-                        _bk = (_sg.get("Opt Expiry", ""), _sg.get("Swp Tenor", ""))
-                        _bucket_map.setdefault(_bk, []).append(_sg)
-
-                    _sabr_ana_rows = []
-                    for (_exp, _ten), _trades in sorted(_bucket_map.items()):
-                        _p_ks, _r_ks, _p_ps, _r_ps = [], [], [], []
-                        for _tr in _trades:
-                            try:
-                                _pts = str(_tr.get("Strike","")).replace("P:","").replace("R:","").replace("%","").split("/")
-                                if len(_pts) == 2:
-                                    _p_ks.append(float(_pts[0].strip()) / 100.0)
-                                    _r_ks.append(float(_pts[1].strip()) / 100.0)
-                            except Exception:
-                                pass
-                            try:
-                                _p_ps.append(float(_tr.get("P Prem BP") or 0))
-                                _r_ps.append(float(_tr.get("R Prem BP") or 0))
-                            except Exception:
-                                pass
-                        if not _p_ks: continue
-
-                        _avg_pk = sum(_p_ks) / len(_p_ks)
-                        _avg_rk = sum(_r_ks) / len(_r_ks)
-                        _avg_pp = sum(_p_ps) / len(_p_ps) if _p_ps else 0
-                        _avg_rp = sum(_r_ps) / len(_r_ps) if _r_ps else 0
-                        _T      = label_to_years(_exp)
-                        _F      = _atm_F.get((_exp, _ten))
-                        _a = _sabr_param(_sabr_adf, _exp, _ten)
-                        _b = _sabr_param(_sabr_bdf, _exp, _ten)
-                        _r = _sabr_param(_sabr_rdf, _exp, _ten)
-                        _n = _sabr_param(_sabr_ndf, _exp, _ten)
-
-                        _sv_p = _sv_r = _s_skew = None
-                        if _F and _a and _b is not None and _r and _n and _T > 0:
-                            try:
-                                _sv_p  = sabr_normal_vol_smile(_F, _avg_pk, _T, _a, _b, _r, _n) * 10000
-                                _sv_r  = sabr_normal_vol_smile(_F, _avg_rk, _T, _a, _b, _r, _n) * 10000
-                                _s_skew = _sv_p - _sv_r
-                            except Exception:
-                                pass
-
-                        _mv_p = _mv_r = _m_skew = None
-                        if _F and _avg_pp > 0 and _T > 0:
-                            _mv_p = _bch_invert_sabr(_avg_pp, _F, _avg_pk, _T, True)
-                            _mv_r = _bch_invert_sabr(_avg_rp, _F, _avg_rk, _T, False)
-                            if _mv_p and _mv_r:
-                                _m_skew = _mv_p - _mv_r
-
-                        _skew_diff = round(_m_skew - _s_skew, 1) if (_m_skew is not None and _s_skew is not None) else None
-                        _flag = ("⚠️" if _skew_diff and abs(_skew_diff) > 2 else
-                                 "✅" if _skew_diff is not None else
-                                 "ℹ️" if not _F else "—")
-
-                        _sabr_ana_rows.append({
-                            "Bucket":    f"{_exp}×{_ten}",
-                            "Trades":    len(_trades),
-                            "F (ATM)":   f"{_F*100:.3f}%" if _F else "— no straddle",
-                            "P Strike":  f"{_avg_pk*100:.3f}%",
-                            "R Strike":  f"{_avg_rk*100:.3f}%",
-                            "Mkt P bp":  f"{_mv_p:.1f}"    if _mv_p    else "—",
-                            "Mkt R bp":  f"{_mv_r:.1f}"    if _mv_r    else "—",
-                            "Mkt Skew":  f"{_m_skew:+.1f}" if _m_skew  else "—",
-                            "SABR P bp": f"{_sv_p:.1f}"    if _sv_p    else "—",
-                            "SABR R bp": f"{_sv_r:.1f}"    if _sv_r    else "—",
-                            "SABR Skew": f"{_s_skew:+.1f}" if _s_skew  else "—",
-                            "Δ Skew bp": f"{_skew_diff:+.1f}" if _skew_diff else "—",
-                            "":          _flag,
-                        })
-
-                    if _sabr_ana_rows:
-                        st.caption(f"SABR ref: **{_sabr_lbl}** | vols in bp (normal) | "
-                                   f"Δ Skew = Mkt − SABR | ⚠️ = |Δ| > 2bp | ℹ️ = no ATM straddle for F")
-                        st.dataframe(pd.DataFrame(_sabr_ana_rows), use_container_width=True, hide_index=True,
-                                     column_config={
-                                         "Bucket":    st.column_config.TextColumn(width=90),
-                                         "Trades":    st.column_config.TextColumn(width=60),
-                                         "F (ATM)":   st.column_config.TextColumn(width=110),
-                                         "P Strike":  st.column_config.TextColumn(width=85),
-                                         "R Strike":  st.column_config.TextColumn(width=85),
-                                         "Mkt P bp":  st.column_config.TextColumn(width=80),
-                                         "Mkt R bp":  st.column_config.TextColumn(width=80),
-                                         "Mkt Skew":  st.column_config.TextColumn(width=85),
-                                         "SABR P bp": st.column_config.TextColumn(width=85),
-                                         "SABR R bp": st.column_config.TextColumn(width=85),
-                                         "SABR Skew": st.column_config.TextColumn(width=85),
-                                         "Δ Skew bp": st.column_config.TextColumn(width=85),
-                                         "":          st.column_config.TextColumn(width=40),
-                                     })
-                        with st.expander("SABR params for active buckets", expanded=False):
-                            _prm_rows = []
-                            for (_exp, _ten) in sorted(_bucket_map.keys()):
-                                _prm_rows.append({
-                                    "Bucket": f"{_exp}×{_ten}",
-                                    "α": f"{_sabr_param(_sabr_adf,_exp,_ten):.5f}" if _sabr_param(_sabr_adf,_exp,_ten) else "—",
-                                    "β": f"{_sabr_param(_sabr_bdf,_exp,_ten):.2f}" if _sabr_param(_sabr_bdf,_exp,_ten) is not None else "—",
-                                    "ρ": f"{_sabr_param(_sabr_rdf,_exp,_ten):.3f}" if _sabr_param(_sabr_rdf,_exp,_ten) else "—",
-                                    "ν": f"{_sabr_param(_sabr_ndf,_exp,_ten):.3f}" if _sabr_param(_sabr_ndf,_exp,_ten) else "—",
-                                })
-                            st.dataframe(pd.DataFrame(_prm_rows), use_container_width=True, hide_index=True)
-                    else:
-                        st.info("Could not parse strike/premium data from USD strangles in this range.")
-
         with _atab5:
             # ── EXPIRY MONITOR — SDR strike exposure for upcoming expiries ──────
             st.markdown("### 📡 Expiry Monitor — Strike Exposure at Upcoming Expiries")
@@ -15065,7 +14890,32 @@ def swaptions_tab(vol_mode: str):
                                 save_user_config(_uid, "sabr_alpha", ccy, {"values": _a_records})
                             except Exception:
                                 pass
-                        st.session_state.pop("_alpha_check_result", None)
+                        # Auto-refresh check with new alpha so table shows 0% diffs immediately
+                        _rows2, _stale2 = [], False
+                        _check_surf2 = st.session_state.get("vol_data", {}).get(ccy, {}).get("atm")
+                        for _exp2 in _EXPIRIES:
+                            _row2 = {"Expiry": _exp2}
+                            _exp_y2b = label_to_years(_exp2)
+                            for _tc2 in _tenor_cols:
+                                _ten_y2b = label_to_years(str(_tc2))
+                                _atm2b = get_matrix_value(_check_surf2, _exp2, _ten_y2b) if _check_surf2 is not None else None
+                                _s2b = get_sabr_params_from_matrices(_new_alpha, _b2, _r2, _n2, _exp2, _ten_y2b)
+                                if _atm2b is None or _s2b is None or _exp_y2b <= 0:
+                                    _row2[_tc2] = "  —  "; continue
+                                try:
+                                    _F2b = _fwd_cache2.get((_exp2, _tc2), 0.05)
+                                    _ia2 = sabr_implied_alpha_from_atm(_atm2b / 10000.0, _F2b, _exp_y2b, _s2b["beta"], _s2b["rho"], _s2b["nu"])
+                                    _sa2 = _s2b["alpha"]
+                                    if _sa2 > 0:
+                                        _pd2 = (_ia2 - _sa2) / _sa2 * 100.0
+                                        _stale2 = _stale2 or abs(_pd2) > 10.0
+                                        _row2[_tc2] = f"{'🔴' if abs(_pd2)>20 else '🟡' if abs(_pd2)>10 else '🟢'} {_pd2:+.1f}%"
+                                    else:
+                                        _row2[_tc2] = "  —  "
+                                except Exception:
+                                    _row2[_tc2] = "  —  "
+                            _rows2.append(_row2)
+                        st.session_state["_alpha_check_result"] = {"rows": _rows2, "stale": _stale2}
                         st.success(f"✅ Alpha recalibrated   —   {_updated} cells updated. ~, ρ,ν, × unchanged.")
                         st.rerun()
             with _rc2:
@@ -30076,20 +29926,20 @@ def main():
     with st.container(height=1200, border=False):
         _tab_funcs[_active_idx]()
 
-    # Backup widget state for all tabs — skip bools (buttons cause crashes), keep checkbox keys explicitly
-    _backup = {}
+    # Backup widget state — merge with previous so inactive-tab keys survive navigation
     _SKIP_PREFIXES = ("_widget_state_backup", "_sdr_filter_backup", "config_", "vol_data",
                       "curves", "basis_", "portfolio", "swaption_portfolio", "atm_prem_matrix",
                       "_fwd_ann_cache", "_aud_", "vol_editor", "FormSubmitter")
     _BOOL_KEEP_PREFIXES = ("tab_show_", "cb_tab_show_", "sdr_alerts_on", "_vol_loaded_",
                            "_um_loaded", "_user_list_loaded", "_portfolio_loaded",
                            "db_auto_loaded", "authenticated", "sdr_filters_loaded")
+    _backup = dict(st.session_state.get("_widget_state_backup", {}))  # start from previous
     for _wk, _wv in st.session_state.items():
         if _wk.startswith(_SKIP_PREFIXES):
             continue
         if isinstance(_wv, bool):
             if not _wk.startswith(_BOOL_KEEP_PREFIXES):
-                continue  # skip buttons and unknown bools
+                continue
         if isinstance(_wv, (str, int, float, bool, list, type(None))):
             _backup[_wk] = _wv
         elif hasattr(_wv, 'isoformat'):
