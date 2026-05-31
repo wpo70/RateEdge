@@ -6536,12 +6536,15 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             _ts_a = pd.Timestamp(_last_a)
             if _ts_a.tzinfo is None:
                 _ts_a = _ts_a.tz_localize('UTC')
-            _age_a = (pd.Timestamp.now(tz='UTC') - _ts_a).total_seconds() / 3600
+            _now_utc = pd.Timestamp.now(tz='UTC')
+            _age_a = (_now_utc - _ts_a).total_seconds() / 3600
+            _is_weekend = _now_utc.dayofweek >= 5  # Sat=5, Sun=6
+            # Only fire on weekdays and only after 4h — weekends have no trades by design
+            if _age_a > 4 and not _is_weekend:
+                st.error(f"⚠️ SDR fetcher appears stopped — last trade {_age_a:.1f}h ago. "
+                         f"Open Admin section below for backfill instructions.")
         except:
-            _age_a = 999
-        if _age_a > 1:
-            st.error(f"⚠️ SDR fetcher appears stopped — last trade {_age_a:.1f}h ago. "
-                     f"Open Admin section below for backfill instructions.")
+            pass
     elif _total_a == 0:
         st.error("⚠️ No SDR data in database. Open Admin section to set up the fetcher.")
 
