@@ -7436,9 +7436,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         "Notional": _fmt_notional(_comb_not),
                                         "Premium": _prem_disp,
                                         "Nett Prem BP": f"{_comb_bp:.2f}" if _comb_bp else "—",
+                                        "Nett Leg BP (R/R)": f"{_net_bp:.2f}" if _net_bp else "—",
                                         "P Prem BP": f"{_p_bp:.2f}" if _p_bp else "—",
                                         "R Prem BP": f"{_r_bp:.2f}" if _r_bp else "—",
-                                        "Net Leg BP": f"{_net_bp:.2f}" if _net_bp else "—",
                                         "Platform": PLATFORM_NAMES.get(str(_p.get("platform_identifier","")), str(_p.get("platform_identifier",""))),
                                         "_notional_num": float(_comb_not or 0),  # v1105o: numeric for broker % breakdown
                                     })
@@ -29552,37 +29552,40 @@ def main():
             if is_super_admin():
                 st.markdown("---")
                 with st.expander("👑 User Management", expanded=False):
-                    try:
-                        _rm_conn = get_db_connection()
-                        if _rm_conn:
-                            _rm_cur = _rm_conn.cursor()
-                            _rm_cur.execute("SELECT email, role FROM user_roles ORDER BY email")
-                            _rm_rows = _rm_cur.fetchall()
-                            _rm_cur.close()
-                            _rm_conn.close()
-                            if _rm_rows:
-                                for _rm_email, _rm_role in _rm_rows:
-                                    _rc1, _rc2 = st.columns([2, 1])
-                                    with _rc1:
-                                        st.caption(_rm_email)
-                                    with _rc2:
-                                        _new_role = st.selectbox(
-                                            "Role", ["super_admin","admin","user","read_only","trainee"],
-                                            index=["super_admin","admin","user","read_only","trainee"].index(_rm_role) if _rm_role in ["super_admin","admin","user","read_only","trainee"] else 2,
-                                            key=f"role_{_rm_email}",
-                                            label_visibility="collapsed"
-                                        )
-                                    if _new_role != _rm_role:
-                                        if st.button(f"Save {_rm_email[:15]}", key=f"save_role_{_rm_email}"):
-                                            _uc = get_db_connection()
-                                            if _uc:
-                                                _uc2 = _uc.cursor()
-                                                _uc2.execute("UPDATE user_roles SET role=%s WHERE email=%s", (_new_role, _rm_email))
-                                                _uc.commit(); _uc2.close(); _uc.close()
-                                                st.success(f"✅ {_rm_email} → {_new_role}")
-                                                st.rerun()
-                    except Exception as _rme:
-                        st.caption(f"Role mgmt error: {_rme}")
+                    if st.button("🔄 Load Users", key="_load_um_btn"):
+                        st.session_state["_um_loaded"] = True
+                    if st.session_state.get("_um_loaded", False):
+                        try:
+                            _rm_conn = get_db_connection()
+                            if _rm_conn:
+                                _rm_cur = _rm_conn.cursor()
+                                _rm_cur.execute("SELECT email, role FROM user_roles ORDER BY email")
+                                _rm_rows = _rm_cur.fetchall()
+                                _rm_cur.close()
+                                _rm_conn.close()
+                                if _rm_rows:
+                                    for _rm_email, _rm_role in _rm_rows:
+                                        _rc1, _rc2 = st.columns([2, 1])
+                                        with _rc1:
+                                            st.caption(_rm_email)
+                                        with _rc2:
+                                            _new_role = st.selectbox(
+                                                "Role", ["super_admin","admin","user","read_only","trainee"],
+                                                index=["super_admin","admin","user","read_only","trainee"].index(_rm_role) if _rm_role in ["super_admin","admin","user","read_only","trainee"] else 2,
+                                                key=f"role_{_rm_email}",
+                                                label_visibility="collapsed"
+                                            )
+                                        if _new_role != _rm_role:
+                                            if st.button(f"Save {_rm_email[:15]}", key=f"save_role_{_rm_email}"):
+                                                _uc = get_db_connection()
+                                                if _uc:
+                                                    _uc2 = _uc.cursor()
+                                                    _uc2.execute("UPDATE user_roles SET role=%s WHERE email=%s", (_new_role, _rm_email))
+                                                    _uc.commit(); _uc2.close(); _uc.close()
+                                                    st.success(f"✅ {_rm_email} → {_new_role}")
+                                                    st.rerun()
+                        except Exception as _rme:
+                            st.caption(f"Role mgmt error: {_rme}")
         else:
             st.warning(" Login required")
             st.caption("Use the main login page to sign in with your email")
