@@ -8701,122 +8701,114 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                         # ── Strike Exposure Heatmap ──────────────────────────
                         st.markdown("#### Strike Exposure Heatmap")
-                        _hem_window = st.radio(
-                            "Expiry window",
-                            ["1 Day", "3 Days", "5 Days"],
-                            index=1, horizontal=True, key="em_heatmap_window"
-                        )
+                        _hem_c1, _hem_c2 = st.columns([2, 3])
+                        with _hem_c1:
+                            _hem_window = st.radio(
+                                "Expiry window",
+                                ["1 Day", "3 Days", "5 Days"],
+                                index=1, horizontal=True, key="em_heatmap_window"
+                            )
                         _hem_days = {"1 Day": 1, "3 Days": 3, "5 Days": 5}[_hem_window]
 
-                        # Filter to trades expiring within selected window
+                        # Window filter — independent of strike variance filter
                         try:
                             _hem_cutoff = _eff_date + timedelta(days=_hem_days - 1)
                             while _hem_cutoff.weekday() >= 5:
                                 _hem_cutoff += timedelta(days=1)
                         except Exception:
                             _hem_cutoff = None
-                        if _hem_cutoff and "expiry_date" in _em_filtered.columns:
-                            _hem_df = _em_filtered[
-                                (_em_filtered["expiry_date"] >= _eff_date) &
-                                (_em_filtered["expiry_date"] <= _hem_cutoff)
-                            ].copy()
-                        else:
-                            _hem_df = _em_filtered.copy()
 
-                        if _hem_df.empty:
-                            st.info(f"No trades expiring within {_hem_window} from {_eff_date.strftime('%d-%b')}.")
-                        else:
-                            # Strike buckets relative to forward
-                            def _hem_bucket(row):
-                                fwd = row.get("_fwd")
-                                if fwd is None or pd.isna(fwd):
-                                    fwd = _em_fwd.get(str(row.get("swp_tenor", "")))
-                                s = row.get("strike_pct")
-                                if fwd is None or pd.isna(s): return "Unknown"
-                                diff_bp = (s - fwd) * 100  # bp
-                                if diff_bp < -100: return "< -100bp"
-                                elif diff_bp < -50:  return "-100 to -50bp"
-                                elif diff_bp < -25:  return "-50 to -25bp"
-                                elif diff_bp < -10:  return "-25 to -10bp"
-                                elif diff_bp <= 10:  return "ATM ±10bp"
-                                elif diff_bp <= 25:  return "+10 to +25bp"
-                                elif diff_bp <= 50:  return "+25 to +50bp"
-                                elif diff_bp <= 100: return "+50 to +100bp"
-                                else:               return "> +100bp"
-
-                            _HEM_BUCKET_ORDER = [
-                                "< -100bp", "-100 to -50bp", "-50 to -25bp", "-25 to -10bp",
-                                "ATM ±10bp",
-                                "+10 to +25bp", "+25 to +50bp", "+50 to +100bp", "> +100bp"
+                        # Use _em_df (unfiltered by strike variance) — show ±50bp from ATM
+                        _hem_base = _em_df.copy()
+                        if _hem_cutoff and "expiry_date" in _hem_base.columns:
+                            _hem_base = _hem_base[
+                                (_hem_base["expiry_date"] >= _eff_date) &
+                                (_hem_base["expiry_date"] <= _hem_cutoff)
                             ]
 
-                            _hem_df["strike_bucket"] = _hem_df.apply(_hem_bucket, axis=1)
-                            _hem_df["signed_mm"] = _hem_df.apply(
-                                lambda r: r["notional_mm"] if r["direction"] == "Payer" else -r["notional_mm"], axis=1)
+                        # Filter to ±50bp from forward
+                        def _hem_otm_bp(row):
+                            fwd = row.get("_fwd")
+                            if fwd is None or pd.isna(fwd):
+                                fwd = _em_fwd.get(str(row.get("swp_tenor", "")))
+                            s = row.get("strike_pct")
+                            if fwd is None or pd.isna(s): return None
+                            return (s - fwd) * 100
 
-                            # Pivot: rows = swap tenor, cols = strike bucket, values = signed notional
-                            _hem_tenors = sorted(
-                                _hem_df["swp_tenor"].dropna().unique().tolist(),
-                                key=_safe_tenor_sort
+                        _hem_base["_otm_bp"] = _hem_base.apply(_hem_otm_bp, axis=1)
+                        _hem_base = _hem_base[_hem_base["_otm_bp"].between(-50, 50, inclusive="both")].copy()
+
+                        if _hem_base.empty:
+                            st.info(f"No trades within ±50bp of ATM expiring in {_hem_window}.")
+                        else:
+                            # 25bp strike buckets matching existing heatmap style
+                            def _hem_norm(row):
+                                fwd = row.get("_fwd")
+                                if fwd is None or pd.isna(fwd):
+                                    fwd = _em_fwd.get(str(row.get("swp_tenor", "")), 0)
+                                s = row.get("strike_pct", 0)
+                                return round(float(s or 0), 5)
+
+                            _hem_base["strike_norm"]   = _hem_base["strike_pct"].apply(lambda x: round(float(x or 0) / 0.0025) * 0.0025)
+                            _hem_base["strike_label"]  = _hem_base["strike_norm"].apply(lambda x: f"{x:.5f}%")
+                            _hem_base["notional_m"]    = _hem_base["notional_leg1"].fillna(0) / 1e6
+                            _hem_base["signed_m"]      = _hem_base.apply(
+                                lambda r: r["notional_m"] if r["direction"] == "Payer" else -r["notional_m"], axis=1)
+
+                            def _tnr_hem(t):
+                                import re as _re2
+                                _m = _re2.match(r"(\d+)Y", str(t)); return int(_m.group(1)) if _m else 999
+
+                            _hem_cols = sorted(_hem_base["swp_tenor"].dropna().unique(), key=_tnr_hem)
+
+                            # Heatmap 1: Net direction (Payer − Receiver)
+                            st.markdown("**Net Directional Exposure ($M) — Payer (+) / Receiver (−)**")
+                            _pivot_net = _hem_base.pivot_table(
+                                index="strike_label", columns="swp_tenor",
+                                values="signed_m", aggfunc="sum", fill_value=0
                             )
-                            _hem_buckets = [b for b in _HEM_BUCKET_ORDER
-                                            if b in _hem_df["strike_bucket"].unique()]
+                            _pivot_net = _pivot_net.reindex(sorted(_pivot_net.columns, key=_tnr_hem), axis=1)
+                            _pivot_net = _pivot_net.reindex(
+                                sorted(_pivot_net.index, key=lambda x: -float(x.replace('%',''))), axis=0)
 
-                            # Build matrix
-                            _hem_rows = []
-                            for _ht in _hem_tenors:
-                                _row_d = {"Tenor": _ht}
-                                _sub = _hem_df[_hem_df["swp_tenor"] == _ht]
-                                for _hb in _hem_buckets:
-                                    _cell = _sub[_sub["strike_bucket"] == _hb]["signed_mm"].sum()
-                                    _n_trades = len(_sub[_sub["strike_bucket"] == _hb])
-                                    if _n_trades == 0:
-                                        _row_d[_hb] = "—"
-                                    else:
-                                        _sign = "+" if _cell >= 0 else ""
-                                        _row_d[_hb] = f"{_sign}{_cell:,.0f}"
-                                _hem_rows.append(_row_d)
-
-                            _hem_matrix = pd.DataFrame(_hem_rows).set_index("Tenor")
-
-                            # Style: green = net payer, red = net receiver, grey = empty
-                            def _hem_style(val):
-                                if val == "—": return "color: #555"
+                            def _net_style(v):
                                 try:
-                                    v = float(str(val).replace(",","").replace("+",""))
-                                    if v > 0:   return "background-color: #1a3a1a; color: #4caf50; font-weight:bold"
-                                    elif v < 0: return "background-color: #3a1a1a; color: #f44336; font-weight:bold"
-                                except Exception: pass
-                                return ""
+                                    f = float(v)
+                                    if f > 0:  return "background-color: #7b2d2d; color: #ffcccc"
+                                    elif f < 0: return "background-color: #1a3a5c; color: #cce5ff"
+                                    return ""
+                                except Exception: return ""
 
-                            _cols_avail = [c for c in _HEM_BUCKET_ORDER if c in _hem_matrix.columns]
-                            _hem_display = _hem_matrix[_cols_avail]
-
-                            st.caption(
-                                f"Values in $M notional | **Green/+** = net payer exposure | **Red/-** = net receiver | "
-                                f"{len(_hem_df)} trades expiring {_eff_date.strftime('%d-%b') if _eff_date else '?'} "
-                                f"to {_hem_cutoff.strftime('%d-%b') if _hem_cutoff else '?'}"
-                            )
                             try:
-                                # pandas 2.1+: applymap → map
-                                _hem_styled = _hem_display.style.map(_hem_style)
-                            except AttributeError:
-                                _hem_styled = _hem_display.style.applymap(_hem_style)
-                            st.dataframe(_hem_styled, use_container_width=True)
+                                _net_styled = _pivot_net.style.background_gradient(
+                                    cmap="RdBu_r", axis=None).format("{:+,.0f}")
+                            except Exception:
+                                _net_styled = _pivot_net.style.format("{:+,.0f}")
+                            st.dataframe(_net_styled, use_container_width=True,
+                                         height=min(500, 40 + len(_pivot_net) * 35))
+                            st.caption("Red = net payer · Blue = net receiver · Rows = 25bp strike buckets · Columns = swap tenor")
 
-                            # Totals row
-                            _hem_col_tots = {}
-                            for _hb in _cols_avail:
-                                try:
-                                    _tot = sum(
-                                        float(str(v).replace(",","").replace("+",""))
-                                        for v in _hem_display[_hb] if v != "—"
-                                    )
-                                    _hem_col_tots[_hb] = f"{'+'if _tot>=0 else ''}{_tot:,.0f}"
-                                except Exception:
-                                    _hem_col_tots[_hb] = "—"
-                            st.caption("**Column totals (net $M):** " +
-                                       " | ".join(f"{k}: {v}" for k,v in _hem_col_tots.items()))
+                            st.markdown("**Strike Concentration ($M total notional)**")
+                            # Heatmap 2: Total concentration (direction-agnostic)
+                            _pivot_conc = _hem_base.pivot_table(
+                                index="strike_label", columns="swp_tenor",
+                                values="notional_m", aggfunc="sum", fill_value=0
+                            )
+                            _pivot_conc = _pivot_conc.reindex(sorted(_pivot_conc.columns, key=_tnr_hem), axis=1)
+                            _pivot_conc = _pivot_conc.reindex(
+                                sorted(_pivot_conc.index, key=lambda x: -float(x.replace('%',''))), axis=0)
+
+                            try:
+                                _conc_styled = _pivot_conc.style.background_gradient(
+                                    cmap="Reds", axis=None).format("{:,.0f}")
+                            except Exception:
+                                _conc_styled = _pivot_conc.style.format("{:,.0f}")
+                            st.dataframe(_conc_styled, use_container_width=True,
+                                         height=min(500, 40 + len(_pivot_conc) * 35))
+                            st.caption(f"Rows = 25bp strike buckets · Columns = swap tenor · "
+                                       f"{len(_hem_base)} trades ±50bp from ATM | "
+                                       f"{_eff_date.strftime('%d-%b') if _eff_date else '?'} "
+                                       f"to {_hem_cutoff.strftime('%d-%b') if _hem_cutoff else '?'}")
 
                         st.markdown("---")
 
