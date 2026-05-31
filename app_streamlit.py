@@ -7876,69 +7876,77 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                     _sabr_ana_rows = []
                     for (_exp, _ten), _trades in sorted(_bucket_map.items()):
-                        _p_ks, _r_ks, _p_ps, _r_ps = [], [], [], []
-                        for _tr in _trades:
-                            try:
-                                _pts = str(_tr.get("Strike","")).replace("P:","").replace("R:","").replace("%","").split("/")
-                                if len(_pts) == 2:
-                                    _p_ks.append(float(_pts[0].strip()) / 100.0)
-                                    _r_ks.append(float(_pts[1].strip()) / 100.0)
-                            except Exception:
-                                pass
-                            try:
-                                _p_ps.append(float(_tr.get("P Prem BP") or 0))
-                                _r_ps.append(float(_tr.get("R Prem BP") or 0))
-                            except Exception:
-                                pass
-                        if not _p_ks: continue
+                        try:
+                            _p_ks, _r_ks, _p_ps, _r_ps = [], [], [], []
+                            for _tr in _trades:
+                                try:
+                                    _pts = str(_tr.get("Strike","")).replace("P:","").replace("R:","").replace("%","").split("/")
+                                    if len(_pts) == 2:
+                                        _p_ks.append(float(_pts[0].strip()) / 100.0)
+                                        _r_ks.append(float(_pts[1].strip()) / 100.0)
+                                except Exception:
+                                    pass
+                                try:
+                                    _p_ps.append(float(_tr.get("P Prem BP") or 0))
+                                    _r_ps.append(float(_tr.get("R Prem BP") or 0))
+                                except Exception:
+                                    pass
+                            if not _p_ks:
+                                continue
 
-                        _avg_pk = sum(_p_ks) / len(_p_ks)
-                        _avg_rk = sum(_r_ks) / len(_r_ks)
-                        _avg_pp = sum(_p_ps) / len(_p_ps) if _p_ps else 0
-                        _avg_rp = sum(_r_ps) / len(_r_ps) if _r_ps else 0
-                        _T      = label_to_years(_exp)
-                        _F      = _atm_F.get((_exp, _ten))
-                        _a = _sabr_param(_sabr_adf, _exp, _ten)
-                        _b = _sabr_param(_sabr_bdf, _exp, _ten)
-                        _r = _sabr_param(_sabr_rdf, _exp, _ten)
-                        _n = _sabr_param(_sabr_ndf, _exp, _ten)
+                            _avg_pk = sum(_p_ks) / len(_p_ks)
+                            _avg_rk = sum(_r_ks) / len(_r_ks)
+                            _avg_pp = sum(_p_ps) / len(_p_ps) if _p_ps else 0
+                            _avg_rp = sum(_r_ps) / len(_r_ps) if _r_ps else 0
+                            _T      = label_to_years(_exp)
+                            _F      = _atm_F.get((_exp, _ten))
+                            _a = _sabr_param(_sabr_adf, _exp, _ten)
+                            _b = _sabr_param(_sabr_bdf, _exp, _ten)
+                            _r = _sabr_param(_sabr_rdf, _exp, _ten)
+                            _n = _sabr_param(_sabr_ndf, _exp, _ten)
 
-                        _sv_p = _sv_r = _s_skew = None
-                        if _F and _a and _b is not None and _r and _n and _T > 0:
-                            try:
-                                _sv_p  = sabr_normal_vol_smile(_F, _avg_pk, _T, _a, _b, _r, _n) * 10000
-                                _sv_r  = sabr_normal_vol_smile(_F, _avg_rk, _T, _a, _b, _r, _n) * 10000
-                                _s_skew = _sv_p - _sv_r
-                            except Exception:
-                                pass
+                            _sv_p = _sv_r = _s_skew = None
+                            if _F and _a and _b is not None and _r and _n and _T > 0:
+                                try:
+                                    _sv_p   = sabr_normal_vol_smile(_F, _avg_pk, _T, _a, _b, _r, _n) * 10000
+                                    _sv_r   = sabr_normal_vol_smile(_F, _avg_rk, _T, _a, _b, _r, _n) * 10000
+                                    _s_skew = _sv_p - _sv_r
+                                except Exception:
+                                    pass
 
-                        _mv_p = _mv_r = _m_skew = None
-                        if _F and _avg_pp > 0 and _T > 0:
-                            _mv_p = _bch_invert_sabr(_avg_pp, _F, _avg_pk, _T, True)
-                            _mv_r = _bch_invert_sabr(_avg_rp, _F, _avg_rk, _T, False)
-                            if _mv_p and _mv_r:
-                                _m_skew = _mv_p - _mv_r
+                            _mv_p = _mv_r = _m_skew = None
+                            if _F and _avg_pp > 0 and _T > 0:
+                                _mv_p = _bch_invert_sabr(_avg_pp, _F, _avg_pk, _T, True)
+                                _mv_r = _bch_invert_sabr(_avg_rp, _F, _avg_rk, _T, False)
+                                if _mv_p and _mv_r:
+                                    _m_skew = _mv_p - _mv_r
 
-                        _skew_diff = round(_m_skew - _s_skew, 1) if (_m_skew is not None and _s_skew is not None) else None
-                        _flag = ("⚠️" if _skew_diff and abs(_skew_diff) > 2 else
-                                 "✅" if _skew_diff is not None else
-                                 "ℹ️" if not _F else "—")
+                            _skew_diff = round(_m_skew - _s_skew, 1) if (_m_skew is not None and _s_skew is not None) else None
+                            _flag = ("⚠️" if _skew_diff and abs(_skew_diff) > 2 else
+                                     "✅" if _skew_diff is not None else
+                                     "ℹ️" if not _F else "—")
 
-                        _sabr_ana_rows.append({
-                            "Bucket":    f"{_exp}×{_ten}",
-                            "Trades":    len(_trades),
-                            "F (ATM)":   f"{_F*100:.3f}%" if _F else "— no straddle",
-                            "P Strike":  f"{_avg_pk*100:.3f}%",
-                            "R Strike":  f"{_avg_rk*100:.3f}%",
-                            "Mkt P bp":  f"{_mv_p:.1f}"    if _mv_p    else "—",
-                            "Mkt R bp":  f"{_mv_r:.1f}"    if _mv_r    else "—",
-                            "Mkt Skew":  f"{_m_skew:+.1f}" if _m_skew  else "—",
-                            "SABR P bp": f"{_sv_p:.1f}"    if _sv_p    else "—",
-                            "SABR R bp": f"{_sv_r:.1f}"    if _sv_r    else "—",
-                            "SABR Skew": f"{_s_skew:+.1f}" if _s_skew  else "—",
-                            "Δ Skew bp": f"{_skew_diff:+.1f}" if _skew_diff else "—",
-                            "":          _flag,
-                        })
+                            _sabr_ana_rows.append({
+                                "Bucket":    f"{_exp}×{_ten}",
+                                "Trades":    len(_trades),
+                                "F (ATM)":   f"{_F*100:.3f}%" if _F else "— no straddle",
+                                "P Strike":  f"{_avg_pk*100:.3f}%",
+                                "R Strike":  f"{_avg_rk*100:.3f}%",
+                                "Mkt P bp":  f"{_mv_p:.1f}"    if _mv_p    else "—",
+                                "Mkt R bp":  f"{_mv_r:.1f}"    if _mv_r    else "—",
+                                "Mkt Skew":  f"{_m_skew:+.1f}" if _m_skew  else "—",
+                                "SABR P bp": f"{_sv_p:.1f}"    if _sv_p    else "—",
+                                "SABR R bp": f"{_sv_r:.1f}"    if _sv_r    else "—",
+                                "SABR Skew": f"{_s_skew:+.1f}" if _s_skew  else "—",
+                                "Δ Skew bp": f"{_skew_diff:+.1f}" if _skew_diff else "—",
+                                "":          _flag,
+                            })
+                        except Exception as _row_ex:
+                            _sabr_ana_rows.append({"Bucket": f"{_exp}×{_ten}", "Trades": len(_trades),
+                                                   "F (ATM)": f"err: {_row_ex}", "P Strike":"—","R Strike":"—",
+                                                   "Mkt P bp":"—","Mkt R bp":"—","Mkt Skew":"—",
+                                                   "SABR P bp":"—","SABR R bp":"—","SABR Skew":"—",
+                                                   "Δ Skew bp":"—","":"❌"})
 
                     if _sabr_ana_rows:
                         st.caption(f"SABR ref: **{_sabr_lbl}** | vols in bp (normal) | "
