@@ -8023,6 +8023,20 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                             _blend_w = st.slider("Blend weight (0=keep current, 1=full market)", 0.0, 1.0, 0.5, 0.05, key="sdr_sabr_blend_w")
 
+                            # Diagnostics — always visible
+                            _diag_strangles = len(_usd_sg)
+                            _diag_buckets = len(_bucket_map)
+                            _diag_F = sum(1 for bk in _bucket_map if _atm_F.get(bk))
+                            _diag_sabr = _sabr_adf is not None
+                            st.caption(
+                                f"USD strangles: {_diag_strangles} | "
+                                f"Buckets: {_diag_buckets} | "
+                                f"Buckets with F (straddle): {_diag_F} | "
+                                f"SABR loaded: {'yes' if _diag_sabr else 'NO — load USD vol snapshot first'}"
+                            )
+                            if _diag_F == 0:
+                                st.warning("No ATM forward (F) available — need USD straddles in the same date range to anchor the fitting. Add straddles to filter or widen date range.")
+
                             if st.button("🔧 Fit & Preview Blended Matrix", key="sdr_sabr_fit_btn", type="secondary"):
                                 import scipy.optimize as _sopt
                                 import scipy.interpolate as _sint
@@ -8112,6 +8126,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         _fit_rows.append({"Bucket":f"{_exp}×{_ten}","ρ curr":"—","ρ fit":"—","Δρ":f"err:{_fe}","ν curr":"—","ν fit":"—","Δν":"—","Trades":len(_trades)})
 
                                 if not _fit_results:
+                                    st.session_state["_sdr_sabr_fit_warn"] = True
                                     st.warning("Could not fit any buckets — need ATM straddles in same session for F.")
                                 else:
                                     # Interpolate Δρ and Δν across full grid
