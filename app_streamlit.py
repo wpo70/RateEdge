@@ -7700,7 +7700,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             "Cap":"Payer","Floor":"Receiver",
                         }
                         st.markdown("**Click to price a trade in the Swaptions pricer:**")
-                        for _ri, _row in enumerate(_all_trades[:20]):  # show top 20
+                        _price_this_total = len(_all_trades)
+                        for _ri, _row in enumerate(_all_trades[:10]):  # top 10 always visible
                             _rc1, _rc2, _rc3, _rc4, _rc5, _rc6 = st.columns([1.2, 0.8, 0.8, 0.8, 1.2, 0.8])
                             _rc1.markdown(f"<small>{_row.get(_time_col,'—')}</small>", unsafe_allow_html=True)
                             _rc2.markdown(f"<small>{_row.get('Type','').replace('🔵 ','').replace('🟤 ','').replace('🟠 ','').replace('🟣 ','')}</small>", unsafe_allow_html=True)
@@ -7733,6 +7734,44 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 st.session_state["_active_tab_override"] = "📊 Swaptions"
                                 st.toast(f"Loading {_exp_raw}×{_ten_raw} {_str_key} into pricer…", icon="📊")
                                 st.rerun()
+
+                        # Remaining trades in scrollable container
+                        if _price_this_total > 10:
+                            st.caption(f"Showing top 10 of {_price_this_total} — scroll for more ↓")
+                            with st.container(height=400, border=False):
+                                for _ri, _row in enumerate(_all_trades[10:], start=10):
+                                    _rc1, _rc2, _rc3, _rc4, _rc5, _rc6 = st.columns([1.2, 0.8, 0.8, 0.8, 1.2, 0.8])
+                                    _rc1.markdown(f"<small>{_row.get(_time_col,'—')}</small>", unsafe_allow_html=True)
+                                    _rc2.markdown(f"<small>{_row.get('Type','').replace('🔵 ','').replace('🟤 ','').replace('🟠 ','').replace('🟣 ','')}</small>", unsafe_allow_html=True)
+                                    _rc3.markdown(f"<small>{_row.get('CCY','—')} {_row.get('Opt Expiry','—')}×{_row.get('Swp Tenor','—')}</small>", unsafe_allow_html=True)
+                                    _rc4.markdown(f"<small>{_row.get('Strike','—')}</small>", unsafe_allow_html=True)
+                                    _rc5.markdown(f"<small>{_row.get('Notional','—')} | {_row.get('Platform','—')}</small>", unsafe_allow_html=True)
+                                    if _rc6.button("Price →", key=f"_price_this_{_ri}", use_container_width=True):
+                                        _exp_raw = _row.get("Opt Expiry","")
+                                        _ten_raw = _row.get("Swp Tenor","")
+                                        _str_raw = _row.get("Type","")
+                                        _stk_raw = _row.get("Strike","")
+                                        _not_raw = _row.get("Notional","")
+                                        _ccy_raw = _row.get("CCY","AUD")
+                                        _exp_key = _EXPIRY_MAP.get(_exp_raw.lower(), _EXPIRY_MAP.get(_exp_raw, None))
+                                        _ten_key = _TENOR_MAP.get(_ten_raw.upper(), None)
+                                        _str_key = next((v for k,v in _STR_MAP.items() if k in _str_raw), "ATM Straddle")
+                                        try: _stk_val = float(_stk_raw.replace("%","")) if _stk_raw and _stk_raw != "—" else None
+                                        except: _stk_val = None
+                                        try: _not_val = float(_not_raw.replace("M","").replace("B","").replace(",","")) * (1000 if "B" in _not_raw else 1) if _not_raw and _not_raw != "—" else None
+                                        except: _not_val = None
+                                        st.session_state["_sdr_price_ccy"] = _ccy_raw
+                                        st.session_state["sw_pending_reload"] = {
+                                            "expiry":       _exp_key,
+                                            "tenor":        _ten_key,
+                                            "structure":    _str_key,
+                                            "strike":       _stk_val,
+                                            "notional_mm":  _not_val,
+                                        }
+                                        st.session_state["tab_show_swaptions"] = True
+                                        st.session_state["_active_tab_override"] = "📊 Swaptions"
+                                        st.toast(f"Loading {_exp_raw}×{_ten_raw} {_str_key} into pricer…", icon="📊")
+                                        st.rerun()
 
                     # end Price This expander
                     st.dataframe(_all_df_display, use_container_width=True, hide_index=True,
