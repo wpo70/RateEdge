@@ -29901,14 +29901,20 @@ def main():
     with st.container(height=1200, border=False):
         _tab_funcs[_active_idx]()
 
-    # Backup widget state for all tabs
+    # Backup widget state for all tabs — skip bools (buttons cause crashes), keep checkbox keys explicitly
     _backup = {}
     _SKIP_PREFIXES = ("_widget_state_backup", "_sdr_filter_backup", "config_", "vol_data",
                       "curves", "basis_", "portfolio", "swaption_portfolio", "atm_prem_matrix",
                       "_fwd_ann_cache", "_aud_", "vol_editor", "FormSubmitter")
+    _BOOL_KEEP_PREFIXES = ("tab_show_", "cb_tab_show_", "sdr_alerts_on", "_vol_loaded_",
+                           "_um_loaded", "_user_list_loaded", "_portfolio_loaded",
+                           "db_auto_loaded", "authenticated", "sdr_filters_loaded")
     for _wk, _wv in st.session_state.items():
         if _wk.startswith(_SKIP_PREFIXES):
             continue
+        if isinstance(_wv, bool):
+            if not _wk.startswith(_BOOL_KEEP_PREFIXES):
+                continue  # skip buttons and unknown bools
         if isinstance(_wv, (str, int, float, bool, list, type(None))):
             _backup[_wk] = _wv
         elif hasattr(_wv, 'isoformat'):
