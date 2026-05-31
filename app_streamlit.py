@@ -9938,8 +9938,12 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _sg_top = (_sg_date_df.groupby("swp_tenor")["notional_mm"].sum()
                                        .nlargest(5).index.tolist())
                             with _sg_c2:
+                                # Key scoped to the selected date so switching dates rebuilds
+                                # the widget with that date's own top-5 defaults instead of
+                                # carrying a stale selection (which collapsed every date to 2Y).
+                                _sg_tenor_key = f"sg_tenors_{_sg_date}"
                                 _sg_sel_tenors = st.multiselect("Swap tenors", _sg_avail_tenors,
-                                    default=[t for t in _sg_avail_tenors if t in _sg_top], key="sg_tenors")
+                                    default=[t for t in _sg_avail_tenors if t in _sg_top], key=_sg_tenor_key)
 
                             _sg_days = max((_sg_date - _nyc_today).days, 0)
                             _sg_date_lbl = _sg_date.strftime("%a %d-%b-%Y") if hasattr(_sg_date, "strftime") else str(_sg_date)
