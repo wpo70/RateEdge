@@ -22170,17 +22170,24 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
             buf.seek(0)
             fname = f"ZCS_{ccy}_{zcs_n:.0f}Y_{zcs_trade_date.strftime('%Y%m%d')}_{client_name.replace(' ','_')[:20]}.xlsx"
 
-            st.download_button(
-                label=f"📤 Download: {fname}",
-                data=buf.getvalue(),
-                file_name=fname,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="zcs_dl"
-            )
+            # Stash so the download survives the rerun (nested download_button inside
+            # `if st.button` disappears before the download fires).
+            st.session_state["_zcs_xl_bytes"] = buf.getvalue()
+            st.session_state["_zcs_xl_fn"] = fname
             st.success(f"✅ Schedule generated   —   {len(reset_dates)} reset periods  |  "
                        f"Fixed: AUD {zcs_fixed_payment:,.0f}  |  "
                        f"Float est.: AUD {zcs_float_payment:,.0f}  |  "
                        f"Net: AUD {abs(zcs_net_payment):,.0f}")
+
+        # Persistent download — rendered unconditionally from session_state
+        if st.session_state.get("_zcs_xl_bytes"):
+            st.download_button(
+                label=f"📤 Download: {st.session_state.get('_zcs_xl_fn','ZCS.xlsx')}",
+                data=st.session_state["_zcs_xl_bytes"],
+                file_name=st.session_state.get("_zcs_xl_fn", "ZCS.xlsx"),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="zcs_dl"
+            )
 
 
 
