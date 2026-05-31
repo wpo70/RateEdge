@@ -509,6 +509,7 @@ def main():
         backfill_day(conn, date.fromisoformat(args.date))
 
     elif args.loop:
+        ensure_heartbeat_table(conn)
         # Time-aware polling — active CCY windows (UTC)
         CCY_WINDOWS = {
             "AUD": (21, 8),   # 21:00-08:00 UTC
@@ -552,7 +553,6 @@ def main():
             _pre_open_done.difference_update(stale)
             return due
 
-        ensure_heartbeat_table(conn)
         log.info(f"Starting time-aware poll loop every {args.loop} min. Ctrl+C to stop.")
         log.info("Active windows (UTC): AUD 21-08 | USD 10-21 | JPY 22-07 | EUR/GBP 07-16")
         log.info("Pre-open catch-up:    AUD @20 | USD @09 | JPY @21 | EUR/GBP @06")
@@ -588,7 +588,9 @@ def main():
             time.sleep(args.loop * 60)
 
     else:
+        ensure_heartbeat_table(conn)
         ins, upd = poll_once(conn, minutes_back=args.minutes)
+        upsert_heartbeat(conn)
         log.info(f"Done: {ins} new, {upd} updated.")
 
     conn.close()
