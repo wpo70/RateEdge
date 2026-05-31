@@ -1098,6 +1098,22 @@ def _sdr_status_cached():
     return None, 0, 0
 
 
+def _sdr_heartbeat_cached():
+    """Read fetcher heartbeat — reflects cron/fetcher health, not DTCC trade activity."""
+    try:
+        _conn = get_db_connection()
+        if _conn:
+            _c = _conn.cursor()
+            _c.execute("SELECT last_run, status FROM sdr_heartbeat WHERE id = 1")
+            _row = _c.fetchone()
+            _c.close(); _conn.close()
+            if _row:
+                return _row[0], _row[1]  # last_run, status
+    except:
+        pass
+    return None, None
+
+
 @st.cache_data(ttl=300)
 def _load_fwd_matrix_history_usd(_fr, _years):
     try:
@@ -6513,40 +6529,42 @@ Get-Process python | Where-Object {$_.CommandLine -like "*dtcc_sdr*"}
 Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=postgresql://postgres.oxwbyotzdqccaajyaqhn:RateEdge2026!@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres"
 ```
 """)
-        # Quick DB status (inside admin)
+        # Quick DB status (inside admin) — heartbeat = cron health, trades = DTCC activity
+        _hb_last, _hb_status = _sdr_heartbeat_cached()
         _last, _cnt, _total = _sdr_status_cached()
-        if _last:
+        if _hb_last:
             try:
-                _ts = pd.Timestamp(_last)
-                if _ts.tzinfo is None:
-                    _ts = _ts.tz_localize('UTC')
-                _age = (pd.Timestamp.now(tz='UTC') - _ts).total_seconds() / 3600
+                _hb_ts = pd.Timestamp(_hb_last)
+                if _hb_ts.tzinfo is None:
+                    _hb_ts = _hb_ts.tz_localize('UTC')
+                _hb_age = (pd.Timestamp.now(tz='UTC') - _hb_ts).total_seconds() / 60
             except:
-                _age = 999
-            _status = "🟢 Running" if _age < 1 else "🟡 Stale" if _age < 6 else "🔴 Stopped"
-            st.caption(f"{_status} — Last fetch: {str(_last)[:19]} ({_age:.1f}h ago) | "
-                       f"24h trades: {_cnt:,} | Total: {_total:,}")
+                _hb_age = 999
+            _fetcher_status = "🟢 Running" if _hb_age < 10 else "🟡 Delayed" if _hb_age < 30 else "🔴 Stopped"
+            _last_trade_str = f"last trade {str(_last)[:16]}" if _last else "no trades yet"
+            st.caption(f"{_fetcher_status} — Fetcher last poll: {_hb_age:.0f}m ago | "
+                       f"24h trades: {_cnt:,} | Total: {_total:,} | {_last_trade_str}")
         elif _total:
-            st.warning(f"🔴 No trades in last 24h. Total in DB: {_total:,}. Fetcher likely stopped.")
+            st.caption(f"⚠️ Heartbeat table not found — fetcher may be v2. "
+                       f"24h trades: {_cnt:,} | Total: {_total:,}")
 
-    # ── SDR Fetcher status alert (always visible) ────────────────────────────
+    # ── SDR Fetcher status alert (always visible) — based on heartbeat, not trade time ──
+    _hb_last_b, _ = _sdr_heartbeat_cached()
     _last_a, _cnt_a, _total_a = _sdr_status_cached()
-    if _last_a:
+    if _hb_last_b:
         try:
-            _ts_a = pd.Timestamp(_last_a)
-            if _ts_a.tzinfo is None:
-                _ts_a = _ts_a.tz_localize('UTC')
-            _now_utc = pd.Timestamp.now(tz='UTC')
-            _age_a = (_now_utc - _ts_a).total_seconds() / 3600
-            _is_weekend = _now_utc.dayofweek >= 5  # Sat=5, Sun=6
-            # Only fire on weekdays and only after 4h — weekends have no trades by design
-            if _age_a > 4 and not _is_weekend:
-                st.error(f"⚠️ SDR fetcher appears stopped — last trade {_age_a:.1f}h ago. "
+            _hb_ts_b = pd.Timestamp(_hb_last_b)
+            if _hb_ts_b.tzinfo is None:
+                _hb_ts_b = _hb_ts_b.tz_localize('UTC')
+            _hb_age_b = (pd.Timestamp.now(tz='UTC') - _hb_ts_b).total_seconds() / 60
+            if _hb_age_b > 30:
+                st.error(f"⚠️ SDR fetcher appears stopped — last poll {_hb_age_b:.0f}m ago. "
                          f"Open Admin section below for backfill instructions.")
         except:
             pass
     elif _total_a == 0:
         st.error("⚠️ No SDR data in database. Open Admin section to set up the fetcher.")
+    # No banner when heartbeat is healthy — trade gaps are normal (off-hours, weekends)
 
     # ── Platform code → full name ─────────────────────────────────────────────
     PLATFORM_NAMES = {
