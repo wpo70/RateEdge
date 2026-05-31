@@ -8699,157 +8699,157 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         _em_m5.metric("Gross Notional (mm)", f"${_gross_mm:,.0f}")
 
 
-                        # ── Strike Exposure Heatmap ──────────────────────────
-                        st.markdown("#### Strike Exposure Heatmap")
-                        _hem_c1, _hem_c2 = st.columns([2, 3])
-                        with _hem_c1:
-                            _hem_window = st.radio(
-                                "Expiry window",
-                                ["1 Day", "3 Days", "5 Days"],
-                                index=1, horizontal=True, key="em_heatmap_window"
-                            )
-                        _hem_days = {"1 Day": 1, "3 Days": 3, "5 Days": 5}[_hem_window]
+                        with st.expander('Strike Exposure Heatmap', expanded=False):
+                            # ── Strike Exposure Heatmap ──────────────────────────
+                            _hem_c1, _hem_c2 = st.columns([2, 3])
+                            with _hem_c1:
+                                _hem_window = st.radio(
+                                    "Expiry window",
+                                    ["1 Day", "3 Days", "5 Days"],
+                                    index=1, horizontal=True, key="em_heatmap_window"
+                                )
+                            _hem_days = {"1 Day": 1, "3 Days": 3, "5 Days": 5}[_hem_window]
 
-                        # Window filter — independent of strike variance filter
-                        try:
-                            _hem_cutoff = _eff_date + timedelta(days=_hem_days - 1)
-                            while _hem_cutoff.weekday() >= 5:
-                                _hem_cutoff += timedelta(days=1)
-                        except Exception:
-                            _hem_cutoff = None
-
-                        # Use _em_filtered (already window+variance filtered) — vectorized ops only
-                        _hem_base = _em_filtered.copy()
-                        if _hem_cutoff and "expiry_date" in _hem_base.columns:
-                            _hem_base = _hem_base[
-                                (_hem_base["expiry_date"] >= _eff_date) &
-                                (_hem_base["expiry_date"] <= _hem_cutoff)
-                            ].copy()
-
-                        # Vectorized ±50bp filter using pre-computed _fwd column
-                        if "_fwd" in _hem_base.columns and "strike_pct" in _hem_base.columns:
-                            _hem_base["_otm_bp"] = (_hem_base["strike_pct"] - _hem_base["_fwd"].fillna(
-                                _hem_base["swp_tenor"].map(_em_fwd))) * 100
-                            _hem_base = _hem_base[_hem_base["_otm_bp"].between(-50, 50)].copy()
-                        else:
-                            _hem_base = _hem_base.iloc[0:0]  # empty
-
-                        if _hem_base.empty:
-                            st.info(f"No trades within ±50bp of ATM expiring in {_hem_window}.")
-                        else:
-                            # Vectorized 25bp buckets
-                            _hem_base["strike_norm"]  = (_hem_base["strike_pct"].fillna(0) / 0.0025).round() * 0.0025
-                            _hem_base["strike_label"] = _hem_base["strike_norm"].apply(lambda x: f"{x:.5f}%")
-                            _hem_base["notional_m"]   = _hem_base["notional_leg1"].fillna(0) / 1e6
-                            _hem_base["signed_m"]     = _hem_base["notional_m"] * _hem_base["direction"].map(
-                                {"Payer": 1, "Receiver": -1}).fillna(0)
-
-                            def _tnr_hem(t):
-                                import re as _re2
-                                _m = _re2.match(r"(\d+)Y", str(t)); return int(_m.group(1)) if _m else 999
-
-                            _hem_cols = sorted(_hem_base["swp_tenor"].dropna().unique(), key=_tnr_hem)
-
+                            # Window filter — independent of strike variance filter
                             try:
-                                def _tnr_s(t):
-                                    import re as _re3
-                                    _ms = _re3.match(r"(\d+)Y", str(t))
-                                    return int(_ms.group(1)) if _ms else 999
+                                _hem_cutoff = _eff_date + timedelta(days=_hem_days - 1)
+                                while _hem_cutoff.weekday() >= 5:
+                                    _hem_cutoff += timedelta(days=1)
+                            except Exception:
+                                _hem_cutoff = None
 
-                                # Payer (Reds) | Receiver (Blues) side by side
-                                _pivot_payer = _hem_base[_hem_base["direction"]=="Payer"].pivot_table(
-                                    index="strike_label", columns="swp_tenor",
-                                    values="notional_m", aggfunc="sum", fill_value=0)
-                                _pivot_recvr = _hem_base[_hem_base["direction"]=="Receiver"].pivot_table(
-                                    index="strike_label", columns="swp_tenor",
-                                    values="notional_m", aggfunc="sum", fill_value=0)
-                                _all_stk = sorted(
-                                    set(list(_pivot_payer.index)+list(_pivot_recvr.index)),
-                                    key=lambda x: -float(x.replace("%","")))
-                                _all_ten = sorted(
-                                    set(list(_pivot_payer.columns)+list(_pivot_recvr.columns)),
-                                    key=_tnr_s)
-                                _pivot_payer = _pivot_payer.reindex(index=_all_stk, columns=_all_ten, fill_value=0)
-                                _pivot_recvr = _pivot_recvr.reindex(index=_all_stk, columns=_all_ten, fill_value=0)
-                                _hm_h = min(500, 40 + len(_all_stk) * 35)
-                                _hm_p_col, _hm_r_col = st.columns(2)
-                                with _hm_p_col:
-                                    st.markdown("**Payer Exposure ($M)**")
+                            # Use _em_filtered (already window+variance filtered) — vectorized ops only
+                            _hem_base = _em_filtered.copy()
+                            if _hem_cutoff and "expiry_date" in _hem_base.columns:
+                                _hem_base = _hem_base[
+                                    (_hem_base["expiry_date"] >= _eff_date) &
+                                    (_hem_base["expiry_date"] <= _hem_cutoff)
+                                ].copy()
+
+                            # Vectorized ±50bp filter using pre-computed _fwd column
+                            if "_fwd" in _hem_base.columns and "strike_pct" in _hem_base.columns:
+                                _hem_base["_otm_bp"] = (_hem_base["strike_pct"] - _hem_base["_fwd"].fillna(
+                                    _hem_base["swp_tenor"].map(_em_fwd))) * 100
+                                _hem_base = _hem_base[_hem_base["_otm_bp"].between(-50, 50)].copy()
+                            else:
+                                _hem_base = _hem_base.iloc[0:0]  # empty
+
+                            if _hem_base.empty:
+                                st.info(f"No trades within ±50bp of ATM expiring in {_hem_window}.")
+                            else:
+                                # Vectorized 25bp buckets
+                                _hem_base["strike_norm"]  = (_hem_base["strike_pct"].fillna(0) / 0.0025).round() * 0.0025
+                                _hem_base["strike_label"] = _hem_base["strike_norm"].apply(lambda x: f"{x:.5f}%")
+                                _hem_base["notional_m"]   = _hem_base["notional_leg1"].fillna(0) / 1e6
+                                _hem_base["signed_m"]     = _hem_base["notional_m"] * _hem_base["direction"].map(
+                                    {"Payer": 1, "Receiver": -1}).fillna(0)
+
+                                def _tnr_hem(t):
+                                    import re as _re2
+                                    _m = _re2.match(r"(\d+)Y", str(t)); return int(_m.group(1)) if _m else 999
+
+                                _hem_cols = sorted(_hem_base["swp_tenor"].dropna().unique(), key=_tnr_hem)
+
+                                try:
+                                    def _tnr_s(t):
+                                        import re as _re3
+                                        _ms = _re3.match(r"(\d+)Y", str(t))
+                                        return int(_ms.group(1)) if _ms else 999
+
+                                    # Payer (Reds) | Receiver (Blues) side by side
+                                    _pivot_payer = _hem_base[_hem_base["direction"]=="Payer"].pivot_table(
+                                        index="strike_label", columns="swp_tenor",
+                                        values="notional_m", aggfunc="sum", fill_value=0)
+                                    _pivot_recvr = _hem_base[_hem_base["direction"]=="Receiver"].pivot_table(
+                                        index="strike_label", columns="swp_tenor",
+                                        values="notional_m", aggfunc="sum", fill_value=0)
+                                    _all_stk = sorted(
+                                        set(list(_pivot_payer.index)+list(_pivot_recvr.index)),
+                                        key=lambda x: -float(x.replace("%","")))
+                                    _all_ten = sorted(
+                                        set(list(_pivot_payer.columns)+list(_pivot_recvr.columns)),
+                                        key=_tnr_s)
+                                    _pivot_payer = _pivot_payer.reindex(index=_all_stk, columns=_all_ten, fill_value=0)
+                                    _pivot_recvr = _pivot_recvr.reindex(index=_all_stk, columns=_all_ten, fill_value=0)
+                                    _hm_h = min(500, 40 + len(_all_stk) * 35)
+                                    _hm_p_col, _hm_r_col = st.columns(2)
+                                    with _hm_p_col:
+                                        st.markdown("**Payer Exposure ($M)**")
+                                        st.dataframe(
+                                            _pivot_payer.style.background_gradient(cmap="Reds", axis=0).format("{:,.0f}"),
+                                            use_container_width=True, height=_hm_h)
+                                    with _hm_r_col:
+                                        st.markdown("**Receiver Exposure ($M)**")
+                                        st.dataframe(
+                                            _pivot_recvr.style.background_gradient(cmap="Blues", axis=0).format("{:,.0f}"),
+                                            use_container_width=True, height=_hm_h)
+                                    st.markdown("**Strike Concentration ($M total)**")
+                                    _pivot_conc = _hem_base.pivot_table(
+                                        index="strike_label", columns="swp_tenor",
+                                        values="notional_m", aggfunc="sum", fill_value=0)
+                                    _pivot_conc = _pivot_conc.reindex(index=_all_stk, columns=_all_ten, fill_value=0)
                                     st.dataframe(
-                                        _pivot_payer.style.background_gradient(cmap="Reds", axis=None).format("{:,.0f}"),
+                                        _pivot_conc.style.background_gradient(cmap="Reds", axis=0).format("{:,.0f}"),
                                         use_container_width=True, height=_hm_h)
-                                with _hm_r_col:
-                                    st.markdown("**Receiver Exposure ($M)**")
-                                    st.dataframe(
-                                        _pivot_recvr.style.background_gradient(cmap="Blues", axis=None).format("{:,.0f}"),
-                                        use_container_width=True, height=_hm_h)
-                                st.markdown("**Strike Concentration ($M total)**")
-                                _pivot_conc = _hem_base.pivot_table(
-                                    index="strike_label", columns="swp_tenor",
-                                    values="notional_m", aggfunc="sum", fill_value=0)
-                                _pivot_conc = _pivot_conc.reindex(index=_all_stk, columns=_all_ten, fill_value=0)
-                                st.dataframe(
-                                    _pivot_conc.style.background_gradient(cmap="Reds", axis=None).format("{:,.0f}"),
-                                    use_container_width=True, height=_hm_h)
-                                _hem_ds = (_eff_date.strftime("%d-%b") if _eff_date else "?")
-                                _hem_de = (_hem_cutoff.strftime("%d-%b") if _hem_cutoff else "?")
-                                st.caption(f"25bp buckets x tenor | {len(_hem_base)} trades +-50bp ATM | {_hem_ds} to {_hem_de}")
-                                st.markdown("---")
-                                st.markdown("**AI Positioning Commentary**")
-                                if st.button("Generate Commentary", key="em_ai_btn", type="secondary"):
-                                    _ai_ls = [
-                                        f"Window: {_hem_ds} to {_hem_de}",
-                                        f"Trades: {len(_hem_base)}",
-                                        f"Total payer: ${_pivot_payer.values.sum():,.0f}M",
-                                        f"Total receiver: ${_pivot_recvr.values.sum():,.0f}M",
-                                    ]
-                                    for _lb2, _pv2 in [("Payer",_pivot_payer),("Receiver",_pivot_recvr)]:
-                                        _fl2 = _pv2.stack().sort_values(ascending=False)
-                                        for (_s2,_t2),_v2 in _fl2[_fl2>0].head(3).items():
-                                            _ai_ls.append(f"  Top {_lb2}: {_s2} x {_t2} = ${_v2:,.0f}M")
-                                    _ai_ls.append("Forwards:")
-                                    for _tf,_ff in sorted(_em_fwd.items(), key=lambda x: label_to_years(x[0])):
-                                        _ai_ls.append(f"  {_tf}: {_ff:.4f}%")
-                                    _sys = "You are a senior USD rates options strategist."
-                                    _usr = (
-                                        "Write a concise 1-2 paragraph start-of-week positioning commentary "
-                                        "based on DTCC SDR expiry data. Cover strike concentration vs forwards, "
-                                        "payer/receiver skew, key buckets, and expiry risk. "
-                                        "Be specific. Professional rates desk voice.\n\n"
-                                        + "\n".join(_ai_ls)
-                                    )
-                                    try:
-                                        import urllib.request as _ur_e, json as _js_e
-                                        _ak = None
-                                        try: _ak = st.secrets.get("ANTHROPIC_API_KEY")
-                                        except Exception: pass
-                                        if not _ak: _ak = os.environ.get("ANTHROPIC_API_KEY")
-                                        if _ak:
-                                            _bd = _js_e.dumps({"model":"claude-sonnet-4-6","max_tokens":600,
-                                                "system":_sys,"messages":[{"role":"user","content":_usr}]}).encode()
-                                            _rq = _ur_e.Request("https://api.anthropic.com/v1/messages",
-                                                data=_bd, method="POST",
-                                                headers={"x-api-key":_ak,"anthropic-version":"2023-06-01",
-                                                         "content-type":"application/json"})
-                                            with st.spinner("Analysing..."):
-                                                with _ur_e.urlopen(_rq, timeout=30) as _rp:
-                                                    _rs = _js_e.loads(_rp.read().decode())
-                                            _tx = " ".join(b.get("text","") for b in _rs.get("content",[]) if b.get("type")=="text").strip()
-                                            if _tx: st.session_state["_em_comm"] = _tx
-                                            else: st.warning("Empty response.")
-                                        else: st.error("No ANTHROPIC_API_KEY.")
-                                    except Exception as _ae: st.error(f"API error: {_ae}")
-                                _ec = st.session_state.get("_em_comm")
-                                if _ec:
-                                    st.markdown(_ec)
-                                    if st.button("Clear", key="em_comm_clear"):
-                                        st.session_state.pop("_em_comm", None)
-                                        st.rerun()
+                                    _hem_ds = (_eff_date.strftime("%d-%b") if _eff_date else "?")
+                                    _hem_de = (_hem_cutoff.strftime("%d-%b") if _hem_cutoff else "?")
+                                    st.caption(f"25bp buckets x tenor | {len(_hem_base)} trades +-50bp ATM | {_hem_ds} to {_hem_de}")
+                                    st.markdown("---")
+                                    st.markdown("**AI Positioning Commentary**")
+                                    if st.button("Generate Commentary", key="em_ai_btn", type="secondary"):
+                                        _ai_ls = [
+                                            f"Window: {_hem_ds} to {_hem_de}",
+                                            f"Trades: {len(_hem_base)}",
+                                            f"Total payer: ${_pivot_payer.values.sum():,.0f}M",
+                                            f"Total receiver: ${_pivot_recvr.values.sum():,.0f}M",
+                                        ]
+                                        for _lb2, _pv2 in [("Payer",_pivot_payer),("Receiver",_pivot_recvr)]:
+                                            _fl2 = _pv2.stack().sort_values(ascending=False)
+                                            for (_s2,_t2),_v2 in _fl2[_fl2>0].head(3).items():
+                                                _ai_ls.append(f"  Top {_lb2}: {_s2} x {_t2} = ${_v2:,.0f}M")
+                                        _ai_ls.append("Forwards:")
+                                        for _tf,_ff in sorted(_em_fwd.items(), key=lambda x: label_to_years(x[0])):
+                                            _ai_ls.append(f"  {_tf}: {_ff:.4f}%")
+                                        _sys = "You are a senior USD rates options strategist."
+                                        _usr = (
+                                            "Write a concise 1-2 paragraph start-of-week positioning commentary "
+                                            "based on DTCC SDR expiry data. Cover strike concentration vs forwards, "
+                                            "payer/receiver skew, key buckets, and expiry risk. "
+                                            "Be specific. Professional rates desk voice.\n\n"
+                                            + "\n".join(_ai_ls)
+                                        )
+                                        try:
+                                            import urllib.request as _ur_e, json as _js_e
+                                            _ak = None
+                                            try: _ak = st.secrets.get("ANTHROPIC_API_KEY")
+                                            except Exception: pass
+                                            if not _ak: _ak = os.environ.get("ANTHROPIC_API_KEY")
+                                            if _ak:
+                                                _bd = _js_e.dumps({"model":"claude-sonnet-4-6","max_tokens":600,
+                                                    "system":_sys,"messages":[{"role":"user","content":_usr}]}).encode()
+                                                _rq = _ur_e.Request("https://api.anthropic.com/v1/messages",
+                                                    data=_bd, method="POST",
+                                                    headers={"x-api-key":_ak,"anthropic-version":"2023-06-01",
+                                                             "content-type":"application/json"})
+                                                with st.spinner("Analysing..."):
+                                                    with _ur_e.urlopen(_rq, timeout=30) as _rp:
+                                                        _rs = _js_e.loads(_rp.read().decode())
+                                                _tx = " ".join(b.get("text","") for b in _rs.get("content",[]) if b.get("type")=="text").strip()
+                                                if _tx: st.session_state["_em_comm"] = _tx
+                                                else: st.warning("Empty response.")
+                                            else: st.error("No ANTHROPIC_API_KEY.")
+                                        except Exception as _ae: st.error(f"API error: {_ae}")
+                                    _ec = st.session_state.get("_em_comm")
+                                    if _ec:
+                                        st.markdown(_ec)
+                                        if st.button("Clear", key="em_comm_clear"):
+                                            st.session_state.pop("_em_comm", None)
+                                            st.rerun()
 
-                            except Exception as _hem_err:
-                                st.warning(f"Heatmap render error: {_hem_err}")
+                                except Exception as _hem_err:
+                                    st.warning(f"Heatmap render error: {_hem_err}")
 
-                        st.markdown("---")
+                            st.markdown("---")
 
                         # ── Daily Expiry Breakdown ────────────────────────
                         st.markdown("#### Daily Expiry Breakdown")
