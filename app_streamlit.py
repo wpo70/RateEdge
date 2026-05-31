@@ -7979,6 +7979,226 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     "ρ":f"{_sabr_param(_sabr_rdf,_exp,_ten):.3f}" if _sabr_param(_sabr_rdf,_exp,_ten) else "—",
                                     "ν":f"{_sabr_param(_sabr_ndf,_exp,_ten):.3f}" if _sabr_param(_sabr_ndf,_exp,_ten) else "—"})
                             st.dataframe(pd.DataFrame(_prm_rows), use_container_width=True, hide_index=True)
+
+                        # ── Matrix Blend & Smooth ─────────────────────────────
+                        with st.expander("🔧 Blend Market Skew into SABR Matrix", expanded=False):
+                            st.caption(
+                                "Fits ρ and ν to SDR market vols for each active bucket, "
+                                "interpolates adjustments across the full matrix, "
+                                "and blends with current params. Alpha recalibrated to ATM after blend."
+                            )
+
+                            _blend_w = st.slider("Blend weight (0=keep current, 1=full market)", 0.0, 1.0, 0.5, 0.05, key="sdr_sabr_blend_w")
+
+                            if st.button("🔧 Fit & Preview Blended Matrix", key="sdr_sabr_fit_btn", type="secondary"):
+                                import scipy.optimize as _sopt
+                                import scipy.interpolate as _sint
+
+                                # Full expiry/tenor grid from stored SABR surface
+                                _GRID_EXP = [c for c in _sabr_adf["Expiry"].tolist() if c]
+                                _GRID_TEN = [c for c in _sabr_adf.columns if c != "Expiry"]
+                                _grid_exp_y = [label_to_years(e) for e in _GRID_EXP]
+                                _grid_ten_y = [label_to_years(t) for t in _GRID_TEN]
+
+                                # Fit ρ, ν for each active bucket
+                                _fit_results = {}
+                                _fit_rows = []
+                                for (_exp, _ten), _trades in _bucket_map.items():
+                                    try:
+                                        _F = _atm_F.get((_exp, _ten))
+                                        if not _F: continue
+                                        _T = label_to_years(_exp)
+                                        _a0 = _sabr_param(_sabr_adf, _exp, _ten)
+                                        _b0 = _sabr_param(_sabr_bdf, _exp, _ten)
+                                        _r0 = _sabr_param(_sabr_rdf, _exp, _ten)
+                                        _n0 = _sabr_param(_sabr_ndf, _exp, _ten)
+                                        if None in (_a0, _b0, _r0, _n0): continue
+
+                                        # Get market vols for this bucket
+                                        _p_ks2, _r_ks2, _p_ps2, _r_ps2 = [], [], [], []
+                                        for _tr in _trades:
+                                            try:
+                                                _pts2 = str(_tr.get("Strike","")).replace("P:","").replace("R:","").replace("%","").split("/")
+                                                if len(_pts2)==2:
+                                                    _p_ks2.append(float(_pts2[0].strip())/100.0)
+                                                    _r_ks2.append(float(_pts2[1].strip())/100.0)
+                                            except Exception: pass
+                                            try:
+                                                _p_ps2.append(float(_tr.get("P Prem BP") or 0))
+                                                _r_ps2.append(float(_tr.get("R Prem BP") or 0))
+                                            except Exception: pass
+                                        if not _p_ks2: continue
+                                        _Kp = sum(_p_ks2)/len(_p_ks2)
+                                        _Kr = sum(_r_ks2)/len(_r_ks2)
+                                        _vp_mkt = _bch_invert_sabr(sum(_p_ps2)/len(_p_ps2), _F, _Kp, _T, True)
+                                        _vr_mkt = _bch_invert_sabr(sum(_r_ps2)/len(_r_ps2), _F, _Kr, _T, False)
+                                        if not _vp_mkt or not _vr_mkt: continue
+
+                                        # Get ATM vol for this bucket
+                                        _atm_v = None
+                                        _atm_df = st.session_state.get("vol_data",{}).get("USD",{}).get("atm")
+                                        if _atm_df is not None:
+                                            _atm_v = get_matrix_value(_atm_df, _exp, label_to_years(_ten))
+                                        if not _atm_v: continue
+                                        _atm_dec = _atm_v / 10000.0
+
+                                        # 2D optimise: fit ρ, ν to match mkt payer+receiver vols
+                                        def _obj(params):
+                                            _rho_t, _nu_t = params
+                                            try:
+                                                _a_t = sabr_implied_alpha_from_atm(_atm_dec, _F, _T, _b0, _rho_t, _nu_t)
+                                                if _a_t <= 0: return 1e6
+                                                _vp_s = sabr_normal_vol_smile(_F,_Kp,_T,_a_t,_b0,_rho_t,_nu_t)*10000
+                                                _vr_s = sabr_normal_vol_smile(_F,_Kr,_T,_a_t,_b0,_rho_t,_nu_t)*10000
+                                                return (_vp_s-_vp_mkt)**2 + (_vr_s-_vr_mkt)**2
+                                            except Exception:
+                                                return 1e6
+
+                                        _res = _sopt.minimize(
+                                            _obj, [_r0, _n0],
+                                            bounds=[(-0.95, 0.95), (0.01, 2.0)],
+                                            method="L-BFGS-B",
+                                            options={"maxiter": 200, "ftol": 1e-10}
+                                        )
+                                        _rho_fit = _res.x[0]; _nu_fit = _res.x[1]
+                                        _dr = _rho_fit - _r0; _dn = _nu_fit - _n0
+                                        _fit_results[(_exp, _ten)] = {
+                                            "rho_fit": _rho_fit, "nu_fit": _nu_fit,
+                                            "dr": _dr, "dn": _dn,
+                                            "exp_y": label_to_years(_exp),
+                                            "ten_y": label_to_years(_ten),
+                                            "n_trades": len(_trades),
+                                        }
+                                        _fit_rows.append({
+                                            "Bucket": f"{_exp}×{_ten}",
+                                            "ρ curr": f"{_r0:.3f}", "ρ fit": f"{_rho_fit:.3f}", "Δρ": f"{_dr:+.3f}",
+                                            "ν curr": f"{_n0:.3f}", "ν fit": f"{_nu_fit:.3f}", "Δν": f"{_dn:+.3f}",
+                                            "Trades": len(_trades),
+                                        })
+                                    except Exception as _fe:
+                                        _fit_rows.append({"Bucket":f"{_exp}×{_ten}","ρ curr":"—","ρ fit":"—","Δρ":f"err:{_fe}","ν curr":"—","ν fit":"—","Δν":"—","Trades":len(_trades)})
+
+                                if not _fit_results:
+                                    st.warning("Could not fit any buckets — need ATM straddles in same session for F.")
+                                else:
+                                    st.markdown("**Fitted ρ / ν per active bucket:**")
+                                    st.dataframe(pd.DataFrame(_fit_rows), use_container_width=True, hide_index=True)
+
+                                    # Interpolate Δρ and Δν across full grid
+                                    _pts_exp = [v["exp_y"] for v in _fit_results.values()]
+                                    _pts_ten = [v["ten_y"] for v in _fit_results.values()]
+                                    _pts_dr  = [v["dr"]    for v in _fit_results.values()]
+                                    _pts_dn  = [v["dn"]    for v in _fit_results.values()]
+                                    _wts     = [v["n_trades"] for v in _fit_results.values()]
+
+                                    # Build full grid coordinates
+                                    _gx = []; _gy = []
+                                    for _ey in _grid_exp_y:
+                                        for _ty in _grid_ten_y:
+                                            _gx.append(_ey); _gy.append(_ty)
+                                    _gxy = list(zip(_gx, _gy))
+
+                                    # RBF interpolation of Δρ and Δν
+                                    try:
+                                        if len(_fit_results) >= 3:
+                                            _rbf_dr = _sint.RBFInterpolator(
+                                                list(zip(_pts_exp, _pts_ten)), _pts_dr,
+                                                kernel="thin_plate_spline", smoothing=0.1
+                                            )
+                                            _rbf_dn = _sint.RBFInterpolator(
+                                                list(zip(_pts_exp, _pts_ten)), _pts_dn,
+                                                kernel="thin_plate_spline", smoothing=0.1
+                                            )
+                                            _dr_grid = _rbf_dr(_gxy)
+                                            _dn_grid = _rbf_dn(_gxy)
+                                        else:
+                                            # Too few points — use nearest neighbour
+                                            _dr_grid = _sint.griddata(
+                                                list(zip(_pts_exp, _pts_ten)), _pts_dr, _gxy, method="nearest"
+                                            )
+                                            _dn_grid = _sint.griddata(
+                                                list(zip(_pts_exp, _pts_ten)), _pts_dn, _gxy, method="nearest"
+                                            )
+                                    except Exception as _ie:
+                                        st.warning(f"Interpolation fallback (nearest): {_ie}")
+                                        _dr_grid = _sint.griddata(
+                                            list(zip(_pts_exp, _pts_ten)), _pts_dr, _gxy, method="nearest"
+                                        )
+                                        _dn_grid = _sint.griddata(
+                                            list(zip(_pts_exp, _pts_ten)), _pts_dn, _gxy, method="nearest"
+                                        )
+
+                                    # Build blended rho/nu matrices
+                                    _new_rho_df = _sabr_rdf.copy()
+                                    _new_nu_df  = _sabr_ndf.copy()
+                                    _new_alpha_df = _sabr_adf.copy()
+                                    _atm_df2 = st.session_state.get("vol_data",{}).get("USD",{}).get("atm")
+
+                                    _idx = 0
+                                    _delta_rows = []
+                                    for _ei, _exp in enumerate(_GRID_EXP):
+                                        _dr_row = {"Expiry": _exp}
+                                        _dn_row = {"Expiry": _exp}
+                                        for _ti, _ten in enumerate(_GRID_TEN):
+                                            _dr_val = float(_dr_grid[_idx]) * _blend_w
+                                            _dn_val = float(_dn_grid[_idx]) * _blend_w
+                                            _r_cur = _sabr_param(_sabr_rdf, _exp, _ten)
+                                            _n_cur = _sabr_param(_sabr_ndf, _exp, _ten)
+                                            _b_cur = _sabr_param(_sabr_bdf, _exp, _ten)
+                                            if _r_cur is not None and _n_cur is not None:
+                                                _r_new = float(np.clip(_r_cur + _dr_val, -0.95, 0.95))
+                                                _n_new = float(np.clip(_n_cur + _dn_val, 0.01, 2.0))
+                                                # Find the row index in _new_rho_df
+                                                _mask = _new_rho_df["Expiry"].str.lower().str.strip() == _exp.lower().strip()
+                                                if _mask.any() and _ten in _new_rho_df.columns:
+                                                    _new_rho_df.loc[_mask, _ten] = _r_new
+                                                    _new_nu_df.loc[_mask, _ten]  = _n_new
+                                                    # Recalibrate alpha to ATM
+                                                    if _atm_df2 is not None and _b_cur is not None:
+                                                        _atm_v2 = get_matrix_value(_atm_df2, _exp, label_to_years(_ten))
+                                                        _F2 = _atm_F.get((_exp, _ten))
+                                                        if _atm_v2 and _F2:
+                                                            try:
+                                                                _a_new = sabr_implied_alpha_from_atm(
+                                                                    _atm_v2/10000.0, _F2,
+                                                                    label_to_years(_exp), _b_cur, _r_new, _n_new
+                                                                )
+                                                                if _a_new > 0:
+                                                                    _new_alpha_df.loc[_mask, _ten] = _a_new
+                                                            except Exception: pass
+                                                _dr_row[_ten] = f"{_dr_val:+.3f}"
+                                                _dn_row[_ten] = f"{_dn_val:+.3f}"
+                                            _idx += 1
+                                        _delta_rows.append((_dr_row, _dn_row))
+
+                                    # Show Δρ and Δν matrices
+                                    _show_dr = [r[0] for r in _delta_rows]
+                                    _show_dn = [r[1] for r in _delta_rows]
+                                    _mc1, _mc2 = st.columns(2)
+                                    with _mc1:
+                                        st.markdown("**Δρ (blended)**")
+                                        st.dataframe(pd.DataFrame(_show_dr).set_index("Expiry"), use_container_width=True)
+                                    with _mc2:
+                                        st.markdown("**Δν (blended)**")
+                                        st.dataframe(pd.DataFrame(_show_dn).set_index("Expiry"), use_container_width=True)
+
+                                    # Store blended params for apply
+                                    st.session_state["_sdr_sabr_blended"] = {
+                                        "rho": _new_rho_df, "nu": _new_nu_df, "alpha": _new_alpha_df
+                                    }
+                                    st.success(f"Preview ready — {len(_fit_results)} buckets fitted, "
+                                               f"blend weight {_blend_w:.0%}. Click Apply to update session.")
+
+                            # Apply button — only shown after preview
+                            if st.session_state.get("_sdr_sabr_blended"):
+                                if st.button("✅ Apply Blended SABR to Session", key="sdr_sabr_apply_btn", type="primary"):
+                                    _bl = st.session_state["_sdr_sabr_blended"]
+                                    _old_atm_bl, _, _b_bl, _, _ = get_ccy_vol_data("USD")
+                                    set_ccy_vol_data("USD", _old_atm_bl, _bl["alpha"], _b_bl, _bl["rho"], _bl["nu"])
+                                    st.session_state.pop("_sdr_sabr_blended", None)
+                                    st.session_state.pop("_alpha_check_result", None)
+                                    st.success("✅ Blended SABR applied to session. Run α Check to verify.")
+                                    st.rerun()
                     else:
                         st.info("Could not parse strike/premium data from USD strangles in this range.")
 
