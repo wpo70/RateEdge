@@ -8871,6 +8871,141 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                         st.markdown("---")
 
+                        # PDF Report
+                        if st.button("Download PDF Report", key="em_pdf_btn", type="secondary"):
+                            try:
+                                import io as _io, re as _re5
+                                from reportlab.lib.pagesizes import A4
+                                from reportlab.lib import colors as _rlc
+                                from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                                from reportlab.lib.units import mm
+                                from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+                                _pdf_buf = _io.BytesIO()
+                                _doc = SimpleDocTemplate(_pdf_buf, pagesize=A4,
+                                    leftMargin=15*mm, rightMargin=15*mm, topMargin=15*mm, bottomMargin=15*mm)
+                                _W = A4[0] - 30*mm
+                                _s_title = ParagraphStyle("t",fontSize=18,fontName="Helvetica-Bold",textColor=_rlc.HexColor("#c0392b"),spaceAfter=4)
+                                _s_sub   = ParagraphStyle("s",fontSize=9,fontName="Helvetica",textColor=_rlc.HexColor("#888888"),spaceAfter=8)
+                                _s_h2    = ParagraphStyle("h2",fontSize=11,fontName="Helvetica-Bold",textColor=_rlc.HexColor("#c0392b"),spaceBefore=10,spaceAfter=4)
+                                _s_body  = ParagraphStyle("b",fontSize=8.5,fontName="Helvetica",leading=13,spaceAfter=6)
+                                _story = []
+                                # Header
+                                _rw = f"{_eff_date.strftime('%d-%b-%Y')} to {_hem_cutoff.strftime('%d-%b-%Y')}" if _eff_date and _hem_cutoff else "—"
+                                _story.append(Paragraph("RateEdge", _s_title))
+                                _story.append(Paragraph(f"Expiry Monitor  |  {_rw}  |  USD Swaptions", _s_sub))
+                                _story.append(HRFlowable(width="100%",thickness=1,color=_rlc.HexColor("#c0392b")))
+                                _story.append(Spacer(1,6))
+                                # Commentary
+                                _ct = st.session_state.get("_em_comm","")
+                                if _ct:
+                                    _story.append(Paragraph("Positioning Commentary", _s_h2))
+                                    _story.append(Paragraph(_ct.replace("\n\n","<br/><br/>").replace("\n","<br/>"), _s_body))
+                                # Summary
+                                _ems_p = st.session_state.get("_em_hms",{})
+                                if _ems_p:
+                                    _story.append(Paragraph("Summary", _s_h2))
+                                    _mt = Table([["Window","Trades","Payer","Receiver"],
+                                                 [_ems_p.get("w","—"),str(_ems_p.get("n","—")),
+                                                  f"${_ems_p.get('p',0):,.0f}M",f"${_ems_p.get('r',0):,.0f}M"]],
+                                                colWidths=[_W*0.35,_W*0.15,_W*0.25,_W*0.25])
+                                    _mt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),_rlc.HexColor("#2c2c2c")),
+                                        ("TEXTCOLOR",(0,0),(-1,0),_rlc.white),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+                                        ("FONTSIZE",(0,0),(-1,-1),8),("GRID",(0,0),(-1,-1),0.5,_rlc.HexColor("#444444")),
+                                        ("TEXTCOLOR",(0,1),(-1,-1),_rlc.HexColor("#dddddd")),("TOPPADDING",(0,0),(-1,-1),4),("BOTTOMPADDING",(0,0),(-1,-1),4)]))
+                                    _story.append(_mt)
+                                    _story.append(Spacer(1,6))
+                                # Heatmaps
+                                def _piv_rl(piv, title, hi):
+                                    if piv is None or piv.empty: return
+                                    _story.append(Paragraph(title, _s_h2))
+                                    _cols2 = list(piv.columns); _rows2 = list(piv.index)
+                                    _mx = float(piv.values.max()) if piv.values.max()>0 else 1
+                                    _dat = [[""] + _cols2]
+                                    for _r2 in _rows2:
+                                        _dat.append([_r2]+[f"{piv.loc[_r2,_c2]:,.0f}" if piv.loc[_r2,_c2] else "" for _c2 in _cols2])
+                                    _cw2 = _W/(len(_cols2)+1)
+                                    _t2 = Table(_dat, colWidths=[_cw2]*(len(_cols2)+1))
+                                    _ts2 = [("FONTSIZE",(0,0),(-1,-1),6.5),("GRID",(0,0),(-1,-1),0.3,_rlc.HexColor("#333333")),
+                                        ("BACKGROUND",(0,0),(-1,0),_rlc.HexColor("#2c2c2c")),("TEXTCOLOR",(0,0),(-1,0),_rlc.white),
+                                        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTNAME",(0,0),(0,-1),"Helvetica-Bold"),
+                                        ("BACKGROUND",(0,1),(0,-1),_rlc.HexColor("#1e1e1e")),("TEXTCOLOR",(0,1),(0,-1),_rlc.HexColor("#cccccc")),
+                                        ("ALIGN",(1,1),(-1,-1),"RIGHT"),("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2)]
+                                    _r_hex = (int(hi[1:3],16)/255, int(hi[3:5],16)/255, int(hi[5:7],16)/255)
+                                    for _ri2,_r2 in enumerate(_rows2):
+                                        for _ci2,_c2 in enumerate(_cols2):
+                                            v2 = float(piv.loc[_r2,_c2])
+                                            if v2>0:
+                                                _a2 = min(int(v2/_mx*200)+20,220)
+                                                _ts2.append(("BACKGROUND",(_ci2+1,_ri2+1),(_ci2+1,_ri2+1),
+                                                    _rlc.Color(_r_hex[0],_r_hex[1],_r_hex[2],alpha=_a2/255)))
+                                                _ts2.append(("TEXTCOLOR",(_ci2+1,_ri2+1),(_ci2+1,_ri2+1),
+                                                    _rlc.white if _a2>120 else _rlc.HexColor("#cccccc")))
+                                    _t2.setStyle(TableStyle(_ts2))
+                                    _story.append(_t2); _story.append(Spacer(1,4))
+
+                                if "_em_results" in st.session_state:
+                                    try:
+                                        _emr = st.session_state["_em_results"]
+                                        _emf2 = st.session_state.get("_em_fwd_rates",{})
+                                        _hb2 = _emr.copy()
+                                        if _hem_cutoff and "expiry_date" in _hb2.columns:
+                                            _hb2 = _hb2[(_hb2["expiry_date"]>=_eff_date)&(_hb2["expiry_date"]<=_hem_cutoff)]
+                                        if "_fwd" in _hb2.columns:
+                                            _hb2["_ob2"] = (_hb2["strike_pct"]-_hb2["_fwd"].fillna(_hb2["swp_tenor"].map(_emf2)))*100
+                                            _hb2 = _hb2[_hb2["_ob2"].between(-50,50)].copy()
+                                        if not _hb2.empty:
+                                            _hb2["sl2"] = (_hb2["strike_pct"].fillna(0)/0.0025).round()*0.0025
+                                            _hb2["sl2"] = _hb2["sl2"].apply(lambda x: f"{x:.5f}%")
+                                            _hb2["nm2"] = _hb2["notional_leg1"].fillna(0)/1e6
+                                            def _tn5(t):
+                                                m2=__import__("re").match(r"(\d+)Y",str(t)); return int(m2.group(1)) if m2 else 999
+                                            _as2 = sorted(set(_hb2["sl2"]),key=lambda x:-float(x.replace("%","")))
+                                            _at2 = sorted(_hb2["swp_tenor"].dropna().unique(),key=_tn5)
+                                            _pp3 = _hb2[_hb2["direction"]=="Payer"].pivot_table(index="sl2",columns="swp_tenor",values="nm2",aggfunc="sum",fill_value=0).reindex(index=_as2,columns=_at2,fill_value=0)
+                                            _rr3 = _hb2[_hb2["direction"]=="Receiver"].pivot_table(index="sl2",columns="swp_tenor",values="nm2",aggfunc="sum",fill_value=0).reindex(index=_as2,columns=_at2,fill_value=0)
+                                            _cc3 = _hb2.pivot_table(index="sl2",columns="swp_tenor",values="nm2",aggfunc="sum",fill_value=0).reindex(index=_as2,columns=_at2,fill_value=0)
+                                            _piv_rl(_pp3,"Payer Exposure ($M)","#c0392b")
+                                            _piv_rl(_rr3,"Receiver Exposure ($M)","#2980b9")
+                                            _piv_rl(_cc3,"Strike Concentration ($M)","#c0392b")
+                                    except Exception as _pe2: _story.append(Paragraph(f"Heatmap error: {_pe2}", _s_body))
+                                # Economic calendar
+                                _et2 = st.session_state.get("_em_target")
+                                if _et2:
+                                    _story.append(Paragraph("Economic Calendar", _s_h2))
+                                    _em2,_ef2 = _et2
+                                    _FOMC3=[date(2026,1,28),date(2026,3,18),date(2026,4,29),date(2026,6,17),date(2026,7,29),date(2026,9,16),date(2026,10,28),date(2026,12,9)]
+                                    _CPI3=[date(2026,2,13),date(2026,3,11),date(2026,4,14),date(2026,5,12),date(2026,6,10),date(2026,7,14),date(2026,8,12),date(2026,9,9),date(2026,10,14),date(2026,11,12),date(2026,12,9)]
+                                    _NFP3=[date(2026,2,6),date(2026,3,6),date(2026,4,3),date(2026,5,1),date(2026,6,5),date(2026,7,2),date(2026,8,7),date(2026,9,4)]
+                                    _ecr=[["Date","Event"]]
+                                    _d3=_em2
+                                    while _d3<=_ef2:
+                                        _ev3=[]
+                                        if _d3 in _FOMC3: _ev3.append("FOMC")
+                                        if _d3 in _CPI3: _ev3.append("CPI")
+                                        if _d3 in _NFP3: _ev3.append("NFP")
+                                        if _ev3: _ecr.append([_d3.strftime("%a %d-%b"),", ".join(_ev3)])
+                                        _d3+=timedelta(days=1)
+                                    if len(_ecr)>1:
+                                        _ect=Table(_ecr,colWidths=[_W*0.3,_W*0.7])
+                                        _ect.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),_rlc.HexColor("#2c2c2c")),
+                                            ("TEXTCOLOR",(0,0),(-1,0),_rlc.white),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),
+                                            ("FONTSIZE",(0,0),(-1,-1),8),("GRID",(0,0),(-1,-1),0.5,_rlc.HexColor("#444444")),
+                                            ("TEXTCOLOR",(0,1),(-1,-1),_rlc.HexColor("#dddddd")),
+                                            ("ROWBACKGROUNDS",(0,1),(-1,-1),[_rlc.HexColor("#1a1a1a"),_rlc.HexColor("#222222")]),
+                                            ("TOPPADDING",(0,0),(-1,-1),4),("BOTTOMPADDING",(0,0),(-1,-1),4)]))
+                                        _story.append(_ect)
+                                    else:
+                                        _story.append(Paragraph("No major events in this window.", _s_body))
+                                # Footer
+                                _story.append(Spacer(1,8))
+                                _story.append(HRFlowable(width="100%",thickness=0.5,color=_rlc.HexColor("#444444")))
+                                _story.append(Paragraph(f"RateEdge  |  {datetime.now(SYDNEY_TZ).strftime('%d-%b-%Y %H:%M')} AEST  |  Confidential", _s_sub))
+                                _doc.build(_story)
+                                _pdf_bytes = _pdf_buf.getvalue()
+                                _fn3 = f"RateEdge_EM_{_eff_date.strftime('%d%b%Y') if _eff_date else 'report'}.pdf"
+                                st.download_button("Download PDF", data=_pdf_bytes, file_name=_fn3, mime="application/pdf", key="em_pdf_dl")
+                            except Exception as _pdfe: st.error(f"PDF error: {_pdfe}"); import traceback; st.code(traceback.format_exc())
+
                         # ── Daily Expiry Breakdown ────────────────────────
                         st.markdown("#### Daily Expiry Breakdown")
                         _expiry_days = sorted(_em_filtered["expiry_date"].unique())
