@@ -29838,6 +29838,8 @@ def main():
     if _tab_override and _tab_override in _tab_names:
         st.session_state["_main_nav"] = _tab_override
 
+    st.markdown('<style>[data-testid="stMainBlockContainer"]{padding-top:0 !important}[data-testid="stAppViewBlockContainer"]{padding-top:0 !important}</style>', unsafe_allow_html=True)
+
     _active = st.radio("Navigation", _tab_names, horizontal=True, key="_main_nav",
                         label_visibility="collapsed")
     _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
