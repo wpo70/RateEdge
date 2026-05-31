@@ -8718,42 +8718,31 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         except Exception:
                             _hem_cutoff = None
 
-                        # Use _em_df (unfiltered by strike variance) — show ±50bp from ATM
-                        _hem_base = _em_df.copy()
+                        # Use _em_filtered (already window+variance filtered) — vectorized ops only
+                        _hem_base = _em_filtered.copy()
                         if _hem_cutoff and "expiry_date" in _hem_base.columns:
                             _hem_base = _hem_base[
                                 (_hem_base["expiry_date"] >= _eff_date) &
                                 (_hem_base["expiry_date"] <= _hem_cutoff)
-                            ]
+                            ].copy()
 
-                        # Filter to ±50bp from forward
-                        def _hem_otm_bp(row):
-                            fwd = row.get("_fwd")
-                            if fwd is None or pd.isna(fwd):
-                                fwd = _em_fwd.get(str(row.get("swp_tenor", "")))
-                            s = row.get("strike_pct")
-                            if fwd is None or pd.isna(s): return None
-                            return (s - fwd) * 100
-
-                        _hem_base["_otm_bp"] = _hem_base.apply(_hem_otm_bp, axis=1)
-                        _hem_base = _hem_base[_hem_base["_otm_bp"].between(-50, 50, inclusive="both")].copy()
+                        # Vectorized ±50bp filter using pre-computed _fwd column
+                        if "_fwd" in _hem_base.columns and "strike_pct" in _hem_base.columns:
+                            _hem_base["_otm_bp"] = (_hem_base["strike_pct"] - _hem_base["_fwd"].fillna(
+                                _hem_base["swp_tenor"].map(_em_fwd))) * 100
+                            _hem_base = _hem_base[_hem_base["_otm_bp"].between(-50, 50)].copy()
+                        else:
+                            _hem_base = _hem_base.iloc[0:0]  # empty
 
                         if _hem_base.empty:
                             st.info(f"No trades within ±50bp of ATM expiring in {_hem_window}.")
                         else:
-                            # 25bp strike buckets matching existing heatmap style
-                            def _hem_norm(row):
-                                fwd = row.get("_fwd")
-                                if fwd is None or pd.isna(fwd):
-                                    fwd = _em_fwd.get(str(row.get("swp_tenor", "")), 0)
-                                s = row.get("strike_pct", 0)
-                                return round(float(s or 0), 5)
-
-                            _hem_base["strike_norm"]   = _hem_base["strike_pct"].apply(lambda x: round(float(x or 0) / 0.0025) * 0.0025)
-                            _hem_base["strike_label"]  = _hem_base["strike_norm"].apply(lambda x: f"{x:.5f}%")
-                            _hem_base["notional_m"]    = _hem_base["notional_leg1"].fillna(0) / 1e6
-                            _hem_base["signed_m"]      = _hem_base.apply(
-                                lambda r: r["notional_m"] if r["direction"] == "Payer" else -r["notional_m"], axis=1)
+                            # Vectorized 25bp buckets
+                            _hem_base["strike_norm"]  = (_hem_base["strike_pct"].fillna(0) / 0.0025).round() * 0.0025
+                            _hem_base["strike_label"] = _hem_base["strike_norm"].apply(lambda x: f"{x:.5f}%")
+                            _hem_base["notional_m"]   = _hem_base["notional_leg1"].fillna(0) / 1e6
+                            _hem_base["signed_m"]     = _hem_base["notional_m"] * _hem_base["direction"].map(
+                                {"Payer": 1, "Receiver": -1}).fillna(0)
 
                             def _tnr_hem(t):
                                 import re as _re2
@@ -9029,139 +9018,134 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                            "Seller Net ($) = Orig Prem − Curr Val (positive = covered, negative = underwater). "
                                            "BE Fwd = forward at which buyer breaks even.")
 
-                        # ── Strike Exposure by Swap Tenor ─────────────────
-                        st.markdown("#### Strike Exposure by Swap Tenor")
-                    _em_tenors = sorted(_em_filtered["swp_tenor"].dropna().unique(),
-                                        key=_safe_tenor_sort)
-                    for _swt in _em_tenors:
-                        _subset = _em_filtered[_em_filtered["swp_tenor"] == _swt].copy()
-                        if _subset.empty:
-                            continue
-                        _fwd_vals = _subset["_fwd"].dropna() if "_fwd" in _subset.columns else pd.Series(dtype=float)
-                        if len(_fwd_vals) > 0:
-                            _fwd_lo, _fwd_hi = _fwd_vals.min(), _fwd_vals.max()
-                            if abs(_fwd_hi - _fwd_lo) < 0.001:
-                                _fwd_lbl = f" | Fwd: {_fwd_lo:.3f}%"
+                    with st.expander("📊 Strike Exposure by Swap Tenor", expanded=False):
+                        _em_tenors = sorted(_em_filtered["swp_tenor"].dropna().unique(),
+                                            key=_safe_tenor_sort)
+                        for _swt in _em_tenors:
+                            _subset = _em_filtered[_em_filtered["swp_tenor"] == _swt].copy()
+                            if _subset.empty:
+                                continue
+                            _fwd_vals = _subset["_fwd"].dropna() if "_fwd" in _subset.columns else pd.Series(dtype=float)
+                            if len(_fwd_vals) > 0:
+                                _fwd_lo, _fwd_hi = _fwd_vals.min(), _fwd_vals.max()
+                                if abs(_fwd_hi - _fwd_lo) < 0.001:
+                                    _fwd_lbl = f" | Fwd: {_fwd_lo:.3f}%"
+                                else:
+                                    _fwd_lbl = f" | Fwd: {_fwd_lo:.3f}–{_fwd_hi:.3f}%"
                             else:
-                                _fwd_lbl = f" | Fwd: {_fwd_lo:.3f}–{_fwd_hi:.3f}%"
-                        else:
-                            _fwd_r = _em_fwd.get(str(_swt))
-                            _fwd_lbl = f" | Fwd: {_fwd_r:.3f}%" if _fwd_r else ""
-                        st.markdown(f"**{_swt} Swap{_fwd_lbl}** — {len(_subset)} trades, "
-                                    f"${_subset['notional_mm'].sum():,.0f}mm gross")
+                                _fwd_r = _em_fwd.get(str(_swt))
+                                _fwd_lbl = f" | Fwd: {_fwd_r:.3f}%" if _fwd_r else ""
+                            st.markdown(f"**{_swt} Swap{_fwd_lbl}** — {len(_subset)} trades, "
+                                        f"${_subset['notional_mm'].sum():,.0f}mm gross")
 
-                        _subset["strike_bucket"] = (_subset["strike_pct"] * 8).round() / 8
-                        _bucket_agg = _subset.groupby("strike_bucket").agg(
-                            count=("notional_mm", "count"),
-                            payer_mm=("signed_notional_mm", lambda x: x[x > 0].sum()),
-                            rcvr_mm=("signed_notional_mm", lambda x: x[x < 0].sum()),
+                            _subset["strike_bucket"] = (_subset["strike_pct"] * 8).round() / 8
+                            _bucket_agg = _subset.groupby("strike_bucket").agg(
+                                count=("notional_mm", "count"),
+                                payer_mm=("signed_notional_mm", lambda x: x[x > 0].sum()),
+                                rcvr_mm=("signed_notional_mm", lambda x: x[x < 0].sum()),
+                                net_mm=("signed_notional_mm", "sum"),
+                            ).reset_index()
+                            _bucket_agg.columns = ["Strike (%)", "Trades", "Payer (mm)", "Receiver (mm)", "Net (mm)"]
+                            _bucket_agg["Strike (%)"] = _bucket_agg["Strike (%)"].apply(lambda x: f"{x:.3f}")
+                            _bucket_agg["Payer (mm)"] = _bucket_agg["Payer (mm)"].apply(lambda x: f"${x:,.0f}" if x else "—")
+                            _bucket_agg["Receiver (mm)"] = _bucket_agg["Receiver (mm)"].apply(lambda x: f"${x:,.0f}" if x else "—")
+                            _bucket_agg["Net (mm)"] = _bucket_agg["Net (mm)"].apply(lambda x: f"${x:+,.0f}")
+                            st.dataframe(_bucket_agg, use_container_width=True, hide_index=True)
+
+                    with st.expander("🎯 Moneyness Classification", expanded=False):
+                        st.caption("Based on current forward rates vs strike. Deep ITM = likely exercised, Deep OTM = likely expires worthless.")
+                        _money_agg = _em_filtered.groupby("moneyness").agg(
+                            trades=("notional_mm", "count"),
+                            gross_mm=("notional_mm", "sum"),
                             net_mm=("signed_notional_mm", "sum"),
                         ).reset_index()
-                        _bucket_agg.columns = ["Strike (%)", "Trades", "Payer (mm)", "Receiver (mm)", "Net (mm)"]
-                        _bucket_agg["Strike (%)"] = _bucket_agg["Strike (%)"].apply(lambda x: f"{x:.3f}")
-                        _bucket_agg["Payer (mm)"] = _bucket_agg["Payer (mm)"].apply(lambda x: f"${x:,.0f}" if x else "—")
-                        _bucket_agg["Receiver (mm)"] = _bucket_agg["Receiver (mm)"].apply(lambda x: f"${x:,.0f}" if x else "—")
-                        _bucket_agg["Net (mm)"] = _bucket_agg["Net (mm)"].apply(lambda x: f"${x:+,.0f}")
-                        st.dataframe(_bucket_agg, use_container_width=True, hide_index=True)
+                        _money_order = ["Deep ITM", "ITM", "ATM", "OTM", "Deep OTM", "Unknown"]
+                        _money_agg["_sort"] = _money_agg["moneyness"].map({m: i for i, m in enumerate(_money_order)})
+                        _money_agg = _money_agg.sort_values("_sort").drop(columns="_sort")
+                        _money_agg.columns = ["Moneyness", "Trades", "Gross (mm)", "Net (mm)"]
+                        _money_agg["Gross (mm)"] = _money_agg["Gross (mm)"].apply(lambda x: f"${x:,.0f}")
+                        _money_agg["Net (mm)"] = _money_agg["Net (mm)"].apply(lambda x: f"${x:+,.0f}")
+                        st.dataframe(_money_agg, use_container_width=True, hide_index=True)
 
-                    # Moneyness
-                    st.markdown("#### Moneyness Classification")
-                    st.caption("Based on current forward rates vs strike. Deep ITM = likely exercised, Deep OTM = likely expires worthless.")
-                    _money_agg = _em_filtered.groupby("moneyness").agg(
-                        trades=("notional_mm", "count"),
-                        gross_mm=("notional_mm", "sum"),
-                        net_mm=("signed_notional_mm", "sum"),
-                    ).reset_index()
-                    _money_order = ["Deep ITM", "ITM", "ATM", "OTM", "Deep OTM", "Unknown"]
-                    _money_agg["_sort"] = _money_agg["moneyness"].map({m: i for i, m in enumerate(_money_order)})
-                    _money_agg = _money_agg.sort_values("_sort").drop(columns="_sort")
-                    _money_agg.columns = ["Moneyness", "Trades", "Gross (mm)", "Net (mm)"]
-                    _money_agg["Gross (mm)"] = _money_agg["Gross (mm)"].apply(lambda x: f"${x:,.0f}")
-                    _money_agg["Net (mm)"] = _money_agg["Net (mm)"].apply(lambda x: f"${x:+,.0f}")
-                    st.dataframe(_money_agg, use_container_width=True, hide_index=True)
+                    with st.expander("🏆 Largest Individual Positions", expanded=False):
+                        _top = _em_filtered.nlargest(20, "notional_mm")[
+                            ["opt_tenor", "swp_tenor", "direction", "strike_pct", "_fwd",
+                             "notional_mm", "moneyness", "expiry_date", "exec_date", "platform_identifier"]
+                        ].copy()
+                        _top["Tenor"] = _top.apply(lambda r: f"{r['swp_tenor']} ({r['opt_tenor']})", axis=1)
+                        _top["strike_pct"] = _top["strike_pct"].apply(lambda x: f"{x:.5f}%" if pd.notna(x) else "—")
+                        _top["_fwd"] = _top["_fwd"].apply(lambda x: f"{x:.4f}%" if pd.notna(x) else "—")
+                        _top["notional_mm"] = _top["notional_mm"].apply(lambda x: f"{x:,.0f}")
+                        _top["expiry_date"] = _top["expiry_date"].apply(lambda x: x.strftime("%d-%b") if x else "—")
+                        _top["platform_identifier"] = _top["platform_identifier"].map(
+                            lambda x: PLATFORM_NAMES.get(str(x), str(x)))
+                        _top = _top[["Tenor", "direction", "strike_pct", "_fwd", "notional_mm", "moneyness", "expiry_date", "exec_date", "platform_identifier"]]
+                        _top.columns = ["Tenor", "Dir", "Strike", "ATM Fwd", "Notional (mm)", "Moneyness", "Expiry", "Exec Date", "Platform"]
+                        st.dataframe(_top, use_container_width=True, hide_index=True)
 
-                    # Largest positions
-                    st.markdown("#### Largest Individual Positions")
-                    _top = _em_filtered.nlargest(20, "notional_mm")[
-                        ["opt_tenor", "swp_tenor", "direction", "strike_pct", "_fwd",
-                         "notional_mm", "moneyness", "expiry_date", "exec_date", "platform_identifier"]
-                    ].copy()
-                    _top["Tenor"] = _top.apply(lambda r: f"{r['swp_tenor']} ({r['opt_tenor']})", axis=1)
-                    _top["strike_pct"] = _top["strike_pct"].apply(lambda x: f"{x:.5f}%" if pd.notna(x) else "—")
-                    _top["_fwd"] = _top["_fwd"].apply(lambda x: f"{x:.4f}%" if pd.notna(x) else "—")
-                    _top["notional_mm"] = _top["notional_mm"].apply(lambda x: f"{x:,.0f}")
-                    _top["expiry_date"] = _top["expiry_date"].apply(lambda x: x.strftime("%d-%b") if x else "—")
-                    _top["platform_identifier"] = _top["platform_identifier"].map(
-                        lambda x: PLATFORM_NAMES.get(str(x), str(x)))
-                    _top = _top[["Tenor", "direction", "strike_pct", "_fwd", "notional_mm", "moneyness", "expiry_date", "exec_date", "platform_identifier"]]
-                    _top.columns = ["Tenor", "Dir", "Strike", "ATM Fwd", "Notional (mm)", "Moneyness", "Expiry", "Exec Date", "Platform"]
-                    st.dataframe(_top, use_container_width=True, hide_index=True)
+                    with st.expander("⏱ By Option Tenor", expanded=False):
+                        _ot_agg = _em_filtered.groupby("opt_tenor").agg(
+                            trades=("notional_mm", "count"),
+                            gross_mm=("notional_mm", "sum"),
+                            net_mm=("signed_notional_mm", "sum"),
+                            avg_strike=("strike_pct", "mean"),
+                        ).reset_index()
+                        _ot_agg = _ot_agg.sort_values("opt_tenor",
+                            key=lambda x: x.map(lambda v: _TENORS_MONTHS.get(v, 99)))
+                        _ot_agg.columns = ["Opt Tenor", "Trades", "Gross (mm)", "Net (mm)", "Avg Strike"]
+                        _ot_agg["Gross (mm)"] = _ot_agg["Gross (mm)"].apply(lambda x: f"${x:,.0f}")
+                        _ot_agg["Net (mm)"] = _ot_agg["Net (mm)"].apply(lambda x: f"${x:+,.0f}")
+                        _ot_agg["Avg Strike"] = _ot_agg["Avg Strike"].apply(lambda x: f"{x:.3f}%" if pd.notna(x) else "—")
+                        st.dataframe(_ot_agg, use_container_width=True, hide_index=True)
 
-                    # By Opt Tenor
-                    st.markdown("#### By Option Tenor")
-                    _ot_agg = _em_filtered.groupby("opt_tenor").agg(
-                        trades=("notional_mm", "count"),
-                        gross_mm=("notional_mm", "sum"),
-                        net_mm=("signed_notional_mm", "sum"),
-                        avg_strike=("strike_pct", "mean"),
-                    ).reset_index()
-                    _ot_agg = _ot_agg.sort_values("opt_tenor",
-                        key=lambda x: x.map(lambda v: _TENORS_MONTHS.get(v, 99)))
-                    _ot_agg.columns = ["Opt Tenor", "Trades", "Gross (mm)", "Net (mm)", "Avg Strike"]
-                    _ot_agg["Gross (mm)"] = _ot_agg["Gross (mm)"].apply(lambda x: f"${x:,.0f}")
-                    _ot_agg["Net (mm)"] = _ot_agg["Net (mm)"].apply(lambda x: f"${x:+,.0f}")
-                    _ot_agg["Avg Strike"] = _ot_agg["Avg Strike"].apply(lambda x: f"{x:.3f}%" if pd.notna(x) else "—")
-                    st.dataframe(_ot_agg, use_container_width=True, hide_index=True)
+                    with st.expander("📅 Economic Calendar — Target Week", expanded=False):
+                        if _em_tgt:
+                            _em_mon_t, _em_fri_t = _em_tgt
+                            _FOMC_2026 = [date(2026,1,28), date(2026,3,18), date(2026,4,29),
+                                          date(2026,6,17), date(2026,7,29), date(2026,9,16),
+                                          date(2026,10,28), date(2026,12,9)]
+                            _ECON_2026 = [
+                                # CPI — verified from BLS
+                                (date(2026,2,13),"CPI"),(date(2026,3,11),"CPI"),(date(2026,4,14),"CPI"),
+                                (date(2026,5,12),"CPI"),(date(2026,6,10),"CPI"),(date(2026,7,14),"CPI"),
+                                (date(2026,8,12),"CPI"),(date(2026,9,15),"CPI"),(date(2026,10,13),"CPI"),
+                                (date(2026,11,12),"CPI"),(date(2026,12,10),"CPI"),
+                                # NFP — verified from BLS/Colorado LMI
+                                (date(2026,2,11),"NFP"),(date(2026,3,6),"NFP"),(date(2026,4,3),"NFP"),
+                                (date(2026,5,8),"NFP"),(date(2026,6,5),"NFP"),(date(2026,7,2),"NFP"),
+                                (date(2026,8,7),"NFP"),(date(2026,9,4),"NFP"),(date(2026,10,2),"NFP"),
+                                (date(2026,11,6),"NFP"),(date(2026,12,4),"NFP"),
+                                # GDP — verified from BEA
+                                (date(2026,2,20),"GDP"),(date(2026,2,26),"GDP"),(date(2026,3,27),"GDP"),
+                                (date(2026,4,30),"GDP"),(date(2026,5,28),"GDP"),(date(2026,8,26),"GDP"),
+                                (date(2026,9,30),"GDP"),(date(2026,10,29),"GDP"),(date(2026,11,25),"GDP"),
+                                (date(2026,12,23),"GDP"),
+                                # ISM Mfg — first business day, verified from ISM
+                                (date(2026,1,5),"ISM Mfg"),(date(2026,2,2),"ISM Mfg"),(date(2026,3,2),"ISM Mfg"),
+                                (date(2026,4,1),"ISM Mfg"),(date(2026,5,1),"ISM Mfg"),(date(2026,6,1),"ISM Mfg"),
+                                (date(2026,7,1),"ISM Mfg"),(date(2026,8,3),"ISM Mfg"),(date(2026,9,1),"ISM Mfg"),
+                                (date(2026,10,1),"ISM Mfg"),(date(2026,11,2),"ISM Mfg"),(date(2026,12,1),"ISM Mfg"),
+                            ]
 
-                    # Economic Calendar
-                    if _em_tgt:
-                        st.markdown("#### Economic Calendar — Target Week")
-                        _em_mon_t, _em_fri_t = _em_tgt
-                        _FOMC_2026 = [date(2026,1,28), date(2026,3,18), date(2026,4,29),
-                                      date(2026,6,17), date(2026,7,29), date(2026,9,16),
-                                      date(2026,10,28), date(2026,12,9)]
-                        _ECON_2026 = [
-                            # CPI — verified from BLS
-                            (date(2026,2,13),"CPI"),(date(2026,3,11),"CPI"),(date(2026,4,14),"CPI"),
-                            (date(2026,5,12),"CPI"),(date(2026,6,10),"CPI"),(date(2026,7,14),"CPI"),
-                            (date(2026,8,12),"CPI"),(date(2026,9,15),"CPI"),(date(2026,10,13),"CPI"),
-                            (date(2026,11,12),"CPI"),(date(2026,12,10),"CPI"),
-                            # NFP — verified from BLS/Colorado LMI
-                            (date(2026,2,11),"NFP"),(date(2026,3,6),"NFP"),(date(2026,4,3),"NFP"),
-                            (date(2026,5,8),"NFP"),(date(2026,6,5),"NFP"),(date(2026,7,2),"NFP"),
-                            (date(2026,8,7),"NFP"),(date(2026,9,4),"NFP"),(date(2026,10,2),"NFP"),
-                            (date(2026,11,6),"NFP"),(date(2026,12,4),"NFP"),
-                            # GDP — verified from BEA
-                            (date(2026,2,20),"GDP"),(date(2026,2,26),"GDP"),(date(2026,3,27),"GDP"),
-                            (date(2026,4,30),"GDP"),(date(2026,5,28),"GDP"),(date(2026,8,26),"GDP"),
-                            (date(2026,9,30),"GDP"),(date(2026,10,29),"GDP"),(date(2026,11,25),"GDP"),
-                            (date(2026,12,23),"GDP"),
-                            # ISM Mfg — first business day, verified from ISM
-                            (date(2026,1,5),"ISM Mfg"),(date(2026,2,2),"ISM Mfg"),(date(2026,3,2),"ISM Mfg"),
-                            (date(2026,4,1),"ISM Mfg"),(date(2026,5,1),"ISM Mfg"),(date(2026,6,1),"ISM Mfg"),
-                            (date(2026,7,1),"ISM Mfg"),(date(2026,8,3),"ISM Mfg"),(date(2026,9,1),"ISM Mfg"),
-                            (date(2026,10,1),"ISM Mfg"),(date(2026,11,2),"ISM Mfg"),(date(2026,12,1),"ISM Mfg"),
-                        ]
+                            _week_events = []
+                            for _fd in _FOMC_2026:
+                                if _em_mon_t <= _fd <= _em_fri_t:
+                                    _week_events.append((_fd, "FOMC", "🔴 HIGH"))
+                            for _ed, _en in _ECON_2026:
+                                if _em_mon_t <= _ed <= _em_fri_t:
+                                    _imp = "🔴 HIGH" if _en in ("CPI", "NFP") else "🟡 MED"
+                                    _week_events.append((_ed, _en, _imp))
 
-                        _week_events = []
-                        for _fd in _FOMC_2026:
-                            if _em_mon_t <= _fd <= _em_fri_t:
-                                _week_events.append((_fd, "FOMC", "🔴 HIGH"))
-                        for _ed, _en in _ECON_2026:
-                            if _em_mon_t <= _ed <= _em_fri_t:
-                                _imp = "🔴 HIGH" if _en in ("CPI", "NFP") else "🟡 MED"
-                                _week_events.append((_ed, _en, _imp))
+                            if _week_events:
+                                _ev_df = pd.DataFrame(_week_events, columns=["Date", "Event", "Impact"])
+                                _ev_df["Date"] = _ev_df["Date"].apply(lambda x: x.strftime("%a %d-%b"))
+                                st.dataframe(_ev_df, use_container_width=True, hide_index=True)
+                                st.warning(f"⚠️ {len(_week_events)} economic event(s) in target week — "
+                                           f"positions have elevated gamma. Watch for dealer hedging flow.")
+                            else:
+                                st.caption("No major economic events in target week.")
 
-                        if _week_events:
-                            _ev_df = pd.DataFrame(_week_events, columns=["Date", "Event", "Impact"])
-                            _ev_df["Date"] = _ev_df["Date"].apply(lambda x: x.strftime("%a %d-%b"))
-                            st.dataframe(_ev_df, use_container_width=True, hide_index=True)
-                            st.warning(f"⚠️ {len(_week_events)} economic event(s) in target week — "
-                                       f"positions have elevated gamma. Watch for dealer hedging flow.")
-                        else:
-                            st.caption("No major economic events in target week.")
-
-                    # Full trade list
+                        # Full trade list
                     with st.expander(f"All {len(_em_filtered)} trades", expanded=False):
                         _show_df = _em_filtered[[
                             "opt_tenor", "swp_tenor", "direction", "strike_pct",
