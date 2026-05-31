@@ -336,6 +336,40 @@ def fetch_dtcc(dt_low: datetime, dt_high: datetime,
 
 # ── Upsert ────────────────────────────────────────────────────────────────────
 
+def ensure_heartbeat_table(conn):
+    """Create sdr_heartbeat table if it doesn't exist (self-bootstraps)."""
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sdr_heartbeat (
+                id      INTEGER PRIMARY KEY DEFAULT 1,
+                last_run TIMESTAMPTZ NOT NULL,
+                status  TEXT NOT NULL DEFAULT 'ok'
+            )
+        """)
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        conn.rollback()
+        log.warning(f"Heartbeat table bootstrap failed: {e}")
+
+
+def upsert_heartbeat(conn, status: str = 'ok'):
+    """Write a heartbeat timestamp on every poll — regardless of trade activity."""
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO sdr_heartbeat (id, last_run, status)
+            VALUES (1, NOW() AT TIME ZONE 'UTC', %s)
+            ON CONFLICT (id) DO UPDATE SET last_run = NOW() AT TIME ZONE 'UTC', status = EXCLUDED.status
+        """, (status,))
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        conn.rollback()
+        log.warning(f"Heartbeat upsert failed: {e}")
+
+
 def upsert_rows(conn, rows: list) -> tuple:
     """Batch upsert using execute_values for 10-20x speed improvement."""
     if not rows: return 0, 0
@@ -518,6 +552,7 @@ def main():
             _pre_open_done.difference_update(stale)
             return due
 
+        ensure_heartbeat_table(conn)
         log.info(f"Starting time-aware poll loop every {args.loop} min. Ctrl+C to stop.")
         log.info("Active windows (UTC): AUD 21-08 | USD 10-21 | JPY 22-07 | EUR/GBP 07-16")
         log.info("Pre-open catch-up:    AUD @20 | USD @09 | JPY @21 | EUR/GBP @06")
@@ -549,6 +584,7 @@ def main():
             elif not pre_ccys:
                 log.info(f"UTC {utc_hour:02d}:xx — no active markets, sleeping...")
 
+            upsert_heartbeat(conn)  # heartbeat every poll regardless of activity
             time.sleep(args.loop * 60)
 
     else:
