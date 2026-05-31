@@ -8936,16 +8936,24 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             ("BACKGROUND",(0,1),(0,-1),_rlc.HexColor("#e8edf2")),("TEXTCOLOR",(0,1),(0,-1),_rlc.HexColor("#1a1a1a")),
                                             ("BACKGROUND",(1,1),(-1,-1),_rlc.HexColor("#f8f9fa")),("TEXTCOLOR",(1,1),(-1,-1),_rlc.HexColor("#1a1a1a")),
                                             ("ALIGN",(1,1),(-1,-1),"RIGHT"),("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2)]
-                                        _r_hex = (int(hi[1:3],16)/255, int(hi[3:5],16)/255, int(hi[5:7],16)/255)
+                                        _r_hex = (int(hi[1:3],16), int(hi[3:5],16), int(hi[5:7],16))
                                         for _ri2,_r2 in enumerate(_rows2):
                                             for _ci2,_c2 in enumerate(_cols2):
                                                 v2 = float(piv.loc[_r2,_c2])
                                                 if v2>0:
-                                                    _a2 = min(int(v2/_mx*200)+20,220)
+                                                    # Solid tint (no alpha): white -> base colour scaled by
+                                                    # notional. Text colour chosen from the cell's luminance
+                                                    # so every cell is readable (no muddy mid-tones).
+                                                    _frac = min(v2/_mx, 1.0)
+                                                    _strength = 0.15 + 0.65*_frac
+                                                    _cr = round(255 - (255-_r_hex[0])*_strength)
+                                                    _cg = round(255 - (255-_r_hex[1])*_strength)
+                                                    _cb = round(255 - (255-_r_hex[2])*_strength)
+                                                    _lum = 0.299*_cr + 0.587*_cg + 0.114*_cb
                                                     _ts2.append(("BACKGROUND",(_ci2+1,_ri2+1),(_ci2+1,_ri2+1),
-                                                        _rlc.Color(_r_hex[0],_r_hex[1],_r_hex[2],alpha=_a2/255)))
+                                                        _rlc.Color(_cr/255,_cg/255,_cb/255)))
                                                     _ts2.append(("TEXTCOLOR",(_ci2+1,_ri2+1),(_ci2+1,_ri2+1),
-                                                        _rlc.white if _a2>100 else _rlc.HexColor("#1a1a1a")))
+                                                        _rlc.white if _lum < 140 else _rlc.HexColor("#1a1a1a")))
                                         _t2.setStyle(TableStyle(_ts2))
                                         _story.append(_t2); _story.append(Spacer(1,4))
 
