@@ -29887,7 +29887,10 @@ def main():
     _widget_backup = st.session_state.get("_widget_state_backup", {})
     for _wk, _wv in _widget_backup.items():
         if _wk not in st.session_state:
-            st.session_state[_wk] = _wv
+            try:
+                st.session_state[_wk] = _wv
+            except Exception:
+                pass
 
     st.markdown('<style>[data-testid="stMainBlockContainer"]{padding-top:0 !important}[data-testid="stAppViewBlockContainer"]{padding-top:0 !important}</style>', unsafe_allow_html=True)
 
