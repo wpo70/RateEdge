@@ -6591,6 +6591,20 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
         st.warning("Database not connected. SDR Live requires a Supabase connection.")
         return
 
+    # ── Restore SDR filter state from shadow key (survives tab switches) ───────
+    # Streamlit deletes widget keys when widgets don't render — shadow key is immune
+    _sdr_shadow = st.session_state.get("_sdr_filter_shadow", {})
+    _SDR_FILTER_KEYS = ["sdr_date_from", "sdr_date_to", "sdr_type", "sdr_ccy",
+                        "sdr_opt_tenor", "sdr_swp_tenor", "sdr_platform", "sdr_action",
+                        "sdr_cleared", "sdr_alerts_on", "sdr_min_notional",
+                        "sdr_alert_ccy", "sdr_refresh_interval", "sdr_timezone"]
+    for _sk in _SDR_FILTER_KEYS:
+        if _sk not in st.session_state and _sk in _sdr_shadow:
+            try:
+                st.session_state[_sk] = _sdr_shadow[_sk]
+            except Exception:
+                pass
+
     # ── Load persisted filter settings on first render ────────────────────────
     _uid = st.session_state.get("username", "default")
     if "sdr_filters_loaded" not in st.session_state:
@@ -6653,19 +6667,22 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
     # ── Setup / filter panel ──────────────────────────────────────────────────
     def _save_sdr_filters():
-        """Persist current SDR filter state to DB."""
+        """Persist current SDR filter state to DB and shadow key."""
         _uid = st.session_state.get("username", "default")
         _keys = ["sdr_date_from", "sdr_date_to", "sdr_type", "sdr_ccy",
                  "sdr_opt_tenor", "sdr_swp_tenor", "sdr_platform", "sdr_action",
                  "sdr_cleared", "sdr_alerts_on", "sdr_min_notional",
-                 "sdr_alert_ccy", "sdr_refresh_interval"]
+                 "sdr_alert_ccy", "sdr_refresh_interval", "sdr_timezone"]
         _data = {k: st.session_state.get(k) for k in _keys if k in st.session_state}
-        # Convert date objects to strings for JSON serialisation
+        # Write to shadow key — non-widget, survives tab navigation
+        st.session_state["_sdr_filter_shadow"] = dict(_data)
+        # Convert date objects to strings for JSON serialisation (DB only)
+        _db_data = dict(_data)
         for k in ["sdr_date_from", "sdr_date_to"]:
-            if k in _data and hasattr(_data[k], 'isoformat'):
-                _data[k] = _data[k].isoformat()
+            if k in _db_data and hasattr(_db_data[k], 'isoformat'):
+                _db_data[k] = _db_data[k].isoformat()
         try:
-            save_user_config(_uid, "sdr_filters", "GLOBAL", _data)
+            save_user_config(_uid, "sdr_filters", "GLOBAL", _db_data)
         except Exception:
             pass
 
@@ -6769,6 +6786,15 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 label_visibility="collapsed",
                 key="sdr_refresh_interval"
             )
+
+    # Write shadow key after every SDR render so navigation away preserves state
+    _sdr_shadow_keys = ["sdr_date_from", "sdr_date_to", "sdr_type", "sdr_ccy",
+                        "sdr_opt_tenor", "sdr_swp_tenor", "sdr_platform", "sdr_action",
+                        "sdr_cleared", "sdr_alerts_on", "sdr_min_notional",
+                        "sdr_alert_ccy", "sdr_refresh_interval", "sdr_timezone"]
+    st.session_state["_sdr_filter_shadow"] = {k: st.session_state.get(k)
+                                               for k in _sdr_shadow_keys
+                                               if k in st.session_state}
 
     # ── Market hours info panel ───────────────────────────────────────────────
     with st.expander("🕐  Market Hours & Refresh Schedule", expanded=False):
@@ -7817,11 +7843,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             else:
                 _usd_sg = [r for r in _paired_rows
                            if "Strangle" in r.get("Type", "") and r.get("CCY") == "USD"]
-
                 if not _usd_sg:
                     st.info("No USD strangles in current date range — widen the date filter to see results.")
                 else:
-                    # ATM forward from USD straddles in same session
                     _atm_map = {}
                     for _sr in _paired_rows:
                         if _sr.get("Type") == "🔵 Straddle" and _sr.get("CCY") == "USD":
@@ -7834,15 +7858,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _atm_F = {k: sum(v) / len(v) for k, v in _atm_map.items()}
 
                     def _bch_invert_sabr(prem_bp, F, K, T, is_payer):
-                        if prem_bp <= 0 or T <= 0 or F <= 0 or K <= 0:
-                            return None
+                        if prem_bp <= 0 or T <= 0 or F <= 0 or K <= 0: return None
                         prem_r = prem_bp / 10000.0
                         def _err(sig):
                             if sig <= 1e-9: return -prem_r
-                            d   = (F - K) / (sig * math.sqrt(T))
+                            d = (F - K) / (sig * math.sqrt(T))
                             nd  = 0.5 * (1 + math.erf(d / math.sqrt(2)))
                             npd = math.exp(-0.5 * d * d) / math.sqrt(2 * math.pi)
-                            val = ((F - K) * nd + sig * math.sqrt(T) * npd) if is_payer                                   else ((K - F) * (1 - nd) + sig * math.sqrt(T) * npd)
+                            val = ((F-K)*nd + sig*math.sqrt(T)*npd) if is_payer else ((K-F)*(1-nd) + sig*math.sqrt(T)*npd)
                             return val - prem_r
                         lo, hi = 1e-7, 0.15
                         try:
@@ -7884,75 +7907,53 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     if len(_pts) == 2:
                                         _p_ks.append(float(_pts[0].strip()) / 100.0)
                                         _r_ks.append(float(_pts[1].strip()) / 100.0)
-                                except Exception:
-                                    pass
+                                except Exception: pass
                                 try:
                                     _p_ps.append(float(_tr.get("P Prem BP") or 0))
                                     _r_ps.append(float(_tr.get("R Prem BP") or 0))
-                                except Exception:
-                                    pass
-                            if not _p_ks:
-                                continue
-
-                            _avg_pk = sum(_p_ks) / len(_p_ks)
-                            _avg_rk = sum(_r_ks) / len(_r_ks)
-                            _avg_pp = sum(_p_ps) / len(_p_ps) if _p_ps else 0
-                            _avg_rp = sum(_r_ps) / len(_r_ps) if _r_ps else 0
-                            _T      = label_to_years(_exp)
-                            _F      = _atm_F.get((_exp, _ten))
-                            _a = _sabr_param(_sabr_adf, _exp, _ten)
-                            _b = _sabr_param(_sabr_bdf, _exp, _ten)
-                            _r = _sabr_param(_sabr_rdf, _exp, _ten)
-                            _n = _sabr_param(_sabr_ndf, _exp, _ten)
-
+                                except Exception: pass
+                            if not _p_ks: continue
+                            _avg_pk = sum(_p_ks)/len(_p_ks); _avg_rk = sum(_r_ks)/len(_r_ks)
+                            _avg_pp = sum(_p_ps)/len(_p_ps) if _p_ps else 0
+                            _avg_rp = sum(_r_ps)/len(_r_ps) if _r_ps else 0
+                            _T = label_to_years(_exp); _F = _atm_F.get((_exp, _ten))
+                            _a = _sabr_param(_sabr_adf,_exp,_ten); _b = _sabr_param(_sabr_bdf,_exp,_ten)
+                            _r = _sabr_param(_sabr_rdf,_exp,_ten); _n = _sabr_param(_sabr_ndf,_exp,_ten)
                             _sv_p = _sv_r = _s_skew = None
                             if _F and _a and _b is not None and _r and _n and _T > 0:
                                 try:
-                                    _sv_p   = sabr_normal_vol_smile(_F, _avg_pk, _T, _a, _b, _r, _n) * 10000
-                                    _sv_r   = sabr_normal_vol_smile(_F, _avg_rk, _T, _a, _b, _r, _n) * 10000
+                                    _sv_p  = sabr_normal_vol_smile(_F,_avg_pk,_T,_a,_b,_r,_n)*10000
+                                    _sv_r  = sabr_normal_vol_smile(_F,_avg_rk,_T,_a,_b,_r,_n)*10000
                                     _s_skew = _sv_p - _sv_r
-                                except Exception:
-                                    pass
-
+                                except Exception: pass
                             _mv_p = _mv_r = _m_skew = None
                             if _F and _avg_pp > 0 and _T > 0:
-                                _mv_p = _bch_invert_sabr(_avg_pp, _F, _avg_pk, _T, True)
-                                _mv_r = _bch_invert_sabr(_avg_rp, _F, _avg_rk, _T, False)
-                                if _mv_p and _mv_r:
-                                    _m_skew = _mv_p - _mv_r
-
-                            _skew_diff = round(_m_skew - _s_skew, 1) if (_m_skew is not None and _s_skew is not None) else None
-                            _flag = ("⚠️" if _skew_diff and abs(_skew_diff) > 2 else
-                                     "✅" if _skew_diff is not None else
-                                     "ℹ️" if not _F else "—")
-
+                                _mv_p = _bch_invert_sabr(_avg_pp,_F,_avg_pk,_T,True)
+                                _mv_r = _bch_invert_sabr(_avg_rp,_F,_avg_rk,_T,False)
+                                if _mv_p and _mv_r: _m_skew = _mv_p - _mv_r
+                            _skew_diff = round(_m_skew-_s_skew,1) if (_m_skew is not None and _s_skew is not None) else None
+                            _flag = ("⚠️" if _skew_diff and abs(_skew_diff)>2 else "✅" if _skew_diff is not None else "ℹ️" if not _F else "—")
                             _sabr_ana_rows.append({
-                                "Bucket":    f"{_exp}×{_ten}",
-                                "Trades":    len(_trades),
+                                "Bucket":    f"{_exp}×{_ten}",  "Trades": len(_trades),
                                 "F (ATM)":   f"{_F*100:.3f}%" if _F else "— no straddle",
-                                "P Strike":  f"{_avg_pk*100:.3f}%",
-                                "R Strike":  f"{_avg_rk*100:.3f}%",
-                                "Mkt P bp":  f"{_mv_p:.1f}"    if _mv_p    else "—",
-                                "Mkt R bp":  f"{_mv_r:.1f}"    if _mv_r    else "—",
-                                "Mkt Skew":  f"{_m_skew:+.1f}" if _m_skew  else "—",
-                                "SABR P bp": f"{_sv_p:.1f}"    if _sv_p    else "—",
-                                "SABR R bp": f"{_sv_r:.1f}"    if _sv_r    else "—",
-                                "SABR Skew": f"{_s_skew:+.1f}" if _s_skew  else "—",
+                                "P Strike":  f"{_avg_pk*100:.3f}%", "R Strike": f"{_avg_rk*100:.3f}%",
+                                "Mkt P bp":  f"{_mv_p:.1f}"    if _mv_p   else "—",
+                                "Mkt R bp":  f"{_mv_r:.1f}"    if _mv_r   else "—",
+                                "Mkt Skew":  f"{_m_skew:+.1f}" if _m_skew else "—",
+                                "SABR P bp": f"{_sv_p:.1f}"    if _sv_p   else "—",
+                                "SABR R bp": f"{_sv_r:.1f}"    if _sv_r   else "—",
+                                "SABR Skew": f"{_s_skew:+.1f}" if _s_skew else "—",
                                 "Δ Skew bp": f"{_skew_diff:+.1f}" if _skew_diff else "—",
-                                "":          _flag,
+                                "": _flag,
                             })
-                        except Exception as _row_ex:
-                            _sabr_ana_rows.append({
-                                "Bucket": f"{_exp}×{_ten}", "Trades": len(_trades),
-                                "F (ATM)": f"err: {_row_ex}", "P Strike":"—","R Strike":"—",
+                        except Exception as _rex:
+                            _sabr_ana_rows.append({"Bucket":f"{_exp}×{_ten}","Trades":len(_trades),
+                                "F (ATM)":f"err:{_rex}","P Strike":"—","R Strike":"—",
                                 "Mkt P bp":"—","Mkt R bp":"—","Mkt Skew":"—",
-                                "SABR P bp":"—","SABR R bp":"—","SABR Skew":"—",
-                                "Δ Skew bp":"—","":"❌"
-                            })
+                                "SABR P bp":"—","SABR R bp":"—","SABR Skew":"—","Δ Skew bp":"—","":"❌"})
 
                     if _sabr_ana_rows:
-                        st.caption(f"SABR ref: **{_sabr_lbl}** | vols in bp (normal) | "
-                                   f"Δ Skew = Mkt − SABR | ⚠️ = |Δ| > 2bp | ℹ️ = no ATM straddle for F")
+                        st.caption(f"SABR ref: **{_sabr_lbl}** | vols in bp | Δ Skew = Mkt − SABR | ⚠️ = |Δ|>2bp | ℹ️ = no straddle for F")
                         st.dataframe(pd.DataFrame(_sabr_ana_rows), use_container_width=True, hide_index=True,
                                      column_config={
                                          "Bucket":    st.column_config.TextColumn(width=90),
@@ -7971,14 +7972,12 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                      })
                         with st.expander("SABR params for active buckets", expanded=False):
                             _prm_rows = []
-                            for (_exp, _ten) in sorted(_bucket_map.keys()):
-                                _prm_rows.append({
-                                    "Bucket": f"{_exp}×{_ten}",
-                                    "α": f"{_sabr_param(_sabr_adf,_exp,_ten):.5f}" if _sabr_param(_sabr_adf,_exp,_ten) else "—",
-                                    "β": f"{_sabr_param(_sabr_bdf,_exp,_ten):.2f}" if _sabr_param(_sabr_bdf,_exp,_ten) is not None else "—",
-                                    "ρ": f"{_sabr_param(_sabr_rdf,_exp,_ten):.3f}" if _sabr_param(_sabr_rdf,_exp,_ten) else "—",
-                                    "ν": f"{_sabr_param(_sabr_ndf,_exp,_ten):.3f}" if _sabr_param(_sabr_ndf,_exp,_ten) else "—",
-                                })
+                            for (_exp,_ten) in sorted(_bucket_map.keys()):
+                                _prm_rows.append({"Bucket":f"{_exp}×{_ten}",
+                                    "α":f"{_sabr_param(_sabr_adf,_exp,_ten):.5f}" if _sabr_param(_sabr_adf,_exp,_ten) else "—",
+                                    "β":f"{_sabr_param(_sabr_bdf,_exp,_ten):.2f}" if _sabr_param(_sabr_bdf,_exp,_ten) is not None else "—",
+                                    "ρ":f"{_sabr_param(_sabr_rdf,_exp,_ten):.3f}" if _sabr_param(_sabr_rdf,_exp,_ten) else "—",
+                                    "ν":f"{_sabr_param(_sabr_ndf,_exp,_ten):.3f}" if _sabr_param(_sabr_ndf,_exp,_ten) else "—"})
                             st.dataframe(pd.DataFrame(_prm_rows), use_container_width=True, hide_index=True)
                     else:
                         st.info("Could not parse strike/premium data from USD strangles in this range.")
