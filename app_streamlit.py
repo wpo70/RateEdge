@@ -8217,8 +8217,17 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         _delta_rows.append((_dr_row, _dn_row))
 
                                     # Store preview data
-                                    _show_dr = [r[0] for r in _delta_rows]
-                                    _show_dn = [r[1] for r in _delta_rows]
+                                    # Filter rows where all tenor values are None (no data), replace remaining None with "—"
+                                    def _clean_delta_rows(rows):
+                                        _out = []
+                                        for _row in rows:
+                                            _vals = [v for k, v in _row.items() if k != "Expiry"]
+                                            if all(v is None for v in _vals):
+                                                continue  # drop entirely
+                                            _out.append({k: ("—" if v is None else v) for k, v in _row.items()})
+                                        return _out
+                                    _show_dr = _clean_delta_rows([r[0] for r in _delta_rows])
+                                    _show_dn = _clean_delta_rows([r[1] for r in _delta_rows])
 
                                     # Store blended params + preview data in session state
                                     st.session_state["_sdr_sabr_blended"] = {
@@ -8256,7 +8265,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     set_ccy_vol_data("USD", _old_atm_bl, _bl["alpha"], _b_bl, _bl["rho"], _bl["nu"])
                                     st.session_state.pop("_sdr_sabr_blended", None)
                                     st.session_state.pop("_alpha_check_result", None)
-                                    st.success("✅ Blended SABR applied to session. Run α Check to verify.")
+                                    # Session-only — no DB save (use Vol Editor save button to persist)
+                                    st.success("✅ Blended SABR applied to session. Run α Check to verify. Use Vol Editor save to persist.")
                                     st.rerun()
                     else:
                         st.info("Could not parse strike/premium data from USD strangles in this range.")
@@ -22197,7 +22207,9 @@ def vol_surface_editor_tab():
             # ── SDR Market Calibration ────────────────────────────────────────
             st.markdown("---")
             _sdr_blend = st.session_state.get("_sdr_sabr_blended")
-            if _sdr_blend and _rc_ccy == "USD":
+            if _sdr_blend:
+                if _rc_ccy != "USD":
+                    st.warning("SDR SABR blend is USD only — switch currency to USD above to apply.")
                 st.markdown("##### 📡 SDR Market Calibration — Blended ρ / ν")
                 st.caption(
                     "Derived from SDR strangle trades via Bachelier inversion + SABR fitting. "
@@ -22299,8 +22311,8 @@ def vol_surface_editor_tab():
                                 set_ccy_vol_data("USD", _old_atm_ve, _bl_alpha, _b_ve, _bl_rho, _bl_nu)
                                 st.session_state.pop("_sdr_sabr_blended", None)
                                 st.session_state.pop("_alpha_check_result", None)
-                                load_user_config.clear()
-                                st.success("✅ Blended SABR applied. Run α Check on Swaptions tab to verify.")
+                                # Session-only — no DB save (use Vol Editor save button to persist)
+                                st.success("✅ Blended SABR applied. Run α Check on Swaptions tab to verify. Use Vol Editor save to persist.")
                                 st.rerun()
                         with _ap2:
                             if st.button("🗑 Discard SDR Blend", key="ve_sdr_sabr_discard", type="secondary"):
@@ -22309,7 +22321,7 @@ def vol_surface_editor_tab():
 
                     except Exception as _ve_err:
                         st.error(f"Heatmap error: {_ve_err}")
-            elif _rc_ccy == "USD":
+            else:
                 st.caption("No SDR blend pending — run 'Fit & Preview' in SDR Live → Full Trade Analytics → SDR SABR Analytics first.")
 
     # Sync back to the main app's vol_data if published
