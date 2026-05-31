@@ -30524,12 +30524,19 @@ def main():
     _SKIP_PREFIXES = ("_widget_state_backup", "_sdr_filter_backup", "config_", "vol_data",
                       "curves", "basis_", "portfolio", "swaption_portfolio", "atm_prem_matrix",
                       "_fwd_ann_cache", "_aud_", "vol_editor", "FormSubmitter")
+    # Never back up file uploaders or other non-restorable widget types
+    _SKIP_SUFFIXES = ("_upload", "_uploader", "_file")
+    _SKIP_CONTAINS = ("upload", "file_uploader")
     _BOOL_KEEP_PREFIXES = ("tab_show_", "cb_tab_show_", "sdr_alerts_on", "_vol_loaded_",
                            "_um_loaded", "_user_list_loaded", "_portfolio_loaded",
                            "db_auto_loaded", "authenticated", "sdr_filters_loaded")
     _backup = dict(st.session_state.get("_widget_state_backup", {}))  # start from previous
     for _wk, _wv in st.session_state.items():
         if _wk.startswith(_SKIP_PREFIXES):
+            continue
+        if any(_wk.endswith(s) for s in _SKIP_SUFFIXES):
+            continue
+        if any(s in _wk for s in _SKIP_CONTAINS):
             continue
         if isinstance(_wv, bool):
             if not _wk.startswith(_BOOL_KEEP_PREFIXES):
