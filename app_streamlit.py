@@ -29866,6 +29866,12 @@ def main():
     if _tab_override and _tab_override in _tab_names:
         st.session_state["_main_nav"] = _tab_override
 
+    # Restore widget keys that Streamlit destroyed when switching tabs
+    _widget_backup = st.session_state.get("_widget_state_backup", {})
+    for _wk, _wv in _widget_backup.items():
+        if _wk not in st.session_state:
+            st.session_state[_wk] = _wv
+
     st.markdown('<style>[data-testid="stMainBlockContainer"]{padding-top:0 !important}[data-testid="stAppViewBlockContainer"]{padding-top:0 !important}</style>', unsafe_allow_html=True)
 
     _active = st.radio("Navigation", _tab_names, horizontal=True, key="_main_nav",
@@ -29874,6 +29880,20 @@ def main():
 
     with st.container(height=1200, border=False):
         _tab_funcs[_active_idx]()
+
+    # Backup widget state for all tabs
+    _backup = {}
+    _SKIP_PREFIXES = ("_widget_state_backup", "_sdr_filter_backup", "config_", "vol_data",
+                      "curves", "basis_", "portfolio", "swaption_portfolio", "atm_prem_matrix",
+                      "_fwd_ann_cache", "_aud_", "vol_editor", "FormSubmitter")
+    for _wk, _wv in st.session_state.items():
+        if _wk.startswith(_SKIP_PREFIXES):
+            continue
+        if isinstance(_wv, (str, int, float, bool, list, type(None))):
+            _backup[_wk] = _wv
+        elif hasattr(_wv, 'isoformat'):
+            _backup[_wk] = _wv
+    st.session_state["_widget_state_backup"] = _backup
 
     # JS: hide circles on first radio only
     import streamlit.components.v1 as _comp
