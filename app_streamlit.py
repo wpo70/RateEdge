@@ -8682,6 +8682,122 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         _gross_mm = _em_filtered["notional_mm"].sum()
                         _em_m5.metric("Gross Notional (mm)", f"${_gross_mm:,.0f}")
 
+
+                        # ── Strike Exposure Heatmap ──────────────────────────
+                        st.markdown("#### Strike Exposure Heatmap")
+                        _hem_window = st.radio(
+                            "Expiry window",
+                            ["1 Day", "3 Days", "5 Days"],
+                            index=1, horizontal=True, key="em_heatmap_window"
+                        )
+                        _hem_days = {"1 Day": 1, "3 Days": 3, "5 Days": 5}[_hem_window]
+
+                        # Filter to trades expiring within selected window
+                        _hem_cutoff = _eff_date + timedelta(days=_hem_days - 1)
+                        # Roll to next business day if weekend
+                        while _hem_cutoff.weekday() >= 5:
+                            _hem_cutoff += timedelta(days=1)
+
+                        _hem_df = _em_filtered[
+                            (_em_filtered["expiry_date"] >= _eff_date) &
+                            (_em_filtered["expiry_date"] <= _hem_cutoff)
+                        ].copy() if "expiry_date" in _em_filtered.columns else _em_filtered.copy()
+
+                        if _hem_df.empty:
+                            st.info(f"No trades expiring within {_hem_window} from {_eff_date.strftime('%d-%b')}.")
+                        else:
+                            # Strike buckets relative to forward
+                            def _hem_bucket(row):
+                                fwd = row.get("_fwd")
+                                if fwd is None or pd.isna(fwd):
+                                    fwd = _em_fwd.get(str(row.get("swp_tenor", "")))
+                                s = row.get("strike_pct")
+                                if fwd is None or pd.isna(s): return "Unknown"
+                                diff_bp = (s - fwd) * 100  # bp
+                                if diff_bp < -100: return "< -100bp"
+                                elif diff_bp < -50:  return "-100 to -50bp"
+                                elif diff_bp < -25:  return "-50 to -25bp"
+                                elif diff_bp < -10:  return "-25 to -10bp"
+                                elif diff_bp <= 10:  return "ATM ±10bp"
+                                elif diff_bp <= 25:  return "+10 to +25bp"
+                                elif diff_bp <= 50:  return "+25 to +50bp"
+                                elif diff_bp <= 100: return "+50 to +100bp"
+                                else:               return "> +100bp"
+
+                            _HEM_BUCKET_ORDER = [
+                                "< -100bp", "-100 to -50bp", "-50 to -25bp", "-25 to -10bp",
+                                "ATM ±10bp",
+                                "+10 to +25bp", "+25 to +50bp", "+50 to +100bp", "> +100bp"
+                            ]
+
+                            _hem_df["strike_bucket"] = _hem_df.apply(_hem_bucket, axis=1)
+                            _hem_df["signed_mm"] = _hem_df.apply(
+                                lambda r: r["notional_mm"] if r["direction"] == "Payer" else -r["notional_mm"], axis=1)
+
+                            # Pivot: rows = swap tenor, cols = strike bucket, values = signed notional
+                            _hem_tenors = sorted(
+                                _hem_df["swp_tenor"].dropna().unique().tolist(),
+                                key=_safe_tenor_sort
+                            )
+                            _hem_buckets = [b for b in _HEM_BUCKET_ORDER
+                                            if b in _hem_df["strike_bucket"].unique()]
+
+                            # Build matrix
+                            _hem_rows = []
+                            for _ht in _hem_tenors:
+                                _row_d = {"Tenor": _ht}
+                                _sub = _hem_df[_hem_df["swp_tenor"] == _ht]
+                                for _hb in _hem_buckets:
+                                    _cell = _sub[_sub["strike_bucket"] == _hb]["signed_mm"].sum()
+                                    _n_trades = len(_sub[_sub["strike_bucket"] == _hb])
+                                    if _n_trades == 0:
+                                        _row_d[_hb] = "—"
+                                    else:
+                                        _sign = "+" if _cell >= 0 else ""
+                                        _row_d[_hb] = f"{_sign}{_cell:,.0f}"
+                                _hem_rows.append(_row_d)
+
+                            _hem_matrix = pd.DataFrame(_hem_rows).set_index("Tenor")
+
+                            # Style: green = net payer, red = net receiver, grey = empty
+                            def _hem_style(val):
+                                if val == "—": return "color: #555"
+                                try:
+                                    v = float(str(val).replace(",","").replace("+",""))
+                                    if v > 0:   return "background-color: #1a3a1a; color: #4caf50; font-weight:bold"
+                                    elif v < 0: return "background-color: #3a1a1a; color: #f44336; font-weight:bold"
+                                except Exception: pass
+                                return ""
+
+                            _cols_avail = [c for c in _HEM_BUCKET_ORDER if c in _hem_matrix.columns]
+                            _hem_display = _hem_matrix[_cols_avail]
+
+                            st.caption(
+                                f"Values in $M notional | **Green/+** = net payer exposure | **Red/-** = net receiver | "
+                                f"{len(_hem_df)} trades expiring {_eff_date.strftime('%d-%b')} "
+                                f"to {_hem_cutoff.strftime('%d-%b')}"
+                            )
+                            st.dataframe(
+                                _hem_display.style.applymap(_hem_style),
+                                use_container_width=True
+                            )
+
+                            # Totals row
+                            _hem_col_tots = {}
+                            for _hb in _cols_avail:
+                                try:
+                                    _tot = sum(
+                                        float(str(v).replace(",","").replace("+",""))
+                                        for v in _hem_display[_hb] if v != "—"
+                                    )
+                                    _hem_col_tots[_hb] = f"{'+'if _tot>=0 else ''}{_tot:,.0f}"
+                                except Exception:
+                                    _hem_col_tots[_hb] = "—"
+                            st.caption("**Column totals (net $M):** " +
+                                       " | ".join(f"{k}: {v}" for k,v in _hem_col_tots.items()))
+
+                        st.markdown("---")
+
                         # ── Daily Expiry Breakdown ────────────────────────
                         st.markdown("#### Daily Expiry Breakdown")
                         _expiry_days = sorted(_em_filtered["expiry_date"].unique())
