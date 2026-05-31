@@ -7554,6 +7554,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     # produce a separate Excel-ready df where Time is a real datetime
                     # so Excel auto-recognises it for filtering/sorting.
                     _all_df_display = _all_df.drop(columns=["_notional_num", "_time_dt"], errors="ignore")
+                    if "Nett Leg BP (R/R)" in _all_df_display.columns:
+                        _all_df_display["Nett Leg BP (R/R)"] = _all_df_display["Nett Leg BP (R/R)"].fillna("—")
                     _all_df_excel = _all_df.copy()
                     if "_time_dt" in _all_df_excel.columns:
                         _all_df_excel["Time"] = _all_df_excel["_time_dt"]
@@ -7759,7 +7761,22 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                     # end Price This expander
                     st.dataframe(_all_df_display, use_container_width=True, hide_index=True,
-                                 height=min(60 + len(_all_df_display) * 35, 700))
+                                 height=min(60 + len(_all_df_display) * 35, 700),
+                                 column_config={
+                                     "Type":               st.column_config.TextColumn("Type",               width=115),
+                                     "Time":               st.column_config.TextColumn("Time",               width=115),
+                                     "CCY":                st.column_config.TextColumn("CCY",                width=55),
+                                     "Opt Expiry":         st.column_config.TextColumn("Opt Expiry",         width=80),
+                                     "Swp Tenor":          st.column_config.TextColumn("Swp Tenor",          width=80),
+                                     "Strike":             st.column_config.TextColumn("Strike",             width=165),
+                                     "Notional":           st.column_config.TextColumn("Notional",           width=70),
+                                     "Premium":            st.column_config.TextColumn("Premium",            width=290),
+                                     "Nett Prem BP":       st.column_config.TextColumn("Nett Prem BP",       width=100),
+                                     "Nett Leg BP (R/R)":  st.column_config.TextColumn("Nett Leg BP (R/R)", width=130),
+                                     "P Prem BP":          st.column_config.TextColumn("P Prem BP",          width=85),
+                                     "R Prem BP":          st.column_config.TextColumn("R Prem BP",          width=85),
+                                     "Platform":           st.column_config.TextColumn("Platform",           width=115),
+                                 })
                     st.caption("Straddle prem deduped for all brokers except DWSF (report full straddle prem on each leg). "
                                "DWSF strikes normalised (÷100).")
 
