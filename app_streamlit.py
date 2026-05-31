@@ -8228,6 +8228,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     st.markdown("**Δν (blended)**")
                                     if _bl_prev.get("show_dn"):
                                         st.dataframe(pd.DataFrame(_bl_prev["show_dn"]).set_index("Expiry"), use_container_width=True)
+                                st.caption(
+                                    "**Δρ** = change in rho — the skew parameter. Negative rho = payer skew "
+                                    "(vol higher for payers than receivers). More negative = steeper payer skew.  
+"
+                                    "**Δν** = change in nu — vol of vol, the smile curvature parameter. Higher nu = more "
+                                    "pronounced wings (both OTM payers and receivers richer vs ATM). Controls how fast "
+                                    "vol rises as you move away from ATM in either direction."
+                                )
                                 st.success(f"Preview ready — {_bl_prev.get('n_buckets','?')} buckets fitted, "
                                            f"blend weight {_bl_prev.get('blend_w',0):.0%}. "
                                            f"Apply here or in Vol Editor Expert section.")
