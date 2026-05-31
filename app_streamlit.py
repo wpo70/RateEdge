@@ -8761,54 +8761,55 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                             _hem_cols = sorted(_hem_base["swp_tenor"].dropna().unique(), key=_tnr_hem)
 
-                            # Heatmap 1: Net direction (Payer − Receiver)
-                            st.markdown("**Net Directional Exposure ($M) — Payer (+) / Receiver (−)**")
-                            _pivot_net = _hem_base.pivot_table(
-                                index="strike_label", columns="swp_tenor",
-                                values="signed_m", aggfunc="sum", fill_value=0
-                            )
-                            _pivot_net = _pivot_net.reindex(sorted(_pivot_net.columns, key=_tnr_hem), axis=1)
-                            _pivot_net = _pivot_net.reindex(
-                                sorted(_pivot_net.index, key=lambda x: -float(x.replace('%',''))), axis=0)
-
-                            def _net_style(v):
-                                try:
-                                    f = float(v)
-                                    if f > 0:  return "background-color: #7b2d2d; color: #ffcccc"
-                                    elif f < 0: return "background-color: #1a3a5c; color: #cce5ff"
-                                    return ""
-                                except Exception: return ""
-
                             try:
+                                def _tnr_s(t):
+                                    import re as _re3
+                                    _ms = _re3.match(r"(\d+)Y", str(t))
+                                    return int(_ms.group(1)) if _ms else 999
+
+                                # Heatmap 1: Net direction — Payer (+) red, Receiver (−) shown as negative
+                                st.markdown("**Net Directional Exposure ($M) — Payer (+) / Receiver (−)**")
+                                _pivot_net = _hem_base.pivot_table(
+                                    index="strike_label", columns="swp_tenor",
+                                    values="signed_m", aggfunc="sum", fill_value=0
+                                )
+                                _pivot_net = _pivot_net.reindex(sorted(_pivot_net.columns, key=_tnr_s), axis=1)
+                                _pivot_net = _pivot_net.reindex(
+                                    sorted(_pivot_net.index, key=lambda x: -float(x.replace('%',''))), axis=0)
+                                # Reds on absolute value — intensity shows magnitude regardless of sign
+                                _pivot_net_abs = _pivot_net.abs()
+                                _net_styled = _pivot_net_abs.style.background_gradient(
+                                    cmap="Reds", axis=None).format(
+                                    lambda v: f"+{v:,.0f}" if _pivot_net.loc[_pivot_net_abs.index[_pivot_net_abs.values.tolist().index([row for row in _pivot_net_abs.values.tolist() if v in row][0])], _pivot_net_abs.columns[_pivot_net_abs.values.tolist()[0].index(v)]] >= 0 else f"-{v:,.0f}"
+                                    if v != 0 else "0"
+                                )
+                                # Simpler: just format the original pivot with Reds on abs
                                 _net_styled = _pivot_net.style.background_gradient(
-                                    cmap="RdBu_r", axis=None).format("{:+,.0f}")
-                            except Exception:
-                                _net_styled = _pivot_net.style.format("{:+,.0f}")
-                            st.dataframe(_net_styled, use_container_width=True,
-                                         height=min(500, 40 + len(_pivot_net) * 35))
-                            st.caption("Red = net payer · Blue = net receiver · Rows = 25bp strike buckets · Columns = swap tenor")
+                                    cmap="Reds", gmap=_pivot_net.abs(), axis=None
+                                ).format("{:+,.0f}")
+                                st.dataframe(_net_styled, use_container_width=True,
+                                             height=min(500, 40 + len(_pivot_net) * 35))
+                                st.caption("Reds intensity = magnitude | + = net payer | − = net receiver | 25bp buckets")
 
-                            st.markdown("**Strike Concentration ($M total notional)**")
-                            # Heatmap 2: Total concentration (direction-agnostic)
-                            _pivot_conc = _hem_base.pivot_table(
-                                index="strike_label", columns="swp_tenor",
-                                values="notional_m", aggfunc="sum", fill_value=0
-                            )
-                            _pivot_conc = _pivot_conc.reindex(sorted(_pivot_conc.columns, key=_tnr_hem), axis=1)
-                            _pivot_conc = _pivot_conc.reindex(
-                                sorted(_pivot_conc.index, key=lambda x: -float(x.replace('%',''))), axis=0)
-
-                            try:
+                                # Heatmap 2: Total concentration
+                                st.markdown("**Strike Concentration ($M total notional)**")
+                                _pivot_conc = _hem_base.pivot_table(
+                                    index="strike_label", columns="swp_tenor",
+                                    values="notional_m", aggfunc="sum", fill_value=0
+                                )
+                                _pivot_conc = _pivot_conc.reindex(sorted(_pivot_conc.columns, key=_tnr_s), axis=1)
+                                _pivot_conc = _pivot_conc.reindex(
+                                    sorted(_pivot_conc.index, key=lambda x: -float(x.replace('%',''))), axis=0)
                                 _conc_styled = _pivot_conc.style.background_gradient(
                                     cmap="Reds", axis=None).format("{:,.0f}")
-                            except Exception:
-                                _conc_styled = _pivot_conc.style.format("{:,.0f}")
-                            st.dataframe(_conc_styled, use_container_width=True,
-                                         height=min(500, 40 + len(_pivot_conc) * 35))
-                            st.caption(f"Rows = 25bp strike buckets · Columns = swap tenor · "
-                                       f"{len(_hem_base)} trades ±50bp from ATM | "
-                                       f"{_eff_date.strftime('%d-%b') if _eff_date else '?'} "
-                                       f"to {_hem_cutoff.strftime('%d-%b') if _hem_cutoff else '?'}")
+                                st.dataframe(_conc_styled, use_container_width=True,
+                                             height=min(500, 40 + len(_pivot_conc) * 35))
+                                st.caption(f"Rows = 25bp strike buckets · Columns = swap tenor · "
+                                           f"{len(_hem_base)} trades ±50bp from ATM | "
+                                           f"{_eff_date.strftime('%d-%b') if _eff_date else '?'} "
+                                           f"to {_hem_cutoff.strftime('%d-%b') if _hem_cutoff else '?'}")
+                            except Exception as _hem_err:
+                                st.warning(f"Heatmap render error: {_hem_err}")
 
                         st.markdown("---")
 
