@@ -6689,17 +6689,34 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
     with st.expander("⚙️  Setup & Filters", expanded=False):
         col1, col2, col3, col4 = st.columns(4)
 
+        # Pull saved values from shadow key — bypasses widget key registration issue
+        _sv = st.session_state.get("_sdr_filter_shadow", {})
+        _sdr_yesterday = datetime.now(SYDNEY_TZ).date() - __import__('datetime').timedelta(days=1)
+        _sdr_today_syd = datetime.now(SYDNEY_TZ).date()
+
         with col1:
             st.markdown("**Date range**")
-            _sdr_yesterday = datetime.now(SYDNEY_TZ).date() - __import__('datetime').timedelta(days=1)
+            _df_val = _sv.get("sdr_date_from", _sdr_yesterday)
+            if not isinstance(_df_val, type(_sdr_yesterday)):
+                try:
+                    import datetime as _dtt
+                    _df_val = _dtt.date.fromisoformat(str(_df_val))
+                except Exception:
+                    _df_val = _sdr_yesterday
             date_from = st.date_input(
-                "From", value=_sdr_yesterday,
+                "From", value=_df_val,
                 key="sdr_date_from", label_visibility="collapsed",
                 on_change=_save_sdr_filters
             )
-            _sdr_today_syd = datetime.now(SYDNEY_TZ).date()
+            _dt_val = _sv.get("sdr_date_to", _sdr_today_syd)
+            if not isinstance(_dt_val, type(_sdr_today_syd)):
+                try:
+                    import datetime as _dtt
+                    _dt_val = _dtt.date.fromisoformat(str(_dt_val))
+                except Exception:
+                    _dt_val = _sdr_today_syd
             date_to = st.date_input(
-                "To", value=_sdr_today_syd,
+                "To", value=_dt_val,
                 key="sdr_date_to", label_visibility="collapsed",
                 on_change=_save_sdr_filters
             )
@@ -6720,22 +6737,30 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 "Other":                 "OTH",
             }
             _type_defaults = ["Payer (C)", "Receiver (P)", "Straddle (D/EC)", "Euro Swn (EC/OPET)"]
+            _sv_type = _sv.get("sdr_type", _type_defaults)
+            _sv_type = [t for t in _sv_type if t in _type_options] if _sv_type else _type_defaults
             sel_type_labels = st.multiselect("P/C", list(_type_options.keys()),
-                default=_type_defaults, key="sdr_type",
+                default=_sv_type, key="sdr_type",
                 label_visibility="collapsed", on_change=_save_sdr_filters)
             sel_type = [_type_options[l] for l in sel_type_labels]
             ccy_opts = _sdr_get_distinct("notional_ccy")
             _ccy_default = [x for x in ["AUD"] if x in ccy_opts] if ccy_opts else []
+            _sv_ccy = _sv.get("sdr_ccy", _ccy_default)
+            _sv_ccy = [c for c in _sv_ccy if c in ccy_opts] if _sv_ccy else _ccy_default
             sel_ccy = st.multiselect("CCY", ccy_opts,
-                default=_ccy_default,
+                default=_sv_ccy,
                 key="sdr_ccy", label_visibility="collapsed", on_change=_save_sdr_filters)
 
         with col3:
             st.markdown("**Tenor filters**")
             opt_tenors = _sdr_get_distinct("opt_tenor", order_by_tenor=True)
-            sel_opt_tenor = st.selectbox("Opt expiry", ["All"] + opt_tenors, key="sdr_opt_tenor", label_visibility="collapsed", on_change=_save_sdr_filters)
+            _sv_opt = _sv.get("sdr_opt_tenor", "All")
+            _sv_opt = _sv_opt if _sv_opt in (["All"] + opt_tenors) else "All"
+            sel_opt_tenor = st.selectbox("Opt expiry", ["All"] + opt_tenors, index=(["All"]+opt_tenors).index(_sv_opt) if _sv_opt in ["All"]+opt_tenors else 0, key="sdr_opt_tenor", label_visibility="collapsed", on_change=_save_sdr_filters)
             swp_tenors = _sdr_get_distinct("swp_tenor", order_by_tenor=True)
-            sel_swp_tenor = st.selectbox("Swp tenor", ["All"] + swp_tenors, key="sdr_swp_tenor", label_visibility="collapsed", on_change=_save_sdr_filters)
+            _sv_swp = _sv.get("sdr_swp_tenor", "All")
+            _sv_swp = _sv_swp if _sv_swp in (["All"] + swp_tenors) else "All"
+            sel_swp_tenor = st.selectbox("Swp tenor", ["All"] + swp_tenors, index=(["All"]+swp_tenors).index(_sv_swp) if _sv_swp in ["All"]+swp_tenors else 0, key="sdr_swp_tenor", label_visibility="collapsed", on_change=_save_sdr_filters)
 
         with col4:
             st.markdown("**Platform & Action**")
@@ -6744,45 +6769,53 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             _all_platforms = sorted(_BROKER_MICS, key=lambda p: PLATFORM_NAMES.get(p, p))
             _platform_display = [f"{PLATFORM_NAMES.get(p, p)} ({p})" for p in _all_platforms]
             _platform_map = {f"{PLATFORM_NAMES.get(p, p)} ({p})": p for p in _all_platforms}
+            _sv_plat = _sv.get("sdr_platform", _platform_display)
+            _sv_plat = [p for p in _sv_plat if p in _platform_display] if _sv_plat else _platform_display
             sel_platform_labels = st.multiselect("Platform", _platform_display,
-                default=_platform_display, key="sdr_platform",
+                default=_sv_plat, key="sdr_platform",
                 label_visibility="collapsed", on_change=_save_sdr_filters)
             sel_platform = [_platform_map[l] for l in sel_platform_labels]
-            # action_type column uses legacy DTCC codes (NEWT=new, MODI=modify,
-            # CORR=correction, CANC=cancellation, TERM=termination, EROR/REVI).
-            # Note: event_type column has different ISO 20022 codes (TRAD/ETRM/etc)
-            # but the SDR tab filters on action_type, not event_type.
             action_opts = ["NEWT", "MODI", "TERM", "CORR", "CANC", "EROR", "REVI"]
-            sel_action = st.multiselect("Action", action_opts, default=["NEWT", "MODI"], key="sdr_action", label_visibility="collapsed", on_change=_save_sdr_filters)
+            _sv_action = _sv.get("sdr_action", ["NEWT", "MODI"])
+            _sv_action = [a for a in _sv_action if a in action_opts] if _sv_action else ["NEWT", "MODI"]
+            sel_action = st.multiselect("Action", action_opts, default=_sv_action, key="sdr_action", label_visibility="collapsed", on_change=_save_sdr_filters)
 
         st.markdown("---")
         al1, al2, al3, al4, al5 = st.columns(5)
         with al1:
             st.markdown("**Timezone**")
             _tz_options = ["Sydney (AEST/AEDT)", "Auckland (NZST/NZDT)", "New York (ET)", "London (GMT/BST)", "Tokyo (JST)"]
-            st.selectbox("Timezone", _tz_options, key="sdr_timezone",
+            _sv_tz = _sv.get("sdr_timezone", "Sydney (AEST/AEDT)")
+            _sv_tz = _sv_tz if _sv_tz in _tz_options else "Sydney (AEST/AEDT)"
+            st.selectbox("Timezone", _tz_options, index=_tz_options.index(_sv_tz), key="sdr_timezone",
                         label_visibility="collapsed", on_change=_save_sdr_filters)
         with al2:
             st.markdown("**Alerts**")
-            alerts_on = st.toggle("🔔 New NEWT trades", value=True, key="sdr_alerts_on", on_change=_save_sdr_filters)
+            _sv_alerts = _sv.get("sdr_alerts_on", True)
+            alerts_on = st.toggle("🔔 New NEWT trades", value=bool(_sv_alerts), key="sdr_alerts_on", on_change=_save_sdr_filters)
         with al3:
             st.markdown("**Min notional (M)**")
+            _sv_not = int(_sv.get("sdr_min_notional", 0) or 0)
             min_notional_m = st.number_input(
-                "Min notional (USD M)", min_value=0, value=0, step=25,
+                "Min notional (USD M)", min_value=0, value=_sv_not, step=25,
                 key="sdr_min_notional", help="Only alert on trades above this size",
                 label_visibility="collapsed", on_change=_save_sdr_filters
             )
         with al4:
             st.markdown("**Alert CCY**")
             _alert_ccy_opts = ["All"] + ccy_opts
-            _alert_ccy_idx = _alert_ccy_opts.index("AUD") if "AUD" in _alert_ccy_opts else 0
+            _sv_accy = _sv.get("sdr_alert_ccy", "AUD")
+            _alert_ccy_idx = _alert_ccy_opts.index(_sv_accy) if _sv_accy in _alert_ccy_opts else (_alert_ccy_opts.index("AUD") if "AUD" in _alert_ccy_opts else 0)
             alert_ccy = st.selectbox("Alert CCY filter", _alert_ccy_opts, index=_alert_ccy_idx,
                         key="sdr_alert_ccy", label_visibility="collapsed", on_change=_save_sdr_filters)
         with al5:
             st.markdown("**Auto-refresh**")
+            _refresh_opts = ["Off", "30s", "1 min", "2 min", "5 min"]
+            _sv_ref = _sv.get("sdr_refresh_interval", "30s")
+            _sv_ref_idx = _refresh_opts.index(_sv_ref) if _sv_ref in _refresh_opts else 1
             auto_refresh = st.selectbox(
-                "Auto-refresh", ["Off", "30s", "1 min", "2 min", "5 min"],
-                index=1,
+                "Auto-refresh", _refresh_opts,
+                index=_sv_ref_idx,
                 label_visibility="collapsed",
                 key="sdr_refresh_interval"
             )
@@ -22134,6 +22167,125 @@ def vol_surface_editor_tab():
                     _ref_tag = st.session_state.get(f"_sabr_ref_updated_{ccy}", "31-Mar-2026 (built-in)")
                     st.caption(f"Ref: {_ref_tag} | Excel needs 'Rho' and 'Nu' sheets — expiry in col A, tenors in row 1")
     
+
+            # ── SDR Market Calibration ────────────────────────────────────────
+            st.markdown("---")
+            _sdr_blend = st.session_state.get("_sdr_sabr_blended")
+            if _sdr_blend and _rc_ccy == "USD":
+                st.markdown("##### 📡 SDR Market Calibration — Blended ρ / ν")
+                st.caption(
+                    "Derived from SDR strangle trades via Bachelier inversion + SABR fitting. "
+                    "Review Δρ and Δν heatmaps below, then apply to session."
+                )
+
+                _bl_rho = _sdr_blend.get("rho")
+                _bl_nu  = _sdr_blend.get("nu")
+                _bl_alpha = _sdr_blend.get("alpha")
+
+                # Build Δρ and Δν vs current
+                if _bl_rho is not None and _rc_r is not None:
+                    try:
+                        _GRID_EXP_VE = [c for c in _bl_rho["Expiry"].tolist() if c]
+                        _GRID_TEN_VE = [c for c in _bl_rho.columns if c != "Expiry"]
+
+                        def _build_delta_matrix(new_df, cur_df):
+                            _rows = []
+                            for _exp in _GRID_EXP_VE:
+                                _row = {"Expiry": _exp}
+                                _mask_n = new_df["Expiry"].str.lower().str.strip() == _exp.lower().strip()
+                                _mask_c = cur_df["Expiry"].str.lower().str.strip() == _exp.lower().strip()
+                                for _ten in _GRID_TEN_VE:
+                                    try:
+                                        _n_val = float(new_df.loc[_mask_n, _ten].iloc[0]) if _ten in new_df.columns and _mask_n.any() else None
+                                        _c_val = float(cur_df.loc[_mask_c, _ten].iloc[0]) if _ten in cur_df.columns and _mask_c.any() else None
+                                        if _n_val is not None and _c_val is not None:
+                                            _row[_ten] = round(_n_val - _c_val, 4)
+                                        else:
+                                            _row[_ten] = None
+                                    except Exception:
+                                        _row[_ten] = None
+                                _rows.append(_row)
+                            return pd.DataFrame(_rows).set_index("Expiry")
+
+                        _delta_rho_df = _build_delta_matrix(_bl_rho, _rc_r)
+                        _delta_nu_df  = _build_delta_matrix(_bl_nu,  _rc_n)
+
+                        # 2D heatmap using plotly
+                        try:
+                            import plotly.graph_objects as _go
+                            from plotly.subplots import make_subplots as _msp
+
+                            def _heatmap_fig(df, title, colorscale="RdBu", zmid=0):
+                                _z = df.values.tolist()
+                                _fig = _go.Figure(data=_go.Heatmap(
+                                    z=_z,
+                                    x=list(df.columns),
+                                    y=list(df.index),
+                                    colorscale=colorscale,
+                                    zmid=zmid,
+                                    text=[[f"{v:+.3f}" if v is not None else "—" for v in row] for row in _z],
+                                    texttemplate="%{text}",
+                                    showscale=True,
+                                    hoverongaps=False,
+                                ))
+                                _fig.update_layout(
+                                    title=title, height=320,
+                                    margin=dict(l=60,r=20,t=40,b=40),
+                                    xaxis_title="Swap Tenor",
+                                    yaxis_title="Option Expiry",
+                                    font=dict(size=11),
+                                )
+                                return _fig
+
+                            _hm1, _hm2 = st.columns(2)
+                            with _hm1:
+                                st.plotly_chart(_heatmap_fig(_delta_rho_df, "Δρ (blended − current)", "RdBu"), use_container_width=True)
+                            with _hm2:
+                                st.plotly_chart(_heatmap_fig(_delta_nu_df,  "Δν (blended − current)", "RdYlGn"), use_container_width=True)
+
+                        except Exception as _pe:
+                            # Fallback: show as styled dataframe
+                            _hm1, _hm2 = st.columns(2)
+                            with _hm1:
+                                st.markdown("**Δρ (blended − current)**")
+                                st.dataframe(_delta_rho_df.style.background_gradient(cmap="RdBu", axis=None), use_container_width=True)
+                            with _hm2:
+                                st.markdown("**Δν (blended − current)**")
+                                st.dataframe(_delta_nu_df.style.background_gradient(cmap="RdYlGn", axis=None), use_container_width=True)
+
+                        # New absolute ρ / ν matrices
+                        with st.expander("New ρ / ν matrices (post-blend)", expanded=False):
+                            _nm1, _nm2 = st.columns(2)
+                            with _nm1:
+                                st.markdown("**ρ (blended)**")
+                                _rho_disp = _bl_rho.set_index("Expiry") if "Expiry" in _bl_rho.columns else _bl_rho
+                                st.dataframe(_rho_disp.style.background_gradient(cmap="RdBu", axis=None), use_container_width=True)
+                            with _nm2:
+                                st.markdown("**ν (blended)**")
+                                _nu_disp = _bl_nu.set_index("Expiry") if "Expiry" in _bl_nu.columns else _bl_nu
+                                st.dataframe(_nu_disp.style.background_gradient(cmap="YlOrRd", axis=None), use_container_width=True)
+
+                        # Apply button
+                        _ap1, _ap2 = st.columns([2, 4])
+                        with _ap1:
+                            if st.button("✅ Apply Blended SABR to Session", key="ve_sdr_sabr_apply", type="primary"):
+                                _old_atm_ve, _, _b_ve, _, _ = get_ccy_vol_data("USD")
+                                set_ccy_vol_data("USD", _old_atm_ve, _bl_alpha, _b_ve, _bl_rho, _bl_nu)
+                                st.session_state.pop("_sdr_sabr_blended", None)
+                                st.session_state.pop("_alpha_check_result", None)
+                                load_user_config.clear()
+                                st.success("✅ Blended SABR applied. Run α Check on Swaptions tab to verify.")
+                                st.rerun()
+                        with _ap2:
+                            if st.button("🗑 Discard SDR Blend", key="ve_sdr_sabr_discard", type="secondary"):
+                                st.session_state.pop("_sdr_sabr_blended", None)
+                                st.rerun()
+
+                    except Exception as _ve_err:
+                        st.error(f"Heatmap error: {_ve_err}")
+            elif _rc_ccy == "USD":
+                st.caption("No SDR blend pending — run 'Fit & Preview' in SDR Live → Full Trade Analytics → SDR SABR Analytics first.")
+
     # Sync back to the main app's vol_data if published
     # (The vol_editor module handles publishing internally via session state)
 
