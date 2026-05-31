@@ -8644,16 +8644,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             key="em_strike_var")
 
                     # Compute strike variance (bp from forward)
-                    def _strike_var_bp(row):
-                        fwd = row.get("_fwd")
-                        if fwd is None or pd.isna(fwd):
-                            fwd = _em_fwd.get(str(row.get("swp_tenor", "")))
-                        s = row.get("strike_pct")
-                        if fwd is None or pd.isna(s):
-                            return None
-                        return abs(s - fwd) * 100  # % to bp
-
-                    _em_df["strike_var_bp"] = _em_df.apply(_strike_var_bp, axis=1)
+                    if "strike_var_bp" not in _em_df.columns:
+                        # Vectorized — no row-by-row apply
+                        _fwd_series = _em_df["_fwd"].fillna(_em_df["swp_tenor"].map(_em_fwd))
+                        _em_df["strike_var_bp"] = (_em_df["strike_pct"] - _fwd_series).abs() * 100
+                        st.session_state["_em_results"] = _em_df
 
                     _em_filtered = _em_df.copy()
                     # Exclude expired: today's expiry valid until 11am NYC, then rolls
@@ -8886,10 +8881,12 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             # Live forward diagnostic — recompute from current curve
                             _live_curve = st.session_state.get("config_curves", {}).get("USD")
                             _live_fwd_diag = ""
-                            if _live_curve is not None:
+                            _live_cache_key = f"_em_live_fwd_{_exp_day}"
+                            if _live_cache_key in st.session_state:
+                                _live_fwd_diag = st.session_state[_live_cache_key]
+                            elif _live_curve is not None:
                                 _days_to_exp = max((_exp_day - _nyc_today).days, 0)
                                 _exp_y_live = _days_to_exp / 365.0
-                                st.session_state.pop("_fwd_ann_cache", None)
                                 for _dt in sorted(_day_df["swp_tenor"].dropna().unique(), key=_safe_tenor_sort):
                                     try:
                                         _ty = label_to_years(str(_dt))
@@ -8898,6 +8895,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         _live_fwd_diag += f" {_dt}={_f_live*100:.4f}%"
                                     except Exception:
                                         pass
+                                st.session_state[_live_cache_key] = _live_fwd_diag
 
                             # Check for economic events on this day
                             _day_events = []
