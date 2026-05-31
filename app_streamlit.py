@@ -8114,9 +8114,6 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 if not _fit_results:
                                     st.warning("Could not fit any buckets — need ATM straddles in same session for F.")
                                 else:
-                                    st.markdown("**Fitted ρ / ν per active bucket:**")
-                                    st.dataframe(pd.DataFrame(_fit_rows), use_container_width=True, hide_index=True)
-
                                     # Interpolate Δρ and Δν across full grid
                                     _pts_exp = [v["exp_y"] for v in _fit_results.values()]
                                     _pts_ten = [v["ten_y"] for v in _fit_results.values()]
@@ -8204,25 +8201,37 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             _idx += 1
                                         _delta_rows.append((_dr_row, _dn_row))
 
-                                    # Show Δρ and Δν matrices
+                                    # Store preview data
                                     _show_dr = [r[0] for r in _delta_rows]
                                     _show_dn = [r[1] for r in _delta_rows]
-                                    _mc1, _mc2 = st.columns(2)
-                                    with _mc1:
-                                        st.markdown("**Δρ (blended)**")
-                                        st.dataframe(pd.DataFrame(_show_dr).set_index("Expiry"), use_container_width=True)
-                                    with _mc2:
-                                        st.markdown("**Δν (blended)**")
-                                        st.dataframe(pd.DataFrame(_show_dn).set_index("Expiry"), use_container_width=True)
 
-                                    # Store blended params for apply
+                                    # Store blended params + preview data in session state
                                     st.session_state["_sdr_sabr_blended"] = {
-                                        "rho": _new_rho_df, "nu": _new_nu_df, "alpha": _new_alpha_df
+                                        "rho": _new_rho_df, "nu": _new_nu_df, "alpha": _new_alpha_df,
+                                        "fit_rows": _fit_rows, "show_dr": _show_dr, "show_dn": _show_dn,
+                                        "n_buckets": len(_fit_results), "blend_w": _blend_w,
                                     }
-                                    st.success(f"Preview ready — {len(_fit_results)} buckets fitted, "
-                                               f"blend weight {_blend_w:.0%}. Click Apply to update session.")
+                                    st.rerun()  # rerun so preview renders outside button block
 
-                            # Apply button — only shown after preview
+                            # Preview + Apply — rendered outside button block so it persists across reruns
+                            if st.session_state.get("_sdr_sabr_blended"):
+                                _bl_prev = st.session_state["_sdr_sabr_blended"]
+                                st.markdown("**Fitted ρ / ν per active bucket:**")
+                                if _bl_prev.get("fit_rows"):
+                                    st.dataframe(pd.DataFrame(_bl_prev["fit_rows"]), use_container_width=True, hide_index=True)
+                                _mc1, _mc2 = st.columns(2)
+                                with _mc1:
+                                    st.markdown("**Δρ (blended)**")
+                                    if _bl_prev.get("show_dr"):
+                                        st.dataframe(pd.DataFrame(_bl_prev["show_dr"]).set_index("Expiry"), use_container_width=True)
+                                with _mc2:
+                                    st.markdown("**Δν (blended)**")
+                                    if _bl_prev.get("show_dn"):
+                                        st.dataframe(pd.DataFrame(_bl_prev["show_dn"]).set_index("Expiry"), use_container_width=True)
+                                st.success(f"Preview ready — {_bl_prev.get('n_buckets','?')} buckets fitted, "
+                                           f"blend weight {_bl_prev.get('blend_w',0):.0%}. "
+                                           f"Apply here or in Vol Editor Expert section.")
+
                             if st.session_state.get("_sdr_sabr_blended"):
                                 if st.button("✅ Apply Blended SABR to Session", key="sdr_sabr_apply_btn", type="primary"):
                                     _bl = st.session_state["_sdr_sabr_blended"]
