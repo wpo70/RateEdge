@@ -8860,7 +8860,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             st.caption("Open Strike Exposure Heatmap first.")
                         _ec5 = st.session_state.get("_em_comm")
                         if _ec5:
-                            st.code(_ec5, language=None)  # built-in copy button
+                            st.markdown(f'''<div style="background:#1a1a2e;border-left:3px solid #e05c5c;padding:16px 20px;border-radius:4px;font-size:0.92rem;line-height:1.6;white-space:pre-wrap;">{_ec5}</div>''', unsafe_allow_html=True)
+                            if st.button("Copy text", key="em_copy_btn"):
+                                st.session_state["_em_copy"] = _ec5
+                            if st.session_state.get("_em_copy"):
+                                st.text_area("", value=st.session_state["_em_copy"], height=100, key="em_copy_area", label_visibility="collapsed")
                             if st.button("Clear", key="em_comm_clear"):
                                 st.session_state.pop("_em_comm", None)
                                 st.rerun()
