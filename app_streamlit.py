@@ -8261,11 +8261,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             if st.session_state.get("_sdr_sabr_blended"):
                                 if st.button("✅ Apply Blended SABR to Session", key="sdr_sabr_apply_btn", type="primary"):
                                     _bl = st.session_state["_sdr_sabr_blended"]
-                                    _old_atm_bl, _, _b_bl, _, _ = get_ccy_vol_data("USD")
-                                    set_ccy_vol_data("USD", _old_atm_bl, _bl["alpha"], _b_bl, _bl["rho"], _bl["nu"])
+                                    # Direct write — bypasses _atm_hash increment so no cache invalidation
+                                    st.session_state["vol_data"].setdefault("USD", {})
+                                    st.session_state["vol_data"]["USD"]["alpha"] = _bl["alpha"]
+                                    st.session_state["vol_data"]["USD"]["rho"]   = _bl["rho"]
+                                    st.session_state["vol_data"]["USD"]["nu"]    = _bl["nu"]
                                     st.session_state.pop("_sdr_sabr_blended", None)
                                     st.session_state.pop("_alpha_check_result", None)
-                                    # Session-only — no DB save (use Vol Editor save button to persist)
                                     st.success("✅ Blended SABR applied to session. Run α Check to verify. Use Vol Editor save to persist.")
                                     st.rerun()
                     else:
@@ -22307,11 +22309,13 @@ def vol_surface_editor_tab():
                         _ap1, _ap2 = st.columns([2, 4])
                         with _ap1:
                             if st.button("✅ Apply Blended SABR to Session", key="ve_sdr_sabr_apply", type="primary"):
-                                _old_atm_ve, _, _b_ve, _, _ = get_ccy_vol_data("USD")
-                                set_ccy_vol_data("USD", _old_atm_ve, _bl_alpha, _b_ve, _bl_rho, _bl_nu)
+                                # Direct write — bypasses _atm_hash increment so no cache invalidation
+                                st.session_state["vol_data"].setdefault("USD", {})
+                                st.session_state["vol_data"]["USD"]["alpha"] = _bl_alpha
+                                st.session_state["vol_data"]["USD"]["rho"]   = _bl_rho
+                                st.session_state["vol_data"]["USD"]["nu"]    = _bl_nu
                                 st.session_state.pop("_sdr_sabr_blended", None)
                                 st.session_state.pop("_alpha_check_result", None)
-                                # Session-only — no DB save (use Vol Editor save button to persist)
                                 st.success("✅ Blended SABR applied. Run α Check on Swaptions tab to verify. Use Vol Editor save to persist.")
                                 st.rerun()
                         with _ap2:
