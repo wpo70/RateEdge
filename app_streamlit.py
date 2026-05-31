@@ -8796,60 +8796,77 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     st.caption(f"25bp buckets x tenor | {len(_hem_base)} trades +-50bp ATM | {_hem_ds} to {_hem_de}")
                                     st.markdown("---")
                                     st.markdown("**AI Positioning Commentary**")
-                                    if st.button("Generate Commentary", key="em_ai_btn", type="secondary"):
-                                        _ai_ls = [
-                                            f"Window: {_hem_ds} to {_hem_de}",
-                                            f"Trades: {len(_hem_base)}",
-                                            f"Total payer: ${_pivot_payer.values.sum():,.0f}M",
-                                            f"Total receiver: ${_pivot_recvr.values.sum():,.0f}M",
-                                        ]
-                                        for _lb2, _pv2 in [("Payer",_pivot_payer),("Receiver",_pivot_recvr)]:
-                                            _fl2 = _pv2.stack().sort_values(ascending=False)
-                                            for (_s2,_t2),_v2 in _fl2[_fl2>0].head(3).items():
-                                                _ai_ls.append(f"  Top {_lb2}: {_s2} x {_t2} = ${_v2:,.0f}M")
-                                        _ai_ls.append("Forwards:")
-                                        for _tf,_ff in sorted(_em_fwd.items(), key=lambda x: label_to_years(x[0])):
-                                            _ai_ls.append(f"  {_tf}: {_ff:.4f}%")
-                                        _sys = "You are a senior USD rates options strategist."
-                                        _usr = (
-                                            "Write a concise 1-2 paragraph start-of-week positioning commentary "
-                                            "based on DTCC SDR expiry data. Cover strike concentration vs forwards, "
-                                            "payer/receiver skew, key buckets, and expiry risk. "
-                                            "Be specific. Professional rates desk voice.\n\n"
-                                            + "\n".join(_ai_ls)
-                                        )
-                                        try:
-                                            import urllib.request as _ur_e, json as _js_e
-                                            _ak = None
-                                            try: _ak = st.secrets.get("ANTHROPIC_API_KEY")
-                                            except Exception: pass
-                                            if not _ak: _ak = os.environ.get("ANTHROPIC_API_KEY")
-                                            if _ak:
-                                                _bd = _js_e.dumps({"model":"claude-sonnet-4-6","max_tokens":600,
-                                                    "system":_sys,"messages":[{"role":"user","content":_usr}]}).encode()
-                                                _rq = _ur_e.Request("https://api.anthropic.com/v1/messages",
-                                                    data=_bd, method="POST",
-                                                    headers={"x-api-key":_ak,"anthropic-version":"2023-06-01",
-                                                             "content-type":"application/json"})
-                                                with st.spinner("Analysing..."):
-                                                    with _ur_e.urlopen(_rq, timeout=30) as _rp:
-                                                        _rs = _js_e.loads(_rp.read().decode())
-                                                _tx = " ".join(b.get("text","") for b in _rs.get("content",[]) if b.get("type")=="text").strip()
-                                                if _tx: st.session_state["_em_comm"] = _tx
-                                                else: st.warning("Empty response.")
-                                            else: st.error("No ANTHROPIC_API_KEY.")
-                                        except Exception as _ae: st.error(f"API error: {_ae}")
-                                    _ec = st.session_state.get("_em_comm")
-                                    if _ec:
-                                        st.markdown(_ec)
-                                        if st.button("Clear", key="em_comm_clear"):
-                                            st.session_state.pop("_em_comm", None)
-                                            st.rerun()
+                                    # Save heatmap data for commentary (outside expander)
+                                    try:
+                                        _tp3 = [(str(s),str(t),float(v)) for (s,t),v in _pivot_payer.stack().sort_values(ascending=False)[_pivot_payer.stack()>0].head(5).items()]
+                                        _tr3 = [(str(s),str(t),float(v)) for (s,t),v in _pivot_recvr.stack().sort_values(ascending=False)[_pivot_recvr.stack()>0].head(5).items()]
+                                    except Exception:
+                                        _tp3 = []; _tr3 = []
+                                    st.session_state["_em_hms"] = {
+                                        "w": f"{_hem_ds} to {_hem_de}",
+                                        "n": len(_hem_base),
+                                        "p": float(_pivot_payer.values.sum()),
+                                        "r": float(_pivot_recvr.values.sum()),
+                                        "tp": _tp3, "tr": _tr3,
+                                        "fwds": {str(k):float(v) for k,v in _em_fwd.items()},
+                                    }
 
                                 except Exception as _hem_err:
                                     st.warning(f"Heatmap render error: {_hem_err}")
 
-                            st.markdown("---")
+                            # AI Commentary
+                        st.markdown("#### AI Positioning Commentary")
+                        _ems4 = st.session_state.get("_em_hms")
+                        if _ems4:
+                            if st.button("Generate Commentary", key="em_ai_btn", type="secondary"):
+                                _ali4 = [
+                                    "Window: " + _ems4["w"],
+                                    "Trades: " + str(_ems4["n"]),
+                                    "Total payer: $" + f"{_ems4['p']:,.0f}M",
+                                    "Total receiver: $" + f"{_ems4['r']:,.0f}M",
+                                ]
+                                for _s4,_t4,_v4 in _ems4.get("tp",[]): _ali4.append(f"  Top payer: {_s4} x {_t4} = ${_v4:,.0f}M")
+                                for _s4,_t4,_v4 in _ems4.get("tr",[]): _ali4.append(f"  Top receiver: {_s4} x {_t4} = ${_v4:,.0f}M")
+                                _ali4.append("Forward rates:")
+                                for _tf4,_ff4 in sorted(_ems4.get("fwds",{}).items(), key=lambda x: label_to_years(x[0])): _ali4.append(f"  {_tf4}: {_ff4:.4f}%")
+                                _em_atm4 = st.session_state.get("vol_data",{}).get("USD",{}).get("atm")
+                                if _em_atm4 is not None:
+                                    try:
+                                        for _ec4 in ["3m","6m","1y","2y","3y"]:
+                                            _vc4 = get_matrix_value(_em_atm4, _ec4, label_to_years("10Y"))
+                                            if _vc4: _ali4.append(f"  ATM vol {_ec4}x10Y: {_vc4:.1f}bp")
+                                    except Exception: pass
+                                _sys4 = "You are a senior USD rates options strategist."
+                                _usr4 = ("In 3-4 sentences max, summarise USD swaption expiry positioning "
+                                         "from this SDR data. Key strikes vs forwards, dominant direction, "
+                                         "largest bucket. Terse rates desk style.\n\n"
+                                         + "\n".join(_ali4))
+                                try:
+                                    import urllib.request as _ur4, json as _js4
+                                    _ak4 = None
+                                    try: _ak4 = st.secrets.get("ANTHROPIC_API_KEY")
+                                    except Exception: pass
+                                    if not _ak4: _ak4 = os.environ.get("ANTHROPIC_API_KEY")
+                                    if _ak4:
+                                        _bd4 = _js4.dumps({"model":"claude-sonnet-4-6","max_tokens":200,"system":_sys4,"messages":[{"role":"user","content":_usr4}]}).encode()
+                                        _rq4 = _ur4.Request("https://api.anthropic.com/v1/messages",data=_bd4,method="POST",headers={"x-api-key":_ak4,"anthropic-version":"2023-06-01","content-type":"application/json"})
+                                        with st.spinner("Analysing..."):
+                                            with _ur4.urlopen(_rq4, timeout=30) as _rp4: _rs4 = _js4.loads(_rp4.read().decode())
+                                        _tx4 = " ".join(b.get("text","") for b in _rs4.get("content",[]) if b.get("type")=="text").strip()
+                                        if _tx4: st.session_state["_em_comm"] = _tx4
+                                        else: st.warning("Empty response.")
+                                    else: st.error("No ANTHROPIC_API_KEY configured.")
+                                except Exception as _ae4: st.error(f"API error: {_ae4}")
+                        else:
+                            st.caption("Open Strike Exposure Heatmap first.")
+                        _ec5 = st.session_state.get("_em_comm")
+                        if _ec5:
+                            st.code(_ec5, language=None)  # built-in copy button
+                            if st.button("Clear", key="em_comm_clear"):
+                                st.session_state.pop("_em_comm", None)
+                                st.rerun()
+
+                        st.markdown("---")
 
                         # ── Daily Expiry Breakdown ────────────────────────
                         st.markdown("#### Daily Expiry Breakdown")
