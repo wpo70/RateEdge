@@ -22759,16 +22759,30 @@ def vol_surface_editor_tab():
                                 _bl_nu_df_ve    = _rec_to_df_ve(_sdr_blend.get("nu_rec"))
                                 # Direct write — bypasses _atm_hash increment so no cache invalidation
                                 if _bl_alpha_df_ve is not None:
+                                    import numpy as _np_ap
+                                    def _mean_sabr(_df):
+                                        try:
+                                            _c = [c for c in _df.columns if c != "Expiry"]
+                                            return float(_np_ap.nanmean(_df[_c].apply(pd.to_numeric, errors="coerce").values))
+                                        except Exception:
+                                            return float("nan")
+                                    _old = st.session_state.get("vol_data", {}).get("USD", {})
+                                    _old_rho = _mean_sabr(_old["rho"]) if _old.get("rho") is not None else float("nan")
+                                    _old_nu  = _mean_sabr(_old["nu"])  if _old.get("nu")  is not None else float("nan")
                                     st.session_state["vol_data"].setdefault("USD", {})
                                     st.session_state["vol_data"]["USD"]["alpha"] = _bl_alpha_df_ve
                                     st.session_state["vol_data"]["USD"]["rho"]   = _bl_rho_df_ve
                                     st.session_state["vol_data"]["USD"]["nu"]    = _bl_nu_df_ve
+                                    # Record before/after so the next render confirms the app updated.
+                                    st.session_state["_usd_sabr_applied_delta"] = {
+                                        "old_rho": _old_rho, "new_rho": _mean_sabr(_bl_rho_df_ve),
+                                        "old_nu":  _old_nu,  "new_nu":  _mean_sabr(_bl_nu_df_ve),
+                                    }
                                 st.session_state.pop("_sdr_sabr_blended", None)
                                 st.session_state.pop("_alpha_check_result", None)
                                 import datetime as _dt_ve
                                 st.session_state["_usd_sabr_source"] = f"SDR blend applied {_dt_ve.datetime.now().strftime('%H:%M:%S')}"
                                 st.session_state["_usd_sabr_applied"] = True
-                                st.success("✅ Blended SABR applied to session (USD α/ρ/ν). Use 'Save Amended SABRs' below to persist.")
                                 st.rerun()
                         with _ap2:
                             if st.button("🗑 Discard SDR Blend", key="ve_sdr_sabr_discard", type="secondary"):
@@ -22779,6 +22793,16 @@ def vol_surface_editor_tab():
                         st.error(f"Heatmap error: {_ve_err}")
             else:
                 st.caption("No SDR blend pending — run 'Fit & Preview' in SDR Live → Full Trade Analytics → SDR SABR Analytics first.")
+
+            # Post-apply confirmation: the in-app (session) SABRs that the pricer uses.
+            _ap_delta = st.session_state.get("_usd_sabr_applied_delta")
+            if _ap_delta:
+                st.success(
+                    "✅ **App SABRs updated (live session — used by the pricer):**  "
+                    f"mean ρ {_ap_delta['old_rho']:.3f} → **{_ap_delta['new_rho']:.3f}**,  "
+                    f"mean ν {_ap_delta['old_nu']:.3f} → **{_ap_delta['new_nu']:.3f}**.  "
+                    "These are now active in pricing. Save below to persist to the database."
+                )
 
             # ── Save Amended SABRs — persist the current session USD SABRs to vol_history ──
             # Shows whenever USD SABR params exist in the session (not gated on the
@@ -22800,8 +22824,30 @@ def vol_surface_editor_tab():
                         _ve_sid = save_vol_snapshot(_ve_uid, "USD", _ve_save_lbl,
                             notes="SDR-blended SABR (ρ/ν from strangle calibration)")
                         if _ve_sid:
-                            st.success(f"✅ Saved to vol_history (id {_ve_sid}). Loadable from Saved Snapshots.")
                             st.session_state.pop("_usd_sabr_applied", None)
+                            # Read the row back and confirm the SABR columns actually landed.
+                            try:
+                                _vc = get_db_connection()
+                                _cur = _vc.cursor()
+                                _cur.execute("""
+                                    SELECT label,
+                                           (sabr_rho IS NOT NULL) AS has_rho,
+                                           (sabr_nu  IS NOT NULL) AS has_nu,
+                                           (sabr_alpha IS NOT NULL) AS has_alpha,
+                                           jsonb_array_length(COALESCE(sabr_rho->'values','[]'::jsonb)) AS rho_rows
+                                    FROM vol_history WHERE id = %s
+                                """, (_ve_sid,))
+                                _row = _cur.fetchone()
+                                _cur.close(); _vc.close()
+                                if _row and _row[1] and _row[2] and _row[3]:
+                                    st.success(f"✅ SABRs CONFIRMED in DB — id {_ve_sid}, label '{_row[0]}'. "
+                                               f"ρ ✓  ν ✓  α ✓  ({_row[4]} expiry rows). Loadable from Saved Snapshots.")
+                                else:
+                                    st.error(f"⚠️ Saved row id {_ve_sid} but SABR columns are MISSING "
+                                             f"(rho={_row[1] if _row else '?'}, nu={_row[2] if _row else '?'}, "
+                                             f"alpha={_row[3] if _row else '?'}). The α/ρ/ν did NOT persist.")
+                            except Exception as _ve_chk:
+                                st.warning(f"Saved (id {_ve_sid}) but could not verify SABR columns: {_ve_chk}")
                         else:
                             st.error("Save failed — see message above.")
 
