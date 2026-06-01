@@ -7934,9 +7934,27 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             pass
                                 _atm_F = {k: sum(v) / len(v) for k, v in _atm_map.items()}
 
-                                def _bch_invert_sabr(prem_bp, F, K, T, is_payer):
+                                # Per-bucket annuity (PV01) from the USD curve — needed to
+                                # invert premium bp → option value → vol correctly.
+                                _sabr_curve = get_ccy_curve("USD")
+                                _sabr_ois   = get_basis_curve("USD", "ois")
+                                def _bucket_annuity(_exp_lbl, _ten_lbl):
+                                    if _sabr_curve is None: return 1.0
+                                    try:
+                                        _, _bann, _ = forward_and_annuity_from_curve(
+                                            _sabr_curve, "USD", label_to_years(_exp_lbl), label_to_years(_ten_lbl), _sabr_ois)
+                                        return _bann if _bann and _bann > 0 else 1.0
+                                    except Exception:
+                                        return 1.0
+
+                                def _bch_invert_sabr(prem_bp, F, K, T, is_payer, annuity=1.0):
                                     if prem_bp <= 0 or T <= 0 or F <= 0 or K <= 0: return None
-                                    prem_r = prem_bp / 10000.0
+                                    # Premium bp = option_value(rate) × annuity × 10000.
+                                    # Must divide by annuity to recover the option value in rate
+                                    # terms before inverting (was missing → backed out ~3.7×
+                                    # too-high vol → fit slammed ν to clamp, ρ wrong sign).
+                                    _ann = annuity if annuity and annuity > 0 else 1.0
+                                    prem_r = prem_bp / 10000.0 / _ann
                                     def _err(sig):
                                         if sig <= 1e-9: return -prem_r
                                         d = (F - K) / (sig * math.sqrt(T))
@@ -8005,8 +8023,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             except Exception: pass
                                         _mv_p = _mv_r = _m_skew = None
                                         if _F and _avg_pp > 0 and _T > 0:
-                                            _mv_p = _bch_invert_sabr(_avg_pp,_F,_avg_pk,_T,True)
-                                            _mv_r = _bch_invert_sabr(_avg_rp,_F,_avg_rk,_T,False)
+                                            _mv_p = _bch_invert_sabr(_avg_pp,_F,_avg_pk,_T,True, _bucket_annuity(_exp,_ten))
+                                            _mv_r = _bch_invert_sabr(_avg_rp,_F,_avg_rk,_T,False, _bucket_annuity(_exp,_ten))
                                             if _mv_p and _mv_r: _m_skew = _mv_p - _mv_r
                                         _skew_diff = round(_m_skew-_s_skew,1) if (_m_skew is not None and _s_skew is not None) else None
                                         _flag = ("⚠️" if _skew_diff and abs(_skew_diff)>2 else "✅" if _skew_diff is not None else "ℹ️" if not _F else "—")
@@ -8124,8 +8142,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     if not _p_ks2: continue
                                                     _Kp = sum(_p_ks2)/len(_p_ks2)
                                                     _Kr = sum(_r_ks2)/len(_r_ks2)
-                                                    _vp_mkt = _bch_invert_sabr(sum(_p_ps2)/len(_p_ps2), _F, _Kp, _T, True)
-                                                    _vr_mkt = _bch_invert_sabr(sum(_r_ps2)/len(_r_ps2), _F, _Kr, _T, False)
+                                                    _vp_mkt = _bch_invert_sabr(sum(_p_ps2)/len(_p_ps2), _F, _Kp, _T, True, _bucket_annuity(_exp,_ten))
+                                                    _vr_mkt = _bch_invert_sabr(sum(_r_ps2)/len(_r_ps2), _F, _Kr, _T, False, _bucket_annuity(_exp,_ten))
                                                     if not _vp_mkt or not _vr_mkt: continue
 
                                                     # Get ATM vol for this bucket (df hoisted above loop)
@@ -8261,11 +8279,25 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                             _dn_show = _n_new - _n_cur
                                                             # Find the row index in _new_rho_df
                                                             _mask = _new_rho_df["Expiry"].str.lower().str.strip() == _exp.lower().strip()
-                                                            if _mask.any() and _ten in _new_rho_df.columns:
-                                                                _new_rho_df.loc[_mask, _ten] = _r_new
-                                                                _new_nu_df.loc[_mask, _ten]  = _n_new
+                                                            # Resolve the actual column name in each target matrix
+                                                            # (alpha/rho/nu can have differently-cased tenor labels;
+                                                            # an exact `_ten in columns` check silently skipped the
+                                                            # write → blend computed but matrix never updated → pricer
+                                                            # kept the old value).
+                                                            def _col_in(_df, _t):
+                                                                if _t in _df.columns: return _t
+                                                                _tl = str(_t).lower().strip()
+                                                                for _c in _df.columns:
+                                                                    if str(_c).lower().strip() == _tl: return _c
+                                                                return None
+                                                            _rc = _col_in(_new_rho_df, _ten)
+                                                            _nc = _col_in(_new_nu_df, _ten)
+                                                            _ac = _col_in(_new_alpha_df, _ten)
+                                                            if _mask.any() and _rc is not None and _nc is not None:
+                                                                _new_rho_df.loc[_mask, _rc] = _r_new
+                                                                _new_nu_df.loc[_mask, _nc]  = _n_new
                                                                 # Recalibrate alpha to ATM
-                                                                if _atm_df2 is not None and _b_cur is not None:
+                                                                if _atm_df2 is not None and _b_cur is not None and _ac is not None:
                                                                     _atm_v2 = get_matrix_value(_atm_df2, _exp, label_to_years(_ten))
                                                                     _F2 = _atm_F.get((_exp, _ten))
                                                                     if _atm_v2 and _F2:
@@ -8275,7 +8307,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                                                 label_to_years(_exp), _b_cur, _r_new, _n_new
                                                                             )
                                                                             if _a_new > 0:
-                                                                                _new_alpha_df.loc[_mask, _ten] = _a_new
+                                                                                _new_alpha_df.loc[_mask, _ac] = _a_new
                                                                         except Exception: pass
                                                             _dr_row[_ten] = f"{_dr_show:+.3f}"
                                                             _dn_row[_ten] = f"{_dn_show:+.3f}"
