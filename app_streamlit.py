@@ -6618,7 +6618,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
         except Exception:
             pass
         st.session_state["sdr_action"]           = ["NEWT", "MODI"]
-        st.session_state["sdr_refresh_interval"] = "30s"
+        st.session_state["sdr_refresh_interval"] = "Off"  # was "30s" — caused rerun-storm hang
         st.session_state.pop("sdr_alert_ccy", None)
         st.session_state.pop("sdr_ccy", None)  # force AUD default on next render
         st.session_state["sdr_filters_loaded"] = True
@@ -6812,8 +6812,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
         with al5:
             st.markdown("**Auto-refresh**")
             _refresh_opts = ["Off", "30s", "1 min", "2 min", "5 min"]
-            _sv_ref = _sv.get("sdr_refresh_interval", "30s")
-            _sv_ref_idx = _refresh_opts.index(_sv_ref) if _sv_ref in _refresh_opts else 1
+            _sv_ref = _sv.get("sdr_refresh_interval", "Off")
+            _sv_ref_idx = _refresh_opts.index(_sv_ref) if _sv_ref in _refresh_opts else 0
             auto_refresh = st.selectbox(
                 "Auto-refresh", _refresh_opts,
                 index=_sv_ref_idx,
