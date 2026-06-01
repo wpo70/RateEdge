@@ -7876,23 +7876,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     st.rerun(scope="app")
 
                     # end Price This expander
-                    st.dataframe(_all_df_display, hide_index=True,
-                                 height=min(60 + len(_all_df_display) * 35, 700),
-                                 column_config={
-                                     "Type":               st.column_config.TextColumn("Type",               width=120),
-                                     "Time":               st.column_config.TextColumn("Time",               width=130),
-                                     "CCY":                st.column_config.TextColumn("CCY",                width=60),
-                                     "Opt Expiry":         st.column_config.TextColumn("Opt Expiry",         width=95),
-                                     "Swp Tenor":          st.column_config.TextColumn("Swp Tenor",          width=95),
-                                     "Strike":             st.column_config.TextColumn("Strike",             width=180),
-                                     "Notional":           st.column_config.TextColumn("Notional",           width=90),
-                                     "Premium":            st.column_config.TextColumn("Premium",            width=320),
-                                     "Nett Prem BP":       st.column_config.TextColumn("Nett Prem BP",       width=110),
-                                     "Nett Leg BP (R/R)":  st.column_config.TextColumn("Nett Leg BP (R/R)", width=130),
-                                     "P Prem BP":          st.column_config.TextColumn("P Prem BP",          width=100),
-                                     "R Prem BP":          st.column_config.TextColumn("R Prem BP",          width=100),
-                                     "Platform":           st.column_config.TextColumn("Platform",           width=140),
-                                 })
+                    st.dataframe(_all_df_display, hide_index=True, use_container_width=True,
+                                 height=min(60 + len(_all_df_display) * 35, 700))
                     st.caption("Straddle prem deduped for all brokers except DWSF (report full straddle prem on each leg). "
                                "DWSF strikes normalised (÷100).")
 
@@ -8325,15 +8310,26 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                 }
                                                 st.rerun(scope="app")  # rerun so preview renders outside button block
 
-                                        # Fit computed here (trade data lives on this tab); all review,
-                                        # apply and save now happen in the Vol Editor → Full SABR
-                                        # Recalibration (Expert) section.
+                                        # Preview — rendered outside the button block so it persists across reruns
                                         if st.session_state.get("_sdr_sabr_blended"):
                                             _bl_prev = st.session_state["_sdr_sabr_blended"]
-                                            st.success(f"✅ Fit ready — {_bl_prev.get('n_buckets','?')} buckets fitted, "
+                                            st.markdown("**Fitted ρ / ν per active bucket:**")
+                                            if _bl_prev.get("fit_rows"):
+                                                st.dataframe(pd.DataFrame(_bl_prev["fit_rows"]), use_container_width=True, hide_index=True)
+                                            _mc1, _mc2 = st.columns(2)
+                                            with _mc1:
+                                                st.caption("Δρ = change in rho — the skew parameter. Negative rho = payer skew. More negative = steeper payer skew.")
+                                                st.markdown("**Δρ (blended)**")
+                                                if _bl_prev.get("show_dr"):
+                                                    st.dataframe(pd.DataFrame(_bl_prev["show_dr"]).set_index("Expiry"), use_container_width=True)
+                                            with _mc2:
+                                                st.caption("Δν = change in nu — vol of vol, the smile curvature parameter. Higher nu = more pronounced wings.")
+                                                st.markdown("**Δν (blended)**")
+                                                if _bl_prev.get("show_dn"):
+                                                    st.dataframe(pd.DataFrame(_bl_prev["show_dn"]).set_index("Expiry"), use_container_width=True)
+                                            st.success(f"✅ Preview ready — {_bl_prev.get('n_buckets','?')} buckets fitted, "
                                                        f"blend weight {_bl_prev.get('blend_w',0):.0%}. "
-                                                       f"Go to **Vol Editor → 🔬 Full SABR Recalibration (Expert)** "
-                                                       f"to review the Δρ/Δν heatmaps, apply, and save.")
+                                                       f"Apply & save in Vol Editor → 🔬 Full SABR Recalibration (Expert).")
                                 else:
                                     st.info("Could not parse strike/premium data from USD strangles in this range.")
 
@@ -22784,12 +22780,13 @@ def vol_surface_editor_tab():
             else:
                 st.caption("No SDR blend pending — run 'Fit & Preview' in SDR Live → Full Trade Analytics → SDR SABR Analytics first.")
 
-            # ── Save Amended SABRs — persist the applied session SABRs to vol_history ──
-            if st.session_state.get("_usd_sabr_applied") and \
-               st.session_state.get("vol_data", {}).get("USD", {}).get("rho") is not None:
+            # ── Save Amended SABRs — persist the current session USD SABRs to vol_history ──
+            # Shows whenever USD SABR params exist in the session (not gated on the
+            # apply-flag, which could leave it hidden).
+            if st.session_state.get("vol_data", {}).get("USD", {}).get("rho") is not None:
                 st.markdown("---")
                 st.markdown("##### 💾 Save Amended SABRs")
-                st.caption("Blended SABRs are live in this session. Save as a new snapshot to persist them to the database.")
+                st.caption("Save the current session USD SABR params (α/ρ/ν) as a new snapshot to persist them to the database.")
                 import datetime as _dt_sv2
                 _sv2_c1, _sv2_c2 = st.columns([3, 2])
                 with _sv2_c1:
