@@ -10233,7 +10233,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
         if _now_rf - _last_rf >= _interval:
             st.session_state["_sdr_last_refresh"] = _now_rf
             _load_sdr_data_cached.clear()
-            st.rerun(scope="app")
+            st.rerun()  # fragment-scoped — app-scope here caused a rerun storm/hang
         else:
             _remaining = max(0, int(_interval - (_now_rf - _last_rf)))
             st.caption(f"🔄 Next refresh in ~{_remaining}s")
