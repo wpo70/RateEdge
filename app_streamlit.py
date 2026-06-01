@@ -10266,22 +10266,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         key="sg_xl_save"
                                     )
 
-    # ── Auto-refresh ──────────────────────────────────────────────────────────
-    _refresh_map = {"Off": 0, "30s": 30, "1 min": 60, "2 min": 120, "5 min": 300}
-    _interval = _refresh_map.get(auto_refresh, 0)
-    if _interval > 0:
-        import time as _time_rf
-        _now_rf  = _time_rf.monotonic()
-        # Seed on first run so it doesn't fire immediately (default 0 made
-        # _now_rf - _last_rf huge → instant refresh+rerun on every tab visit).
-        if "_sdr_last_refresh" not in st.session_state:
-            st.session_state["_sdr_last_refresh"] = _now_rf
-        _last_rf = st.session_state["_sdr_last_refresh"]
-        if _now_rf - _last_rf >= _interval:
-            st.session_state["_sdr_last_refresh"] = _now_rf
-            _load_sdr_data_cached.clear()
-            st.rerun()
-        st.caption(f"🔄 Auto-refresh every {auto_refresh}")
+    # ── Auto-refresh DISABLED ───────────────────────────────────────────────────
+    # The timer caused repeated rerun storms / hangs (cleared cache + reran the
+    # whole heavy SDR tab every interval, including during Fit & Preview).
+    # Use the manual "🔄 Reload" controls instead. Force any stale saved 30s to Off.
+    st.session_state["sdr_refresh_interval"] = "Off"
 
 
 # ── SDR helper functions (add alongside sdr_live_tab) ─────────────────────────
