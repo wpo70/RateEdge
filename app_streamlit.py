@@ -7109,38 +7109,51 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             try: return pd.Timestamp(v).strftime("%m/%d %H:%M")
             except: return str(v)[:16]
 
-        # Build display dict
-        rows_html = []
-        for _, r in disp.iterrows():
-            strike = f"{r['strike_pct']:.5f}%" if pd.notna(r.get("strike_pct")) else "—"
-            prem   = _fmt_premium(r.get("premium_amount")) if pd.notna(r.get("premium_amount")) else "—"
-            not1   = _fmt_notional(r.get("notional_leg1"))
-            _prem_raw = r.get("premium_amount")
-            _not1_raw = r.get("notional_leg1")
-            if pd.notna(_prem_raw) and pd.notna(_not1_raw) and _not1_raw and float(_not1_raw) > 0:
-                _prem_bp = round(float(_prem_raw) / float(_not1_raw) * 10000, 2)
-                _prem_bp_str = f"{_prem_bp:.2f}"
-            else:
-                _prem_bp_str = "—"
-            und    = (r.get("upi_underlier_name") or "—").replace("NA/Swap ","").replace(" Compound","")
-            rows_html.append({
-                "Time":       _ts_fmt_tz(r.get("execution_timestamp") or r.get("event_timestamp"), user_tz),
-                "Action":     r.get("action_type",""),
-                "P/C":        _fmt_type(r.get("option_type_decoded","")),
-                "Opt Expiry": r.get("opt_tenor","—"),
-                "Swp Tenor":  r.get("swp_tenor","—"),
-                "CCY":        r.get("notional_ccy","—"),
-                "Underlying": _clean_underlying(r.get("upi_underlier_name",""), r.get("upi_fisn","")),
-                "Strike %":   strike,
-                "Premium":    prem,
-                "Prem BP":    _prem_bp_str,
-                "Notional":   not1,
-                "Cleared":    r.get("cleared","—"),
-                "Eff Date":   str(r.get("effective_date","—") or "—"),
-                "Exp Date":   str(r.get("expiration_date","—") or "—"),
-                "Mat Date":   str(r.get("maturity_underlier","—") or "—"),
-                "Platform":   PLATFORM_NAMES.get(r.get("platform_identifier",""), r.get("platform_identifier","—")),
-            })
+        # Build display dict — cached on a cheap data fingerprint so the row-by-row
+        # build only runs when the blotter data changes (was rebuilding the whole
+        # table on every interaction → lag).
+        try:
+            _disp_ts = str(disp["execution_timestamp"].max()) if "execution_timestamp" in disp.columns else ""
+        except Exception:
+            _disp_ts = ""
+        # Include filter/query state so changing any filter invalidates the cache.
+        _disp_fp = f"{len(disp)}|{_disp_ts}|{user_tz}|{hash(query)}|{hash(tuple(params))}"
+        if st.session_state.get("_sdr_disp_fp") == _disp_fp and st.session_state.get("_sdr_disp_rows") is not None:
+            rows_html = st.session_state["_sdr_disp_rows"]
+        else:
+            rows_html = []
+            for _, r in disp.iterrows():
+                strike = f"{r['strike_pct']:.5f}%" if pd.notna(r.get("strike_pct")) else "—"
+                prem   = _fmt_premium(r.get("premium_amount")) if pd.notna(r.get("premium_amount")) else "—"
+                not1   = _fmt_notional(r.get("notional_leg1"))
+                _prem_raw = r.get("premium_amount")
+                _not1_raw = r.get("notional_leg1")
+                if pd.notna(_prem_raw) and pd.notna(_not1_raw) and _not1_raw and float(_not1_raw) > 0:
+                    _prem_bp = round(float(_prem_raw) / float(_not1_raw) * 10000, 2)
+                    _prem_bp_str = f"{_prem_bp:.2f}"
+                else:
+                    _prem_bp_str = "—"
+                und    = (r.get("upi_underlier_name") or "—").replace("NA/Swap ","").replace(" Compound","")
+                rows_html.append({
+                    "Time":       _ts_fmt_tz(r.get("execution_timestamp") or r.get("event_timestamp"), user_tz),
+                    "Action":     r.get("action_type",""),
+                    "P/C":        _fmt_type(r.get("option_type_decoded","")),
+                    "Opt Expiry": r.get("opt_tenor","—"),
+                    "Swp Tenor":  r.get("swp_tenor","—"),
+                    "CCY":        r.get("notional_ccy","—"),
+                    "Underlying": _clean_underlying(r.get("upi_underlier_name",""), r.get("upi_fisn","")),
+                    "Strike %":   strike,
+                    "Premium":    prem,
+                    "Prem BP":    _prem_bp_str,
+                    "Notional":   not1,
+                    "Cleared":    r.get("cleared","—"),
+                    "Eff Date":   str(r.get("effective_date","—") or "—"),
+                    "Exp Date":   str(r.get("expiration_date","—") or "—"),
+                    "Mat Date":   str(r.get("maturity_underlier","—") or "—"),
+                    "Platform":   PLATFORM_NAMES.get(r.get("platform_identifier",""), r.get("platform_identifier","—")),
+                })
+            st.session_state["_sdr_disp_fp"] = _disp_fp
+            st.session_state["_sdr_disp_rows"] = rows_html
 
         disp_df = pd.DataFrame(rows_html)
 
