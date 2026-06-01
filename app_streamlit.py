@@ -7344,6 +7344,22 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             if _newt_all.empty:
                 st.info("No NEWT trades in current filter.")
             else:
+                # ── Pairing cache ──────────────────────────────────────────────
+                # The payer×receiver pairing below is O(n²) and was re-running on
+                # every interaction (the hang). Fingerprint the filtered NEWT set;
+                # if unchanged since last render, reuse the stored _all_trades and
+                # skip the whole build. Refreshing the blotter changes the data →
+                # fingerprint changes → it recomputes. No pairing logic is lost.
+                import hashlib as _hl_sdr
+                _sdr_ccy_fp = st.session_state.get("sidebar_ccy", "USD")
+                try:
+                    _fp_id = _newt_all["dissemination_id"].astype(str).str.cat() if "dissemination_id" in _newt_all.columns else _newt_all.index.astype(str).str.cat()
+                    _fp_src = f"{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_id}"
+                except Exception:
+                    _fp_src = f"{len(_newt_all)}|{_sdr_ccy_fp}|{_newt_all.shape}"
+                _newt_fp = _hl_sdr.md5(_fp_src.encode()).hexdigest()
+                _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
+                                       and st.session_state.get("_sdr_pairing_trades") is not None)
                 # Convert timestamps to local time based on sidebar currency
                 from zoneinfo import ZoneInfo as _ZI_sdr
                 _CCY_TIMEZONE = {
@@ -7376,7 +7392,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 _paired_rows = []
                 _exo_types = ["EC", "EXOTIC", "BARRIER", "BERMUDAN", "ASIAN", "DIGITAL", "RANGE"]
 
-                if not _payers_a.empty and not _rcvrs_a.empty and "strike_pct" in _newt_all.columns:
+                if _use_cached_pairing:
+                    # Reuse stored result — blotter data unchanged since last build.
+                    _cached = st.session_state["_sdr_pairing_trades"]
+                    _paired_rows = _cached.get("paired", [])
+                    _single_rows = _cached.get("single", [])
+                    _exo_rows    = _cached.get("exo", [])
+                elif not _payers_a.empty and not _rcvrs_a.empty and "strike_pct" in _newt_all.columns:
                     for _pi, _p in _payers_a.iterrows():
                         if _pi in _matched_p_ids:
                             continue
@@ -7505,70 +7527,78 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     break
 
                 # Single legs (unmatched)
-                _single_rows = []
-                for _si, _s_row in _newt_all.iterrows():
-                    _ot = _s_row.get("option_type_decoded", "")
-                    if _si in _matched_p_ids or _si in _matched_r_ids:
-                        continue
-                    if str(_ot).upper() in _exo_types:
-                        continue
-                    _s_prem = float(_s_row.get("premium_amount") or 0)
-                    _s_not = float(_s_row.get("notional_leg1") or 0)
-                    _s_bp = round(_s_prem / _s_not * 10000, 2) if _s_not > 0 else 0
-                    _s_time = _to_local(_s_row.get("execution_timestamp") or _s_row.get("event_timestamp"))
-                    _pc_label = "🟢 Payer" if _ot == "CALL" else "🔴 Receiver" if _ot == "PUT" else "🔵 Straddle" if str(_ot).upper() == "STR" else f"⚪ {_ot}"
-                    _s_swp = str(_s_row.get("swp_tenor", "") or "").strip()
-                    _s_opt = str(_s_row.get("opt_tenor", "") or "").strip()
-                    if (not _s_swp or _s_swp in ("—", "NA", "None", "")) and _s_opt:
-                        if _ot == "CALL":
-                            _pc_label = "🟩 Cap"
-                        elif _ot == "PUT":
-                            _pc_label = "🟥 Floor"
-                    _single_rows.append({
-                        "Type": _pc_label,
-                        _time_col: _s_time.strftime("%d-%b %H:%M") if _s_time is not pd.NaT else "—",
-                        "_time_dt": _s_time.to_pydatetime().replace(tzinfo=None) if _s_time is not pd.NaT else None,
-                        "CCY": str(_s_row.get("notional_ccy", "")),
-                        "Opt Expiry": str(_s_row.get("opt_tenor", "—")),
-                        "Swp Tenor": _s_swp if _s_swp and _s_swp not in ("—","NA","None","") else "—",
-                        "Strike": f"{float(_s_row.get('strike_pct') or 0):.5f}%" if pd.notna(_s_row.get("strike_pct")) else "—",
-                        "Notional": _fmt_notional(_s_not),
-                        "Premium": _fmt_premium(_s_prem) if _s_prem else "—",
-                        "Nett Prem BP": f"{_s_bp:.2f}" if _s_bp else "—",
-                        "P Prem BP": "—",
-                        "R Prem BP": "—",
-                        "Platform": PLATFORM_NAMES.get(str(_s_row.get("platform_identifier","")), str(_s_row.get("platform_identifier",""))),
-                        "_notional_num": float(_s_not or 0),  # v1105o
-                    })
+                if not _use_cached_pairing:
+                    _single_rows = []
+                    for _si, _s_row in _newt_all.iterrows():
+                        _ot = _s_row.get("option_type_decoded", "")
+                        if _si in _matched_p_ids or _si in _matched_r_ids:
+                            continue
+                        if str(_ot).upper() in _exo_types:
+                            continue
+                        _s_prem = float(_s_row.get("premium_amount") or 0)
+                        _s_not = float(_s_row.get("notional_leg1") or 0)
+                        _s_bp = round(_s_prem / _s_not * 10000, 2) if _s_not > 0 else 0
+                        _s_time = _to_local(_s_row.get("execution_timestamp") or _s_row.get("event_timestamp"))
+                        _pc_label = "🟢 Payer" if _ot == "CALL" else "🔴 Receiver" if _ot == "PUT" else "🔵 Straddle" if str(_ot).upper() == "STR" else f"⚪ {_ot}"
+                        _s_swp = str(_s_row.get("swp_tenor", "") or "").strip()
+                        _s_opt = str(_s_row.get("opt_tenor", "") or "").strip()
+                        if (not _s_swp or _s_swp in ("—", "NA", "None", "")) and _s_opt:
+                            if _ot == "CALL":
+                                _pc_label = "🟩 Cap"
+                            elif _ot == "PUT":
+                                _pc_label = "🟥 Floor"
+                        _single_rows.append({
+                            "Type": _pc_label,
+                            _time_col: _s_time.strftime("%d-%b %H:%M") if _s_time is not pd.NaT else "—",
+                            "_time_dt": _s_time.to_pydatetime().replace(tzinfo=None) if _s_time is not pd.NaT else None,
+                            "CCY": str(_s_row.get("notional_ccy", "")),
+                            "Opt Expiry": str(_s_row.get("opt_tenor", "—")),
+                            "Swp Tenor": _s_swp if _s_swp and _s_swp not in ("—","NA","None","") else "—",
+                            "Strike": f"{float(_s_row.get('strike_pct') or 0):.5f}%" if pd.notna(_s_row.get("strike_pct")) else "—",
+                            "Notional": _fmt_notional(_s_not),
+                            "Premium": _fmt_premium(_s_prem) if _s_prem else "—",
+                            "Nett Prem BP": f"{_s_bp:.2f}" if _s_bp else "—",
+                            "P Prem BP": "—",
+                            "R Prem BP": "—",
+                            "Platform": PLATFORM_NAMES.get(str(_s_row.get("platform_identifier","")), str(_s_row.get("platform_identifier",""))),
+                            "_notional_num": float(_s_not or 0),  # v1105o
+                        })
 
                 # Exotics
-                _exo_rows = []
-                for _ei, _e_row in _newt_all.iterrows():
-                    _ot = str(_e_row.get("option_type_decoded", "")).upper()
-                    if _ei in _matched_p_ids or _ei in _matched_r_ids:
-                        continue
-                    if _ot not in _exo_types:
-                        continue
-                    _e_prem = float(_e_row.get("premium_amount") or 0)
-                    _e_not = float(_e_row.get("notional_leg1") or 0)
-                    _e_bp = round(_e_prem / _e_not * 10000, 2) if _e_not > 0 else 0
-                    _e_time = _to_local(_e_row.get("execution_timestamp") or _e_row.get("event_timestamp"))
-                    _exo_rows.append({
-                        "Type": f"🟡 {_ot}",
-                        _time_col: _e_time.strftime("%d-%b %H:%M") if _e_time is not pd.NaT else "—",
-                        "_time_dt": _e_time.to_pydatetime().replace(tzinfo=None) if _e_time is not pd.NaT else None,
-                        "CCY": str(_e_row.get("notional_ccy", "")),
-                        "Opt Expiry": str(_e_row.get("opt_tenor", "—")),
-                        "Swp Tenor": str(_e_row.get("swp_tenor", "—")),
-                        "Strike": f"{float(_e_row.get('strike_pct') or 0):.5f}%" if pd.notna(_e_row.get("strike_pct")) else "—",
-                        "Notional": _fmt_notional(_e_not),
-                        "Premium": _fmt_premium(_e_prem) if _e_prem else "—",
-                        "Nett Prem BP": f"{_e_bp:.2f}" if _e_bp else "—",
-                        "P Prem BP": "—",
-                        "R Prem BP": "—",
-                        "Platform": PLATFORM_NAMES.get(str(_e_row.get("platform_identifier","")), str(_e_row.get("platform_identifier",""))),
-                        "_notional_num": float(_e_not or 0),  # v1105o
-                    })
+                if not _use_cached_pairing:
+                    _exo_rows = []
+                    for _ei, _e_row in _newt_all.iterrows():
+                        _ot = str(_e_row.get("option_type_decoded", "")).upper()
+                        if _ei in _matched_p_ids or _ei in _matched_r_ids:
+                            continue
+                        if _ot not in _exo_types:
+                            continue
+                        _e_prem = float(_e_row.get("premium_amount") or 0)
+                        _e_not = float(_e_row.get("notional_leg1") or 0)
+                        _e_bp = round(_e_prem / _e_not * 10000, 2) if _e_not > 0 else 0
+                        _e_time = _to_local(_e_row.get("execution_timestamp") or _e_row.get("event_timestamp"))
+                        _exo_rows.append({
+                            "Type": f"🟡 {_ot}",
+                            _time_col: _e_time.strftime("%d-%b %H:%M") if _e_time is not pd.NaT else "—",
+                            "_time_dt": _e_time.to_pydatetime().replace(tzinfo=None) if _e_time is not pd.NaT else None,
+                            "CCY": str(_e_row.get("notional_ccy", "")),
+                            "Opt Expiry": str(_e_row.get("opt_tenor", "—")),
+                            "Swp Tenor": str(_e_row.get("swp_tenor", "—")),
+                            "Strike": f"{float(_e_row.get('strike_pct') or 0):.5f}%" if pd.notna(_e_row.get("strike_pct")) else "—",
+                            "Notional": _fmt_notional(_e_not),
+                            "Premium": _fmt_premium(_e_prem) if _e_prem else "—",
+                            "Nett Prem BP": f"{_e_bp:.2f}" if _e_bp else "—",
+                            "P Prem BP": "—",
+                            "R Prem BP": "—",
+                            "Platform": PLATFORM_NAMES.get(str(_e_row.get("platform_identifier","")), str(_e_row.get("platform_identifier",""))),
+                            "_notional_num": float(_e_not or 0),  # v1105o
+                        })
+                    # Store the freshly-built pairing so subsequent reruns reuse it
+                    # until the blotter data changes (fingerprint mismatch).
+                    st.session_state["_sdr_pairing_fp"] = _newt_fp
+                    st.session_state["_sdr_pairing_trades"] = {
+                        "paired": _paired_rows, "single": _single_rows, "exo": _exo_rows,
+                    }
 
                 # Summary
                 _n_straddles = len([r for r in _paired_rows if r["Type"] == "🔵 Straddle"])
