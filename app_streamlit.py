@@ -8048,9 +8048,12 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             _grid_exp_y = [label_to_years(e) for e in _GRID_EXP]
                                             _grid_ten_y = [label_to_years(t) for t in _GRID_TEN]
 
-                                            # Fit ρ, ν for each active bucket
+                                            # Fit ρ, ν for each active bucket (df hoisted above loop)
+                                            _atm_df = st.session_state.get("vol_data",{}).get("USD",{}).get("atm")
                                             _fit_results = {}
                                             _fit_rows = []
+                                            _spin_ctx = st.spinner(f"Fitting ρ/ν across {len(_bucket_map)} buckets…")
+                                            _spin_ctx.__enter__()
                                             for (_exp, _ten), _trades in _bucket_map.items():
                                                 try:
                                                     _F = _atm_F.get((_exp, _ten))
@@ -8082,9 +8085,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     _vr_mkt = _bch_invert_sabr(sum(_r_ps2)/len(_r_ps2), _F, _Kr, _T, False)
                                                     if not _vp_mkt or not _vr_mkt: continue
 
-                                                    # Get ATM vol for this bucket
+                                                    # Get ATM vol for this bucket (df hoisted above loop)
                                                     _atm_v = None
-                                                    _atm_df = st.session_state.get("vol_data",{}).get("USD",{}).get("atm")
                                                     if _atm_df is not None:
                                                         _atm_v = get_matrix_value(_atm_df, _exp, label_to_years(_ten))
                                                     if not _atm_v: continue
@@ -8106,7 +8108,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                         _obj, [_r0, _n0],
                                                         bounds=[(-0.95, 0.95), (0.01, 2.0)],
                                                         method="L-BFGS-B",
-                                                        options={"maxiter": 200, "ftol": 1e-10}
+                                                        options={"maxiter": 40, "ftol": 1e-7, "eps": 1e-6}
                                                     )
                                                     _rho_fit = _res.x[0]; _nu_fit = _res.x[1]
                                                     _dr = _rho_fit - _r0; _dn = _nu_fit - _n0
@@ -8125,6 +8127,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     })
                                                 except Exception as _fe:
                                                     _fit_rows.append({"Bucket":f"{_exp}×{_ten}","ρ curr":"—","ρ fit":"—","Δρ":f"err:{_fe}","ν curr":"—","ν fit":"—","Δν":"—","Trades":len(_trades)})
+
+                                            _spin_ctx.__exit__(None, None, None)
 
                                             if not _fit_results:
                                                 st.session_state["_sdr_sabr_fit_warn"] = True
@@ -22624,9 +22628,13 @@ def vol_surface_editor_tab():
                 def _rec_to_df_hm(rec):
                     if not rec: return None
                     return pd.DataFrame(rec)
-                _bl_rho   = _rec_to_df_hm(_sdr_blend.get("rho_rec"))   or _sdr_blend.get("rho")
-                _bl_nu    = _rec_to_df_hm(_sdr_blend.get("nu_rec"))    or _sdr_blend.get("nu")
-                _bl_alpha = _rec_to_df_hm(_sdr_blend.get("alpha_rec")) or _sdr_blend.get("alpha")
+                def _blend_field(rec_key, fallback_key):
+                    # Explicit fallback — `df or x` raises on DataFrames (ambiguous truthiness).
+                    _df = _rec_to_df_hm(_sdr_blend.get(rec_key))
+                    return _df if _df is not None else _sdr_blend.get(fallback_key)
+                _bl_rho   = _blend_field("rho_rec",   "rho")
+                _bl_nu    = _blend_field("nu_rec",    "nu")
+                _bl_alpha = _blend_field("alpha_rec", "alpha")
 
                 # Build Δρ and Δν vs current
                 if _bl_rho is not None and _rc_r is not None:
