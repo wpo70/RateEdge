@@ -7175,9 +7175,22 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
     if not df.empty:
         st.markdown("---")
         st.markdown("#### 📊 Analytics")
-        _atab1, _atab2, _atab3, _atab4, _atab5 = st.tabs(["Strike Heatmap", "Straddle Detection", "P/R Ratio", "Full Trade Analytics", "📡 Expiry Monitor"])
+        _atab_names = ["Strike Heatmap", "Straddle Detection", "P/R Ratio", "Full Trade Analytics", "📡 Expiry Monitor"]
+        _atab_sel = st.radio("Analytics view", _atab_names, horizontal=True,
+                             key="sdr_analytics_view", label_visibility="collapsed")
+        # Only the selected panel's body runs (st.tabs rendered all 5 every rerun → slow).
+        class _AtabGate:
+            def __init__(self, active): self._active = active
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def __bool__(self): return self._active
+        _atab1 = _AtabGate(_atab_sel == _atab_names[0])
+        _atab2 = _AtabGate(_atab_sel == _atab_names[1])
+        _atab3 = _AtabGate(_atab_sel == _atab_names[2])
+        _atab4 = _AtabGate(_atab_sel == _atab_names[3])
+        _atab5 = _AtabGate(_atab_sel == _atab_names[4])
 
-        with _atab1:
+        if _atab1:
             # ── Strike Heatmap ──────────────────────────────────────────────
             _hm_newt = df[df["action_type"] == "NEWT"].copy()
             _hm_col1, _hm_col2 = st.columns([2, 1])
@@ -7244,7 +7257,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             else:
                 st.info("No strike data available.")
 
-        with _atab2:
+        if _atab2:
             # ── Straddle Detection ───────────────────────────────────────────
             st.caption("Identifies Payer+Receiver pairs with same tenor/strike executed within 2 minutes — "
                        "DTCC no longer reports type 'D-' so straddles appear as separate legs.")
@@ -7300,7 +7313,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             else:
                 st.info("No straddle pairs detected. Widen date range or remove filters.")
 
-        with _atab3:
+        if _atab3:
             # ── P/R Ratio ───────────────────────────────────────────────────
             _newt_pr = df[df["action_type"] == "NEWT"].copy()
             _pr_payers = _newt_pr[_newt_pr["option_type_decoded"] == "CALL"]
@@ -7336,7 +7349,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     st.dataframe(_pr_tenor, use_container_width=True)
                     st.caption("Notional in $M · Payer % = Payer / (Payer + Receiver) by swap tenor")
 
-        with _atab4:
+        if _atab4:
             # ── Full Trade Analytics — straddles, strangles, collars, singles, exotics ──
             st.caption("All NEWT trades classified: Straddles (matched P+R same strike), "
                        "Strangles (P+R different strikes), Collars (Cap+Floor), singles, exotics.")
@@ -7346,18 +7359,17 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             else:
                 # ── Pairing cache ──────────────────────────────────────────────
                 # The payer×receiver pairing below is O(n²) and was re-running on
-                # every interaction (the hang). Fingerprint the filtered NEWT set;
-                # if unchanged since last render, reuse the stored _all_trades and
-                # skip the whole build. Refreshing the blotter changes the data →
-                # fingerprint changes → it recomputes. No pairing logic is lost.
-                import hashlib as _hl_sdr
+                # every interaction. Cheap O(1) fingerprint (no per-row hashing):
+                # row count + currency + max execution timestamp. Changes when the
+                # blotter refreshes (new rows / newer trade) → recompute; otherwise
+                # reuse stored result. No pairing logic is lost.
                 _sdr_ccy_fp = st.session_state.get("sidebar_ccy", "USD")
                 try:
-                    _fp_id = _newt_all["dissemination_id"].astype(str).str.cat() if "dissemination_id" in _newt_all.columns else _newt_all.index.astype(str).str.cat()
-                    _fp_src = f"{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_id}"
+                    _ts_col = "execution_timestamp" if "execution_timestamp" in _newt_all.columns else None
+                    _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
-                    _fp_src = f"{len(_newt_all)}|{_sdr_ccy_fp}|{_newt_all.shape}"
-                _newt_fp = _hl_sdr.md5(_fp_src.encode()).hexdigest()
+                    _fp_max = ""
+                _newt_fp = f"{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
                 # Convert timestamps to local time based on sidebar currency
@@ -8311,7 +8323,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 else:
                                     st.info("Could not parse strike/premium data from USD strangles in this range.")
 
-        with _atab5:
+        if _atab5:
             # ── EXPIRY MONITOR — SDR strike exposure for upcoming expiries ──────
             st.markdown("### 📡 Expiry Monitor — Strike Exposure at Upcoming Expiries")
             st.caption("Scans 12 months of SDR trades to find swaptions expiring in a target week. "
