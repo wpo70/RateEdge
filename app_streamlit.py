@@ -7877,7 +7877,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                     # end Price This expander
                     st.dataframe(_all_df_display, hide_index=True, use_container_width=True,
-                                 height=min(60 + len(_all_df_display) * 35, 700))
+                                 height=min(60 + len(_all_df_display) * 35, 700),
+                                 column_config={c: st.column_config.Column(width="small")
+                                                for c in _all_df_display.columns})
                     st.caption("Straddle prem deduped for all brokers except DWSF (report full straddle prem on each leg). "
                                "DWSF strikes normalised (÷100).")
 
