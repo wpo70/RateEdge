@@ -8269,77 +8269,15 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                 }
                                                 st.rerun(scope="app")  # rerun so preview renders outside button block
 
-                                        # Preview + Apply — rendered outside button block so it persists across reruns
+                                        # Fit computed here (trade data lives on this tab); all review,
+                                        # apply and save now happen in the Vol Editor → Full SABR
+                                        # Recalibration (Expert) section.
                                         if st.session_state.get("_sdr_sabr_blended"):
                                             _bl_prev = st.session_state["_sdr_sabr_blended"]
-                                            st.markdown("**Fitted ρ / ν per active bucket:**")
-                                            if _bl_prev.get("fit_rows"):
-                                                st.dataframe(pd.DataFrame(_bl_prev["fit_rows"]), use_container_width=True, hide_index=True)
-                                            _mc1, _mc2 = st.columns(2)
-                                            with _mc1:
-                                                st.caption("Δρ = change in rho — the skew parameter. Negative rho = payer skew (vol higher for payers than receivers). More negative = steeper payer skew.")
-                                                st.markdown("**Δρ (blended)**")
-                                                if _bl_prev.get("show_dr"):
-                                                    st.dataframe(pd.DataFrame(_bl_prev["show_dr"]).set_index("Expiry"), use_container_width=True)
-                                            with _mc2:
-                                                st.caption("Δν = change in nu — vol of vol, the smile curvature parameter. Higher nu = more pronounced wings (both OTM payers and receivers richer vs ATM). Controls how fast vol rises as you move away from ATM.")
-                                                st.markdown("**Δν (blended)**")
-                                                if _bl_prev.get("show_dn"):
-                                                    st.dataframe(pd.DataFrame(_bl_prev["show_dn"]).set_index("Expiry"), use_container_width=True)
-                                            st.success(f"Preview ready — {_bl_prev.get('n_buckets','?')} buckets fitted, "
+                                            st.success(f"✅ Fit ready — {_bl_prev.get('n_buckets','?')} buckets fitted, "
                                                        f"blend weight {_bl_prev.get('blend_w',0):.0%}. "
-                                                       f"Apply here or in Vol Editor Expert section.")
-
-                                        if st.session_state.get("_sdr_sabr_blended"):
-                                            if st.button("✅ Apply Blended SABR to Session", key="sdr_sabr_apply_btn", type="primary"):
-                                                _bl = st.session_state["_sdr_sabr_blended"]
-                                                # Reconstruct DataFrames from stored records
-                                                def _rec_to_df(rec):
-                                                    if not rec: return None
-                                                    return pd.DataFrame(rec)
-                                                _bl_alpha_df = _rec_to_df(_bl.get("alpha_rec"))
-                                                _bl_rho_df   = _rec_to_df(_bl.get("rho_rec"))
-                                                _bl_nu_df    = _rec_to_df(_bl.get("nu_rec"))
-                                                # Direct write — bypasses _atm_hash increment so no cache invalidation
-                                                if _bl_alpha_df is not None:
-                                                    st.session_state["vol_data"].setdefault("USD", {})
-                                                    st.session_state["vol_data"]["USD"]["alpha"] = _bl_alpha_df
-                                                    st.session_state["vol_data"]["USD"]["rho"]   = _bl_rho_df
-                                                    st.session_state["vol_data"]["USD"]["nu"]    = _bl_nu_df
-                                                st.session_state.pop("_sdr_sabr_blended", None)
-                                                st.session_state.pop("_alpha_check_result", None)
-                                                # Tag so the Vol Editor expert section can show provenance
-                                                import datetime as _dt_sabr
-                                                st.session_state["_usd_sabr_source"] = f"SDR blend (w={_bl.get('blend_w', '?')}) applied {_dt_sabr.datetime.now().strftime('%H:%M:%S')}"
-                                                st.session_state["_usd_sabr_applied"] = True
-                                                st.success("✅ Blended SABR applied to session (USD α/ρ/ν). "
-                                                           "Use 'Save Amended SABRs' below to persist to the database.")
-                                                st.rerun(scope="app")
-
-                                        # Save Amended SABRs — persists the applied session SABRs to vol_history.
-                                        # Rendered after Apply (which pops the blend + sets the applied flag).
-                                        if st.session_state.get("_usd_sabr_applied") and \
-                                           st.session_state.get("vol_data", {}).get("USD", {}).get("rho") is not None:
-                                            st.caption("Blended SABRs are live in this session. Save them as a new snapshot to persist.")
-                                            _sv_c1, _sv_c2 = st.columns([3, 2])
-                                            with _sv_c1:
-                                                import datetime as _dt_sv
-                                                _sabr_save_lbl = st.text_input(
-                                                    "Snapshot label",
-                                                    value=f"USD SDR-Blended SABR {_dt_sv.datetime.now().strftime('%d-%b-%Y %H:%M')}",
-                                                    key="sdr_sabr_save_label")
-                                            with _sv_c2:
-                                                st.write("")
-                                                st.write("")
-                                                if st.button("💾 Save Amended SABRs", key="sdr_sabr_save_btn", type="primary"):
-                                                    _uid = st.session_state.get("username") or "wpo@rateedge.au"
-                                                    _sid = save_vol_snapshot(_uid, "USD", _sabr_save_lbl,
-                                                                             notes="SDR-blended SABR (ρ/ν from strangle calibration)")
-                                                    if _sid:
-                                                        st.success(f"✅ Saved to vol_history (id {_sid}). Loadable from Saved Snapshots.")
-                                                        st.session_state.pop("_usd_sabr_applied", None)
-                                                    else:
-                                                        st.error("Save failed — see message above.")
+                                                       f"Go to **Vol Editor → 🔬 Full SABR Recalibration (Expert)** "
+                                                       f"to review the Δρ/Δν heatmaps, apply, and save.")
                                 else:
                                     st.info("Could not parse strike/premium data from USD strangles in this range.")
 
@@ -22784,7 +22722,11 @@ def vol_surface_editor_tab():
                                     st.session_state["vol_data"]["USD"]["nu"]    = _bl_nu_df_ve
                                 st.session_state.pop("_sdr_sabr_blended", None)
                                 st.session_state.pop("_alpha_check_result", None)
-                                st.success("✅ Blended SABR applied. Run α Check on Swaptions tab to verify. Use Vol Editor save to persist.")
+                                import datetime as _dt_ve
+                                st.session_state["_usd_sabr_source"] = f"SDR blend applied {_dt_ve.datetime.now().strftime('%H:%M:%S')}"
+                                st.session_state["_usd_sabr_applied"] = True
+                                st.success("✅ Blended SABR applied to session (USD α/ρ/ν). Use 'Save Amended SABRs' below to persist.")
+                                st.rerun()
                         with _ap2:
                             if st.button("🗑 Discard SDR Blend", key="ve_sdr_sabr_discard", type="secondary"):
                                 st.session_state.pop("_sdr_sabr_blended", None)
@@ -22794,6 +22736,30 @@ def vol_surface_editor_tab():
                         st.error(f"Heatmap error: {_ve_err}")
             else:
                 st.caption("No SDR blend pending — run 'Fit & Preview' in SDR Live → Full Trade Analytics → SDR SABR Analytics first.")
+
+            # ── Save Amended SABRs — persist the applied session SABRs to vol_history ──
+            if st.session_state.get("_usd_sabr_applied") and \
+               st.session_state.get("vol_data", {}).get("USD", {}).get("rho") is not None:
+                st.markdown("---")
+                st.markdown("##### 💾 Save Amended SABRs")
+                st.caption("Blended SABRs are live in this session. Save as a new snapshot to persist them to the database.")
+                import datetime as _dt_sv2
+                _sv2_c1, _sv2_c2 = st.columns([3, 2])
+                with _sv2_c1:
+                    _ve_save_lbl = st.text_input("Snapshot label",
+                        value=f"USD SDR-Blended SABR {_dt_sv2.datetime.now().strftime('%d-%b-%Y %H:%M')}",
+                        key="ve_sabr_save_label")
+                with _sv2_c2:
+                    st.write(""); st.write("")
+                    if st.button("💾 Save Amended SABRs", key="ve_sabr_save_btn", type="primary"):
+                        _ve_uid = st.session_state.get("username") or "wpo@rateedge.au"
+                        _ve_sid = save_vol_snapshot(_ve_uid, "USD", _ve_save_lbl,
+                            notes="SDR-blended SABR (ρ/ν from strangle calibration)")
+                        if _ve_sid:
+                            st.success(f"✅ Saved to vol_history (id {_ve_sid}). Loadable from Saved Snapshots.")
+                            st.session_state.pop("_usd_sabr_applied", None)
+                        else:
+                            st.error("Save failed — see message above.")
 
     # Sync back to the main app's vol_data if published
     # (The vol_editor module handles publishing internally via session state)
