@@ -474,6 +474,7 @@ def save_to_supabase(t, mw_json):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 def render_ticket_tab(ss):
     st.subheader("📋 Swaption Trade Ticket → MarkitWire")
+    from datetime import datetime, date  # was using bare `datetime` (only `date` imported at module level) → NameError crash
 
     # Load data
     all_banks     = load_banks()
