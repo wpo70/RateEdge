@@ -7820,22 +7820,22 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     st.rerun(scope="app")
 
                     # end Price This expander
-                    st.dataframe(_all_df_display, use_container_width=True, hide_index=True,
+                    st.dataframe(_all_df_display, hide_index=True,
                                  height=min(60 + len(_all_df_display) * 35, 700),
                                  column_config={
-                                     "Type":               st.column_config.TextColumn("Type",               width=115),
-                                     "Time":               st.column_config.TextColumn("Time",               width=115),
-                                     "CCY":                st.column_config.TextColumn("CCY",                width=55),
+                                     "Type":               st.column_config.TextColumn("Type",               width=95),
+                                     "Time":               st.column_config.TextColumn("Time",               width=110),
+                                     "CCY":                st.column_config.TextColumn("CCY",                width=50),
                                      "Opt Expiry":         st.column_config.TextColumn("Opt Expiry",         width=80),
                                      "Swp Tenor":          st.column_config.TextColumn("Swp Tenor",          width=80),
-                                     "Strike":             st.column_config.TextColumn("Strike",             width=165),
+                                     "Strike":             st.column_config.TextColumn("Strike",             width=150),
                                      "Notional":           st.column_config.TextColumn("Notional",           width=70),
-                                     "Premium":            st.column_config.TextColumn("Premium",            width=290),
-                                     "Nett Prem BP":       st.column_config.TextColumn("Nett Prem BP",       width=100),
-                                     "Nett Leg BP (R/R)":  st.column_config.TextColumn("Nett Leg BP (R/R)", width=130),
-                                     "P Prem BP":          st.column_config.TextColumn("P Prem BP",          width=85),
-                                     "R Prem BP":          st.column_config.TextColumn("R Prem BP",          width=85),
-                                     "Platform":           st.column_config.TextColumn("Platform",           width=115),
+                                     "Premium":            st.column_config.TextColumn("Premium",            width=240),
+                                     "Nett Prem BP":       st.column_config.TextColumn("Nett Prem BP",       width=90),
+                                     "Nett Leg BP (R/R)":  st.column_config.TextColumn("Nett Leg BP (R/R)", width=110),
+                                     "P Prem BP":          st.column_config.TextColumn("P Prem BP",          width=80),
+                                     "R Prem BP":          st.column_config.TextColumn("R Prem BP",          width=80),
+                                     "Platform":           st.column_config.TextColumn("Platform",           width=100),
                                  })
                     st.caption("Straddle prem deduped for all brokers except DWSF (report full straddle prem on each leg). "
                                "DWSF strikes normalised (÷100).")
