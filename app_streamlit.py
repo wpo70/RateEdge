@@ -8311,10 +8311,35 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                 # Tag so the Vol Editor expert section can show provenance
                                                 import datetime as _dt_sabr
                                                 st.session_state["_usd_sabr_source"] = f"SDR blend (w={_bl.get('blend_w', '?')}) applied {_dt_sabr.datetime.now().strftime('%H:%M:%S')}"
+                                                st.session_state["_usd_sabr_applied"] = True
                                                 st.success("✅ Blended SABR applied to session (USD α/ρ/ν). "
-                                                           "To persist permanently: go to IRS/Vol Upload → 💾 Save Snapshot "
-                                                           "(it saves the blended SABR params to vol_history). "
-                                                           "Otherwise the blend is lost on app restart.")
+                                                           "Use 'Save Amended SABRs' below to persist to the database.")
+                                                st.rerun(scope="app")
+
+                                        # Save Amended SABRs — persists the applied session SABRs to vol_history.
+                                        # Rendered after Apply (which pops the blend + sets the applied flag).
+                                        if st.session_state.get("_usd_sabr_applied") and \
+                                           st.session_state.get("vol_data", {}).get("USD", {}).get("rho") is not None:
+                                            st.caption("Blended SABRs are live in this session. Save them as a new snapshot to persist.")
+                                            _sv_c1, _sv_c2 = st.columns([3, 2])
+                                            with _sv_c1:
+                                                import datetime as _dt_sv
+                                                _sabr_save_lbl = st.text_input(
+                                                    "Snapshot label",
+                                                    value=f"USD SDR-Blended SABR {_dt_sv.datetime.now().strftime('%d-%b-%Y %H:%M')}",
+                                                    key="sdr_sabr_save_label")
+                                            with _sv_c2:
+                                                st.write("")
+                                                st.write("")
+                                                if st.button("💾 Save Amended SABRs", key="sdr_sabr_save_btn", type="primary"):
+                                                    _uid = st.session_state.get("username") or "wpo@rateedge.au"
+                                                    _sid = save_vol_snapshot(_uid, "USD", _sabr_save_lbl,
+                                                                             notes="SDR-blended SABR (ρ/ν from strangle calibration)")
+                                                    if _sid:
+                                                        st.success(f"✅ Saved to vol_history (id {_sid}). Loadable from Saved Snapshots.")
+                                                        st.session_state.pop("_usd_sabr_applied", None)
+                                                    else:
+                                                        st.error("Save failed — see message above.")
                                 else:
                                     st.info("Could not parse strike/premium data from USD strangles in this range.")
 
