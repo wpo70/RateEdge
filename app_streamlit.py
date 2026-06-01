@@ -10270,15 +10270,17 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
     _interval = _refresh_map.get(auto_refresh, 0)
     if _interval > 0:
         import time as _time_rf
-        _last_rf = st.session_state.get("_sdr_last_refresh", 0)
         _now_rf  = _time_rf.monotonic()
+        # Seed on first run so it doesn't fire immediately (default 0 made
+        # _now_rf - _last_rf huge → instant refresh+rerun on every tab visit).
+        if "_sdr_last_refresh" not in st.session_state:
+            st.session_state["_sdr_last_refresh"] = _now_rf
+        _last_rf = st.session_state["_sdr_last_refresh"]
         if _now_rf - _last_rf >= _interval:
             st.session_state["_sdr_last_refresh"] = _now_rf
             _load_sdr_data_cached.clear()
-            st.rerun()  # fragment-scoped — app-scope here caused a rerun storm/hang
-        else:
-            _remaining = max(0, int(_interval - (_now_rf - _last_rf)))
-            st.caption(f"🔄 Next refresh in ~{_remaining}s")
+            st.rerun()
+        st.caption(f"🔄 Auto-refresh every {auto_refresh}")
 
 
 # ── SDR helper functions (add alongside sdr_live_tab) ─────────────────────────
