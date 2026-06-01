@@ -8286,7 +8286,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     st.session_state["vol_data"]["USD"]["nu"]    = _bl_nu_df
                                                 st.session_state.pop("_sdr_sabr_blended", None)
                                                 st.session_state.pop("_alpha_check_result", None)
-                                                st.success("✅ Blended SABR applied. Run α Check to verify. Use Vol Editor save to persist.")
+                                                # Tag so the Vol Editor expert section can show provenance
+                                                import datetime as _dt_sabr
+                                                st.session_state["_usd_sabr_source"] = f"SDR blend (w={_bl.get('blend_w', '?')}) applied {_dt_sabr.datetime.now().strftime('%H:%M:%S')}"
+                                                st.success("✅ Blended SABR applied to session. Open Vol Editor → 🔬 Full SABR Recalibration to confirm the loaded params, then save to persist.")
                                 else:
                                     st.info("Could not parse strike/premium data from USD strangles in this range.")
 
@@ -22428,6 +22431,23 @@ def vol_surface_editor_tab():
             _rc_ois = get_basis_curve(_rc_ccy, "ois")
             _rc_atm = get_working_atm_surface(_rc_ccy)
             _, _rc_a, _rc_b, _rc_r, _rc_n = get_ccy_vol_data(_rc_ccy)
+
+            # Show what SABR params are currently loaded in the session so an applied
+            # SDR blend (or any prior calibration) is visible here, not invisible.
+            _src = st.session_state.get(f"_{_rc_ccy.lower()}_sabr_source")
+            if _rc_a is not None:
+                try:
+                    import numpy as _np
+                    _acols = [c for c in _rc_a.columns if c != ("Expiry" if "Expiry" in _rc_a.columns else _rc_a.columns[0])]
+                    _amean = _np.nanmean(_rc_a[_acols].apply(pd.to_numeric, errors="coerce").values)
+                    _rmean = _np.nanmean(_rc_r[_acols].apply(pd.to_numeric, errors="coerce").values) if _rc_r is not None else float("nan")
+                    _nmean = _np.nanmean(_rc_n[_acols].apply(pd.to_numeric, errors="coerce").values) if _rc_n is not None else float("nan")
+                    st.info(f"**Loaded SABR ({_rc_ccy})** — mean α={_amean:.4f}, ρ={_rmean:.3f}, ν={_nmean:.3f}"
+                            + (f"  |  source: {_src}" if _src else ""))
+                except Exception:
+                    st.caption(f"SABR params loaded for {_rc_ccy}" + (f" — {_src}" if _src else ""))
+            else:
+                st.warning(f"No SABR params loaded for {_rc_ccy}. Apply an SDR blend or run calibration below.")
 
             if _rc_atm is None or _rc_curve is None:
                 st.info("Load ATM surface and IRS curve first.")
