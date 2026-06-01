@@ -8178,6 +8178,17 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                         list(zip(_pts_exp, _pts_ten)), _pts_dn, _gxy, method="nearest"
                                                     )
 
+                                                # Clip interpolated grids to the observed fit range.
+                                                # thin_plate_spline RBF extrapolates unboundedly outside the
+                                                # convex hull of fitted buckets — the long×long corner (no SDR
+                                                # strangles there) was blowing up to ±1.9 and pinning the ρ clamp.
+                                                # No cell should move more than the market actually showed.
+                                                if _pts_dr:
+                                                    _dr_lo, _dr_hi = min(_pts_dr), max(_pts_dr)
+                                                    _dn_lo, _dn_hi = min(_pts_dn), max(_pts_dn)
+                                                    _dr_grid = np.clip(_dr_grid, _dr_lo, _dr_hi)
+                                                    _dn_grid = np.clip(_dn_grid, _dn_lo, _dn_hi)
+
                                                 # Build blended rho/nu matrices
                                                 _new_rho_df = _sabr_rdf.copy()
                                                 _new_nu_df  = _sabr_ndf.copy()
@@ -8198,6 +8209,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                         if _r_cur is not None and _n_cur is not None:
                                                             _r_new = float(np.clip(_r_cur + _dr_val, -0.95, 0.95))
                                                             _n_new = float(np.clip(_n_cur + _dn_val, 0.01, 2.0))
+                                                            # Display the ACTUAL applied change (post-clamp),
+                                                            # not the raw interpolated delta — RBF/griddata
+                                                            # extrapolates wild values in the long×long corner
+                                                            # (showed Δρ=+1.9 while the real applied change is
+                                                            # bounded by the ±0.95 ρ clamp).
+                                                            _dr_show = _r_new - _r_cur
+                                                            _dn_show = _n_new - _n_cur
                                                             # Find the row index in _new_rho_df
                                                             _mask = _new_rho_df["Expiry"].str.lower().str.strip() == _exp.lower().strip()
                                                             if _mask.any() and _ten in _new_rho_df.columns:
@@ -8216,8 +8234,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                                             if _a_new > 0:
                                                                                 _new_alpha_df.loc[_mask, _ten] = _a_new
                                                                         except Exception: pass
-                                                            _dr_row[_ten] = f"{_dr_val:+.3f}"
-                                                            _dn_row[_ten] = f"{_dn_val:+.3f}"
+                                                            _dr_row[_ten] = f"{_dr_show:+.3f}"
+                                                            _dn_row[_ten] = f"{_dn_show:+.3f}"
                                                         _idx += 1
                                                     _delta_rows.append((_dr_row, _dn_row))
 
@@ -8293,7 +8311,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                 # Tag so the Vol Editor expert section can show provenance
                                                 import datetime as _dt_sabr
                                                 st.session_state["_usd_sabr_source"] = f"SDR blend (w={_bl.get('blend_w', '?')}) applied {_dt_sabr.datetime.now().strftime('%H:%M:%S')}"
-                                                st.success("✅ Blended SABR applied to session. Open Vol Editor → 🔬 Full SABR Recalibration to confirm the loaded params, then save to persist.")
+                                                st.success("✅ Blended SABR applied to session (USD α/ρ/ν). "
+                                                           "To persist permanently: go to IRS/Vol Upload → 💾 Save Snapshot "
+                                                           "(it saves the blended SABR params to vol_history). "
+                                                           "Otherwise the blend is lost on app restart.")
                                 else:
                                     st.info("Could not parse strike/premium data from USD strangles in this range.")
 
