@@ -7656,6 +7656,79 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                 # Combined display
                 _all_trades = _paired_rows + _single_rows + _exo_rows
+
+                # ── R/R + delta-hedge package linking ───────────────────────────────
+                # A traded risk-reversal (Strangle flagged poss. R/R) is often printed
+                # with a synthetic-straddle delta hedge at the same expiry×tenor, same
+                # broker, within a tight execution window. No package/trade-id exists in
+                # the DTCC public feed, so we link on broker + expiry + tenor + exec time
+                # (±180s). Both rows are KEPT and tagged [P1], [P2]… so they read as one
+                # package; the hedge % (straddle_notional / RR_notional) is shown on the
+                # straddle (delta) row. NaN-notional R/Rs are reconstructed from a
+                # same-day / same-broker / same-strike-width package's hedge ratio
+                # (same width => same delta => same ratio), marked '*', premium-checked.
+                try:
+                    import re as _re_pkg
+                    def _strike_width(_s):
+                        try:
+                            _m = _re_pkg.findall(r"([0-9.]+)", str(_s))
+                            if "P:" in str(_s) and "R:" in str(_s) and len(_m) >= 2:
+                                return round(abs(float(_m[0]) - float(_m[1])), 4)
+                        except Exception:
+                            pass
+                        return None
+                    def _notional_to_num(_s):
+                        try:
+                            _t = str(_s).upper().replace(",", "").replace("*", "").strip()
+                            _mult = 1e6 if _t.endswith("M") else (1e9 if _t.endswith("B") else 1)
+                            _num = _re_pkg.findall(r"[0-9.]+", _t)
+                            return float(_num[0]) * _mult if _num else 0.0
+                        except Exception:
+                            return 0.0
+
+                    _rrs   = [r for r in _all_trades if "Strangle" in r.get("Type", "") and "poss. R/R" in r.get("Type", "")]
+                    _strds = [r for r in _all_trades if r.get("Type", "") == "🔵 Straddle"]
+                    _used_strd = set()
+                    _ratio_by_key = {}   # (platform, exp, tenor, width) -> hedge ratio, for NaN carry
+                    _pkg_n = 0
+
+                    for _rr in _rrs:
+                        _rt = _rr.get("_time_dt")
+                        if _rt is None:
+                            continue
+                        _rplat = _rr.get("Platform"); _rexp = _rr.get("Opt Expiry"); _rten = _rr.get("Swp Tenor")
+                        _rwidth = _strike_width(_rr.get("Strike"))
+                        _best = None; _best_dt = None
+                        for _i, _sd in enumerate(_strds):
+                            if _i in _used_strd:
+                                continue
+                            if (_sd.get("Platform") == _rplat and _sd.get("Opt Expiry") == _rexp
+                                    and _sd.get("Swp Tenor") == _rten and _sd.get("_time_dt") is not None):
+                                _gap = abs((_sd["_time_dt"] - _rt).total_seconds())
+                                if _gap <= 180 and (_best_dt is None or _gap < _best_dt):
+                                    _best = _i; _best_dt = _gap
+                        _rr_not = _notional_to_num(_rr.get("Notional"))
+                        if _best is not None:
+                            _pkg_n += 1; _tag = f"[P{_pkg_n}]"
+                            _used_strd.add(_best)
+                            _sd = _strds[_best]
+                            _sd_not = _notional_to_num(_sd.get("Notional"))
+                            _key = (_rplat, _rexp, _rten, _rwidth)
+                            if _rr_not <= 0 and _sd_not > 0 and _key in _ratio_by_key and _ratio_by_key[_key] > 0:
+                                _recon = _sd_not / _ratio_by_key[_key]
+                                _rr["Notional"] = f"{_recon/1e6:.0f}M*"
+                                _rr_not = _recon
+                            _ratio = (_sd_not / _rr_not) if _rr_not > 0 else None
+                            if _ratio and _rwidth is not None:
+                                _ratio_by_key.setdefault(_key, _ratio)
+                            _rr["Type"]  = f"{_rr.get('Type','')} {_tag}".replace("⚠️ poss. R/R", "R/R")
+                            _hpct = f" {_ratio*100:.0f}%" if _ratio else ""
+                            _sd["Type"]  = f"🔵 Hedge {_tag}{_hpct}"
+                        else:
+                            _rr["Type"] = _rr.get("Type", "").replace("⚠️ poss. R/R", "R/R (outright)")
+                except Exception:
+                    pass
+
                 if _all_trades:
                     _all_df = pd.DataFrame(_all_trades)
                     # v1605j: sort by real datetime not Time-as-string
@@ -7950,8 +8023,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                                 # Per-bucket annuity (PV01) from the USD curve — needed to
                                 # invert premium bp → option value → vol correctly.
-                                _sabr_curve = get_ccy_curve("USD")
-                                _sabr_ois   = get_basis_curve("USD", "ois")
+                                # MUST read config_curves (the live curve); get_ccy_curve()
+                                # reads stale session["curves"] which is empty here → annuity
+                                # defaulted to 1.0 → targets ~3.7× too high → fit slammed ν to
+                                # the 2.0 clamp. config_curves first, legacy getter as fallback.
+                                _sabr_curve = st.session_state.get("config_curves", {}).get("USD") or get_ccy_curve("USD")
+                                _sabr_ois   = (st.session_state.get("config_basis", {}).get("USD", {}).get("ois")
+                                               or get_basis_curve("USD", "ois") or _sabr_curve)
                                 def _bucket_annuity(_exp_lbl, _ten_lbl):
                                     if _sabr_curve is None: return 1.0
                                     try:
@@ -15697,8 +15775,9 @@ def swaptions_tab(vol_mode: str):
         _, _a, _b, _r, _n = get_ccy_vol_data(ccy)
         _atm_surf = get_published_atm_surface(ccy)  # Use published not working draft
 
-        # Auto-init default SABR if ATM loaded but SABR missing — once per session
-        if _a is None and _atm_surf is not None and not st.session_state.get(f"_sabr_init_{ccy}"):
+        # Auto-init default SABR if ATM loaded but SABR missing — once per session.
+        # NEVER for USD: USD must only ever use real saved SABRs, no dummies.
+        if ccy != "USD" and _a is None and _atm_surf is not None and not st.session_state.get(f"_sabr_init_{ccy}"):
             try:
                 _ar = _atm_surf.copy()
                 _tc = [c for c in _ar.columns if c != "Expiry"]
@@ -22660,27 +22739,57 @@ def vol_surface_editor_tab():
                     if _cal_upload is not None:
                         try:
                             import io as _io
-                            _xl = pd.read_excel(_io.BytesIO(_cal_upload.read()), sheet_name=None)
-                            _rho_sheet = next((s for s in _xl if "rho" in s.lower() and ccy.lower() in s.lower()),
-                                             next((s for s in _xl if "rho" in s.lower()), None))
-                            _nu_sheet  = next((s for s in _xl if "nu" in s.lower() and ccy.lower() in s.lower()),
-                                             next((s for s in _xl if s.lower() in ("nu","nu (ν)","nu (v)")), None))
+                            _xlf = _io.BytesIO(_cal_upload.read())
+                            _all_sheets = pd.read_excel(_xlf, sheet_name=None, header=None)
+
+                            def _find_header_row(_raw):
+                                # Locate the row that holds the tenor labels (e.g. 1Y,2Y,…)
+                                # so title rows above the table are skipped automatically.
+                                for _i in range(min(6, len(_raw))):
+                                    _vals = [str(v).strip().upper() for v in _raw.iloc[_i].tolist()]
+                                    if any(_v.endswith("Y") and _v[:-1].isdigit() for _v in _vals):
+                                        return _i
+                                return 0
+                            def _sheet_to_df(_name):
+                                _raw = _all_sheets[_name]
+                                _hr = _find_header_row(_raw)
+                                _df = _raw.iloc[_hr+1:].copy()
+                                _df.columns = [str(c).strip() for c in _raw.iloc[_hr].tolist()]
+                                _df = _df.rename(columns={_df.columns[0]: "Expiry"})
+                                _df = _df[_df["Expiry"].notna()]
+                                return _df.reset_index(drop=True)
+
+                            _names = list(_all_sheets.keys())
+                            _rho_sheet = next((s for s in _names if "rho" in s.lower() and ccy.lower() in s.lower()),
+                                             next((s for s in _names if "rho" in s.lower()), None))
+                            _nu_sheet  = next((s for s in _names if "nu" in s.lower() and ccy.lower() in s.lower()),
+                                             next((s for s in _names if "nu" in s.lower()), None))
+                            _atm_sheet = next((s for s in _names if "atm" in s.lower() and ccy.lower() in s.lower()),
+                                             next((s for s in _names if "atm" in s.lower()), None))
                             if _rho_sheet and _nu_sheet:
-                                _rho_df = _xl[_rho_sheet]; _nu_df = _xl[_nu_sheet]
-                                _exp_col_r = _rho_df.columns[0]
-                                _ten_cols_r = list(_rho_df.columns[1:])
+                                _rho_df = _sheet_to_df(_rho_sheet); _nu_df = _sheet_to_df(_nu_sheet)
+                                _ten_cols_r = [c for c in _rho_df.columns if c != "Expiry"]
                                 _rho_arr = _rho_df[_ten_cols_r].values.astype(float)
                                 _nu_arr  = _nu_df[_ten_cols_r].values.astype(float)
+                                _expiries = [str(e) for e in _rho_df["Expiry"]]
                                 _SABR_REF[ccy] = {
-                                    "expiries": [str(e) for e in _rho_df[_exp_col_r]],
+                                    "expiries": _expiries,
                                     "tenors":   _ten_cols_r,
-                                    "rho": {str(_rho_df[_exp_col_r].iloc[i]): list(_rho_arr[i]) for i in range(len(_rho_arr))},
-                                    "nu":  {str(_rho_df[_exp_col_r].iloc[i]): list(_nu_arr[i])  for i in range(len(_nu_arr))},
+                                    "rho": {_expiries[i]: list(_rho_arr[i]) for i in range(len(_rho_arr))},
+                                    "nu":  {_expiries[i]: list(_nu_arr[i])  for i in range(len(_nu_arr))},
                                 }
+                                # Also capture ATM from the file (for alpha) if present
+                                if _atm_sheet:
+                                    try:
+                                        _atm_df_up = _sheet_to_df(_atm_sheet)
+                                        st.session_state[f"_sabr_cal_atm_{ccy}"] = _atm_df_up
+                                    except Exception:
+                                        st.session_state.pop(f"_sabr_cal_atm_{ccy}", None)
                                 st.session_state[f"_sabr_ref_updated_{ccy}"] = _cal_upload.name
-                                st.success(f"✅ {_cal_upload.name} loaded — {len(_ten_cols_r)} tenors × {len(_rho_arr)} expiries. Click Load to apply.")
+                                st.success(f"✅ {_cal_upload.name} loaded — {len(_ten_cols_r)} tenors × {len(_rho_arr)} expiries"
+                                           + (" (+ATM)" if _atm_sheet else "") + ". Click Load to apply.")
                             else:
-                                st.error(f"Sheets not found. Available: {list(_xl.keys())}")
+                                st.error(f"Rho/Nu sheets not found. Available: {_names}")
                         except Exception as _ue:
                             st.error(f"Upload error: {_ue}")
                 with _lc3:
@@ -30413,7 +30522,7 @@ def main():
                                         try: st.session_state["vol_data"][_cc2][_pm] = pd.DataFrame(_pd["values"])
                                         except: pass
                                 _vd = st.session_state["vol_data"][_cc2]
-                                if _vd.get("alpha") is None and _vd.get("atm") is not None:
+                                if _cc2 != "USD" and _vd.get("alpha") is None and _vd.get("atm") is not None:
                                     try:
                                         _ar = _vd["atm"].copy()
                                         _tc = [c for c in _ar.columns if c!="Expiry"]
