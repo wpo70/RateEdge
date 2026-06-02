@@ -6496,7 +6496,7 @@ def sdr_live_tab():
 ```
 cd "C:\\Users\\willp\\RateEdge Swaption Pricer"
 $env:RATEEDGE_DB_URL = 'postgresql://postgres.oxwbyotzdqccaajyaqhn:RateEdge2026!@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres'
-python dtcc_sdr_fetcher_v21.py --loop 5
+python SDR_FETCHER_v22.py --loop 5
 ```
 ⚠️ The `--loop 5` is REQUIRED — without it the fetcher does ONE poll and exits.
 Leave the window open; Ctrl+C to stop.
@@ -6511,17 +6511,17 @@ This registers a Windows Scheduled Task (`--loop 5`) that restarts on failure an
 ```
 cd "C:\\Users\\willp\\RateEdge Swaption Pricer"
 $env:RATEEDGE_DB_URL = 'postgresql://postgres.oxwbyotzdqccaajyaqhn:RateEdge2026!@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres'
-python dtcc_sdr_fetcher_v21.py --date 2026-05-05
+python SDR_FETCHER_v22.py --date 2026-05-05
 ```
 
 **Backfill last N days:**
 ```
-python dtcc_sdr_fetcher_v21.py --backfill 5
+python SDR_FETCHER_v22.py --backfill 5
 ```
 
 **Backfill date range:**
 ```
-python dtcc_sdr_fetcher_v21.py --date-from 2026-05-01 --date-to 2026-05-05
+python SDR_FETCHER_v22.py --date-from 2026-05-01 --date-to 2026-05-05
 ```
 
 **Check if already running:**
