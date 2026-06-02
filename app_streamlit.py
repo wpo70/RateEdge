@@ -30802,11 +30802,11 @@ def main():
         with st.expander("🗂️ Show/Hide Tabs", expanded=False):
             _ALL_TABS = [
                 ("🏡 Home", "tab_show_home"),
-                ("📡 SDR Live", "tab_show_sdr"),
                 ("📋 IRS / Vol Upload", "tab_show_upload"),
                 ("📏 Curves", "tab_show_curves"),
-                ("📊 Historical VOL Analysis", "tab_show_hva"),
+                ("📡 SDR Live", "tab_show_sdr"),
                 ("📈 FWD IRS Analysis", "tab_show_fwd"),
+                ("📊 Historical VOL Analysis", "tab_show_hva"),
                 ("📊 Swaptions", "tab_show_swaptions"),
                 ("🔔 Caps & Floors", "tab_show_caps"),
                 ("💼 Trade Blotter", "tab_show_blotter"),
@@ -31096,9 +31096,9 @@ def main():
 
     _ALL_TAB_DEFS = [
         ("🏡 Home",                      "tab_show_home",      home_tab),
-        ("📡 SDR Live",                  "tab_show_sdr",       sdr_live_tab),
         ("📋 IRS / Vol Upload",          "tab_show_upload",    vol_config_tab),
         ("📏 Curves",                    "tab_show_curves",    curves_tab),
+        ("📡 SDR Live",                  "tab_show_sdr",       sdr_live_tab),
         ("📈 FWD IRS Analysis",          "tab_show_fwd",       fwd_analysis_tab),
         ("📊 Historical VOL Analysis",   "tab_show_hva",       backtesting_tab),
         ("📊 Swaptions",                 "tab_show_swaptions", lambda: swaptions_tab(vol_mode)),
