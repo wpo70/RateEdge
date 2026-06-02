@@ -6503,9 +6503,15 @@ Leave the window open; Ctrl+C to stop.
 
 **Run 24/7 (survives reboot/logout — recommended):** run once in an **admin** PowerShell:
 ```
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\\Downloads\\setup_sdr_24x7.ps1"
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\\Downloads\\SETUP_SDR_24x7_v24.ps1"
 ```
 This registers a Windows Scheduled Task (`--loop 5`) that restarts on failure and runs weekends. No window to babysit.
+
+**Monitor the fetcher live (works with the 24/7 task — it runs headless):**
+```
+Get-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\sdr_fetcher.log" -Wait -Tail 30
+```
+Streams each new log line as it's written. Close this window anytime — it does NOT stop the fetcher.
 
 **Backfill a specific date** (single poll, then exits):
 ```
@@ -6651,12 +6657,12 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
     if not table_exists(conn):
         st.warning("⚠️ The `dtcc_sdr` table doesn't exist yet.")
         st.code(
-            "# Run once from your server or local machine:\n"
-            "python dtcc_sdr_fetcher.py --init-only\n\n"
-            "# Then load yesterday's data:\n"
-            "python dtcc_sdr_fetcher.py\n\n"
+            "# Run once from your local machine:\n"
+            "python SDR_FETCHER_v22.py --init-only\n\n"
+            "# Then load recent data:\n"
+            "python SDR_FETCHER_v22.py --loop 5\n\n"
             "# Or backfill 5 days:\n"
-            "python dtcc_sdr_fetcher.py --backfill 5",
+            "python SDR_FETCHER_v22.py --backfill 5",
             language="bash"
         )
         conn.close()
@@ -7093,7 +7099,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
     # ── Blotter table ─────────────────────────────────────────────────────────
     if df.empty:
-        st.info("No data found for selected filters. Run `dtcc_sdr_fetcher.py` to load data, or adjust the date range.")
+        st.info("No data found for selected filters. Run `SDR_FETCHER_v22.py --loop 5` to load data, or adjust the date range.")
     else:
         # Format display dataframe
         disp = df.copy()
