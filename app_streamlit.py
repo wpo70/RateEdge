@@ -22672,7 +22672,13 @@ def vol_surface_editor_tab():
             "curve inversion, or regime change). For daily use, run Sticky-ATM alpha recalibration in the Swaptions tab instead."
         )
         _expert_code = st.text_input("Enter expert code to unlock", type="password", key="sabr_expert_code")
-        _expert_unlocked = _expert_code == "SABR2025"
+        # Persist unlock across reruns/navigation. Without this, leaving and
+        # returning to the tab clears the password field → re-locks → the Apply
+        # button (inside the unlocked block) disappears mid-flow and the blend
+        # never makes it into the session surface.
+        if _expert_code == "SABR2025":
+            st.session_state["_expert_unlocked_sticky"] = True
+        _expert_unlocked = st.session_state.get("_expert_unlocked_sticky", False)
 
         if not _expert_unlocked:
             st.caption("Contact wpo@rateedge.au for the expert recalibration code.")
