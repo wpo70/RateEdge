@@ -4905,28 +4905,35 @@ _SABR_REF = {
 }
 
 def _apply_sabr_calibration(ccy: str) -> int:
-    """Apply per-cell rho/nu from calibration reference. Returns cells updated."""
+    """Apply per-cell rho/nu from the calibration reference onto the CURRENT
+    ATM surface. The file supplies only the SABR shape (ρ, ν, β); alpha is
+    recalibrated to the currently-loaded ATM so the surface is at TODAY's vol
+    level (not the file's historical ATM). Without a current ATM we can't pin
+    alpha, so this requires one to be loaded."""
     ref = _SABR_REF.get(ccy)
     if ref is None: return 0
     _, a, b, r, n = get_ccy_vol_data(ccy)
     atm = get_working_atm_surface(ccy)
-    if atm is None: return 0
-    
+    if atm is None:
+        st.error(f"Load the current {ccy} ATM surface first — calibration supplies ρ/ν, "
+                 f"but alpha must be pinned to today's ATM.")
+        return 0
+
     exp_ref  = ref["expiries"]
     ten_ref  = ref["tenors"]
     exp_yrs  = [label_to_years(e) for e in exp_ref]
-    ten_yrs  = [float(t[:-1]) for t in ten_ref]
+    ten_yrs  = [float(str(t).rstrip("Yy")) for t in ten_ref]
     rho_grid = np.array([ref["rho"][e] for e in exp_ref], dtype=float)
     nu_grid  = np.array([ref["nu"][e]  for e in exp_ref], dtype=float)
-    
+
     # Get ATM expiry/tenor labels from surface
     atm_exps = atm["Expiry"].astype(str).str.strip().str.lower().tolist()
     atm_tens = [c for c in atm.columns if c != "Expiry"]
-    
+
     # Build new rho and nu dataframes via bilinear interpolation
     _df_rho = atm[["Expiry"]].copy()
     _df_nu  = atm[["Expiry"]].copy()
-    
+
     updated = 0
     for _tc in atm_tens:
         _ty = label_to_years(str(_tc))
@@ -4943,13 +4950,38 @@ def _apply_sabr_calibration(ccy: str) -> int:
             updated += 1
         _df_rho[_tc] = _rho_col
         _df_nu[_tc]  = _nu_col
-    
-    # Preserve alpha and beta, update rho and nu
-    if "vol_data" not in st.session_state: st.session_state["vol_data"] = {}
-    if ccy not in st.session_state["vol_data"]: st.session_state["vol_data"][ccy] = {}
-    _vd = st.session_state["vol_data"][ccy]
+
+    # Beta: keep existing, else 0.5 flat.
     _old_atm, _old_a, _old_b, _, _ = get_ccy_vol_data(ccy)
-    set_ccy_vol_data(ccy, _old_atm, _old_a, _old_b, _df_rho, _df_nu)
+    if _old_b is None:
+        _df_beta = atm[["Expiry"]].copy()
+        for _tc in atm_tens: _df_beta[_tc] = 0.5
+    else:
+        _df_beta = _old_b
+
+    # Alpha: ALWAYS recalibrate to the CURRENT ATM with the new ρ/ν so the
+    # smile sits at today's vol level. alpha = ATM_normal_bp/10000 adjusted by
+    # the SABR ATM correction (1 + ((2-3ρ²)/24)ν²·T) — invert so the model ATM
+    # reproduces the surface ATM.
+    _df_alpha = atm[["Expiry"]].copy()
+    _b_flat = 0.5
+    for _tc in atm_tens:
+        _ty = label_to_years(str(_tc))
+        _acol = []
+        for _i, _exp_lbl in enumerate(atm_exps):
+            _T = label_to_years(_exp_lbl)
+            try:
+                _atm_bp = float(pd.to_numeric(atm.loc[atm["Expiry"].astype(str).str.lower().str.strip()==_exp_lbl, _tc].iloc[0], errors="coerce"))
+                _atm_dec = _atm_bp / 10000.0
+                _rho_c = _df_rho[_tc].iloc[_i]; _nu_c = _df_nu[_tc].iloc[_i]
+                _corr = 1.0 + ((2 - 3*_rho_c**2) / 24.0) * (_nu_c**2) * _T
+                _alpha = _atm_dec / _corr if _corr > 0 else _atm_dec
+                _acol.append(_alpha)
+            except Exception:
+                _acol.append(np.nan)
+        _df_alpha[_tc] = _acol
+
+    set_ccy_vol_data(ccy, atm, _df_alpha, _df_beta, _df_rho, _df_nu)
     return updated
 
 
