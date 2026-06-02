@@ -7439,6 +7439,18 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _single_rows = _cached.get("single", [])
                     _exo_rows    = _cached.get("exo", [])
                 elif not _payers_a.empty and not _rcvrs_a.empty and "strike_pct" in _newt_all.columns:
+                    # Order payers so those with a same-strike receiver (straddle legs)
+                    # are matched FIRST — they consume the straddle partner before an
+                    # R/R payer can steal it. Without this, an R/R payer (5.46) grabs a
+                    # straddle leg (4.46) and the pairing scrambles.
+                    try:
+                        _rcv_strikes = set(round(float(x), 2) for x in _rcvrs_a["strike_pct"].dropna())
+                        _payers_a = _payers_a.assign(
+                            _has_same=_payers_a["strike_pct"].apply(
+                                lambda v: 1 if (pd.notna(v) and round(float(v), 2) in _rcv_strikes) else 0)
+                        ).sort_values("_has_same", ascending=False)
+                    except Exception:
+                        pass
                     for _pi, _p in _payers_a.iterrows():
                         if _pi in _matched_p_ids:
                             continue
@@ -7461,6 +7473,22 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _match = _match[_match["swp_tenor"].isin(["","—","NA","None",None]) | _match["swp_tenor"].isna()]
 
                         if not _match.empty and _time_p is not pd.NaT:
+                            # Prefer an EXACT same-strike receiver (straddle partner)
+                            # with strong priority; only if none exists fall back to the
+                            # nearest strike. This stops an R/R payer (e.g. 5.46) from
+                            # stealing a straddle-hedge leg (4.46) — the two 4.46 legs
+                            # must pair together as the straddle first, leaving 5.46/3.46
+                            # to form the R/R.
+                            try:
+                                _sp_arr = _match["strike_pct"].astype(float)
+                                _gap = (_sp_arr - _s_p).abs()
+                                # rank: 0 if same-strike (<0.01), else 1; then by gap
+                                _same = (_gap < 0.01).astype(int)  # 1 if same strike
+                                _match = _match.assign(
+                                    _is_same=_same, _strike_gap=_gap
+                                ).sort_values(["_is_same", "_strike_gap"], ascending=[False, True])
+                            except Exception:
+                                pass
                             for _ri, _r in _match.iterrows():
                                 _time_r = pd.to_datetime(_r.get("execution_timestamp") or _r.get("event_timestamp"), errors="coerce")
                                 _window = 1200 if not (_t_p and _t_p not in ("—","NA","None","")) else 120
@@ -8027,9 +8055,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 # reads stale session["curves"] which is empty here → annuity
                                 # defaulted to 1.0 → targets ~3.7× too high → fit slammed ν to
                                 # the 2.0 clamp. config_curves first, legacy getter as fallback.
-                                _sabr_curve = st.session_state.get("config_curves", {}).get("USD") or get_ccy_curve("USD")
-                                _sabr_ois   = (st.session_state.get("config_basis", {}).get("USD", {}).get("ois")
-                                               or get_basis_curve("USD", "ois") or _sabr_curve)
+                                _sabr_curve = st.session_state.get("config_curves", {}).get("USD")
+                                if _sabr_curve is None:
+                                    _sabr_curve = get_ccy_curve("USD")
+                                _sabr_ois = st.session_state.get("config_basis", {}).get("USD", {}).get("ois")
+                                if _sabr_ois is None:
+                                    _sabr_ois = get_basis_curve("USD", "ois")
+                                if _sabr_ois is None:
+                                    _sabr_ois = _sabr_curve
                                 def _bucket_annuity(_exp_lbl, _ten_lbl):
                                     if _sabr_curve is None: return 1.0
                                     try:
