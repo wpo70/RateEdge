@@ -8394,6 +8394,19 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     _dr_grid = np.clip(_dr_grid, _dr_lo, _dr_hi)
                                                     _dn_grid = np.clip(_dn_grid, _dn_lo, _dn_hi)
 
+                                                # Pin traded buckets to their EXACT fitted Δ. The RBF
+                                                # smooths across the grid (smoothing=0.1) so it does NOT
+                                                # pass through the fitted points — that made one traded
+                                                # bucket undershoot and another overshoot its own market
+                                                # trade at 100% blend. A bucket that actually traded must
+                                                # reproduce its own fit; smoothing only fills un-traded gaps.
+                                                _gxy_idx = {(_gx[_k], _gy[_k]): _k for _k in range(len(_gxy))}
+                                                for _v in _fit_results.values():
+                                                    _kk = _gxy_idx.get((_v["exp_y"], _v["ten_y"]))
+                                                    if _kk is not None:
+                                                        _dr_grid[_kk] = _v["dr"]
+                                                        _dn_grid[_kk] = _v["dn"]
+
                                                 # Build blended rho/nu matrices
                                                 _new_rho_df = _sabr_rdf.copy()
                                                 _new_nu_df  = _sabr_ndf.copy()
