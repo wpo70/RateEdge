@@ -4960,11 +4960,15 @@ def _apply_sabr_calibration(ccy: str) -> int:
         _df_beta = _old_b
 
     # Alpha: ALWAYS recalibrate to the CURRENT ATM with the new ρ/ν so the
-    # smile sits at today's vol level. alpha = ATM_normal_bp/10000 adjusted by
-    # the SABR ATM correction (1 + ((2-3ρ²)/24)ν²·T) — invert so the model ATM
-    # reproduces the surface ATM.
+    # smile sits at today's vol level. Use the canonical helper which solves
+    # atm_vol = alpha · F^β · (1 + ((2-3ρ²)/24)ν²·T) — i.e. it includes the
+    # F^β factor. The forward F is taken per bucket from the live curve (same
+    # source the pricer/fit use). Omitting F^β made alpha ~5× too small and
+    # collapsed the whole smile (3Y10Y RR priced 0.47bp).
+    _alpha_curve = st.session_state.get("config_curves", {}).get(ccy)
+    if _alpha_curve is None:
+        _alpha_curve = get_ccy_curve(ccy)
     _df_alpha = atm[["Expiry"]].copy()
-    _b_flat = 0.5
     for _tc in atm_tens:
         _ty = label_to_years(str(_tc))
         _acol = []
@@ -4973,10 +4977,19 @@ def _apply_sabr_calibration(ccy: str) -> int:
             try:
                 _atm_bp = float(pd.to_numeric(atm.loc[atm["Expiry"].astype(str).str.lower().str.strip()==_exp_lbl, _tc].iloc[0], errors="coerce"))
                 _atm_dec = _atm_bp / 10000.0
-                _rho_c = _df_rho[_tc].iloc[_i]; _nu_c = _df_nu[_tc].iloc[_i]
-                _corr = 1.0 + ((2 - 3*_rho_c**2) / 24.0) * (_nu_c**2) * _T
-                _alpha = _atm_dec / _corr if _corr > 0 else _atm_dec
-                _acol.append(_alpha)
+                _rho_c = float(_df_rho[_tc].iloc[_i]); _nu_c = float(_df_nu[_tc].iloc[_i])
+                _beta_c = float(_df_beta[_tc].iloc[_i]) if _tc in _df_beta.columns else 0.5
+                # Forward for this bucket from the live curve (OIS=None like the pricer).
+                _F_b = None
+                if _alpha_curve is not None:
+                    try:
+                        _F_b, _, _ = forward_and_annuity_from_curve(_alpha_curve, ccy, _T, _ty, None)
+                    except Exception:
+                        _F_b = None
+                if not _F_b or _F_b <= 0:
+                    _F_b = 0.04  # safe fallback forward
+                _alpha = sabr_implied_alpha_from_atm(_atm_dec, _F_b, _T, _beta_c, _rho_c, _nu_c)
+                _acol.append(_alpha if _alpha and _alpha > 0 else np.nan)
             except Exception:
                 _acol.append(np.nan)
         _df_alpha[_tc] = _acol
