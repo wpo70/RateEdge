@@ -22730,6 +22730,9 @@ def vol_surface_editor_tab():
                         _n_updated = _apply_sabr_calibration(ccy)
                         if _n_updated > 0:
                             st.session_state[f"_sabr_init_{ccy}"] = True
+                            # Track source for the save label/notes.
+                            _cal_src = st.session_state.get(f"_sabr_ref_updated_{ccy}", "calibration file")
+                            st.session_state[f"_sabr_src_{ccy}"] = f"Loaded calibration ({_cal_src})"
                             st.success(f"✅ ρ / ν loaded — {_n_updated} cells. Run Recalibrate Alpha in Swaptions tab.")
                             st.rerun()
                         else:
@@ -22939,6 +22942,12 @@ def vol_surface_editor_tab():
                                 st.session_state.pop("_alpha_check_result", None)
                                 import datetime as _dt_ve
                                 st.session_state["_usd_sabr_source"] = f"SDR blend applied {_dt_ve.datetime.now().strftime('%H:%M:%S')}"
+                                # Combined source: note if a calibration was loaded before this blend.
+                                _prev_src = st.session_state.get("_sabr_src_USD", "")
+                                if "calibration" in _prev_src.lower():
+                                    st.session_state["_sabr_src_USD"] = f"{_prev_src} + SDR blend"
+                                else:
+                                    st.session_state["_sabr_src_USD"] = "SDR blend"
                                 st.session_state["_usd_sabr_applied"] = True
                                 st.rerun()
                         with _ap2:
@@ -22967,19 +22976,21 @@ def vol_surface_editor_tab():
             if st.session_state.get("vol_data", {}).get("USD", {}).get("rho") is not None:
                 st.markdown("---")
                 st.markdown("##### 💾 Save Amended SABRs")
-                st.caption("Save the current session USD SABR params (α/ρ/ν) as a new snapshot to persist them to the database.")
+                _sabr_src = st.session_state.get("_sabr_src_USD", "session SABRs")
+                st.caption(f"Save the current session USD SABR params (α/ρ/ν) to the database. Source: {_sabr_src}.")
                 import datetime as _dt_sv2
+                _src_tag = _sabr_src if _sabr_src else "SABR"
                 _sv2_c1, _sv2_c2 = st.columns([3, 2])
                 with _sv2_c1:
                     _ve_save_lbl = st.text_input("Snapshot label",
-                        value=f"USD SDR-Blended SABR {_dt_sv2.datetime.now().strftime('%d-%b-%Y %H:%M')}",
+                        value=f"USD {_src_tag} {_dt_sv2.datetime.now().strftime('%d-%b-%Y %H:%M')}"[:80],
                         key="ve_sabr_save_label")
                 with _sv2_c2:
                     st.write(""); st.write("")
                     if st.button("💾 Save Amended SABRs", key="ve_sabr_save_btn", type="primary"):
                         _ve_uid = st.session_state.get("username") or "wpo@rateedge.au"
                         _ve_sid = save_vol_snapshot(_ve_uid, "USD", _ve_save_lbl,
-                            notes="SDR-blended SABR (ρ/ν from strangle calibration)")
+                            notes=f"USD SABR source: {_sabr_src}")
                         if _ve_sid:
                             st.session_state.pop("_usd_sabr_applied", None)
                             # Read the row back and confirm the SABR columns actually landed.
