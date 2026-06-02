@@ -2237,6 +2237,10 @@ def label_to_years(lbl: str) -> float:
     if lbl is None or str(lbl).strip() == "" or str(lbl).strip().lower() in ("none","nan","expiry"):
         return 0.0
     x = str(lbl).strip()
+    # Strip comparator/approx prefixes (e.g. "<1M", ">30Y", "~3M") that some
+    # SDR buckets carry — otherwise float("<1") throws and the bucket errors.
+    while x[:1] in ("<", ">", "~", "≤", "≥"):
+        x = x[1:].strip()
     # Handle DD/MM/YYYY or YYYY-MM-DD date strings
     for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
         try:
@@ -8289,6 +8293,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                             _r_ps2.append(float(_tr.get("R Prem BP") or 0))
                                                         except Exception: pass
                                                     if not _p_ks2: continue
+                                                    if not _p_ps2 or not _r_ps2: continue  # no parseable premiums → skip (was div-by-zero)
                                                     _Kp = sum(_p_ks2)/len(_p_ks2)
                                                     _Kr = sum(_r_ks2)/len(_r_ks2)
                                                     _vp_mkt = _bch_invert_sabr(sum(_p_ps2)/len(_p_ps2), _F, _Kp, _T, True, _bucket_annuity(_exp,_ten))
