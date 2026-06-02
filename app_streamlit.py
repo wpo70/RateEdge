@@ -8085,8 +8085,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 def _bucket_annuity(_exp_lbl, _ten_lbl):
                                     if _sabr_curve is None: return 1.0
                                     try:
+                                        # Pass OIS=None exactly like the pricer
+                                        # (forward_and_annuity_from_curve defaults OIS to the
+                                        # curve itself). Passing a different OIS curve gave a
+                                        # wrong annuity (~5.5 vs the pricer's ~8.0 for 5Y10Y),
+                                        # which inflated the inverted market vols → bad fit.
                                         _, _bann, _ = forward_and_annuity_from_curve(
-                                            _sabr_curve, "USD", label_to_years(_exp_lbl), label_to_years(_ten_lbl), _sabr_ois)
+                                            _sabr_curve, "USD", label_to_years(_exp_lbl), label_to_years(_ten_lbl), None)
                                         return _bann if _bann and _bann > 0 else 1.0
                                     except Exception:
                                         return 1.0
@@ -8309,12 +8314,30 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                         except Exception:
                                                             return 1e6
 
+                                                    # Seed from a sane INTERIOR point, not the current
+                                                    # surface value. _r0/_n0 are often already clamped
+                                                    # (ν=2.0 = the upper bound); L-BFGS-B started at the
+                                                    # boundary can't descend and returns the start point
+                                                    # unchanged → Δ=0 (fit does nothing). Start mid-range.
+                                                    _seed_rho = float(np.clip(_r0, -0.6, 0.6)) if (_r0 is not None and abs(_r0) < 0.9) else 0.0
+                                                    _seed_nu  = float(_n0) if (_n0 is not None and 0.1 < _n0 < 1.5) else 0.4
                                                     _res = _sopt.minimize(
-                                                        _obj, [_r0, _n0],
+                                                        _obj, [_seed_rho, _seed_nu],
                                                         bounds=[(-0.95, 0.95), (0.01, 2.0)],
                                                         method="L-BFGS-B",
-                                                        options={"maxiter": 40, "ftol": 1e-7, "eps": 1e-6}
+                                                        options={"maxiter": 200, "ftol": 1e-10, "eps": 1e-5}
                                                     )
+                                                    # Retry from a second seed if it stalled at a bound or
+                                                    # left large residual — avoids a single bad start.
+                                                    if _res.fun > 1.0:
+                                                        _res2 = _sopt.minimize(
+                                                            _obj, [0.0, 0.5],
+                                                            bounds=[(-0.95, 0.95), (0.01, 2.0)],
+                                                            method="L-BFGS-B",
+                                                            options={"maxiter": 200, "ftol": 1e-10, "eps": 1e-5}
+                                                        )
+                                                        if _res2.fun < _res.fun:
+                                                            _res = _res2
                                                     _rho_fit = _res.x[0]; _nu_fit = _res.x[1]
                                                     _dr = _rho_fit - _r0; _dn = _nu_fit - _n0
                                                     _fit_results[(_exp, _ten)] = {
