@@ -7714,6 +7714,25 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         except Exception:
                             return 0.0
 
+                    # Reset any package tags from a previous render first (rows are
+                    # cached and mutated in place, so without this the [Pn] tags stack
+                    # and the counter climbs every refresh). Restore each row to its
+                    # base Type so this render re-tags cleanly from [P1].
+                    import re as _re_rst
+                    for _row in _all_trades:
+                        _ty = _row.get("Type", "")
+                        # strip trailing " [Pn] 52%" / " [Pn]" package tags
+                        _ty = _re_rst.sub(r"\s*\[P\d+\].*$", "", _ty).strip()
+                        # restore hedge rows back to plain straddle
+                        if _ty.startswith("🔵 Hedge"):
+                            _ty = "🔵 Straddle"
+                        # restore R/R rows back to the poss-R/R strangle form
+                        if "Strangle R/R (outright)" in _ty:
+                            _ty = "🟠 Strangle ⚠️ poss. R/R"
+                        elif _ty.startswith("🟠 Strangle R/R"):
+                            _ty = "🟠 Strangle ⚠️ poss. R/R"
+                        _row["Type"] = _ty
+
                     _rrs   = [r for r in _all_trades if "Strangle" in r.get("Type", "") and "poss. R/R" in r.get("Type", "")]
                     _strds = [r for r in _all_trades if r.get("Type", "") == "🔵 Straddle"]
                     _used_strd = set()
@@ -10437,8 +10456,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
     # ── Auto-refresh DISABLED ───────────────────────────────────────────────────
     # The timer caused repeated rerun storms / hangs (cleared cache + reran the
     # whole heavy SDR tab every interval, including during Fit & Preview).
-    # Use the manual "🔄 Reload" controls instead. Force any stale saved 30s to Off.
-    st.session_state["sdr_refresh_interval"] = "Off"
+    # Use the manual "🔄 Reload" controls instead. (The refresh-interval default is
+    # forced to "Off" BEFORE the widget is created at ~6636; assigning here — after
+    # the widget exists — is illegal in Streamlit and crashed the tab.)
 
 
 # ── SDR helper functions (add alongside sdr_live_tab) ─────────────────────────
