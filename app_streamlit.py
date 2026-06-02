@@ -6492,34 +6492,36 @@ def sdr_live_tab():
         _admin_pw = st.text_input("Admin password", type="password", key="_sdr_admin_pw")
         if _admin_pw == "1Will-po1":
             st.markdown("""
-**Start SDR Fetcher** — open PowerShell, then:
+**Start SDR Fetcher (continuous — polls every 5 min)** — open PowerShell, then:
 ```
 cd "C:\\Users\\willp\\RateEdge Swaption Pricer"
 $env:RATEEDGE_DB_URL = 'postgresql://postgres.oxwbyotzdqccaajyaqhn:RateEdge2026!@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres'
-python dtcc_sdr_fetcher_v2.py
+python dtcc_sdr_fetcher_v21.py --loop 5
 ```
-Leave the window open — polls every 5 min. Close window to stop.
+⚠️ The `--loop 5` is REQUIRED — without it the fetcher does ONE poll and exits.
+Leave the window open; Ctrl+C to stop.
 
-**Backfill a specific date** (e.g. if fetcher stopped):
+**Run 24/7 (survives reboot/logout — recommended):** run once in an **admin** PowerShell:
+```
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\\Downloads\\setup_sdr_24x7.ps1"
+```
+This registers a Windows Scheduled Task (`--loop 5`) that restarts on failure and runs weekends. No window to babysit.
+
+**Backfill a specific date** (single poll, then exits):
 ```
 cd "C:\\Users\\willp\\RateEdge Swaption Pricer"
 $env:RATEEDGE_DB_URL = 'postgresql://postgres.oxwbyotzdqccaajyaqhn:RateEdge2026!@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres'
-python dtcc_sdr_fetcher_v2.py --date 2026-05-05
+python dtcc_sdr_fetcher_v21.py --date 2026-05-05
 ```
 
 **Backfill last N days:**
 ```
-python dtcc_sdr_fetcher_v2.py --backfill 5
+python dtcc_sdr_fetcher_v21.py --backfill 5
 ```
 
 **Backfill date range:**
 ```
-python dtcc_sdr_fetcher_v2.py --date-from 2026-05-01 --date-to 2026-05-05
-```
-
-**Run as background task:**
-```
-Start-Process -NoNewWindow python -ArgumentList "dtcc_sdr_fetcher_v2.py" -WorkingDirectory "C:\\Users\\willp\\RateEdge Swaption Pricer"
+python dtcc_sdr_fetcher_v21.py --date-from 2026-05-01 --date-to 2026-05-05
 ```
 
 **Check if already running:**
@@ -30592,20 +30594,30 @@ def main():
         
         st.markdown("###  Settings")
         
-        # ── SDR Fetcher status — cron/fetcher health only, no trade-time references ──
+        # ── SDR Fetcher status ──
+        # GREEN = fetcher process is running (heartbeat fresh), regardless of DTCC
+        # or trade volume (quiet weekends are normal). RED only if the heartbeat
+        # has gone stale = the fetcher actually stopped. DTCC API up/down is shown
+        # as a SEPARATE informational line — a DTCC outage is their side, not the
+        # fetcher dying.
         try:
-            _sb_hb_last, _ = _sdr_heartbeat_cached()
+            _sb_hb_last, _sb_hb_status = _sdr_heartbeat_cached()
             if _sb_hb_last:
                 _sb_hb_ts = pd.Timestamp(_sb_hb_last)
                 if _sb_hb_ts.tzinfo is None:
                     _sb_hb_ts = _sb_hb_ts.tz_localize('UTC')
                 _sb_hb_age = (pd.Timestamp.now(tz='UTC') - _sb_hb_ts).total_seconds() / 60
                 if _sb_hb_age < 10:
-                    st.success("🟢 SDR connected")
+                    st.success("🟢 SDR fetcher running")
                 elif _sb_hb_age < 30:
-                    st.warning(f"🟡 SDR delayed ({_sb_hb_age:.0f}m)")
+                    st.warning(f"🟡 SDR fetcher delayed ({_sb_hb_age:.0f}m)")
                 else:
-                    st.error(f"🔴 SDR disconnected ({_sb_hb_age:.0f}m)")
+                    st.error(f"🔴 SDR fetcher stopped ({_sb_hb_age:.0f}m ago)")
+                # DTCC API health — informational only, separate from fetcher health
+                if _sb_hb_status and ("ERROR" in str(_sb_hb_status).upper()
+                                      or "503" in str(_sb_hb_status)
+                                      or "FAIL" in str(_sb_hb_status).upper()):
+                    st.caption("⚠️ DTCC API last poll errored (their side) — fetcher will retry")
             else:
                 st.warning("🟡 SDR — awaiting heartbeat")
         except Exception:
