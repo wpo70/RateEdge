@@ -1854,35 +1854,41 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
 
 @st.cache_data(ttl=60, show_spinner=False)
 def list_vol_snapshots(user_id: str, currency: str = None):
-    """List all historical vol snapshots for a user"""
-    # Normalise: both admin emails share the same snapshots
+    """List historical vol snapshots: the logged-in user's own + all published ('shared').
+    Published EOD closes are saved with user_id='shared' so every login sees them."""
+    # Both admin emails are treated as the same account.
     _ADMIN_ALIASES = {"wpo70@icloud.com": "wpo@rateedge.au", "wpo@rateedge.au": "wpo@rateedge.au"}
-    user_id = _ADMIN_ALIASES.get(user_id, user_id)
+    _uid = _ADMIN_ALIASES.get(user_id, user_id)
+    # Admins also see the alias account's rows; everyone sees their own + 'shared'.
+    _ids = ['shared', _uid]
+    if _uid == "wpo@rateedge.au":
+        _ids.append("wpo70@icloud.com")
     conn = get_db_connection()
     if not conn:
         return []
-    
+
     try:
         cur = conn.cursor()
+        _ph = ", ".join(["%s"] * len(_ids))
         if currency:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT id, currency, snapshot_date, label, notes, created_at
                 FROM vol_history
-                WHERE (user_id = %s OR user_id = %s OR user_id = 'shared') AND currency = %s
+                WHERE user_id IN ({_ph}) AND currency = %s
                 ORDER BY snapshot_date DESC, created_at DESC
-            """, ('wpo@rateedge.au', 'wpo70@icloud.com', currency))
+            """, (*_ids, currency))
         else:
-            cur.execute("""
+            cur.execute(f"""
                 SELECT id, currency, snapshot_date, label, notes, created_at
                 FROM vol_history
-                WHERE (user_id = %s OR user_id = %s OR user_id = 'shared')
+                WHERE user_id IN ({_ph})
                 ORDER BY snapshot_date DESC, created_at DESC
-            """, ('wpo@rateedge.au', 'wpo70@icloud.com',))
-        
+            """, tuple(_ids))
+
         snapshots = cur.fetchall()
         cur.close()
         conn.close()
-        
+
         return [
             {
                 "id": s[0],
@@ -1894,7 +1900,7 @@ def list_vol_snapshots(user_id: str, currency: str = None):
             }
             for s in snapshots
         ]
-        
+
     except Exception as e:
         st.error(f"Failed to list snapshots: {e}")
         return []
