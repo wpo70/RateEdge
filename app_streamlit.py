@@ -1814,8 +1814,15 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
         sabr_rho_json = sabr_rho.to_dict(orient="records") if sabr_rho is not None else None
         sabr_nu_json = sabr_nu.to_dict(orient="records") if sabr_nu is not None else None
         
-        # atm_prems saved as NULL — serialization too slow for large matrices
-        atm_prems_json = None
+        # atm_prems repurposed to carry the Option-A pin map (exact traded market
+        # vols keyed by exp_y|ten_y|strike). Tiny payload, so no serialization
+        # concern. This makes the saved surface reprice traded buckets to their
+        # exact net bp permanently — the pins survive save → reload.
+        _pin_map = (st.session_state.get("_sdr_sabr_blended") or {}).get("pin_map") or {}
+        # carry forward pins already on the live surface (loaded from a prior snap)
+        _existing_pins = st.session_state.get("vol_data", {}).get(currency, {}).get("pin_map") or {}
+        _merged_pins = {**_existing_pins, **_pin_map}
+        atm_prems_json = {"pin_map": _merged_pins} if _merged_pins else None
 
         # Insert into vol_history table — always save as 'shared' so all users can load
         cur = conn.cursor()
@@ -1830,7 +1837,7 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
             datetime.now(),
             label,
             Json({"values": atm_json}),
-            Json({"values": atm_prems_json}) if atm_prems_json else None,
+            Json(atm_prems_json) if atm_prems_json else None,
             Json({"values": sabr_alpha_json}) if sabr_alpha_json else None,
             Json({"values": sabr_beta_json}) if sabr_beta_json else None,
             Json({"values": sabr_rho_json}) if sabr_rho_json else None,
@@ -1916,7 +1923,7 @@ def load_vol_snapshot(snapshot_id: int):
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT currency, atm_vols, sabr_alpha, sabr_beta, sabr_rho, sabr_nu, label, snapshot_date
+            SELECT currency, atm_vols, sabr_alpha, sabr_beta, sabr_rho, sabr_nu, label, snapshot_date, atm_prems
             FROM vol_history
             WHERE id = %s
         """, (snapshot_id,))
@@ -1928,7 +1935,7 @@ def load_vol_snapshot(snapshot_id: int):
         if not row:
             return None
         
-        currency, atm_vols, sabr_alpha, sabr_beta, sabr_rho, sabr_nu, label, snapshot_date = row
+        currency, atm_vols, sabr_alpha, sabr_beta, sabr_rho, sabr_nu, label, snapshot_date, atm_prems = row
         
         # Convert JSON to DataFrames
         atm_df = pd.DataFrame(atm_vols["values"]) if atm_vols else None
@@ -1936,6 +1943,13 @@ def load_vol_snapshot(snapshot_id: int):
         sabr_beta_df = pd.DataFrame(sabr_beta["values"]) if sabr_beta else None
         sabr_rho_df = pd.DataFrame(sabr_rho["values"]) if sabr_rho else None
         sabr_nu_df = pd.DataFrame(sabr_nu["values"]) if sabr_nu else None
+        # Option-A pins stored in atm_prems
+        _pin_map = {}
+        try:
+            if atm_prems and isinstance(atm_prems, dict):
+                _pin_map = atm_prems.get("pin_map", {}) or {}
+        except Exception:
+            _pin_map = {}
         
         return {
             "currency": currency,
@@ -1945,7 +1959,8 @@ def load_vol_snapshot(snapshot_id: int):
             "alpha": sabr_alpha_df,
             "beta": sabr_beta_df,
             "rho": sabr_rho_df,
-            "nu": sabr_nu_df
+            "nu": sabr_nu_df,
+            "pin_map": _pin_map
         }
         
     except Exception as e:
@@ -2432,22 +2447,36 @@ def sabr_normal_vol_smile(F: float, K: float, T: float,
 def smile_vol_pinned(F: float, K: float, T: float,
                      alpha: float, beta: float, rho: float, nu: float,
                      exp_y=None, ten_y=None) -> float:
-    """Option A: if a traded market vol is pinned at this exact (expiry_y, tenor_y,
-    strike), return it directly so the bucket reprices to its true traded level.
-    Otherwise fall back to the SABR smile. Strike matched within 1bp, expiry/tenor
-    within 0.02y. Pin map written by the SDR fit."""
+    """Option B: smoothed SABR backbone + decaying residual bumps at traded
+    strikes. The pin map holds residual = (market vol − smoothed-SABR vol) per
+    traded (expiry_y, tenor_y, strike). The pricer adds each residual as a
+    Gaussian bump (width 25bp) centred on the traded strike, so a traded R/R
+    reprices to its EXACT net bp while the surface stays smooth between marks.
+    Untraded strikes/buckets get pure SABR."""
+    _base = sabr_normal_vol_smile(F, K, T, alpha, beta, rho, nu)
     try:
         import streamlit as _st
-        _pm = (_st.session_state.get("_sdr_sabr_blended") or {}).get("pin_map") or {}
+        _W = 0.0025  # bump width in rate units (25bp)
+        _pm = dict((_st.session_state.get("_sdr_sabr_blended") or {}).get("pin_map") or {})
+        for _cc, _vd in (_st.session_state.get("vol_data") or {}).items():
+            if isinstance(_vd, dict) and _vd.get("pin_map"):
+                _pm.update(_vd["pin_map"])
         if _pm and exp_y is not None and ten_y is not None:
-            for _key, _vol in _pm.items():
-                _ke, _kt, _ks = _key.split("|")
+            _bump = 0.0
+            for _key, _resid in _pm.items():
+                _ke, _kt, _km = _key.split("|")
                 if abs(float(_ke) - float(exp_y)) <= 0.02 and abs(float(_kt) - float(ten_y)) <= 0.02:
-                    if abs(float(_ks) - float(K)) <= 1e-4:  # within 1bp
-                        return float(_vol)
+                    if _km.startswith("m"):
+                        # moneyness-anchored: strike centre = current forward + offset
+                        _Kpin = float(F) + float(_km[1:])
+                    else:
+                        # legacy absolute-strike pin
+                        _Kpin = float(_km)
+                    _bump += float(_resid) * math.exp(-0.5 * ((float(K) - _Kpin) / _W) ** 2)
+            return _base + _bump
     except Exception:
         pass
-    return sabr_normal_vol_smile(F, K, T, alpha, beta, rho, nu)
+    return _base
 
 
 def sabr_implied_alpha_from_atm(atm_vol_normal: float, F: float, T: float,
@@ -7467,7 +7496,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0406a"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0406b"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -8813,6 +8842,45 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                         _idx += 1
                                                     _delta_rows.append((_dr_row, _dn_row))
 
+                                                # ── Build the residual-bump pin map (Option B).
+                                                # The smoothed SABR surface can't pass exactly through
+                                                # the traded vols (they don't lie on a SABR smile). So we
+                                                # store, per traded strike, a small residual =
+                                                # (market vol − smoothed-SABR vol). The pricer adds this as
+                                                # a Gaussian bump (width 25bp) centred on the strike, so the
+                                                # traded R/R reprices to its EXACT net bp while the surface
+                                                # stays smooth between marks.
+                                                _pin_map = {}
+                                                for (_pe, _pt), _v in _fit_results.items():
+                                                    _eyk = round(label_to_years(_pe), 4)
+                                                    _tyk = round(label_to_years(_pt), 4)
+                                                    # smoothed SABR params at this bucket
+                                                    _ra = _sabr_param(_new_alpha_df, _pe, _pt)
+                                                    _rr_ = _sabr_param(_new_rho_df, _pe, _pt)
+                                                    _rn = _sabr_param(_new_nu_df, _pe, _pt)
+                                                    _rb = _b_cur if _b_cur is not None else 0.5
+                                                    try:
+                                                        _Fb, _, _ = forward_and_annuity_from_curve(
+                                                            _sabr_curve, "USD", _eyk, _tyk, None)
+                                                    except Exception:
+                                                        _Fb = None
+                                                    if _ra is None or _rr_ is None or _rn is None or not _Fb:
+                                                        continue
+                                                    for _Kpin, _vmkt in ((_v.get("pin_Kp"), _v.get("pin_vp")),
+                                                                          (_v.get("pin_Kr"), _v.get("pin_vr"))):
+                                                        if not _Kpin or not _vmkt:
+                                                            continue
+                                                        _v_sabr = sabr_normal_vol_smile(_Fb, _Kpin, _eyk, _ra, _rb, _rr_, _rn)
+                                                        _resid = _vmkt - _v_sabr   # decimal normal-vol residual
+                                                        # Anchor the pin to MONEYNESS offset (K − F), not the
+                                                        # absolute strike. As the curve forward moves day to
+                                                        # day, a "+100bp payer" mark stays a +100bp payer — the
+                                                        # pricer reconstructs the strike from the current
+                                                        # forward (K = F_now + offset). No manual forward
+                                                        # override needed for the mark to track.
+                                                        _offset = round(_Kpin - _Fb, 6)
+                                                        _pin_map[f"{_eyk}|{_tyk}|m{_offset:+.6f}"] = _resid
+
                                                 # Store preview data
                                                 # Filter rows where all tenor values are None (no data), replace remaining None with "—"
                                                 def _clean_delta_rows(rows):
@@ -8834,17 +8902,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     if "Expiry" in _d.columns:
                                                         return _d.to_dict(orient="records")
                                                     return _d.reset_index().to_dict(orient="records")
-                                                # Build the Option-A pin map: (exp_lbl, ten_lbl, strike_dec)
-                                                # -> exact market normal vol. Keyed loosely on strike
-                                                # (rounded) so the pricer can match the traded strike.
-                                                _pin_map = {}
-                                                for (_pe, _pt), _v in _fit_results.items():
-                                                    _eyk = round(label_to_years(_pe), 4)
-                                                    _tyk = round(label_to_years(_pt), 4)
-                                                    if _v.get("pin_vp") and _v.get("pin_Kp"):
-                                                        _pin_map[f"{_eyk}|{_tyk}|{round(_v['pin_Kp'],5)}"] = _v["pin_vp"]
-                                                    if _v.get("pin_vr") and _v.get("pin_Kr"):
-                                                        _pin_map[f"{_eyk}|{_tyk}|{round(_v['pin_Kr'],5)}"] = _v["pin_vr"]
+                                                # (pin map built above as residual bumps)
                                                 st.session_state["_sdr_sabr_blended"] = {
                                                     "rho_rec":   _df_to_rec(_new_rho_df),
                                                     "nu_rec":    _df_to_rec(_new_nu_df),
@@ -11725,6 +11783,7 @@ def vol_config_tab():
                     st.session_state["vol_data"][_lc]["beta"] = loaded_snap["beta"]
                     st.session_state["vol_data"][_lc]["rho"] = loaded_snap["rho"]
                     st.session_state["vol_data"][_lc]["nu"] = loaded_snap["nu"]
+                    st.session_state["vol_data"][_lc]["pin_map"] = loaded_snap.get("pin_map", {}) or {}
                     if "vol_editor" in st.session_state:
                         st.session_state["vol_editor"]["working"].pop(_lc, None)
                         st.session_state["vol_editor"]["base"].pop(_lc, None)
@@ -16464,6 +16523,18 @@ def swaptions_tab(vol_mode: str):
         is_midcurve = False
 
     fwd_pct = fwd * 100
+    # ── ATM forward override (A): price the smile at a specified forward so a
+    # pinned trade can be repriced in its trade-time moneyness frame. Strikes
+    # (ATMF ± offset) and the moneyness-anchored pins both follow this forward.
+    _ovr_fwd = st.checkbox("Override ATM forward", value=False, key="sw_fwd_override",
+                           help="Price at a specified forward (e.g. the trade-time ATM). "
+                                "Strike offsets and traded-mark pins follow this forward.")
+    if _ovr_fwd:
+        _fwd_in = st.number_input("ATM forward (%)", value=round(fwd_pct, 4),
+                                  format="%.4f", step=0.0100, key="sw_fwd_override_val")
+        fwd = _fwd_in / 100.0
+        fwd_pct = _fwd_in
+        fwd_source = "manual override"
     # Safety defaults in case col blocks don't execute
     eff_disc_rate = 0.035
     disc_source = "Flat (default)"
