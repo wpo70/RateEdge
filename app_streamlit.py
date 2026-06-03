@@ -7825,6 +7825,33 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 except Exception:
                     pass
 
+                # ── Manual per-trade label override ─────────────────────────────────
+                # User can lock an ambiguous trade as Strangle or R/R (set via the
+                # dropdowns in the Price-This panel). Keyed by a stable trade
+                # signature so the choice survives refreshes. Applied here, after
+                # auto-tagging, so the manual choice wins.
+                def _ovr_key(_r):
+                    return "|".join(str(_r.get(_k, "")) for _k in
+                        ("Time", "CCY", "Opt Expiry", "Swp Tenor", "Strike", "Platform"))
+                import re as _re_ovr
+                _type_overrides = st.session_state.setdefault("_sdr_type_overrides", {})
+                for _row in _all_trades:
+                    _ovr = _type_overrides.get(_ovr_key(_row))
+                    if not _ovr:
+                        continue
+                    _base = _row.get("Type", "")
+                    # strip any package tag suffix to preserve it
+                    _tag_m = _re_ovr.search(r"(\s*\[P\d+\].*)$", _base)
+                    _suffix = _tag_m.group(1) if _tag_m else ""
+                    if _ovr == "R/R":
+                        _row["Type"] = "🟠 R/R" + _suffix
+                    elif _ovr == "Strangle":
+                        _row["Type"] = "🟠 Strangle" + _suffix
+                    elif _ovr == "Hide":
+                        _row["_hidden"] = True
+                # Drop hidden rows
+                _all_trades = [_r for _r in _all_trades if not _r.get("_hidden")]
+
                 if _all_trades:
                     _all_df = pd.DataFrame(_all_trades)
                     # v1605j: sort by real datetime not Time-as-string
@@ -8023,15 +8050,28 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             "Cap":"Payer","Floor":"Receiver",
                         }
                         st.markdown("**Click to price a trade in the Swaptions pricer:**")
+                        st.caption("Use the label dropdown to lock an ambiguous trade as Strangle or R/R, or Hide it.")
                         with st.container(height=420, border=False):
                             for _ri, _row in enumerate(_all_trades):
-                                _rc1, _rc2, _rc3, _rc4, _rc5, _rc6 = st.columns([1.2, 0.8, 0.8, 0.8, 1.2, 0.8])
+                                _rc1, _rc2, _rc3, _rc4, _rc5, _rc6, _rc7 = st.columns([1.1, 0.7, 0.8, 0.8, 1.1, 0.9, 0.8])
                                 _rc1.markdown(f"<small>{_row.get(_time_col,'—')}</small>", unsafe_allow_html=True)
                                 _rc2.markdown(f"<small>{_row.get('Type','').replace('🔵 ','').replace('🟤 ','').replace('🟠 ','').replace('🟣 ','')}</small>", unsafe_allow_html=True)
                                 _rc3.markdown(f"<small>{_row.get('CCY','—')} {_row.get('Opt Expiry','—')}×{_row.get('Swp Tenor','—')}</small>", unsafe_allow_html=True)
                                 _rc4.markdown(f"<small>{_row.get('Strike','—')}</small>", unsafe_allow_html=True)
                                 _rc5.markdown(f"<small>{_row.get('Notional','—')} | {_row.get('Platform','—')}</small>", unsafe_allow_html=True)
-                                if _rc6.button("Price →", key=f"_price_this_{_ri}", use_container_width=True):
+                                # ── Manual label override dropdown ──
+                                _ok = _ovr_key(_row)
+                                _cur_ovr = _type_overrides.get(_ok, "Auto")
+                                _ovr_choice = _rc6.selectbox(
+                                    "label", ["Auto", "R/R", "Strangle", "Hide"],
+                                    index=["Auto", "R/R", "Strangle", "Hide"].index(_cur_ovr) if _cur_ovr in ("Auto","R/R","Strangle","Hide") else 0,
+                                    key=f"_ovr_sel_{_ri}", label_visibility="collapsed")
+                                if _ovr_choice == "Auto":
+                                    _type_overrides.pop(_ok, None)
+                                elif _type_overrides.get(_ok) != _ovr_choice:
+                                    _type_overrides[_ok] = _ovr_choice
+                                    st.rerun()
+                                if _rc7.button("Price →", key=f"_price_this_{_ri}", use_container_width=True):
                                     _exp_raw = _row.get("Opt Expiry","")
                                     _ten_raw = _row.get("Swp Tenor","")
                                     _str_raw = _row.get("Type","")
