@@ -7871,6 +7871,20 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 if _recon and _recon > 0:
                                     _rr["Notional"] = f"{_recon/1e6:.0f}M*"
                                     _rr_not = _recon
+                                    # Backfill the bp fields now that we have a notional.
+                                    # They were "—" because notional was NaN at pairing time.
+                                    _pp2 = _rr.get("_p_prem_raw") or 0
+                                    _rp2 = _rr.get("_r_prem_raw") or 0
+                                    _comb2 = _pp2 + _rp2
+                                    _net2  = abs(_pp2 - _rp2)
+                                    _rr["P Prem BP"]        = f"{_pp2/_recon*1e4:.2f}" if _pp2 else "—"
+                                    _rr["R Prem BP"]        = f"{_rp2/_recon*1e4:.2f}" if _rp2 else "—"
+                                    _rr["Nett Prem BP"]     = f"{_comb2/_recon*1e4:.2f}" if _comb2 else "—"
+                                    _rr["Nett Leg BP (R/R)"]= f"{_net2/_recon*1e4:.2f}" if _net2 else "—"
+                                    # Add net bp into the Premium string if not already there.
+                                    _prem_str = _rr.get("Premium", "")
+                                    if _prem_str and "net" not in _prem_str:
+                                        _rr["Premium"] = f"{_prem_str}  net {_net2/_recon*1e4:.1f}bp"
                             _ratio = (_sd_not / _rr_not) if _rr_not > 0 else None
                             if _ratio and _rwidth is not None:
                                 _ratio_by_key.setdefault(_key, _ratio)
@@ -7909,6 +7923,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 # Drop hidden rows
                 _all_trades = [_r for _r in _all_trades if not _r.get("_hidden")]
 
+                # Stamp each row with its override key so it survives the sort and
+                # aligns the data_editor rows back to the right trade. (Previously
+                # the key list was built from _all_trades order but the editor shows
+                # the time-sorted order — misaligned, so edits hit the wrong/no row
+                # and the selector appeared to do nothing.)
+                for _row in _all_trades:
+                    _row["_ovrkey"] = _ovr_key(_row)
+
                 if _all_trades:
                     _all_df = pd.DataFrame(_all_trades)
                     # v1605j: sort by real datetime not Time-as-string
@@ -7937,7 +7959,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     # produce a separate Excel-ready df where Time is a real datetime
                     # so Excel auto-recognises it for filtering/sorting.
                     _INTERNAL_COLS = ["_notional_num", "_time_dt", "_p_strike", "_r_strike",
-                                      "_p_prem_raw", "_r_prem_raw", "_opt_raw", "_ten_raw", "_hidden"]
+                                      "_p_prem_raw", "_r_prem_raw", "_opt_raw", "_ten_raw", "_hidden", "_ovrkey"]
                     _all_df_display = _all_df.drop(columns=_INTERNAL_COLS, errors="ignore")
                     if "Nett Leg BP (R/R)" in _all_df_display.columns:
                         _all_df_display["Nett Leg BP (R/R)"] = _all_df_display["Nett Leg BP (R/R)"].fillna("—")
@@ -8162,17 +8184,18 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     # (keyed by trade signature) and feed both the table and the
                     # download, so exporting reflects your label choices.
                     _ed_df = _all_df_display.copy()
-                    # Build the current label-choice column from existing overrides.
-                    _ovr_keys_list = [_ovr_key(_r) for _r in _all_trades]
-                    _label_col = []
-                    for _k in _ovr_keys_list:
-                        _label_col.append(_type_overrides.get(_k, "Auto"))
+                    # Build the label-choice column and the aligned key list FROM THE
+                    # SORTED df (same order the editor shows), so edits map back to the
+                    # correct trade.
+                    _ovr_keys_list = list(_all_df["_ovrkey"]) if "_ovrkey" in _all_df.columns else [_ovr_key(_r) for _r in _all_trades]
+                    _label_col = [_type_overrides.get(_k, "Auto") for _k in _ovr_keys_list]
                     _ed_df.insert(0, "Label", _label_col)
 
+                    _ovr_sig = str(sorted(_type_overrides.items()))
                     _edited = st.data_editor(
                         _ed_df, hide_index=True, use_container_width=True,
                         height=min(60 + len(_ed_df) * 35, 700),
-                        key="_sdr_blotter_editor",
+                        key=f"_sdr_blotter_editor_{abs(hash(_ovr_sig)) % 100000}",
                         disabled=[c for c in _ed_df.columns if c != "Label"],
                         column_config={
                             "Label": st.column_config.SelectboxColumn(
