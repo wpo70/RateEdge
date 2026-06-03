@@ -7496,7 +7496,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0406b"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0406c"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -23432,6 +23432,13 @@ def vol_surface_editor_tab():
                                     st.session_state["vol_data"]["USD"]["alpha"] = _bl_alpha_df_ve
                                     st.session_state["vol_data"]["USD"]["rho"]   = _bl_rho_df_ve
                                     st.session_state["vol_data"]["USD"]["nu"]    = _bl_nu_df_ve
+                                    # Carry the residual pin map into the live surface so the
+                                    # pricer applies the traded marks. Without this the pins
+                                    # were lost when _sdr_sabr_blended was popped below →
+                                    # pricer saw pure backbone (10Y10Y came back 188 not 117).
+                                    _bl_pins = (st.session_state.get("_sdr_sabr_blended") or {}).get("pin_map") or {}
+                                    _exist_pins = st.session_state["vol_data"]["USD"].get("pin_map") or {}
+                                    st.session_state["vol_data"]["USD"]["pin_map"] = {**_exist_pins, **_bl_pins}
                                     # Record before/after so the next render confirms the app updated.
                                     st.session_state["_usd_sabr_applied_delta"] = {
                                         "old_rho": _old_rho, "new_rho": _mean_sabr(_bl_rho_df_ve),
