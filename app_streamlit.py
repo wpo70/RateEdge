@@ -7446,7 +7446,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0306t"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0306u"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -7945,17 +7945,17 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     if "_ovrkey" in _all_df.columns:
                         _drop_idx = []
                         for _i in range(len(_all_df)):
-                            _k = _all_df.iloc[_i]["_ovrkey"]
-                            # Read the override straight from the widget's session_state
-                            # (the selectbox key). Single source of truth — the dict and
-                            # the widget can never desync this way.
-                            _ov = st.session_state.get(f"_lblsel_{_k}")
-                            if not _ov or _ov == "Auto":
-                                _ov = _type_overrides.get(_k)
+                            # Use ROW POSITION as the override key. Both this apply step
+                            # and the selector panel run on the SAME sorted _all_df in the
+                            # same render, so position is a stable, collision-free key.
+                            # (The string signature _ovrkey proved unstable across the
+                            # cache-rebuild rerun, causing the dropdown to flip back.)
+                            _ov = st.session_state.get(f"_lblsel_pos_{_i}")
                             if not _ov or _ov == "Auto":
                                 continue
                             if _ov == "Hide":
-                                _drop_idx.append(_i); continue
+                                _all_df.iat[_i, _all_df.columns.get_loc("Type")] = "__HIDE__"
+                                continue
                             _ty = str(_all_df.iloc[_i]["Type"])
                             _tagm = _re_ovapp.search(r"(\s*\[P\d+\].*)$", _ty)
                             _suf = _tagm.group(1) if _tagm else ""
@@ -7968,7 +7968,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             elif _ov == "Strangle":
                                 _all_df.iat[_i, _all_df.columns.get_loc("Type")] = "🟠 Strangle" + _suf
                         if _drop_idx:
-                            _all_df = _all_df.drop(index=_drop_idx).reset_index(drop=True)
+                            pass  # hidden rows are tagged __HIDE__ and filtered at display
 
                     # v1105o: build CSV with broker % breakdown appended at the bottom.
                     # Uses hidden _notional_num column for numeric notional aggregation,
@@ -8009,6 +8009,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _xl_front = [c for c in ["Time", "Label", "CCY", "Type"] if c in _all_df_excel.columns]
                     _xl_rest  = [c for c in _all_df_excel.columns if c not in _xl_front]
                     _all_df_excel = _all_df_excel[_xl_front + _xl_rest]
+                    if "Type" in _all_df_excel.columns:
+                        _all_df_excel = _all_df_excel[_all_df_excel["Type"] != "__HIDE__"].reset_index(drop=True)
 
                     # Assemble CSV: trades table → blank → broker breakdown
                     # v1205f: ship as XLSX (not CSV) so Excel column widths auto-fit on open.
@@ -8219,28 +8221,19 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     st.rerun(scope="app")
 
                     # end Price This expander
-                    # ── Label overrides via reliable per-row selectboxes ──
-                    # data_editor did not surface edits through its returned frame
-                    # (disabled cols + rebuilt df), so the selector never registered.
-                    # Use real st.selectbox widgets instead — they always return their
-                    # value. Only show controls for ambiguous rows (Strangle/R/R/Hedge).
-                    _ovr_keys_list = list(_all_df["_ovrkey"]) if "_ovrkey" in _all_df.columns else [""] * len(_all_df_display)
+                    # ── Label overrides via per-row selectboxes (positional keys) ──
+                    # Keys are ROW POSITION (_lblsel_pos_{i}) matching the apply step,
+                    # which reads the SAME positions on the SAME sorted _all_df. The
+                    # widget's own session_state is the single source of truth — the
+                    # apply reads it directly, so the dropdown and the table never
+                    # disagree and nothing flips back.
                     with st.expander("🏷️ Set trade labels (R/R / Strangle / Hide)", expanded=True):
                         st.caption("Override the auto-label for any trade. Changes apply to the report and download.")
-                        st.caption(f"🔧 stored overrides right now: {dict(_type_overrides)}")
-                        # One-time purge of stale positional selector keys (_lblsel_0,
-                        # _lblsel_1 …) left by earlier builds — they collide with the
-                        # current per-trade keys and cause the dropdown to flip back.
-                        if not st.session_state.get("_lblsel_purged_v0306t"):
-                            for _sk in [k for k in list(st.session_state.keys())
-                                        if k.startswith("_lblsel_") and k.split("_lblsel_")[-1].isdigit()]:
-                                st.session_state.pop(_sk, None)
-                            st.session_state["_lblsel_purged_v0306t"] = True
                         for _i in range(len(_all_df_display)):
-                            _k = _ovr_keys_list[_i] if _i < len(_ovr_keys_list) else ""
                             _ty_now = str(_all_df_display.iloc[_i]["Type"])
-                            # Only offer override on strangle/R/R/hedge-ish rows
-                            if not any(_t in _ty_now for _t in ("Strangle", "R/R", "Hedge", "Collar")):
+                            if _ty_now == "__HIDE__":
+                                _ty_now = "(hidden)"
+                            if not any(_t in _ty_now for _t in ("Strangle", "R/R", "Hedge", "Collar", "hidden")):
                                 continue
                             _tm = str(_all_df_display.iloc[_i].get("Time",""))
                             _ex = str(_all_df_display.iloc[_i].get("Opt Expiry",""))
@@ -8249,21 +8242,16 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _lc1, _lc2 = st.columns([3, 1])
                             _lc1.markdown(f"<small>{_tm} · {_ex}×{_tn} · {_ty_now} · {_pf}</small>", unsafe_allow_html=True)
                             _opts = ["Auto", "R/R", "Strangle", "Hide"]
-                            _wkey = f"_lblsel_{_k}"
-                            _sel = _lc2.selectbox("lbl", _opts, key=_wkey,
+                            _sel = _lc2.selectbox("lbl", _opts, key=f"_lblsel_pos_{_i}",
                                                   label_visibility="collapsed")
-                            # Mirror into _type_overrides so the apply step (which runs
-                            # BEFORE this panel) sees it on the NEXT rerun. No index=,
-                            # no seeding — the widget's own state is the source of truth.
-                            if _sel == "Auto":
-                                if _k in _type_overrides:
-                                    _type_overrides.pop(_k, None); st.rerun()
-                            else:
-                                if _type_overrides.get(_k) != _sel:
-                                    _type_overrides[_k] = _sel; st.rerun()
+                            # No manual st.rerun() — changing a selectbox already triggers
+                            # a rerun, and the apply step reads the widget value directly.
+                            # A manual rerun here caused an infinite loop.
 
-                    # Static display table (overrides already applied to _all_df upstream)
+                    # Static display table — drop hidden rows here only.
                     _disp = _all_df_display.copy()
+                    if "Type" in _disp.columns:
+                        _disp = _disp[_disp["Type"] != "__HIDE__"].reset_index(drop=True)
                     _front = [c for c in ["Time", "CCY", "Type"] if c in _disp.columns]
                     _rest  = [c for c in _disp.columns if c not in _front]
                     _disp = _disp[_front + _rest]
