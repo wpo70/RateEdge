@@ -2429,6 +2429,27 @@ def sabr_normal_vol_smile(F: float, K: float, T: float,
         return sabr_normal_atm_vol(F, T, alpha, beta, rho, nu)
 
 
+def smile_vol_pinned(F: float, K: float, T: float,
+                     alpha: float, beta: float, rho: float, nu: float,
+                     exp_y=None, ten_y=None) -> float:
+    """Option A: if a traded market vol is pinned at this exact (expiry_y, tenor_y,
+    strike), return it directly so the bucket reprices to its true traded level.
+    Otherwise fall back to the SABR smile. Strike matched within 1bp, expiry/tenor
+    within 0.02y. Pin map written by the SDR fit."""
+    try:
+        import streamlit as _st
+        _pm = (_st.session_state.get("_sdr_sabr_blended") or {}).get("pin_map") or {}
+        if _pm and exp_y is not None and ten_y is not None:
+            for _key, _vol in _pm.items():
+                _ke, _kt, _ks = _key.split("|")
+                if abs(float(_ke) - float(exp_y)) <= 0.02 and abs(float(_kt) - float(ten_y)) <= 0.02:
+                    if abs(float(_ks) - float(K)) <= 1e-4:  # within 1bp
+                        return float(_vol)
+    except Exception:
+        pass
+    return sabr_normal_vol_smile(F, K, T, alpha, beta, rho, nu)
+
+
 def sabr_implied_alpha_from_atm(atm_vol_normal: float, F: float, T: float,
                                   beta: float, rho: float, nu: float) -> float:
     """Back out alpha from ATM normal vol, given fixed beta/rho/nu.
@@ -7446,7 +7467,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0306z"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0406a"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -8625,6 +8646,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                         "exp_y": label_to_years(_exp),
                                                         "ten_y": label_to_years(_ten),
                                                         "n_trades": len(_trades),
+                                                        # Option A pins: exact inverted market vols at the
+                                                        # traded strikes. The pricer uses these EXACT vols at
+                                                        # these strikes so a traded R/R reprices to its true
+                                                        # net bp (≤2bp), SABR only fills untraded strikes.
+                                                        "pin_Kp": _Kp, "pin_Kr": _Kr,
+                                                        "pin_vp": _vp_mkt / 10000.0,   # decimal normal vol
+                                                        "pin_vr": _vr_mkt / 10000.0,
                                                     }
                                                     _fit_rows.append({
                                                         "Bucket": f"{_exp}×{_ten}",
@@ -8641,12 +8669,24 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                 st.session_state["_sdr_sabr_fit_warn"] = True
                                                 st.warning("Could not fit any buckets — need ATM straddles in same session for F.")
                                             else:
-                                                # Interpolate Δρ and Δν across full grid
+                                                # ── Confidence-weighted smoothing of the ABSOLUTE ρ/ν
+                                                # surface (not deltas), in log-expiry/log-tenor space.
+                                                #  • Cap fitted ρ/ν to sane bounds first (NU_CAP/RHO_CAP)
+                                                #    — no real swaption surface has ν=2.0.
+                                                #  • Per-point smoothing weight = confidence = min(1, trades/3)
+                                                #    so 3+ trades pins to its fit, 1-2 trades bends toward
+                                                #    neighbours. Any trade still sets a level; smoothing only
+                                                #    controls variance between buckets so ρ/α/ν stay smooth.
+                                                #  • log-coords keep the steep short-end ν local (doesn't
+                                                #    bleed into longer expiries).
+                                                # Downstream apply uses (_r_cur + _dr_grid); we therefore
+                                                # output the smoothed-absolute minus current as the delta.
+                                                _NU_CAP = 1.2; _RHO_CAP = 0.9; _SMAX = 1.0
                                                 _pts_exp = [v["exp_y"] for v in _fit_results.values()]
                                                 _pts_ten = [v["ten_y"] for v in _fit_results.values()]
-                                                _pts_dr  = [v["dr"]    for v in _fit_results.values()]
-                                                _pts_dn  = [v["dn"]    for v in _fit_results.values()]
-                                                _wts     = [v["n_trades"] for v in _fit_results.values()]
+                                                _pts_rf  = [max(-_RHO_CAP, min(_RHO_CAP, v["rho_fit"])) for v in _fit_results.values()]
+                                                _pts_nf  = [min(_NU_CAP, v["nu_fit"]) for v in _fit_results.values()]
+                                                _pts_w   = [min(1.0, v["n_trades"] / 3.0) for v in _fit_results.values()]
 
                                                 # Build full grid coordinates
                                                 _gx = []; _gy = []
@@ -8655,59 +8695,47 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                         _gx.append(_ey); _gy.append(_ty)
                                                 _gxy = list(zip(_gx, _gy))
 
-                                                # RBF interpolation of Δρ and Δν
+                                                def _logc(_xy):
+                                                    import math as _m
+                                                    return [[_m.log(max(_a, 1e-4)), _m.log(max(_b, 1e-4))] for _a, _b in _xy]
+
+                                                _node_xy = list(zip(_pts_exp, _pts_ten))
                                                 try:
                                                     if len(_fit_results) >= 3:
-                                                        _rbf_dr = _sint.RBFInterpolator(
-                                                            list(zip(_pts_exp, _pts_ten)), _pts_dr,
-                                                            kernel="thin_plate_spline", smoothing=0.1
-                                                        )
-                                                        _rbf_dn = _sint.RBFInterpolator(
-                                                            list(zip(_pts_exp, _pts_ten)), _pts_dn,
-                                                            kernel="thin_plate_spline", smoothing=0.1
-                                                        )
-                                                        _dr_grid = _rbf_dr(_gxy)
-                                                        _dn_grid = _rbf_dn(_gxy)
+                                                        _smv = np.array([ (1.0 - _w) * _SMAX + 1e-3 for _w in _pts_w ], dtype=float)
+                                                        _rbf_r = _sint.RBFInterpolator(
+                                                            _logc(_node_xy), _pts_rf,
+                                                            kernel="thin_plate_spline", smoothing=_smv)
+                                                        _rbf_n = _sint.RBFInterpolator(
+                                                            _logc(_node_xy), _pts_nf,
+                                                            kernel="thin_plate_spline", smoothing=_smv)
+                                                        _rho_s = _rbf_r(_logc(_gxy))
+                                                        _nu_s  = _rbf_n(_logc(_gxy))
                                                     else:
-                                                        # Too few points — use nearest neighbour
-                                                        _dr_grid = _sint.griddata(
-                                                            list(zip(_pts_exp, _pts_ten)), _pts_dr, _gxy, method="nearest"
-                                                        )
-                                                        _dn_grid = _sint.griddata(
-                                                            list(zip(_pts_exp, _pts_ten)), _pts_dn, _gxy, method="nearest"
-                                                        )
+                                                        _rho_s = _sint.griddata(_node_xy, _pts_rf, _gxy, method="nearest")
+                                                        _nu_s  = _sint.griddata(_node_xy, _pts_nf, _gxy, method="nearest")
                                                 except Exception as _ie:
-                                                    st.warning(f"Interpolation fallback (nearest): {_ie}")
-                                                    _dr_grid = _sint.griddata(
-                                                        list(zip(_pts_exp, _pts_ten)), _pts_dr, _gxy, method="nearest"
-                                                    )
-                                                    _dn_grid = _sint.griddata(
-                                                        list(zip(_pts_exp, _pts_ten)), _pts_dn, _gxy, method="nearest"
-                                                    )
+                                                    st.warning(f"Smoother fallback (nearest): {_ie}")
+                                                    _rho_s = _sint.griddata(_node_xy, _pts_rf, _gxy, method="nearest")
+                                                    _nu_s  = _sint.griddata(_node_xy, _pts_nf, _gxy, method="nearest")
 
-                                                # Clip interpolated grids to the observed fit range.
-                                                # thin_plate_spline RBF extrapolates unboundedly outside the
-                                                # convex hull of fitted buckets — the long×long corner (no SDR
-                                                # strangles there) was blowing up to ±1.9 and pinning the ρ clamp.
-                                                # No cell should move more than the market actually showed.
-                                                if _pts_dr:
-                                                    _dr_lo, _dr_hi = min(_pts_dr), max(_pts_dr)
-                                                    _dn_lo, _dn_hi = min(_pts_dn), max(_pts_dn)
-                                                    _dr_grid = np.clip(_dr_grid, _dr_lo, _dr_hi)
-                                                    _dn_grid = np.clip(_dn_grid, _dn_lo, _dn_hi)
+                                                # Clamp the smoothed absolute surface to sane bounds.
+                                                _rho_s = np.clip(np.asarray(_rho_s, dtype=float), -_RHO_CAP, _RHO_CAP)
+                                                _nu_s  = np.clip(np.asarray(_nu_s,  dtype=float), 0.05, _NU_CAP)
 
-                                                # Pin traded buckets to their EXACT fitted Δ. The RBF
-                                                # smooths across the grid (smoothing=0.1) so it does NOT
-                                                # pass through the fitted points — that made one traded
-                                                # bucket undershoot and another overshoot its own market
-                                                # trade at 100% blend. A bucket that actually traded must
-                                                # reproduce its own fit; smoothing only fills un-traded gaps.
-                                                _gxy_idx = {(_gx[_k], _gy[_k]): _k for _k in range(len(_gxy))}
-                                                for _v in _fit_results.values():
-                                                    _kk = _gxy_idx.get((_v["exp_y"], _v["ten_y"]))
-                                                    if _kk is not None:
-                                                        _dr_grid[_kk] = _v["dr"]
-                                                        _dn_grid[_kk] = _v["dn"]
+                                                # Convert smoothed-absolute → delta vs the CURRENT grid value
+                                                # (downstream apply adds _dr_grid to _r_cur).
+                                                _dr_grid = np.zeros(len(_gxy))
+                                                _dn_grid = np.zeros(len(_gxy))
+                                                for _k in range(len(_gxy)):
+                                                    _ec = _GRID_EXP[_k // len(_GRID_TEN)]
+                                                    _tc = _GRID_TEN[_k %  len(_GRID_TEN)]
+                                                    _rc0 = _sabr_param(_sabr_rdf, _ec, _tc)
+                                                    _nc0 = _sabr_param(_sabr_ndf, _ec, _tc)
+                                                    if _rc0 is not None:
+                                                        _dr_grid[_k] = float(_rho_s[_k]) - float(_rc0)
+                                                    if _nc0 is not None:
+                                                        _dn_grid[_k] = float(_nu_s[_k]) - float(_nc0)
 
                                                 # Build blended rho/nu matrices
                                                 _new_rho_df = _sabr_rdf.copy()
@@ -8806,12 +8834,24 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     if "Expiry" in _d.columns:
                                                         return _d.to_dict(orient="records")
                                                     return _d.reset_index().to_dict(orient="records")
+                                                # Build the Option-A pin map: (exp_lbl, ten_lbl, strike_dec)
+                                                # -> exact market normal vol. Keyed loosely on strike
+                                                # (rounded) so the pricer can match the traded strike.
+                                                _pin_map = {}
+                                                for (_pe, _pt), _v in _fit_results.items():
+                                                    _eyk = round(label_to_years(_pe), 4)
+                                                    _tyk = round(label_to_years(_pt), 4)
+                                                    if _v.get("pin_vp") and _v.get("pin_Kp"):
+                                                        _pin_map[f"{_eyk}|{_tyk}|{round(_v['pin_Kp'],5)}"] = _v["pin_vp"]
+                                                    if _v.get("pin_vr") and _v.get("pin_Kr"):
+                                                        _pin_map[f"{_eyk}|{_tyk}|{round(_v['pin_Kr'],5)}"] = _v["pin_vr"]
                                                 st.session_state["_sdr_sabr_blended"] = {
                                                     "rho_rec":   _df_to_rec(_new_rho_df),
                                                     "nu_rec":    _df_to_rec(_new_nu_df),
                                                     "alpha_rec": _df_to_rec(_new_alpha_df),
                                                     "fit_rows": _fit_rows, "show_dr": _show_dr, "show_dn": _show_dn,
                                                     "n_buckets": len(_fit_results), "blend_w": _blend_w,
+                                                    "pin_map": _pin_map,
                                                 }
                                                 st.rerun(scope="app")  # rerun so preview renders outside button block
 
@@ -16816,9 +16856,10 @@ def swaptions_tab(vol_mode: str):
             sabr = get_sabr_params_from_matrices(a, b, r, n, _sabr_expiry_lbl, tenor_y)
             if vol_mode.startswith("Normal"):
                 if sabr and sabr.get("alpha", 0) > 0:
-                    return sabr_normal_vol_smile(
+                    return smile_vol_pinned(
                         fwd_pct/100.0, k_pct/100.0, _T_sabr,
-                        sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"])
+                        sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"],
+                        _T_sabr, tenor_y)
                 else:
                     return atm_val / 10000.0
             else:
@@ -21773,10 +21814,11 @@ The adjustment is always **positive** (CMS forward rate > standard forward rate)
                             params = get_sabr_params_from_matrices(_sabr_a, _sabr_b, _sabr_r, _sabr_n, exp_lbl_match, T_sw_)
                             if params and T_exp_ > 0.01:
                                 try:
-                                    smile_vol = sabr_normal_vol_smile(
+                                    smile_vol = smile_vol_pinned(
                                         F_, K_, T_exp_,
                                         params["alpha"], params["beta"],
-                                        params["rho"], params["nu"])
+                                        params["rho"], params["nu"],
+                                        T_exp_, T_sw_)
                                     if smile_vol > 0:
                                         return smile_vol * 10000.0  # convert to bp
                                 except Exception:
