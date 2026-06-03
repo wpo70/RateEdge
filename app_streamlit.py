@@ -7899,17 +7899,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _ratio_by_key.setdefault(_key, _ratio)
                             _hpct = f" {_ratio*100:.0f}%" if _ratio else ""
                             _rr["_hedge_pct"] = f"{_ratio*100:.0f}%" if _ratio else ""
-                            # Check for a manual override on this R/R; if set to R/R,
-                            # write the user's format directly here (atomic with the
-                            # tag) so nothing downstream can revert it.
-                            _ov_now = st.session_state.get("_sdr_type_overrides", {}).get(_ovr_key(_rr))
-                            if _ov_now == "R/R":
-                                _el = _rr.get("Opt Expiry",""); _tl = _rr.get("Swp Tenor","")
-                                _rr["Type"] = f"🟠 {_el} {_tl} R/R{_hpct} {_tag}".strip()
-                            elif _ov_now == "Strangle":
-                                _rr["Type"] = f"🟠 Strangle {_tag}".strip()
-                            else:
-                                _rr["Type"]  = f"{_rr.get('Type','')} {_tag}".replace("⚠️ poss. R/R", "R/R")
+                            _rr["Type"]  = f"{_rr.get('Type','')} {_tag}".replace("⚠️ poss. R/R", "R/R")
                             _sd["Type"]  = f"🔵 Hedge {_tag}{_hpct}"
                         else:
                             _rr["Type"] = _rr.get("Type", "").replace("⚠️ poss. R/R", "R/R (outright)")
@@ -7923,25 +7913,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 # outright (unlinked) R/R rows and Strangle/Hide overrides.
                 import re as _re_ovr
                 _type_overrides = st.session_state.setdefault("_sdr_type_overrides", {})
+                # NOTE: label overrides are applied at the DISPLAY layer (on the editor
+                # dataframe by row position), not here — this avoids the linker/key
+                # coupling that kept reverting the Type. We only stamp keys below.
                 for _row in _all_trades:
-                    _ovr = _type_overrides.get(_ovr_key(_row))
-                    if not _ovr:
-                        continue
-                    _base = _row.get("Type", "")
-                    # strip any package tag suffix to preserve it
-                    _tag_m = _re_ovr.search(r"(\s*\[P\d+\].*)$", _base)
-                    _suffix = _tag_m.group(1) if _tag_m else ""
-                    if _ovr == "R/R":
-                        _hp = _row.get("_hedge_pct", "")
-                        _exp_l = _row.get("Opt Expiry", ""); _ten_l = _row.get("Swp Tenor", "")
-                        _hp_str = f" {_hp}" if _hp else ""
-                        _row["Type"] = f"🟠 {_exp_l} {_ten_l} R/R{_hp_str}".strip() + _suffix
-                    elif _ovr == "Strangle":
-                        _row["Type"] = "🟠 Strangle" + _suffix
-                    elif _ovr == "Hide":
-                        _row["_hidden"] = True
-                # Drop hidden rows
-                _all_trades = [_r for _r in _all_trades if not _r.get("_hidden")]
+                    pass
 
                 # Stamp each row with its override key so it survives the sort and
                 # aligns the data_editor rows back to the right trade. (Previously
@@ -7957,6 +7933,34 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     # (string sort gives "01-Apr" before "31-Mar" alphabetically)
                     _sort_col = "_time_dt" if "_time_dt" in _all_df.columns else _time_col
                     _all_df = _all_df.sort_values(_sort_col, ascending=False, na_position="last").reset_index(drop=True)
+
+                    # ── Apply manual label overrides ONCE here, on _all_df, by row.
+                    # Everything downstream (on-screen editor, Excel export, broker
+                    # breakdown) inherits the corrected Type / hidden rows. Single
+                    # point — no linker coupling, no double application.
+                    import re as _re_ovapp
+                    if "_ovrkey" in _all_df.columns:
+                        _drop_idx = []
+                        for _i in range(len(_all_df)):
+                            _k = _all_df.iloc[_i]["_ovrkey"]
+                            _ov = _type_overrides.get(_k)
+                            if not _ov:
+                                continue
+                            if _ov == "Hide":
+                                _drop_idx.append(_i); continue
+                            _ty = str(_all_df.iloc[_i]["Type"])
+                            _tagm = _re_ovapp.search(r"(\s*\[P\d+\].*)$", _ty)
+                            _suf = _tagm.group(1) if _tagm else ""
+                            if _ov == "R/R":
+                                _hp = str(_all_df.iloc[_i].get("_hedge_pct", "") or "")
+                                _el = _all_df.iloc[_i].get("Opt Expiry", "")
+                                _tl = _all_df.iloc[_i].get("Swp Tenor", "")
+                                _hps = f" {_hp}" if _hp else ""
+                                _all_df.iat[_i, _all_df.columns.get_loc("Type")] = f"🟠 {_el} {_tl} R/R{_hps}".strip() + _suf
+                            elif _ov == "Strangle":
+                                _all_df.iat[_i, _all_df.columns.get_loc("Type")] = "🟠 Strangle" + _suf
+                        if _drop_idx:
+                            _all_df = _all_df.drop(index=_drop_idx).reset_index(drop=True)
 
                     # v1105o: build CSV with broker % breakdown appended at the bottom.
                     # Uses hidden _notional_num column for numeric notional aggregation,
@@ -8207,16 +8211,12 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     st.rerun(scope="app")
 
                     # end Price This expander
-                    # ── Main blotter as interactive editor with inline Label selector ──
-                    # The "Label" dropdown on each row overrides the auto-classified
-                    # Type (Auto/R/R/Strangle/Hide). Edits persist to _type_overrides
-                    # (keyed by trade signature) and feed both the table and the
-                    # download, so exporting reflects your label choices.
+                    # ── Main blotter editor with inline Label selector ──
+                    # Overrides are already applied to _all_df upstream (Type fixed,
+                    # hidden rows dropped). Here we just add the Label dropdown and
+                    # capture changes.
                     _ed_df = _all_df_display.copy()
-                    # Build the label-choice column and the aligned key list FROM THE
-                    # SORTED df (same order the editor shows), so edits map back to the
-                    # correct trade.
-                    _ovr_keys_list = list(_all_df["_ovrkey"]) if "_ovrkey" in _all_df.columns else [_ovr_key(_r) for _r in _all_trades]
+                    _ovr_keys_list = list(_all_df["_ovrkey"]) if "_ovrkey" in _all_df.columns else [""] * len(_ed_df)
                     _label_col = [_type_overrides.get(_k, "Auto") for _k in _ovr_keys_list]
                     _ed_df.insert(0, "Label", _label_col)
                     # Column order: Time | Label | CCY | Type | rest
@@ -8231,15 +8231,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         disabled=[c for c in _ed_df.columns if c != "Label"],
                         column_config={
                             "Label": st.column_config.SelectboxColumn(
-                                "Label", help="Override the trade label; Hide removes it from the report & download.",
+                                "Label", help="Lock the label; Hide removes the row from report & download.",
                                 options=["Auto", "R/R", "Strangle", "Hide"], required=True, width="small"),
                             **{c: st.column_config.Column(width="small")
                                for c in _ed_df.columns if c != "Label"},
                         })
-                    # Detect edits by comparing the returned editor df's Label column
-                    # to the labels we sent in. This is the most robust method —
-                    # edited_rows in session_state can be empty/stale depending on
-                    # widget lifecycle.
                     _changed = False
                     try:
                         _new_labels = list(_edited["Label"])
@@ -8259,8 +8255,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _changed = True
                     if _changed:
                         st.rerun()
-                    st.caption("Straddle prem deduped for all brokers except DWSF (report full straddle prem on each leg). "
-                               "DWSF strikes normalised (÷100). Use the **Label** column to lock R/R / Strangle or Hide a row — the download follows your choices.")
+                    st.caption("Use the **Label** column to lock R/R / Strangle or Hide a row — the report and download follow your choices.")
 
                     with st.expander("Notional by Product Type", expanded=False):
                         _type_summary = []
