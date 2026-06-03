@@ -8093,27 +8093,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             "Cap":"Payer","Floor":"Receiver",
                         }
                         st.markdown("**Click to price a trade in the Swaptions pricer:**")
-                        st.caption("Use the label dropdown to lock an ambiguous trade as Strangle or R/R, or Hide it.")
                         with st.container(height=420, border=False):
                             for _ri, _row in enumerate(_all_trades):
-                                _rc1, _rc2, _rc3, _rc4, _rc5, _rc6, _rc7 = st.columns([1.1, 0.7, 0.8, 0.8, 1.1, 0.9, 0.8])
+                                _rc1, _rc2, _rc3, _rc4, _rc5, _rc7 = st.columns([1.2, 0.8, 0.8, 0.8, 1.2, 0.8])
                                 _rc1.markdown(f"<small>{_row.get(_time_col,'—')}</small>", unsafe_allow_html=True)
                                 _rc2.markdown(f"<small>{_row.get('Type','').replace('🔵 ','').replace('🟤 ','').replace('🟠 ','').replace('🟣 ','')}</small>", unsafe_allow_html=True)
                                 _rc3.markdown(f"<small>{_row.get('CCY','—')} {_row.get('Opt Expiry','—')}×{_row.get('Swp Tenor','—')}</small>", unsafe_allow_html=True)
                                 _rc4.markdown(f"<small>{_row.get('Strike','—')}</small>", unsafe_allow_html=True)
                                 _rc5.markdown(f"<small>{_row.get('Notional','—')} | {_row.get('Platform','—')}</small>", unsafe_allow_html=True)
-                                # ── Manual label override dropdown ──
-                                _ok = _ovr_key(_row)
-                                _cur_ovr = _type_overrides.get(_ok, "Auto")
-                                _ovr_choice = _rc6.selectbox(
-                                    "label", ["Auto", "R/R", "Strangle", "Hide"],
-                                    index=["Auto", "R/R", "Strangle", "Hide"].index(_cur_ovr) if _cur_ovr in ("Auto","R/R","Strangle","Hide") else 0,
-                                    key=f"_ovr_sel_{_ri}", label_visibility="collapsed")
-                                if _ovr_choice == "Auto":
-                                    _type_overrides.pop(_ok, None)
-                                elif _type_overrides.get(_ok) != _ovr_choice:
-                                    _type_overrides[_ok] = _ovr_choice
-                                    st.rerun()
                                 if _rc7.button("Price →", key=f"_price_this_{_ri}", use_container_width=True):
                                     _exp_raw = _row.get("Opt Expiry","")
                                     _ten_raw = _row.get("Swp Tenor","")
@@ -8142,12 +8129,49 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     st.rerun(scope="app")
 
                     # end Price This expander
-                    st.dataframe(_all_df_display, hide_index=True, use_container_width=True,
-                                 height=min(60 + len(_all_df_display) * 35, 700),
-                                 column_config={c: st.column_config.Column(width="small")
-                                                for c in _all_df_display.columns})
+                    # ── Main blotter as interactive editor with inline Label selector ──
+                    # The "Label" dropdown on each row overrides the auto-classified
+                    # Type (Auto/R/R/Strangle/Hide). Edits persist to _type_overrides
+                    # (keyed by trade signature) and feed both the table and the
+                    # download, so exporting reflects your label choices.
+                    _ed_df = _all_df_display.copy()
+                    # Build the current label-choice column from existing overrides.
+                    _ovr_keys_list = [_ovr_key(_r) for _r in _all_trades]
+                    _label_col = []
+                    for _k in _ovr_keys_list:
+                        _label_col.append(_type_overrides.get(_k, "Auto"))
+                    _ed_df.insert(0, "Label", _label_col)
+
+                    _edited = st.data_editor(
+                        _ed_df, hide_index=True, use_container_width=True,
+                        height=min(60 + len(_ed_df) * 35, 700),
+                        key="_sdr_blotter_editor",
+                        disabled=[c for c in _ed_df.columns if c != "Label"],
+                        column_config={
+                            "Label": st.column_config.SelectboxColumn(
+                                "Label", help="Override the trade label; Hide removes it from the report & download.",
+                                options=["Auto", "R/R", "Strangle", "Hide"], required=True, width="small"),
+                            **{c: st.column_config.Column(width="small")
+                               for c in _ed_df.columns if c != "Label"},
+                        })
+                    # Apply edits back to overrides; rerun if anything changed.
+                    _changed = False
+                    for _idx, _k in enumerate(_ovr_keys_list):
+                        try:
+                            _new_lbl = _edited.iloc[_idx]["Label"]
+                        except Exception:
+                            continue
+                        _prev = _type_overrides.get(_k, "Auto")
+                        if _new_lbl != _prev:
+                            if _new_lbl == "Auto":
+                                _type_overrides.pop(_k, None)
+                            else:
+                                _type_overrides[_k] = _new_lbl
+                            _changed = True
+                    if _changed:
+                        st.rerun()
                     st.caption("Straddle prem deduped for all brokers except DWSF (report full straddle prem on each leg). "
-                               "DWSF strikes normalised (÷100).")
+                               "DWSF strikes normalised (÷100). Use the **Label** column to lock R/R / Strangle or Hide a row — the download follows your choices.")
 
                     with st.expander("Notional by Product Type", expanded=False):
                         _type_summary = []
