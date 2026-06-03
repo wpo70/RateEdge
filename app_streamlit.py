@@ -7754,6 +7754,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 # Combined display
                 _all_trades = _paired_rows + _single_rows + _exo_rows
 
+                def _ovr_key(_r):
+                    return "|".join(str(_r.get(_k, "")) for _k in
+                        ("Time", "CCY", "Opt Expiry", "Swp Tenor", "Strike", "Platform"))
+
                 # ── R/R + delta-hedge package linking ───────────────────────────────
                 # A traded risk-reversal (Strangle flagged poss. R/R) is often printed
                 # with a synthetic-straddle delta hedge at the same expiry×tenor, same
@@ -7893,9 +7897,19 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _ratio = (_sd_not / _rr_not) if _rr_not > 0 else None
                             if _ratio and _rwidth is not None:
                                 _ratio_by_key.setdefault(_key, _ratio)
-                            _rr["Type"]  = f"{_rr.get('Type','')} {_tag}".replace("⚠️ poss. R/R", "R/R")
                             _hpct = f" {_ratio*100:.0f}%" if _ratio else ""
                             _rr["_hedge_pct"] = f"{_ratio*100:.0f}%" if _ratio else ""
+                            # Check for a manual override on this R/R; if set to R/R,
+                            # write the user's format directly here (atomic with the
+                            # tag) so nothing downstream can revert it.
+                            _ov_now = st.session_state.get("_sdr_type_overrides", {}).get(_ovr_key(_rr))
+                            if _ov_now == "R/R":
+                                _el = _rr.get("Opt Expiry",""); _tl = _rr.get("Swp Tenor","")
+                                _rr["Type"] = f"🟠 {_el} {_tl} R/R{_hpct} {_tag}".strip()
+                            elif _ov_now == "Strangle":
+                                _rr["Type"] = f"🟠 Strangle {_tag}".strip()
+                            else:
+                                _rr["Type"]  = f"{_rr.get('Type','')} {_tag}".replace("⚠️ poss. R/R", "R/R")
                             _sd["Type"]  = f"🔵 Hedge {_tag}{_hpct}"
                         else:
                             _rr["Type"] = _rr.get("Type", "").replace("⚠️ poss. R/R", "R/R (outright)")
@@ -7903,13 +7917,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     pass
 
                 # ── Manual per-trade label override ─────────────────────────────────
-                # User can lock an ambiguous trade as Strangle or R/R (set via the
-                # dropdowns in the Price-This panel). Keyed by a stable trade
-                # signature so the choice survives refreshes. Applied here, after
-                # auto-tagging, so the manual choice wins.
-                def _ovr_key(_r):
-                    return "|".join(str(_r.get(_k, "")) for _k in
-                        ("Time", "CCY", "Opt Expiry", "Swp Tenor", "Strike", "Platform"))
+                # User can lock an ambiguous trade as Strangle or R/R. Keyed by a
+                # stable trade signature so the choice survives refreshes. The R/R
+                # link case is handled inside the linker (above); this pass handles
+                # outright (unlinked) R/R rows and Strangle/Hide overrides.
                 import re as _re_ovr
                 _type_overrides = st.session_state.setdefault("_sdr_type_overrides", {})
                 for _row in _all_trades:
