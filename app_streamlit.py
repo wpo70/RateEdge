@@ -7446,7 +7446,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0306o"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0306p"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -7827,6 +7827,41 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _ratio_by_key = {}   # (platform, exp, tenor, width) -> hedge ratio, for NaN carry
                     _pkg_n = 0
 
+                    # Reconstruct a NaN-notional R/R from the bp-reference table (a
+                    # same-strike R/R leg's premium-bp seen elsewhere today). Runs for
+                    # ALL R/Rs — linked OR outright — so an unhedged NaN R/R still gets
+                    # its notional. Returns reconstructed notional or None.
+                    def _reconstruct_rr_notional(_rr):
+                        _bk = _rr.get("Platform"); _oe = _rr.get("_opt_raw"); _tn = _rr.get("_ten_raw")
+                        _ps = _rr.get("_p_strike"); _rs = _rr.get("_r_strike")
+                        _pp = _rr.get("_p_prem_raw") or 0; _rp = _rr.get("_r_prem_raw") or 0
+                        def _lookup(_strike):
+                            if _strike is None: return None
+                            _b = None; _bg = 0.20
+                            for (_kb, _ke, _kt, _ks), _bp in _bp_ref_tbl.items():
+                                if _kb == _bk and _ke == _oe and _kt == _tn:
+                                    _g = abs(_ks - _strike)
+                                    if _g <= _bg:
+                                        _bg = _g; _b = _bp
+                            return _b
+                        _rfp = _lookup(_ps); _rfr = _lookup(_rs)
+                        _rp_n = _pp / (_rfp/1e4) if (_rfp and _rfp > 0 and _pp > 0) else None
+                        _rr_n = _rp / (_rfr/1e4) if (_rfr and _rfr > 0 and _rp > 0) else None
+                        if _rp_n and _rr_n: return (_rp_n + _rr_n) / 2.0
+                        return _rp_n or _rr_n
+
+                    def _backfill_bp(_rr, _recon):
+                        _pp2 = _rr.get("_p_prem_raw") or 0; _rp2 = _rr.get("_r_prem_raw") or 0
+                        _comb2 = _pp2 + _rp2; _net2 = abs(_pp2 - _rp2)
+                        _rr["Notional"] = f"{_recon/1e6:.0f}M*"
+                        _rr["P Prem BP"]        = f"{_pp2/_recon*1e4:.2f}" if _pp2 else "—"
+                        _rr["R Prem BP"]        = f"{_rp2/_recon*1e4:.2f}" if _rp2 else "—"
+                        _rr["Nett Prem BP"]     = f"{_comb2/_recon*1e4:.2f}" if _comb2 else "—"
+                        _rr["Nett Leg BP (R/R)"]= f"{_net2/_recon*1e4:.2f}" if _net2 else "—"
+                        _prem_str = _rr.get("Premium", "")
+                        if _prem_str and "net" not in _prem_str:
+                            _rr["Premium"] = f"{_prem_str}  net {_net2/_recon*1e4:.1f}bp"
+
                     for _rr in _rrs:
                         _rt = _rr.get("_time_dt")
                         if _rt is None:
@@ -7850,60 +7885,12 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _sd_not = _notional_to_num(_sd.get("Notional"))
                             _key = (_rplat, _rexp, _rten, _rwidth)
                             if _rr_not <= 0:
-                                # Unified NaN reconstruction (works for ALL brokers):
-                                # notional = leg_premium / (ref_bp/10000), where ref_bp
-                                # is a same-strike R/R leg's premium-bp seen elsewhere
-                                # today. Cross-check payer & receiver legs agree.
-                                _recon_p = _recon_r = None
-                                _bk = _rr.get("Platform"); _oe = _rr.get("_opt_raw", _rexp); _tn = _rr.get("_ten_raw", _rten)
-                                _ps = _rr.get("_p_strike"); _rs = _rr.get("_r_strike")
-                                _pp = _rr.get("_p_prem_raw") or 0; _rp = _rr.get("_r_prem_raw") or 0
-                                # Tolerant lookup: match the closest reference strike within
-                                # ±0.20% for the same broker/expiry/tenor. R/R wings drift a
-                                # bp or two between prints (e.g. 5.45 vs 5.46), so an exact
-                                # match misses — find the nearest instead.
-                                def _ref_bp_lookup(_strike):
-                                    if _strike is None:
-                                        return None
-                                    _best = None; _best_gap = 0.20
-                                    for (_kb, _ke, _kt, _ks), _bp in _bp_ref_tbl.items():
-                                        if _kb == _bk and _ke == _oe and _kt == _tn:
-                                            _g = abs(_ks - _strike)
-                                            if _g <= _best_gap:
-                                                _best_gap = _g; _best = _bp
-                                    return _best
-                                _ref_p = _ref_bp_lookup(_ps)
-                                _ref_r = _ref_bp_lookup(_rs)
-                                if _ref_p and _ref_p > 0 and _pp > 0:
-                                    _recon_p = _pp / (_ref_p / 1e4)
-                                if _ref_r and _ref_r > 0 and _rp > 0:
-                                    _recon_r = _rp / (_ref_r / 1e4)
-                                # Prefer cross-checked value; if both present & agree (±5%) use mean
-                                _recon = None
-                                if _recon_p and _recon_r:
-                                    _recon = (_recon_p + _recon_r) / 2.0
-                                elif _recon_p or _recon_r:
-                                    _recon = _recon_p or _recon_r
-                                # Fallback: legacy hedge-ratio method if bp-reference missed
+                                _recon = _reconstruct_rr_notional(_rr)
+                                # Fallback: legacy hedge-ratio if bp-reference missed
                                 if (not _recon or _recon <= 0) and _sd_not > 0 and _key in _ratio_by_key and _ratio_by_key[_key] > 0:
                                     _recon = _sd_not / _ratio_by_key[_key]
                                 if _recon and _recon > 0:
-                                    _rr["Notional"] = f"{_recon/1e6:.0f}M*"
-                                    _rr_not = _recon
-                                    # Backfill the bp fields now that we have a notional.
-                                    # They were "—" because notional was NaN at pairing time.
-                                    _pp2 = _rr.get("_p_prem_raw") or 0
-                                    _rp2 = _rr.get("_r_prem_raw") or 0
-                                    _comb2 = _pp2 + _rp2
-                                    _net2  = abs(_pp2 - _rp2)
-                                    _rr["P Prem BP"]        = f"{_pp2/_recon*1e4:.2f}" if _pp2 else "—"
-                                    _rr["R Prem BP"]        = f"{_rp2/_recon*1e4:.2f}" if _rp2 else "—"
-                                    _rr["Nett Prem BP"]     = f"{_comb2/_recon*1e4:.2f}" if _comb2 else "—"
-                                    _rr["Nett Leg BP (R/R)"]= f"{_net2/_recon*1e4:.2f}" if _net2 else "—"
-                                    # Add net bp into the Premium string if not already there.
-                                    _prem_str = _rr.get("Premium", "")
-                                    if _prem_str and "net" not in _prem_str:
-                                        _rr["Premium"] = f"{_prem_str}  net {_net2/_recon*1e4:.1f}bp"
+                                    _backfill_bp(_rr, _recon); _rr_not = _recon
                             _ratio = (_sd_not / _rr_not) if _rr_not > 0 else None
                             if _ratio and _rwidth is not None:
                                 _ratio_by_key.setdefault(_key, _ratio)
@@ -7912,6 +7899,12 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _rr["Type"]  = f"{_rr.get('Type','')} {_tag}".replace("⚠️ poss. R/R", "R/R")
                             _sd["Type"]  = f"🔵 Hedge {_tag}{_hpct}"
                         else:
+                            # Outright R/R (no hedge straddle found) — still reconstruct
+                            # a NaN notional from the bp-reference table.
+                            if _rr_not <= 0:
+                                _recon = _reconstruct_rr_notional(_rr)
+                                if _recon and _recon > 0:
+                                    _backfill_bp(_rr, _recon)
                             _rr["Type"] = _rr.get("Type", "").replace("⚠️ poss. R/R", "R/R (outright)")
                 except Exception:
                     pass
