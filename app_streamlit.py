@@ -7525,25 +7525,34 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _match = _match[_match["swp_tenor"].isin(["","—","NA","None",None]) | _match["swp_tenor"].isna()]
 
                         if not _match.empty and _time_p is not pd.NaT:
-                            # Prefer an EXACT same-strike receiver (straddle partner)
-                            # with strong priority; only if none exists fall back to the
-                            # nearest strike. This stops an R/R payer (e.g. 5.46) from
-                            # stealing a straddle-hedge leg (4.46) — the two 4.46 legs
-                            # must pair together as the straddle first, leaving 5.46/3.46
-                            # to form the R/R.
+                            # GROUPING IS PRIMARY, TIME IS SECONDARY. Candidates already
+                            # share expiry/tenor/ccy. Rank by: exact same-strike first
+                            # (straddle partner), then nearest strike, then closest in
+                            # time. Time only breaks ties between equally-good strikes —
+                            # it never rejects an otherwise-good grouping. A generous
+                            # same-day window guards against linking unrelated next-day
+                            # prints only.
                             try:
                                 _sp_arr = _match["strike_pct"].astype(float)
                                 _gap = (_sp_arr - _s_p).abs()
-                                # rank: 0 if same-strike (<0.01), else 1; then by gap
-                                _same = (_gap < 0.01).astype(int)  # 1 if same strike
+                                _same = (_gap < 0.01).astype(int)
+                                _tsec = _match.apply(lambda _row: abs((
+                                    _time_p - pd.to_datetime(_row.get("execution_timestamp") or _row.get("event_timestamp"), errors="coerce")
+                                ).total_seconds()) if pd.notna(pd.to_datetime(_row.get("execution_timestamp") or _row.get("event_timestamp"), errors="coerce")) else 9e9, axis=1)
                                 _match = _match.assign(
-                                    _is_same=_same, _strike_gap=_gap
-                                ).sort_values(["_is_same", "_strike_gap"], ascending=[False, True])
+                                    _is_same=_same, _strike_gap=_gap, _tsec=_tsec
+                                ).sort_values(["_is_same", "_strike_gap", "_tsec"],
+                                              ascending=[False, True, True])
                             except Exception:
                                 pass
                             for _ri, _r in _match.iterrows():
                                 _time_r = pd.to_datetime(_r.get("execution_timestamp") or _r.get("event_timestamp"), errors="coerce")
-                                _window = 1200 if not (_t_p and _t_p not in ("—","NA","None","")) else 300
+                                # Generous window: 10 min. Same-day package legs can
+                                # print a few minutes apart (the ICAP 3M10Y case), but
+                                # this still won't cross-link genuinely separate trades
+                                # because strike-match ranking picks the right partner
+                                # first and each leg is consumed once.
+                                _window = 600
                                 if _time_r is not pd.NaT and abs((_time_p - _time_r).total_seconds()) <= _window:
                                     _matched_p_ids.add(_pi)
                                     _matched_r_ids.add(_ri)
@@ -7830,7 +7839,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             if (_sd.get("Platform") == _rplat and _sd.get("Opt Expiry") == _rexp
                                     and _sd.get("Swp Tenor") == _rten and _sd.get("_time_dt") is not None):
                                 _gap = abs((_sd["_time_dt"] - _rt).total_seconds())
-                                if _gap <= 300 and (_best_dt is None or _gap < _best_dt):
+                                if _gap <= 600 and (_best_dt is None or _gap < _best_dt):
                                     _best = _i; _best_dt = _gap
                         _rr_not = _notional_to_num(_rr.get("Notional"))
                         if _best is not None:
