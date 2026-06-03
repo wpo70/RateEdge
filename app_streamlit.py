@@ -7446,7 +7446,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0306p"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0306q"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -8220,8 +8220,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     # Use real st.selectbox widgets instead — they always return their
                     # value. Only show controls for ambiguous rows (Strangle/R/R/Hedge).
                     _ovr_keys_list = list(_all_df["_ovrkey"]) if "_ovrkey" in _all_df.columns else [""] * len(_all_df_display)
-                    with st.expander("🏷️ Set trade labels (R/R / Strangle / Hide)", expanded=False):
+                    with st.expander("🏷️ Set trade labels (R/R / Strangle / Hide)", expanded=True):
                         st.caption("Override the auto-label for any trade. Changes apply to the report and download.")
+                        st.caption(f"🔧 stored overrides right now: {dict(_type_overrides)}")
                         for _i in range(len(_all_df_display)):
                             _k = _ovr_keys_list[_i] if _i < len(_ovr_keys_list) else ""
                             _ty_now = str(_all_df_display.iloc[_i]["Type"])
