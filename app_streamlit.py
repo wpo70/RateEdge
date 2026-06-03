@@ -7987,7 +7987,16 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     if "_time_dt" in _all_df_excel.columns:
                         _all_df_excel["Time"] = _all_df_excel["_time_dt"]
                         _all_df_excel = _all_df_excel.drop(columns=["_time_dt"])
+                    # Add the Label column (from overrides) before dropping internals,
+                    # so the export matches the on-screen blotter.
+                    if "_ovrkey" in _all_df_excel.columns:
+                        _all_df_excel["Label"] = _all_df_excel["_ovrkey"].apply(
+                            lambda _k: _type_overrides.get(_k, "Auto"))
                     _all_df_excel = _all_df_excel.drop(columns=_INTERNAL_COLS, errors="ignore")
+                    # Same column order as the blotter: Time | Label | CCY | Type | rest
+                    _xl_front = [c for c in ["Time", "Label", "CCY", "Type"] if c in _all_df_excel.columns]
+                    _xl_rest  = [c for c in _all_df_excel.columns if c not in _xl_front]
+                    _all_df_excel = _all_df_excel[_xl_front + _xl_rest]
 
                     # Assemble CSV: trades table → blank → broker breakdown
                     # v1205f: ship as XLSX (not CSV) so Excel column widths auto-fit on open.
@@ -8227,20 +8236,20 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             **{c: st.column_config.Column(width="small")
                                for c in _ed_df.columns if c != "Label"},
                         })
-                    # Read the edit delta directly from the editor's widget state.
-                    # (More reliable than diffing the returned df, and a stable key
-                    # means the edit is never dropped by a widget re-creation.)
+                    # Detect edits by comparing the returned editor df's Label column
+                    # to the labels we sent in. This is the most robust method —
+                    # edited_rows in session_state can be empty/stale depending on
+                    # widget lifecycle.
                     _changed = False
-                    _editor_state = st.session_state.get("_sdr_blotter_editor", {})
-                    _edited_rows = _editor_state.get("edited_rows", {}) if isinstance(_editor_state, dict) else {}
-                    for _ridx, _delta in _edited_rows.items():
-                        if "Label" not in _delta:
-                            continue
+                    try:
+                        _new_labels = list(_edited["Label"])
+                    except Exception:
+                        _new_labels = _label_col
+                    for _idx, _k in enumerate(_ovr_keys_list):
                         try:
-                            _k = _ovr_keys_list[int(_ridx)]
+                            _new_lbl = _new_labels[_idx]
                         except Exception:
                             continue
-                        _new_lbl = _delta["Label"]
                         _prev = _type_overrides.get(_k, "Auto")
                         if _new_lbl != _prev:
                             if _new_lbl == "Auto":
