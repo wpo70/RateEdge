@@ -7446,7 +7446,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0306u"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0306w"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -7649,6 +7649,15 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     else:
                                         _opt_exp_disp = _e_p
                                         _swp_ten_disp = _t_p if _t_p and _t_p not in ("—","NA","None","") else "—"
+                                        # For sub-1M expiries, show the actual expiry DATE
+                                        # (e.g. "02-Jun") instead of "<1M" — gives colour on
+                                        # where the very short end / EM is trading.
+                                        if str(_e_p).lstrip("<>~≤≥ ").strip().lower() in ("1m",) and str(_e_p).strip().startswith("<"):
+                                            try:
+                                                _xd = pd.to_datetime(_p.get("expiration_date")).date()
+                                                _opt_exp_disp = _xd.strftime("%d-%b")
+                                            except Exception:
+                                                _opt_exp_disp = _e_p
 
                                     _paired_rows.append({
                                         "Type": _ptype,
@@ -7693,12 +7702,19 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _pc_label = "🟩 Cap"
                             elif _ot == "PUT":
                                 _pc_label = "🟥 Floor"
+                        _s_opt_disp = str(_s_row.get("opt_tenor", "—"))
+                        if _s_opt_disp.lstrip("<>~≤≥ ").strip().lower() == "1m" and _s_opt_disp.strip().startswith("<"):
+                            try:
+                                _sxd = pd.to_datetime(_s_row.get("expiration_date")).date()
+                                _s_opt_disp = _sxd.strftime("%d-%b")
+                            except Exception:
+                                pass
                         _single_rows.append({
                             "Type": _pc_label,
                             _time_col: _s_time.strftime("%d-%b %H:%M") if _s_time is not pd.NaT else "—",
                             "_time_dt": _s_time.to_pydatetime().replace(tzinfo=None) if _s_time is not pd.NaT else None,
                             "CCY": str(_s_row.get("notional_ccy", "")),
-                            "Opt Expiry": str(_s_row.get("opt_tenor", "—")),
+                            "Opt Expiry": _s_opt_disp,
                             "Swp Tenor": _s_swp if _s_swp and _s_swp not in ("—","NA","None","") else "—",
                             "Strike": f"{float(_s_row.get('strike_pct') or 0):.5f}%" if pd.notna(_s_row.get("strike_pct")) else "—",
                             "Notional": _fmt_notional(_s_not),
@@ -7960,11 +7976,22 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _tagm = _re_ovapp.search(r"(\s*\[P\d+\].*)$", _ty)
                             _suf = _tagm.group(1) if _tagm else ""
                             if _ov == "R/R":
-                                _hp = str(_all_df.iloc[_i].get("_hedge_pct", "") or "")
+                                _hp = str(_all_df.iloc[_i].get("_hedge_pct", "") or "").replace("%", "")
                                 _el = _all_df.iloc[_i].get("Opt Expiry", "")
                                 _tl = _all_df.iloc[_i].get("Swp Tenor", "")
-                                _hps = f" {_hp}" if _hp else ""
-                                _all_df.iat[_i, _all_df.columns.get_loc("Type")] = f"🟠 {_el} {_tl} R/R{_hps}".strip() + _suf
+                                # Strike width in bp = (payer - receiver) * 100.
+                                _psk = _all_df.iloc[_i].get("_p_strike")
+                                _rsk = _all_df.iloc[_i].get("_r_strike")
+                                _wstr = ""
+                                try:
+                                    if _psk is not None and _rsk is not None:
+                                        _w = abs(round((float(_psk) - float(_rsk)) * 100))
+                                        _wstr = f" {_w}w"
+                                except Exception:
+                                    pass
+                                _hps = f" ({_hp}% Δ)" if _hp else ""
+                                # Voice format: "3Y 10Y 200w R/R (41% Δ)"
+                                _all_df.iat[_i, _all_df.columns.get_loc("Type")] = f"🟠 {_el} {_tl}{_wstr} R/R{_hps}".strip() + _suf
                             elif _ov == "Strangle":
                                 _all_df.iat[_i, _all_df.columns.get_loc("Type")] = "🟠 Strangle" + _suf
                         if _drop_idx:
