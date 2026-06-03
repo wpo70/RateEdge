@@ -7543,7 +7543,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 pass
                             for _ri, _r in _match.iterrows():
                                 _time_r = pd.to_datetime(_r.get("execution_timestamp") or _r.get("event_timestamp"), errors="coerce")
-                                _window = 1200 if not (_t_p and _t_p not in ("—","NA","None","")) else 120
+                                _window = 1200 if not (_t_p and _t_p not in ("—","NA","None","")) else 300
                                 if _time_r is not pd.NaT and abs((_time_p - _time_r).total_seconds()) <= _window:
                                     _matched_p_ids.add(_pi)
                                     _matched_r_ids.add(_ri)
@@ -7759,7 +7759,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 # with a synthetic-straddle delta hedge at the same expiry×tenor, same
                 # broker, within a tight execution window. No package/trade-id exists in
                 # the DTCC public feed, so we link on broker + expiry + tenor + exec time
-                # (±180s). Both rows are KEPT and tagged [P1], [P2]… so they read as one
+                # (±300s). Both rows are KEPT and tagged [P1], [P2]… so they read as one
                 # package; the hedge % (straddle_notional / RR_notional) is shown on the
                 # straddle (delta) row. NaN-notional R/Rs are reconstructed from a
                 # same-day / same-broker / same-strike-width package's hedge ratio
@@ -7821,7 +7821,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             if (_sd.get("Platform") == _rplat and _sd.get("Opt Expiry") == _rexp
                                     and _sd.get("Swp Tenor") == _rten and _sd.get("_time_dt") is not None):
                                 _gap = abs((_sd["_time_dt"] - _rt).total_seconds())
-                                if _gap <= 180 and (_best_dt is None or _gap < _best_dt):
+                                if _gap <= 300 and (_best_dt is None or _gap < _best_dt):
                                     _best = _i; _best_dt = _gap
                         _rr_not = _notional_to_num(_rr.get("Notional"))
                         if _best is not None:
