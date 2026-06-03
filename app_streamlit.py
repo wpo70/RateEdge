@@ -7800,9 +7800,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _ty = "🟠 Strangle ⚠️ poss. R/R"
                         elif _ty.startswith("🟠 Strangle R/R"):
                             _ty = "🟠 Strangle ⚠️ poss. R/R"
-                        elif _ty.strip().startswith("🟠 R/R"):
-                            # manually-overridden R/R (with or without hedge %) —
-                            # restore so re-linking still finds it and keeps the hedge
+                        elif "R/R" in _ty and not _ty.startswith("🟠 Strangle"):
+                            # manually-overridden R/R in any format (e.g.
+                            # "🟠 3Y 10Y R/R 52%") — restore so re-linking still finds
+                            # it and keeps the hedge link
                             _ty = "🟠 Strangle ⚠️ poss. R/R"
                         _row["Type"] = _ty
 
@@ -7921,8 +7922,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _suffix = _tag_m.group(1) if _tag_m else ""
                     if _ovr == "R/R":
                         _hp = _row.get("_hedge_pct", "")
-                        _hp_str = f" ({_hp})" if _hp else ""
-                        _row["Type"] = "🟠 R/R" + _hp_str + _suffix
+                        _exp_l = _row.get("Opt Expiry", ""); _ten_l = _row.get("Swp Tenor", "")
+                        _hp_str = f" {_hp}" if _hp else ""
+                        _row["Type"] = f"🟠 {_exp_l} {_ten_l} R/R{_hp_str}".strip() + _suffix
                     elif _ovr == "Strangle":
                         _row["Type"] = "🟠 Strangle" + _suffix
                     elif _ovr == "Hide":
@@ -8202,11 +8204,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _rest  = [c for c in _ed_df.columns if c not in _front]
                     _ed_df = _ed_df[_front + _rest]
 
-                    _ovr_sig = str(sorted(_type_overrides.items()))
                     _edited = st.data_editor(
                         _ed_df, hide_index=True, use_container_width=True,
                         height=min(60 + len(_ed_df) * 35, 700),
-                        key=f"_sdr_blotter_editor_{abs(hash(_ovr_sig)) % 100000}",
+                        key="_sdr_blotter_editor",
                         disabled=[c for c in _ed_df.columns if c != "Label"],
                         column_config={
                             "Label": st.column_config.SelectboxColumn(
@@ -8215,13 +8216,20 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             **{c: st.column_config.Column(width="small")
                                for c in _ed_df.columns if c != "Label"},
                         })
-                    # Apply edits back to overrides; rerun if anything changed.
+                    # Read the edit delta directly from the editor's widget state.
+                    # (More reliable than diffing the returned df, and a stable key
+                    # means the edit is never dropped by a widget re-creation.)
                     _changed = False
-                    for _idx, _k in enumerate(_ovr_keys_list):
+                    _editor_state = st.session_state.get("_sdr_blotter_editor", {})
+                    _edited_rows = _editor_state.get("edited_rows", {}) if isinstance(_editor_state, dict) else {}
+                    for _ridx, _delta in _edited_rows.items():
+                        if "Label" not in _delta:
+                            continue
                         try:
-                            _new_lbl = _edited.iloc[_idx]["Label"]
+                            _k = _ovr_keys_list[int(_ridx)]
                         except Exception:
                             continue
+                        _new_lbl = _delta["Label"]
                         _prev = _type_overrides.get(_k, "Auto")
                         if _new_lbl != _prev:
                             if _new_lbl == "Auto":
