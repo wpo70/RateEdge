@@ -7800,6 +7800,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _ty = "🟠 Strangle ⚠️ poss. R/R"
                         elif _ty.startswith("🟠 Strangle R/R"):
                             _ty = "🟠 Strangle ⚠️ poss. R/R"
+                        elif _ty.strip().startswith("🟠 R/R"):
+                            # manually-overridden R/R (with or without hedge %) —
+                            # restore so re-linking still finds it and keeps the hedge
+                            _ty = "🟠 Strangle ⚠️ poss. R/R"
                         _row["Type"] = _ty
 
                     _rrs   = [r for r in _all_trades if "Strangle" in r.get("Type", "") and "poss. R/R" in r.get("Type", "")]
@@ -7890,6 +7894,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _ratio_by_key.setdefault(_key, _ratio)
                             _rr["Type"]  = f"{_rr.get('Type','')} {_tag}".replace("⚠️ poss. R/R", "R/R")
                             _hpct = f" {_ratio*100:.0f}%" if _ratio else ""
+                            _rr["_hedge_pct"] = f"{_ratio*100:.0f}%" if _ratio else ""
                             _sd["Type"]  = f"🔵 Hedge {_tag}{_hpct}"
                         else:
                             _rr["Type"] = _rr.get("Type", "").replace("⚠️ poss. R/R", "R/R (outright)")
@@ -7915,7 +7920,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _tag_m = _re_ovr.search(r"(\s*\[P\d+\].*)$", _base)
                     _suffix = _tag_m.group(1) if _tag_m else ""
                     if _ovr == "R/R":
-                        _row["Type"] = "🟠 R/R" + _suffix
+                        _hp = _row.get("_hedge_pct", "")
+                        _hp_str = f" ({_hp})" if _hp else ""
+                        _row["Type"] = "🟠 R/R" + _hp_str + _suffix
                     elif _ovr == "Strangle":
                         _row["Type"] = "🟠 Strangle" + _suffix
                     elif _ovr == "Hide":
@@ -7959,7 +7966,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     # produce a separate Excel-ready df where Time is a real datetime
                     # so Excel auto-recognises it for filtering/sorting.
                     _INTERNAL_COLS = ["_notional_num", "_time_dt", "_p_strike", "_r_strike",
-                                      "_p_prem_raw", "_r_prem_raw", "_opt_raw", "_ten_raw", "_hidden", "_ovrkey"]
+                                      "_p_prem_raw", "_r_prem_raw", "_opt_raw", "_ten_raw", "_hidden", "_ovrkey", "_hedge_pct"]
                     _all_df_display = _all_df.drop(columns=_INTERNAL_COLS, errors="ignore")
                     if "Nett Leg BP (R/R)" in _all_df_display.columns:
                         _all_df_display["Nett Leg BP (R/R)"] = _all_df_display["Nett Leg BP (R/R)"].fillna("—")
@@ -8190,6 +8197,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _ovr_keys_list = list(_all_df["_ovrkey"]) if "_ovrkey" in _all_df.columns else [_ovr_key(_r) for _r in _all_trades]
                     _label_col = [_type_overrides.get(_k, "Auto") for _k in _ovr_keys_list]
                     _ed_df.insert(0, "Label", _label_col)
+                    # Column order: Time | Label | CCY | Type | rest
+                    _front = [c for c in ["Time", "Label", "CCY", "Type"] if c in _ed_df.columns]
+                    _rest  = [c for c in _ed_df.columns if c not in _front]
+                    _ed_df = _ed_df[_front + _rest]
 
                     _ovr_sig = str(sorted(_type_overrides.items()))
                     _edited = st.data_editor(
