@@ -7446,7 +7446,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0306w"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0306x"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -7709,6 +7709,17 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _s_opt_disp = _sxd.strftime("%d-%b")
                             except Exception:
                                 pass
+                        # Cap/Floor voice-quote label: "2Y 5.5% Cap" / "3Y 0% Flr".
+                        if _pc_label in ("🟩 Cap", "🟥 Floor"):
+                            try:
+                                _cf_k = float(_s_row.get("strike_pct") or 0)
+                                # trim trailing zeros: 5.50000 -> 5.5, 0.00000 -> 0
+                                _cf_kstr = f"{_cf_k:.4f}".rstrip("0").rstrip(".")
+                            except Exception:
+                                _cf_kstr = "?"
+                            _cf_word = "Cap" if _pc_label == "🟩 Cap" else "Flr"
+                            _cf_emoji = "🟩" if _pc_label == "🟩 Cap" else "🟥"
+                            _pc_label = f"{_cf_emoji} {_s_opt_disp} {_cf_kstr}% {_cf_word}"
                         _single_rows.append({
                             "Type": _pc_label,
                             _time_col: _s_time.strftime("%d-%b %H:%M") if _s_time is not pd.NaT else "—",
@@ -8297,7 +8308,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             ("Single Payers", [r for r in _single_rows if "Payer" in r["Type"]]),
                             ("Single Receivers", [r for r in _single_rows if "Receiver" in r["Type"]]),
                             ("Caps", [r for r in _single_rows if "Cap" in r["Type"]]),
-                            ("Floors", [r for r in _single_rows if "Floor" in r["Type"]]),
+                            ("Floors", [r for r in _single_rows if "Floor" in r["Type"] or "Flr" in r["Type"]]),
                             ("Exotics", _exo_rows),
                         ]:
                             if _rows:
