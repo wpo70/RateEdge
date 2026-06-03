@@ -7446,7 +7446,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0306n"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0306o"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -8221,54 +8221,45 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     st.rerun(scope="app")
 
                     # end Price This expander
-                    # ── Main blotter editor with inline Label selector ──
-                    # Overrides are already applied to _all_df upstream (Type fixed,
-                    # hidden rows dropped). Here we just add the Label dropdown and
-                    # capture changes.
-                    _ed_df = _all_df_display.copy()
-                    _ovr_keys_list = list(_all_df["_ovrkey"]) if "_ovrkey" in _all_df.columns else [""] * len(_ed_df)
-                    _label_col = [_type_overrides.get(_k, "Auto") for _k in _ovr_keys_list]
-                    _ed_df.insert(0, "Label", _label_col)
-                    # Column order: Time | Label | CCY | Type | rest
-                    _front = [c for c in ["Time", "Label", "CCY", "Type"] if c in _ed_df.columns]
-                    _rest  = [c for c in _ed_df.columns if c not in _front]
-                    _ed_df = _ed_df[_front + _rest]
+                    # ── Label overrides via reliable per-row selectboxes ──
+                    # data_editor did not surface edits through its returned frame
+                    # (disabled cols + rebuilt df), so the selector never registered.
+                    # Use real st.selectbox widgets instead — they always return their
+                    # value. Only show controls for ambiguous rows (Strangle/R/R/Hedge).
+                    _ovr_keys_list = list(_all_df["_ovrkey"]) if "_ovrkey" in _all_df.columns else [""] * len(_all_df_display)
+                    with st.expander("🏷️ Set trade labels (R/R / Strangle / Hide)", expanded=False):
+                        st.caption("Override the auto-label for any trade. Changes apply to the report and download.")
+                        for _i in range(len(_all_df_display)):
+                            _k = _ovr_keys_list[_i] if _i < len(_ovr_keys_list) else ""
+                            _ty_now = str(_all_df_display.iloc[_i]["Type"])
+                            # Only offer override on strangle/R/R/hedge-ish rows
+                            if not any(_t in _ty_now for _t in ("Strangle", "R/R", "Hedge", "Collar")):
+                                continue
+                            _tm = str(_all_df_display.iloc[_i].get("Time",""))
+                            _ex = str(_all_df_display.iloc[_i].get("Opt Expiry",""))
+                            _tn = str(_all_df_display.iloc[_i].get("Swp Tenor",""))
+                            _pf = str(_all_df_display.iloc[_i].get("Platform",""))
+                            _lc1, _lc2 = st.columns([3, 1])
+                            _lc1.markdown(f"<small>{_tm} · {_ex}×{_tn} · {_ty_now} · {_pf}</small>", unsafe_allow_html=True)
+                            _cur = _type_overrides.get(_k, "Auto")
+                            _opts = ["Auto", "R/R", "Strangle", "Hide"]
+                            _sel = _lc2.selectbox("lbl", _opts,
+                                index=_opts.index(_cur) if _cur in _opts else 0,
+                                key=f"_lblsel_{_i}", label_visibility="collapsed")
+                            if _sel == "Auto" and _k in _type_overrides:
+                                _type_overrides.pop(_k, None); st.rerun()
+                            elif _sel != "Auto" and _type_overrides.get(_k) != _sel:
+                                _type_overrides[_k] = _sel; st.rerun()
 
-                    _edited = st.data_editor(
-                        _ed_df, hide_index=True, use_container_width=True,
-                        height=min(60 + len(_ed_df) * 35, 700),
-                        key="_sdr_blotter_editor",
-                        disabled=[c for c in _ed_df.columns if c != "Label"],
-                        column_config={
-                            "Label": st.column_config.SelectboxColumn(
-                                "Label", help="Lock the label; Hide removes the row from report & download.",
-                                options=["Auto", "R/R", "Strangle", "Hide"], required=True, width="small"),
-                            **{c: st.column_config.Column(width="small")
-                               for c in _ed_df.columns if c != "Label"},
-                        })
-                    _changed = False
-                    try:
-                        _new_labels = list(_edited["Label"])
-                    except Exception as _e_lbl:
-                        _new_labels = _label_col
-                    # TEMP DEBUG — shows what the editor returned vs stored overrides
-                    _dbg_nonauto = [(_i, _new_labels[_i]) for _i in range(len(_new_labels)) if _i < len(_new_labels) and _new_labels[_i] != "Auto"]
-                    st.caption(f"🔧 debug: editor returned non-Auto labels at rows {_dbg_nonauto} | stored overrides: {dict(_type_overrides)}")
-                    for _idx, _k in enumerate(_ovr_keys_list):
-                        try:
-                            _new_lbl = _new_labels[_idx]
-                        except Exception:
-                            continue
-                        _prev = _type_overrides.get(_k, "Auto")
-                        if _new_lbl != _prev:
-                            if _new_lbl == "Auto":
-                                _type_overrides.pop(_k, None)
-                            else:
-                                _type_overrides[_k] = _new_lbl
-                            _changed = True
-                    if _changed:
-                        st.rerun()
-                    st.caption("Use the **Label** column to lock R/R / Strangle or Hide a row — the report and download follow your choices.")
+                    # Static display table (overrides already applied to _all_df upstream)
+                    _disp = _all_df_display.copy()
+                    _front = [c for c in ["Time", "CCY", "Type"] if c in _disp.columns]
+                    _rest  = [c for c in _disp.columns if c not in _front]
+                    _disp = _disp[_front + _rest]
+                    st.dataframe(_disp, hide_index=True, use_container_width=True,
+                                 height=min(60 + len(_disp) * 35, 700),
+                                 column_config={c: st.column_config.Column(width="small") for c in _disp.columns})
+                    st.caption("Use **🏷️ Set trade labels** above to lock R/R / Strangle or Hide a row — the report and download follow your choices.")
 
                     with st.expander("Notional by Product Type", expanded=False):
                         _type_summary = []
