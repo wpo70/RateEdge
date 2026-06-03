@@ -7446,7 +7446,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0306r"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0306s"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -7946,8 +7946,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         _drop_idx = []
                         for _i in range(len(_all_df)):
                             _k = _all_df.iloc[_i]["_ovrkey"]
-                            _ov = _type_overrides.get(_k)
-                            if not _ov:
+                            # Read the override straight from the widget's session_state
+                            # (the selectbox key). Single source of truth — the dict and
+                            # the widget can never desync this way.
+                            _ov = st.session_state.get(f"_lblsel_{_k}")
+                            if not _ov or _ov == "Auto":
+                                _ov = _type_overrides.get(_k)
+                            if not _ov or _ov == "Auto":
                                 continue
                             if _ov == "Hide":
                                 _drop_idx.append(_i); continue
@@ -8235,19 +8240,19 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _pf = str(_all_df_display.iloc[_i].get("Platform",""))
                             _lc1, _lc2 = st.columns([3, 1])
                             _lc1.markdown(f"<small>{_tm} · {_ex}×{_tn} · {_ty_now} · {_pf}</small>", unsafe_allow_html=True)
-                            _cur = _type_overrides.get(_k, "Auto")
                             _opts = ["Auto", "R/R", "Strangle", "Hide"]
                             _wkey = f"_lblsel_{_k}"
-                            # Seed the widget's stored value ONCE (don't pass index= on a
-                            # keyed widget — that fights the user's click and resets it).
-                            if _wkey not in st.session_state:
-                                st.session_state[_wkey] = _cur
                             _sel = _lc2.selectbox("lbl", _opts, key=_wkey,
                                                   label_visibility="collapsed")
-                            if _sel == "Auto" and _k in _type_overrides:
-                                _type_overrides.pop(_k, None); st.rerun()
-                            elif _sel != "Auto" and _type_overrides.get(_k) != _sel:
-                                _type_overrides[_k] = _sel; st.rerun()
+                            # Mirror into _type_overrides so the apply step (which runs
+                            # BEFORE this panel) sees it on the NEXT rerun. No index=,
+                            # no seeding — the widget's own state is the source of truth.
+                            if _sel == "Auto":
+                                if _k in _type_overrides:
+                                    _type_overrides.pop(_k, None); st.rerun()
+                            else:
+                                if _type_overrides.get(_k) != _sel:
+                                    _type_overrides[_k] = _sel; st.rerun()
 
                     # Static display table (overrides already applied to _all_df upstream)
                     _disp = _all_df_display.copy()
