@@ -7446,7 +7446,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0306y"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0306z"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -8759,6 +8759,18 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                                 if _atm_df2 is not None and _b_cur is not None and _ac is not None:
                                                                     _atm_v2 = get_matrix_value(_atm_df2, _exp, label_to_years(_ten))
                                                                     _F2 = _atm_F.get((_exp, _ten))
+                                                                    # If no SDR straddle gave a forward for this
+                                                                    # bucket, fall back to the curve forward.
+                                                                    # Without this, alpha is NOT recalibrated when
+                                                                    # ν changes → the raised ν inflates the ATM →
+                                                                    # RR blows up (10Y10Y went 150→279bp).
+                                                                    if not _F2:
+                                                                        try:
+                                                                            _F2, _, _ = forward_and_annuity_from_curve(
+                                                                                _sabr_curve, "USD",
+                                                                                label_to_years(_exp), label_to_years(_ten), None)
+                                                                        except Exception:
+                                                                            _F2 = None
                                                                     if _atm_v2 and _F2:
                                                                         try:
                                                                             _a_new = sabr_implied_alpha_from_atm(
