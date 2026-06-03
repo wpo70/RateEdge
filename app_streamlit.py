@@ -7446,7 +7446,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0306x"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0306y"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -8037,14 +8037,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     if "_time_dt" in _all_df_excel.columns:
                         _all_df_excel["Time"] = _all_df_excel["_time_dt"]
                         _all_df_excel = _all_df_excel.drop(columns=["_time_dt"])
-                    # Add the Label column (from overrides) before dropping internals,
-                    # so the export matches the on-screen blotter.
-                    if "_ovrkey" in _all_df_excel.columns:
-                        _all_df_excel["Label"] = _all_df_excel["_ovrkey"].apply(
-                            lambda _k: _type_overrides.get(_k, "Auto"))
+                    # NOTE: the Label column is on-screen only — not in the export.
+                    # The overrides are already baked into the Type column upstream.
                     _all_df_excel = _all_df_excel.drop(columns=_INTERNAL_COLS, errors="ignore")
-                    # Same column order as the blotter: Time | Label | CCY | Type | rest
-                    _xl_front = [c for c in ["Time", "Label", "CCY", "Type"] if c in _all_df_excel.columns]
+                    # Column order: Time | CCY | Type | rest
+                    _xl_front = [c for c in ["Time", "CCY", "Type"] if c in _all_df_excel.columns]
                     _xl_rest  = [c for c in _all_df_excel.columns if c not in _xl_front]
                     _all_df_excel = _all_df_excel[_xl_front + _xl_rest]
                     if "Type" in _all_df_excel.columns:
