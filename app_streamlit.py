@@ -7839,8 +7839,22 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _bk = _rr.get("Platform"); _oe = _rr.get("_opt_raw", _rexp); _tn = _rr.get("_ten_raw", _rten)
                                 _ps = _rr.get("_p_strike"); _rs = _rr.get("_r_strike")
                                 _pp = _rr.get("_p_prem_raw") or 0; _rp = _rr.get("_r_prem_raw") or 0
-                                _ref_p = _bp_ref_tbl.get((_bk, _oe, _tn, round(_ps, 4))) if _ps is not None else None
-                                _ref_r = _bp_ref_tbl.get((_bk, _oe, _tn, round(_rs, 4))) if _rs is not None else None
+                                # Tolerant lookup: match the closest reference strike within
+                                # ±0.20% for the same broker/expiry/tenor. R/R wings drift a
+                                # bp or two between prints (e.g. 5.45 vs 5.46), so an exact
+                                # match misses — find the nearest instead.
+                                def _ref_bp_lookup(_strike):
+                                    if _strike is None:
+                                        return None
+                                    _best = None; _best_gap = 0.20
+                                    for (_kb, _ke, _kt, _ks), _bp in _bp_ref_tbl.items():
+                                        if _kb == _bk and _ke == _oe and _kt == _tn:
+                                            _g = abs(_ks - _strike)
+                                            if _g <= _best_gap:
+                                                _best_gap = _g; _best = _bp
+                                    return _best
+                                _ref_p = _ref_bp_lookup(_ps)
+                                _ref_r = _ref_bp_lookup(_rs)
                                 if _ref_p and _ref_p > 0 and _pp > 0:
                                     _recon_p = _pp / (_ref_p / 1e4)
                                 if _ref_r and _ref_r > 0 and _rp > 0:
@@ -7922,14 +7936,16 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     # v1605i: keep screen Time as string (nice "31-Mar 18:52") but
                     # produce a separate Excel-ready df where Time is a real datetime
                     # so Excel auto-recognises it for filtering/sorting.
-                    _all_df_display = _all_df.drop(columns=["_notional_num", "_time_dt"], errors="ignore")
+                    _INTERNAL_COLS = ["_notional_num", "_time_dt", "_p_strike", "_r_strike",
+                                      "_p_prem_raw", "_r_prem_raw", "_opt_raw", "_ten_raw", "_hidden"]
+                    _all_df_display = _all_df.drop(columns=_INTERNAL_COLS, errors="ignore")
                     if "Nett Leg BP (R/R)" in _all_df_display.columns:
                         _all_df_display["Nett Leg BP (R/R)"] = _all_df_display["Nett Leg BP (R/R)"].fillna("—")
                     _all_df_excel = _all_df.copy()
                     if "_time_dt" in _all_df_excel.columns:
                         _all_df_excel["Time"] = _all_df_excel["_time_dt"]
                         _all_df_excel = _all_df_excel.drop(columns=["_time_dt"])
-                    _all_df_excel = _all_df_excel.drop(columns=["_notional_num"], errors="ignore")
+                    _all_df_excel = _all_df_excel.drop(columns=_INTERNAL_COLS, errors="ignore")
 
                     # Assemble CSV: trades table → blank → broker breakdown
                     # v1205f: ship as XLSX (not CSV) so Excel column widths auto-fit on open.
@@ -8093,14 +8109,25 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             "Cap":"Payer","Floor":"Receiver",
                         }
                         st.markdown("**Click to price a trade in the Swaptions pricer:**")
+                        st.caption("Label dropdown also available here (mirrors the main table).")
                         with st.container(height=420, border=False):
                             for _ri, _row in enumerate(_all_trades):
-                                _rc1, _rc2, _rc3, _rc4, _rc5, _rc7 = st.columns([1.2, 0.8, 0.8, 0.8, 1.2, 0.8])
+                                _rc1, _rc2, _rc3, _rc4, _rc5, _rc6, _rc7 = st.columns([1.1, 0.7, 0.8, 0.8, 1.1, 0.9, 0.8])
                                 _rc1.markdown(f"<small>{_row.get(_time_col,'—')}</small>", unsafe_allow_html=True)
                                 _rc2.markdown(f"<small>{_row.get('Type','').replace('🔵 ','').replace('🟤 ','').replace('🟠 ','').replace('🟣 ','')}</small>", unsafe_allow_html=True)
                                 _rc3.markdown(f"<small>{_row.get('CCY','—')} {_row.get('Opt Expiry','—')}×{_row.get('Swp Tenor','—')}</small>", unsafe_allow_html=True)
                                 _rc4.markdown(f"<small>{_row.get('Strike','—')}</small>", unsafe_allow_html=True)
                                 _rc5.markdown(f"<small>{_row.get('Notional','—')} | {_row.get('Platform','—')}</small>", unsafe_allow_html=True)
+                                _ok = _ovr_key(_row)
+                                _cur_ovr = _type_overrides.get(_ok, "Auto")
+                                _ovr_choice = _rc6.selectbox(
+                                    "label", ["Auto", "R/R", "Strangle", "Hide"],
+                                    index=["Auto", "R/R", "Strangle", "Hide"].index(_cur_ovr) if _cur_ovr in ("Auto","R/R","Strangle","Hide") else 0,
+                                    key=f"_ovr_sel_{_ri}", label_visibility="collapsed")
+                                if _ovr_choice == "Auto" and _ok in _type_overrides:
+                                    _type_overrides.pop(_ok, None); st.rerun()
+                                elif _ovr_choice != "Auto" and _type_overrides.get(_ok) != _ovr_choice:
+                                    _type_overrides[_ok] = _ovr_choice; st.rerun()
                                 if _rc7.button("Price →", key=f"_price_this_{_ri}", use_container_width=True):
                                     _exp_raw = _row.get("Opt Expiry","")
                                     _ten_raw = _row.get("Swp Tenor","")
