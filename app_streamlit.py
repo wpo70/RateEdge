@@ -7446,7 +7446,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0306s"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0306t"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -8228,6 +8228,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     with st.expander("🏷️ Set trade labels (R/R / Strangle / Hide)", expanded=True):
                         st.caption("Override the auto-label for any trade. Changes apply to the report and download.")
                         st.caption(f"🔧 stored overrides right now: {dict(_type_overrides)}")
+                        # One-time purge of stale positional selector keys (_lblsel_0,
+                        # _lblsel_1 …) left by earlier builds — they collide with the
+                        # current per-trade keys and cause the dropdown to flip back.
+                        if not st.session_state.get("_lblsel_purged_v0306t"):
+                            for _sk in [k for k in list(st.session_state.keys())
+                                        if k.startswith("_lblsel_") and k.split("_lblsel_")[-1].isdigit()]:
+                                st.session_state.pop(_sk, None)
+                            st.session_state["_lblsel_purged_v0306t"] = True
                         for _i in range(len(_all_df_display)):
                             _k = _ovr_keys_list[_i] if _i < len(_ovr_keys_list) else ""
                             _ty_now = str(_all_df_display.iloc[_i]["Type"])
