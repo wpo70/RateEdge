@@ -7446,7 +7446,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _newt_fp = f"{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
+                _PAIRING_LOGIC_VER = "v0306l"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
                 # Convert timestamps to local time based on sidebar currency
