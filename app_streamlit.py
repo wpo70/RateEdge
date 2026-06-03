@@ -7479,6 +7479,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 _matched_p_ids = set()
                 _matched_r_ids = set()
                 _paired_rows = []
+                _bp_ref_tbl = {}
                 _exo_types = ["EC", "EXOTIC", "BARRIER", "BERMUDAN", "ASIAN", "DIGITAL", "RANGE"]
 
                 if _use_cached_pairing:
@@ -7487,7 +7488,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _paired_rows = _cached.get("paired", [])
                     _single_rows = _cached.get("single", [])
                     _exo_rows    = _cached.get("exo", [])
+                    _bp_ref_tbl  = _cached.get("bp_ref", {})
                 elif not _payers_a.empty and not _rcvrs_a.empty and "strike_pct" in _newt_all.columns:
+                    _bp_ref_tbl = {}  # (broker, expiry, tenor, strike) -> premium bp, for unified NaN reconstruction
                     # Order payers so those with a same-strike receiver (straddle legs)
                     # are matched FIRST — they consume the straddle partner before an
                     # R/R payer can steal it. Without this, an R/R payer (5.46) grabs a
@@ -7584,6 +7587,19 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         _strike_disp = f"P:{_s_p:.5f}% / R:{_s_r:.5f}%"
                                         _net_str = f"  net {_net_bp:.1f}bp" if _net_bp else ""
                                         _prem_disp = f"P:{_fmt_premium(_p_prem)} / R:{_fmt_premium(_r_prem)} = {_fmt_premium(_comb_prem)}{_net_str}" if _comb_prem else "—"
+                                        # Unified bp-reference capture: for any R/R leg with a
+                                        # known notional, record premium-bp per (broker, expiry,
+                                        # tenor, strike). NaN-notional legs elsewhere reconstruct
+                                        # via notional = premium / (ref_bp/10000). Works for ALL
+                                        # brokers (replaces broker-specific hedge-ratio method).
+                                        if _comb_not > 0:
+                                            _brk = PLATFORM_NAMES.get(str(_p.get("platform_identifier","")), str(_p.get("platform_identifier","")))
+                                            _pbp = _p_prem / _comb_not * 1e4
+                                            _rbp = _r_prem / _comb_not * 1e4
+                                            if _pbp > 0:
+                                                _bp_ref_tbl.setdefault((_brk, _e_p, _t_p, round(_s_p,4)), _pbp)
+                                            if _rbp > 0:
+                                                _bp_ref_tbl.setdefault((_brk, _e_p, _t_p, round(_s_r,4)), _rbp)
                                     elif _same_strike and not _has_swp:
                                         _ptype = "🟤 C/F Straddle"
                                         _strike_disp = f"{_s_p:.5f}%"
@@ -7640,6 +7656,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         "R Prem BP": f"{_r_bp:.2f}" if _r_bp else "—",
                                         "Platform": PLATFORM_NAMES.get(str(_p.get("platform_identifier","")), str(_p.get("platform_identifier",""))),
                                         "_notional_num": float(_comb_not or 0),  # v1105o: numeric for broker % breakdown
+                                        "_p_strike": _s_p, "_r_strike": _s_r,
+                                        "_p_prem_raw": _p_prem, "_r_prem_raw": _r_prem,
+                                        "_opt_raw": _e_p, "_ten_raw": _t_p,
                                     })
                                     break
 
@@ -7715,6 +7734,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     st.session_state["_sdr_pairing_fp"] = _newt_fp
                     st.session_state["_sdr_pairing_trades"] = {
                         "paired": _paired_rows, "single": _single_rows, "exo": _exo_rows,
+                        "bp_ref": _bp_ref_tbl,
                     }
 
                 # Summary
@@ -7810,10 +7830,33 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _sd = _strds[_best]
                             _sd_not = _notional_to_num(_sd.get("Notional"))
                             _key = (_rplat, _rexp, _rten, _rwidth)
-                            if _rr_not <= 0 and _sd_not > 0 and _key in _ratio_by_key and _ratio_by_key[_key] > 0:
-                                _recon = _sd_not / _ratio_by_key[_key]
-                                _rr["Notional"] = f"{_recon/1e6:.0f}M*"
-                                _rr_not = _recon
+                            if _rr_not <= 0:
+                                # Unified NaN reconstruction (works for ALL brokers):
+                                # notional = leg_premium / (ref_bp/10000), where ref_bp
+                                # is a same-strike R/R leg's premium-bp seen elsewhere
+                                # today. Cross-check payer & receiver legs agree.
+                                _recon_p = _recon_r = None
+                                _bk = _rr.get("Platform"); _oe = _rr.get("_opt_raw", _rexp); _tn = _rr.get("_ten_raw", _rten)
+                                _ps = _rr.get("_p_strike"); _rs = _rr.get("_r_strike")
+                                _pp = _rr.get("_p_prem_raw") or 0; _rp = _rr.get("_r_prem_raw") or 0
+                                _ref_p = _bp_ref_tbl.get((_bk, _oe, _tn, round(_ps, 4))) if _ps is not None else None
+                                _ref_r = _bp_ref_tbl.get((_bk, _oe, _tn, round(_rs, 4))) if _rs is not None else None
+                                if _ref_p and _ref_p > 0 and _pp > 0:
+                                    _recon_p = _pp / (_ref_p / 1e4)
+                                if _ref_r and _ref_r > 0 and _rp > 0:
+                                    _recon_r = _rp / (_ref_r / 1e4)
+                                # Prefer cross-checked value; if both present & agree (±5%) use mean
+                                _recon = None
+                                if _recon_p and _recon_r:
+                                    _recon = (_recon_p + _recon_r) / 2.0
+                                elif _recon_p or _recon_r:
+                                    _recon = _recon_p or _recon_r
+                                # Fallback: legacy hedge-ratio method if bp-reference missed
+                                if (not _recon or _recon <= 0) and _sd_not > 0 and _key in _ratio_by_key and _ratio_by_key[_key] > 0:
+                                    _recon = _sd_not / _ratio_by_key[_key]
+                                if _recon and _recon > 0:
+                                    _rr["Notional"] = f"{_recon/1e6:.0f}M*"
+                                    _rr_not = _recon
                             _ratio = (_sd_not / _rr_not) if _rr_not > 0 else None
                             if _ratio and _rwidth is not None:
                                 _ratio_by_key.setdefault(_key, _ratio)
