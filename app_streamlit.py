@@ -8438,14 +8438,35 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     except Exception:
                                         return 1.0
 
-                                def _bch_invert_sabr(prem_bp, F, K, T, is_payer, annuity=1.0):
+                                def _bucket_df(_exp_lbl):
+                                    # Expiry discount factor on the SOFR curve — must match the
+                                    # pricer's eff_disc_rate = exp(-SOFR_zero(T)·T) so the inverted
+                                    # vols reprice exactly through the pricer's forward premium.
+                                    if _sabr_curve is None: return 1.0
+                                    try:
+                                        _Tx = label_to_years(_exp_lbl)
+                                        _ox = _sabr_curve[_sabr_curve.columns[0]].to_numpy().astype(float)
+                                        _oy = _sabr_curve[_sabr_curve.columns[1]].to_numpy().astype(float) / 100.0
+                                        _rz = float(np.interp(_Tx, _ox, _oy))
+                                        return math.exp(-_rz * _Tx)
+                                    except Exception:
+                                        return 1.0
+
+                                def _bch_invert_sabr(prem_bp, F, K, T, is_payer, annuity=1.0, df=1.0):
                                     if prem_bp <= 0 or T <= 0 or F <= 0 or K <= 0: return None
-                                    # Premium bp = option_value(rate) × annuity × 10000.
-                                    # Must divide by annuity to recover the option value in rate
-                                    # terms before inverting (was missing → backed out ~3.7×
-                                    # too-high vol → fit slammed ν to clamp, ρ wrong sign).
+                                    # SDR premiums are FORWARD premiums. The pricer's forward
+                                    # premium = option_value(rate) × annuity × 1e4 / df, so to
+                                    # recover the option value we must MULTIPLY by df as well as
+                                    # divide by annuity. Omitting df (the bug) backed out vols
+                                    # ~1/df too high → the pricer then repriced the R/R at net/df
+                                    # (e.g. 169.55 instead of the traded 117.25). With df included
+                                    # this is the exact inverse of the pricer's forward premium,
+                                    # so every R/R reprices to its traded net. The straddle was
+                                    # unaffected because its vol comes from the ATM surface, not
+                                    # this inversion.
                                     _ann = annuity if annuity and annuity > 0 else 1.0
-                                    prem_r = prem_bp / 10000.0 / _ann
+                                    _df = df if df and df > 0 else 1.0
+                                    prem_r = prem_bp / 10000.0 / _ann * _df
                                     def _err(sig):
                                         if sig <= 1e-9: return -prem_r
                                         d = (F - K) / (sig * math.sqrt(T))
@@ -8514,8 +8535,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             except Exception: pass
                                         _mv_p = _mv_r = _m_skew = None
                                         if _F and _avg_pp > 0 and _T > 0:
-                                            _mv_p = _bch_invert_sabr(_avg_pp,_F,_avg_pk,_T,True, _bucket_annuity(_exp,_ten))
-                                            _mv_r = _bch_invert_sabr(_avg_rp,_F,_avg_rk,_T,False, _bucket_annuity(_exp,_ten))
+                                            _mv_p = _bch_invert_sabr(_avg_pp,_F,_avg_pk,_T,True, _bucket_annuity(_exp,_ten), _bucket_df(_exp))
+                                            _mv_r = _bch_invert_sabr(_avg_rp,_F,_avg_rk,_T,False, _bucket_annuity(_exp,_ten), _bucket_df(_exp))
                                             if _mv_p and _mv_r: _m_skew = _mv_p - _mv_r
                                         _skew_diff = round(_m_skew-_s_skew,1) if (_m_skew is not None and _s_skew is not None) else None
                                         _flag = ("⚠️" if _skew_diff and abs(_skew_diff)>2 else "✅" if _skew_diff is not None else "ℹ️" if not _F else "—")
@@ -8609,6 +8630,18 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             for (_exp, _ten), _trades in _bucket_map.items():
                                                 try:
                                                     _F = _atm_F.get((_exp, _ten))
+                                                    if not _F:
+                                                        # v0406n: no SDR straddle in window for this bucket →
+                                                        # fall back to the curve forward so an R/R-only bucket
+                                                        # (e.g. 10Y10Y that traded today with no co-located
+                                                        # straddle) still gets fit & pinned. Previously this
+                                                        # hard-skipped → no pin → R/R priced pure backbone.
+                                                        try:
+                                                            _F, _, _ = forward_and_annuity_from_curve(
+                                                                _sabr_curve, "USD",
+                                                                label_to_years(_exp), label_to_years(_ten), None)
+                                                        except Exception:
+                                                            _F = None
                                                     if not _F: continue
                                                     _T = label_to_years(_exp)
                                                     _a0 = _sabr_param(_sabr_adf, _exp, _ten)
@@ -8634,8 +8667,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     if not _p_ps2 or not _r_ps2: continue  # no parseable premiums → skip (was div-by-zero)
                                                     _Kp = sum(_p_ks2)/len(_p_ks2)
                                                     _Kr = sum(_r_ks2)/len(_r_ks2)
-                                                    _vp_mkt = _bch_invert_sabr(sum(_p_ps2)/len(_p_ps2), _F, _Kp, _T, True, _bucket_annuity(_exp,_ten))
-                                                    _vr_mkt = _bch_invert_sabr(sum(_r_ps2)/len(_r_ps2), _F, _Kr, _T, False, _bucket_annuity(_exp,_ten))
+                                                    _vp_mkt = _bch_invert_sabr(sum(_p_ps2)/len(_p_ps2), _F, _Kp, _T, True, _bucket_annuity(_exp,_ten), _bucket_df(_exp))
+                                                    _vr_mkt = _bch_invert_sabr(sum(_r_ps2)/len(_r_ps2), _F, _Kr, _T, False, _bucket_annuity(_exp,_ten), _bucket_df(_exp))
                                                     if not _vp_mkt or not _vr_mkt: continue
 
                                                     # Get ATM vol for this bucket (df hoisted above loop)
