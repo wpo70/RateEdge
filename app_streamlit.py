@@ -7496,7 +7496,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0406c"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0406d"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -16020,21 +16020,41 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
                     row[tenor] = fwd
                 else:
                     # ── NZD/USD: zero curve IRS-only discounting ──────────────
-                    mkt_rate = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy,
-                                                 freq_override=None,
-                                                 ois_x=ois_x, ois_y=ois_y,
-                                                 basis6v3_x=basis_x, basis6v3_y=basis_y)
-                    basis_bp = 0.0
-                    if basis_x is not None:
-                        mid_t = exp_y + tenor_y / 2
-                        basis_bp = float(np.interp(mid_t, basis_x, basis_y))
-                    if convention == "qq" and tenor_y > 3.0:
-                        fwd = mkt_rate - basis_bp / 10000.0
-                    elif convention == "ss" and tenor_y <= 3.0:
-                        fwd = mkt_rate + basis_bp / 10000.0
-                    else:
+                    if ccy == "USD":
+                        # Use the EXACT pricer forward (T+2 SOFR, annual Act/360,
+                        # mod-following calendar) so the forward matrix and the
+                        # swaption pricer are identical by construction. The old
+                        # fast_forward_rate path used T+1 + year-fraction grid and
+                        # diverged ~4-5bp from the pricer (10Y10Y 4.531 vs 4.5765).
+                        _usd_curve_df = pd.DataFrame({
+                            "MaturityY": list(curve_x),
+                            "ZeroRatePct": [z * 100.0 for z in curve_y],
+                        })
+                        try:
+                            mkt_rate, _, _ = forward_and_annuity_from_curve(
+                                _usd_curve_df, "USD", exp_y, tenor_y, None)
+                        except Exception:
+                            mkt_rate = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy,
+                                                         freq_override=None, ois_x=ois_x, ois_y=ois_y,
+                                                         basis6v3_x=basis_x, basis6v3_y=basis_y)
                         fwd = mkt_rate
-                    row[tenor] = fwd * 100
+                        row[tenor] = fwd * 100
+                    else:
+                        mkt_rate = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy,
+                                                     freq_override=None,
+                                                     ois_x=ois_x, ois_y=ois_y,
+                                                     basis6v3_x=basis_x, basis6v3_y=basis_y)
+                        basis_bp = 0.0
+                        if basis_x is not None:
+                            mid_t = exp_y + tenor_y / 2
+                            basis_bp = float(np.interp(mid_t, basis_x, basis_y))
+                        if convention == "qq" and tenor_y > 3.0:
+                            fwd = mkt_rate - basis_bp / 10000.0
+                        elif convention == "ss" and tenor_y <= 3.0:
+                            fwd = mkt_rate + basis_bp / 10000.0
+                        else:
+                            fwd = mkt_rate
+                        row[tenor] = fwd * 100
 
             except:
                 row[tenor] = None
