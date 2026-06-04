@@ -7741,6 +7741,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         "_notional_num": float(_comb_not or 0),  # v1105o: numeric for broker % breakdown
                                         "_p_strike": _s_p, "_r_strike": _s_r,
                                         "_p_prem_raw": _p_prem, "_r_prem_raw": _r_prem,
+                                        "_was_deduped": _prem_deduped,
                                         "_opt_raw": _e_p, "_ten_raw": _t_p,
                                     })
                                     break
@@ -7900,6 +7901,22 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         # restore hedge rows back to plain straddle
                         if _ty.startswith("🔵 Hedge"):
                             _ty = "🔵 Straddle"
+                            # v0506b: if this row was un-deduped as a hedge last render,
+                            # reset its display premium to the deduped (halved) standalone
+                            # values. _p_prem_raw/_r_prem_raw still hold the deduped legs,
+                            # so the hedge-link re-doubles cleanly if it re-links (idempotent),
+                            # and a row that no longer links shows the correct standalone prem.
+                            if _row.get("_was_deduped"):
+                                _rn = _row.get("_notional_num") or 0
+                                _pp = float(_row.get("_p_prem_raw") or 0)
+                                _rp = float(_row.get("_r_prem_raw") or 0)
+                                if _rn > 0 and (_pp or _rp):
+                                    _cb = _pp + _rp
+                                    _row["P Prem BP"]    = f"{_pp/_rn*1e4:.2f}" if _pp else "—"
+                                    _row["R Prem BP"]    = f"{_rp/_rn*1e4:.2f}" if _rp else "—"
+                                    _row["Nett Prem BP"] = f"{_cb/_rn*1e4:.2f}" if _cb else "—"
+                                    if _cb:
+                                        _row["Premium"]  = _fmt_premium(_cb)
                         # restore R/R rows back to the poss-R/R strangle form
                         if "Strangle R/R (outright)" in _ty:
                             _ty = "🟠 Strangle ⚠️ poss. R/R"
@@ -7989,6 +8006,24 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _rr["_hedge_pct"] = f"{_ratio*100:.0f}%" if _ratio else ""
                             _rr["Type"]  = f"{_rr.get('Type','')} {_tag}".replace("⚠️ poss. R/R", "R/R")
                             _sd["Type"]  = f"🔵 Hedge {_tag}{_hpct}"
+                            # v0506b: a straddle bundled as the delta hedge on an R/R MW
+                            # ticket reports PER-LEG premiums (payer + receiver), unlike a
+                            # standalone straddle which double-reports the full premium on
+                            # each leg. The same-strike dedup above halved this hedge
+                            # (e.g. 806/806 -> 403/403, total 806). Undo it for the hedge
+                            # only: restore each leg to its true per-leg amount (2x the
+                            # halved value) so the hedge prices at payer+receiver
+                            # (10Y10Y 1612, 6M2Y 103). Standalone straddles are untouched.
+                            if _sd.get("_was_deduped"):
+                                _hnot = _sd.get("_notional_num") or 0
+                                _hp = 2.0 * float(_sd.get("_p_prem_raw") or 0)
+                                _hr = 2.0 * float(_sd.get("_r_prem_raw") or 0)
+                                if _hp > 0 and _hr > 0 and _hnot > 0:
+                                    _hcomb = _hp + _hr
+                                    _sd["P Prem BP"]    = f"{_hp/_hnot*1e4:.2f}"
+                                    _sd["R Prem BP"]    = f"{_hr/_hnot*1e4:.2f}"
+                                    _sd["Nett Prem BP"] = f"{_hcomb/_hnot*1e4:.2f}"
+                                    _sd["Premium"]      = _fmt_premium(_hcomb)
                         else:
                             # Outright R/R (no hedge straddle found) — still reconstruct
                             # a NaN notional from the bp-reference table.
