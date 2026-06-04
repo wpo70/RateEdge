@@ -12066,11 +12066,17 @@ def curves_tab():
         _ff_ois      = st.session_state.get("config_basis", {}).get("USD", {}).get("fedfunds_ois")
         _sofr_ff_bas = st.session_state.get("config_basis", {}).get("USD", {}).get("sofr_ff_basis")
 
-        # v0105l: always recompute basis from current curves (don't use stale cache)
-        if _sofr_curve is not None and _ff_ois is not None:
+        # v0406j: basis = FF OIS par − SOFR OIS par (both PAR rates, like-for-like).
+        # SOFR leg uses raw par (_usd_sofr_par), NOT the bootstrapped zero in
+        # config_curves["USD"]. FF leg (fedfunds_ois) is already par. Clipped to 30Y
+        # (SOFR par stops at 30Y; beyond that the diff blows up the chart).
+        _sofr_par_basis = st.session_state.get("_usd_sofr_par")
+        if _sofr_par_basis is None or getattr(_sofr_par_basis, "empty", True):
+            _sofr_par_basis = _sofr_curve  # fallback if par not stashed yet
+        if _sofr_par_basis is not None and _ff_ois is not None:
             try:
                 # Sort both curves by maturity — np.interp requires sorted xp
-                _s_sorted = _sofr_curve.sort_values("MaturityY")
+                _s_sorted = _sofr_par_basis.sort_values("MaturityY")
                 _f_sorted = _ff_ois.sort_values("MaturityY")
                 _s_xs = _s_sorted["MaturityY"].to_numpy().astype(float)
                 _s_ys = _s_sorted["ZeroRatePct"].to_numpy().astype(float)
@@ -12078,9 +12084,9 @@ def curves_tab():
                 _f_ys = _f_sorted["ZeroRatePct"].to_numpy().astype(float)
                 # Use all maturities from EITHER curve, interpolate where needed
                 _all_mats = sorted(set(round(float(x), 6) for x in _s_xs) | set(round(float(x), 6) for x in _f_xs))
-                # Clip to range covered by both curves
+                # Clip to range covered by both curves, hard cap at 30Y
                 _min_mat = max(min(_s_xs), min(_f_xs))
-                _max_mat = min(max(_s_xs), max(_f_xs))
+                _max_mat = min(max(_s_xs), max(_f_xs), 30.0)
                 _all_mats = [m for m in _all_mats if _min_mat <= m <= _max_mat]
                 if _all_mats:
                     _s_interp = np.interp(_all_mats, _s_xs, _s_ys)
