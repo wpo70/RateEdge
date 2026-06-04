@@ -8898,6 +8898,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                 # traded R/R reprices to its EXACT net bp while the surface
                                                 # stays smooth between marks.
                                                 _pin_map = {}
+                                                _pin_skips = []  # v0406p diag: why buckets produced no pin
                                                 for (_pe, _pt), _v in _fit_results.items():
                                                     _eyk = round(label_to_years(_pe), 4)
                                                     _tyk = round(label_to_years(_pt), 4)
@@ -8906,16 +8907,32 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     _rr_ = _sabr_param(_new_rho_df, _pe, _pt)
                                                     _rn = _sabr_param(_new_nu_df, _pe, _pt)
                                                     _rb = _b_cur if _b_cur is not None else 0.5
+                                                    # Fall back to the bucket's own fitted ρ/ν if the blended
+                                                    # matrix lookup misses (label/case mismatch) so the pin
+                                                    # still builds. Pricer uses the same blended backbone, so
+                                                    # the residual still cancels at the traded strike.
+                                                    if _rr_ is None: _rr_ = _v.get("rho_fit")
+                                                    if _rn is None: _rn = _v.get("nu_fit")
                                                     try:
                                                         _Fb, _, _ = forward_and_annuity_from_curve(
                                                             _sabr_curve, "USD", _eyk, _tyk, None)
                                                     except Exception:
                                                         _Fb = None
+                                                    if _ra is None and _rr_ is not None and _rn is not None and _Fb:
+                                                        # recover alpha from ATM with the fit params
+                                                        try:
+                                                            _av = get_matrix_value(_atm_df, _pe, _tyk) if _atm_df is not None else None
+                                                            if _av:
+                                                                _ra = sabr_implied_alpha_from_atm(_av/10000.0, _Fb, _eyk, _rb, _rr_, _rn)
+                                                        except Exception:
+                                                            _ra = None
                                                     if _ra is None or _rr_ is None or _rn is None or not _Fb:
+                                                        _pin_skips.append(f"{_pe}x{_pt}:a={_ra is not None},r={_rr_ is not None},n={_rn is not None},F={bool(_Fb)}")
                                                         continue
                                                     for _Kpin, _vmkt in ((_v.get("pin_Kp"), _v.get("pin_vp")),
                                                                           (_v.get("pin_Kr"), _v.get("pin_vr"))):
                                                         if not _Kpin or not _vmkt:
+                                                            _pin_skips.append(f"{_pe}x{_pt}:K={_Kpin},v={_vmkt}")
                                                             continue
                                                         _v_sabr = sabr_normal_vol_smile(_Fb, _Kpin, _eyk, _ra, _rb, _rr_, _rn)
                                                         _resid = _vmkt - _v_sabr   # decimal normal-vol residual
@@ -8957,6 +8974,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     "fit_rows": _fit_rows, "show_dr": _show_dr, "show_dn": _show_dn,
                                                     "n_buckets": len(_fit_results), "blend_w": _blend_w,
                                                     "pin_map": _pin_map,
+                                                    "n_pins": len(_pin_map),
+                                                    "pin_skips": _pin_skips,
                                                 }
                                                 st.rerun(scope="app")  # rerun so preview renders outside button block
 
@@ -8980,6 +8999,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             st.success(f"✅ Preview ready — {_bl_prev.get('n_buckets','?')} buckets fitted, "
                                                        f"blend weight {_bl_prev.get('blend_w',0):.0%}. "
                                                        f"Apply & save in Vol Editor → 🔬 Full SABR Recalibration (Expert).")
+                                            _np = _bl_prev.get("n_pins", 0)
+                                            _psk = _bl_prev.get("pin_skips", []) or []
+                                            if _np > 0:
+                                                st.info(f"📌 {_np} pin(s) built from traded strikes."
+                                                        + (f" Skipped: {_psk}" if _psk else ""))
+                                            else:
+                                                st.warning(f"📌 0 pins built — traded R/Rs will NOT reprice exactly. "
+                                                           f"Skip reasons: {_psk}")
                                 else:
                                     st.info("Could not parse strike/premium data from USD strangles in this range.")
 
