@@ -30927,6 +30927,12 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
     _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
     ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
 
+    # USD SOFR OIS is single-curve — SOFR for both projection and discounting.
+    # config_basis["USD"]["ois"] is FEDFUNDS which is WRONG for SOFR swap pricing.
+    # Matches the swaption pricer (swaptions_tab) guard so premium matrix == pricer.
+    if ccy == "USD":
+        ois_curve = curve  # SOFR IS the OIS curve
+
     prem_rows = []
     vega_rows = []
 
