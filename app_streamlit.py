@@ -30961,7 +30961,7 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
                     continue
 
                 tenor_y = label_to_years(tenor)
-                _, ann, _ = forward_and_annuity_from_curve(curve, ccy, exp_y, tenor_y, ois_curve)
+                _fwd, ann, _ = forward_and_annuity_from_curve(curve, ccy, exp_y, tenor_y, ois_curve)
 
                 sigma_n = vol_bp / 10000.0
                 sqrt_t = math.sqrt(max(exp_y, 0.001))
@@ -30975,9 +30975,28 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
                         _r  = float(np.interp(exp_y, _ox, _oy))
                         df_exp = math.exp(-_r * exp_y)
                     except Exception:
+                        _r = 0.04
                         df_exp = math.exp(-0.04 * exp_y)
                 else:
+                    _r = 0.04
                     df_exp = math.exp(-0.04 * exp_y)
+
+                # v0406k: USD — price the ATM straddle through the EXACT pricer engine
+                # (price_swaption → bachelier_swaption_vanilla, payer+receiver), with the
+                # SAME forward/annuity/discount_rate/vol the swaption pricer uses, so the
+                # premium matrix is identical to the pricer. The closed-form below (kept for
+                # AUD/NZD/EUR, unchanged) used a truncated 0.3989 constant and diverged.
+                if ccy == "USD":
+                    _tk = SwaptionTicket(
+                        side="Payer", payoff_type="straddle", notional=1e6, currency="USD",
+                        expiry_years=exp_y, swap_tenor_years=tenor_y, forward=_fwd,
+                        strike=_fwd, vol=sigma_n, discount_rate=_r, annuity=ann,
+                        model="Normal", label="", use_curve=True)
+                    _res = price_swaption(_tk)
+                    prow[tenor] = round(_res.get("pv_bp_fwd", _res.get("pv_bp", 0.0)), 2)
+                    d_fwd_prem_per_bp = 2 * (1.0 / math.sqrt(2 * math.pi)) * sqrt_t * ann / df_exp if df_exp > 0 else 0.0
+                    vrow[tenor] = round((d_fwd_prem_per_bp / 10000.0) * 1e6, 2)
+                    continue
 
                 # ATM straddle FORWARD premium (bp of notional) — matches BBG Prem=Fwd, OIS
                 spot_prem_bp = 2 * 0.3989 * sigma_n * sqrt_t * ann * 10000
