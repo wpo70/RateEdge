@@ -17086,6 +17086,30 @@ def swaptions_tab(vol_mode: str):
             elif structure == "Risk Reversal":
                 vol_k1 = get_vol_for_strike(strike_pct)  # Payer strike
                 vol_k2 = get_vol_for_strike(strike_pct_2)  # Receiver strike
+                # v0406m PIN DIAGNOSTIC — shows whether the SDR pin is firing on each
+                # leg: pinned vol (with bump) vs raw SABR vol (no bump), and how many
+                # pin keys exist for this expiry|tenor bucket. Diagnostic only.
+                try:
+                    _dbg_s = get_sabr_params_from_matrices(a, b, r, n, expiry, tenor_y)
+                    if _dbg_s and _dbg_s.get("alpha", 0) > 0:
+                        _sp = sabr_normal_vol_smile(fwd_pct/100.0, strike_pct/100.0, expiry_y,
+                                                    _dbg_s["alpha"], _dbg_s["beta"], _dbg_s["rho"], _dbg_s["nu"])
+                        _srr = sabr_normal_vol_smile(fwd_pct/100.0, strike_pct_2/100.0, expiry_y,
+                                                     _dbg_s["alpha"], _dbg_s["beta"], _dbg_s["rho"], _dbg_s["nu"])
+                        _pm_dbg = dict((st.session_state.get("_sdr_sabr_blended") or {}).get("pin_map") or {})
+                        for _cc, _vdd in (st.session_state.get("vol_data") or {}).items():
+                            if isinstance(_vdd, dict) and _vdd.get("pin_map"):
+                                _pm_dbg.update(_vdd["pin_map"])
+                        _bkeys = [k for k in _pm_dbg
+                                  if abs(float(k.split("|")[0]) - expiry_y) <= 0.02
+                                  and abs(float(k.split("|")[1]) - tenor_y) <= 0.02]
+                        st.caption(
+                            f"🔧 PIN DIAG | payer K={strike_pct:.3f}: pinned {vol_k1*1e4:.2f} vs SABR {_sp*1e4:.2f} "
+                            f"(bump {(vol_k1-_sp)*1e4:+.2f}bp) | recv K={strike_pct_2:.3f}: pinned {vol_k2*1e4:.2f} "
+                            f"vs SABR {_srr*1e4:.2f} (bump {(vol_k2-_srr)*1e4:+.2f}bp) | "
+                            f"pins@{expiry_y:g}|{tenor_y:g}: {len(_bkeys)} {_bkeys[:4]}")
+                except Exception as _de:
+                    st.caption(f"🔧 PIN DIAG error: {_de}")
                 is_long_payer = collar_dir.startswith("Long Payer")
                 ticket_p = SwaptionTicket(
                     side="Payer", payoff_type="vanilla", notional=notional*1e6, currency=ccy,
