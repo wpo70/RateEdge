@@ -16277,6 +16277,87 @@ def interpolate_basis(basis_df: pd.DataFrame, t: float) -> float:
     return float(np.interp(t, xs, ys))
 
 
+def _recalibrate_usd_alpha_to_atm():
+    """Sticky-ATM: set USD SABR alpha so the SABR-reconstructed ATM equals the
+    grid ATM at every bucket. Run once per surface change so a freshly-marked
+    VCUB ATM flows straight into the vol lookup, premium matrix and exotics with
+    no manual 'Recalibrate Alpha' click. USD only — never touches AUD/NZD/EUR.
+
+    Mirrors the Recalibrate Alpha (Sticky-ATM) button: alpha is solved from the
+    grid ATM with the current beta/rho/nu and the curve-derived SOFR forward
+    (ois=None -> SOFR single-curve, matching the pricer). Adjusts the in-session
+    alpha only; the saved snapshot alpha is untouched (recomputed each load)."""
+    try:
+        _vd = st.session_state.get("vol_data", {}).get("USD")
+        if not _vd:
+            return
+        _ca = _vd.get("alpha"); _cb = _vd.get("beta")
+        _cr = _vd.get("rho");   _cn = _vd.get("nu"); _cat = _vd.get("atm")
+        if any(x is None for x in (_ca, _cb, _cr, _cn, _cat)):
+            return
+        _ucur = st.session_state.get("config_curves", {}).get("USD")
+        if _ucur is None:
+            try:
+                _ucur = get_ccy_curve("USD")
+            except Exception:
+                _ucur = None
+        if _ucur is None:
+            return
+        _na = _ca.copy()
+        _ecol = "Expiry" if "Expiry" in _na.columns else _na.columns[0]
+        _tcols = [c for c in _na.columns if c != _ecol]
+        for _ix, _rw in _na.iterrows():
+            _el = str(_rw[_ecol]).strip()
+            _ey = label_to_years(_el)
+            if _ey <= 0:
+                continue
+            for _tc in _tcols:
+                _ty = label_to_years(str(_tc))
+                _av = get_matrix_value(_cat, _el, _ty)
+                _sp = get_sabr_params_from_matrices(_ca, _cb, _cr, _cn, _el, _ty)
+                if _av is None or _sp is None:
+                    continue
+                try:
+                    _Fr, _, _ = forward_and_annuity_from_curve(_ucur, "USD", _ey, _ty, None)
+                except Exception:
+                    _Fr = 0.05
+                _Fr = max(_Fr, 0.001)
+                try:
+                    _na2 = sabr_implied_alpha_from_atm(
+                        _av / 10000.0, _Fr, _ey, _sp["beta"], _sp["rho"], _sp["nu"])
+                    if _na2 and _na2 > 0:
+                        _na.at[_ix, _tc] = _na2
+                except Exception:
+                    pass
+        _vd["alpha"] = _na
+    except Exception:
+        pass
+
+
+def _ensure_usd_alpha_sticky():
+    """Run the USD sticky-ATM alpha recal once per surface change, gated by a
+    signature over the atm/rho/nu matrices (+ load hash). Alpha is excluded from
+    the signature (it's what we write) so there's no loop. Safe to call from any
+    USD pricing tab — the shared session signature means it executes once and the
+    other tabs inherit the recalibrated alpha. USD only."""
+    try:
+        _vdu = st.session_state.get("vol_data", {}).get("USD", {})
+        _sig_parts = [st.session_state.get("_atm_hash_USD", 0)]
+        for _kk in ("atm", "rho", "nu"):
+            _mm = _vdu.get(_kk)
+            if _mm is not None:
+                try:
+                    _sig_parts.append(int(pd.util.hash_pandas_object(_mm, index=False).sum()))
+                except Exception:
+                    _sig_parts.append(0)
+        _usd_sig = hash(tuple(_sig_parts))
+        if st.session_state.get("_usd_alpha_recal_sig") != _usd_sig:
+            _recalibrate_usd_alpha_to_atm()
+            st.session_state["_usd_alpha_recal_sig"] = _usd_sig
+    except Exception:
+        pass
+
+
 @st.fragment
 def swaptions_tab(vol_mode: str):
     st.subheader(" Swaptions")
@@ -16340,6 +16421,11 @@ def swaptions_tab(vol_mode: str):
     # config_basis["USD"]["ois"] is FEDFUNDS which is WRONG for SOFR swap pricing.
     if ccy == "USD":
         ois_curve = curve  # SOFR IS the OIS curve
+        # v0506c: keep USD SABR alpha sticky to the ATM surface automatically so
+        # a freshly-marked VCUB ATM (or an SDR blend that moved rho/nu) flows into
+        # the vol lookup with no manual Recalibrate Alpha click. Runs once per
+        # surface change (signature-gated inside the helper).
+        _ensure_usd_alpha_sticky()
 
     # v0805c: EUR — ESTR IS the OIS curve for EUR; config_curves['EUR'] holds ESTR.
     # ois_curve must point to ESTR for discounting; projection (EURIBOR 6M/3M) is
@@ -21220,6 +21306,9 @@ def exotics_tab(vol_mode: str):
     curve     = get_ccy_curve(ccy)
     _ois_cb = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
     ois_curve = _ois_cb if _ois_cb is not None else get_basis_curve(ccy, "ois")
+    if ccy == "USD":
+        ois_curve = curve  # USD single-curve SOFR: SOFR is both projection AND discount
+        _ensure_usd_alpha_sticky()  # v0506c: keep alpha sticky to ATM here too
     basis_6v3 = get_basis_curve(ccy, "6v3")
     atm       = get_working_atm_surface(ccy)
     _, a_m, b_m, r_m, n_m = get_ccy_vol_data(ccy)
