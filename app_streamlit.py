@@ -7510,7 +7510,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0406e"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0406f"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -12249,12 +12249,22 @@ def curves_tab():
                         return float(np.interp(maturity, xs, ys))
 
                     def _usd_fwd_rate(df_curve, exp, ten, col="ZeroRatePct"):
-                        """Forward rate from zero curve: (z2*t2 - z1*t1) / tenor."""
+                        """USD forward swap rate — uses the EXACT pricer function
+                        (forward_and_annuity_from_curve: T+2 SOFR, annual Act/360,
+                        log-DF interpolation) so the Curves-tab matrix is IDENTICAL
+                        to the swaption pricer. The old (z2*t2 - z1*t1)/tenor formula
+                        was a crude zero-rate approximation that disagreed with the
+                        pricer by ~5bp (matrix 4.6341 vs pricer 4.6836)."""
                         if df_curve is None or df_curve.empty: return None
-                        t1, t2 = exp, exp + ten
-                        z1 = _interp_rate(df_curve, t1, col) / 100
-                        z2 = _interp_rate(df_curve, t2, col) / 100
-                        return round(((z2 * t2 - z1 * t1) / ten) * 100, 4)
+                        try:
+                            _cdf = df_curve[["MaturityY", col]].copy()
+                            if col != "ZeroRatePct":
+                                _cdf = _cdf.rename(columns={col: "ZeroRatePct"})
+                            _f, _, _ = forward_and_annuity_from_curve(
+                                _cdf, "USD", float(exp), float(ten), None)
+                            return round(_f * 100, 4)
+                        except Exception:
+                            return None
 
                     with st.spinner("Generating USD forward matrices..."):
                         # SOFR forward matrix
