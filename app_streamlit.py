@@ -7510,7 +7510,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0406g"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0406h"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -12098,14 +12098,24 @@ def curves_tab():
         else:
             # ── USD Curve Chart ──────────────────────────────────────────────
             _usd_fig = go.Figure()
+            _usd_par_plot = st.session_state.get("_usd_sofr_par")
 
-            # SOFR swap curve
+            # SOFR bootstrapped zero curve (used for pricing)
             if _sofr_curve is not None and not _sofr_curve.empty:
                 _usd_fig.add_trace(go.Scatter(
                     x=_sofr_curve["MaturityY"], y=_sofr_curve["ZeroRatePct"],
-                    mode="lines+markers", name="SOFR Swap",
+                    mode="lines+markers", name="SOFR Zero (bootstrapped)",
                     line=dict(color="#38bdf8", width=2),
                     marker=dict(size=5)
+                ))
+
+            # Par SOFR IRS (market input)
+            if _usd_par_plot is not None and not _usd_par_plot.empty:
+                _usd_fig.add_trace(go.Scatter(
+                    x=_usd_par_plot["MaturityY"], y=_usd_par_plot["ZeroRatePct"],
+                    mode="lines+markers", name="Par SOFR IRS",
+                    line=dict(color="#a78bfa", width=2, dash="dot"),
+                    marker=dict(size=4)
                 ))
 
             # FF OIS curve
@@ -12123,7 +12133,11 @@ def curves_tab():
                 font=dict(color="#94a3b8", size=11),
                 xaxis=dict(title="Maturity (Y)", gridcolor="#1e293b"),
                 yaxis=dict(title="Rate (%)", gridcolor="#1e293b"),
-                legend=dict(bgcolor="rgba(0,0,0,0)"),
+                legend=dict(
+                    bgcolor="rgba(15,23,42,0.9)", bordercolor="#334155", borderwidth=1,
+                    font=dict(color="#e2e8f0", size=12),
+                    orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+                ),
                 hovermode="x unified"
             )
             st.plotly_chart(_usd_fig, use_container_width=True)
