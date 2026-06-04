@@ -7510,7 +7510,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0406f"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0406g"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -11068,6 +11068,7 @@ def vol_config_tab():
                         if _db_curve is not None and len(_db_curve) > 0:
                             # Bootstrap par → zero for USD SOFR OIS
                             if _db_ccy == "USD":
+                                st.session_state["_usd_sofr_par"] = _db_curve.copy()
                                 _db_curve = bootstrap_usd_sofr_ois(_db_curve)
                             st.session_state.setdefault("curves", {})[_db_ccy] = _db_curve
                             st.session_state.setdefault("config_curves", {})[_db_ccy] = _db_curve
@@ -12161,16 +12162,23 @@ def curves_tab():
                 return _dc
 
             with st.expander("USD Curve Data", expanded=False):
-                _usd_tcols = st.columns(3)
+                _usd_par = st.session_state.get("_usd_sofr_par")
+                _usd_tcols = st.columns(4)
                 with _usd_tcols[0]:
-                    st.caption("SOFR Swap (%)")
+                    st.caption("🔵 Bootstrapped Zero Curve (%) — used for pricing")
                     if _sofr_curve is not None and not _sofr_curve.empty:
-                        st.dataframe(_relabel_maturity(_sofr_curve).rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Rate(%)"}), use_container_width=True, hide_index=True)
+                        st.dataframe(_relabel_maturity(_sofr_curve).rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Zero(%)"}), use_container_width=True, hide_index=True)
                 with _usd_tcols[1]:
-                    st.caption("FF OIS (%)")
+                    st.caption("⚪ Par SOFR IRS (%) — market input")
+                    if _usd_par is not None and not _usd_par.empty:
+                        st.dataframe(_relabel_maturity(_usd_par).rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Par(%)"}), use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("(reload USD curve to populate)")
+                with _usd_tcols[2]:
+                    st.caption("🟠 FF OIS (%)")
                     if _ff_ois is not None and not _ff_ois.empty:
                         st.dataframe(_relabel_maturity(_ff_ois).rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Rate(%)"}), use_container_width=True, hide_index=True)
-                with _usd_tcols[2]:
+                with _usd_tcols[3]:
                     st.caption("SOFR-FF Basis (bp)")
                     if _sofr_ff_bas is not None and not _sofr_ff_bas.empty:
                         _bas_tbl = _relabel_maturity(_sofr_ff_bas).rename(columns={"MaturityY":"Tenor","BasisBp":"Basis(bp)"})
@@ -31209,6 +31217,9 @@ def main():
                             # in bootstrap_usd_sofr_ois. AUD/NZD/EUR unchanged.
                             if target_ccy == "USD":
                                 try:
+                                    # Keep the raw par SOFR IRS rates for display
+                                    # (bootstrap overwrites _df with zeros).
+                                    st.session_state["_usd_sofr_par"] = _df.copy()
                                     _df = bootstrap_usd_sofr_ois(_df)
                                 except Exception:
                                     pass
