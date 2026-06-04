@@ -2779,6 +2779,15 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         """Projection discount factor with convention-aware basis adjustment for AUD."""
         xs = crv["MaturityY"].to_numpy().astype(float)
         ys = crv["ZeroRatePct"].to_numpy().astype(float) / 100.0
+        if ccy == "USD":
+            # Log-linear interpolation ON DISCOUNT FACTORS (QuantLib
+            # PiecewiseYieldCurve<Discount, LogLinear/LogCubic> convention,
+            # which is what BlueGamma uses). Node DF = exp(-z*t); we interpolate
+            # log(DF) = -z*t linearly in t, then exp back. This is the market
+            # standard for OIS curves — NOT linear-on-zero.
+            _logdf = -ys * xs            # log(DF) at each node
+            _ld = float(np.interp(t, xs, _logdf))
+            return math.exp(_ld)
         z = float(np.interp(t, xs, ys))
         # Basis already incorporated in QQ-full and SS projection curves - no double adjustment
         return math.exp(-z * t)
@@ -2786,6 +2795,11 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
     def _df_disc(crv: pd.DataFrame, t: float) -> float:
         xs = crv["MaturityY"].to_numpy().astype(float)
         ys = crv["ZeroRatePct"].to_numpy().astype(float) / 100.0
+        if ccy == "USD":
+            # Log-linear interpolation on discount factors (see _df_proj).
+            _logdf = -ys * xs
+            _ld = float(np.interp(t, xs, _logdf))
+            return math.exp(_ld)
         z = float(np.interp(t, xs, ys))
         return math.exp(-z * t)
 
@@ -7496,7 +7510,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0406d"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0406e"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -31176,6 +31190,18 @@ def main():
                         if _df is None or len(_df) == 0:
                             continue
                         if _role == "main":
+                            # USD SOFR: bootstrap par swap rates → zero rates before
+                            # storing. This path (currency switch / startup) previously
+                            # stored RAW PAR rates into config_curves["USD"], so the
+                            # pricer discounted off par-as-zero and the 10y10y forward
+                            # came out ~9bp low (4.5765 vs BG 4.649). The correct market
+                            # method (par → bootstrap → zero, verified vs BlueGamma) lives
+                            # in bootstrap_usd_sofr_ois. AUD/NZD/EUR unchanged.
+                            if target_ccy == "USD":
+                                try:
+                                    _df = bootstrap_usd_sofr_ois(_df)
+                                except Exception:
+                                    pass
                             st.session_state.setdefault("curves", {})[target_ccy] = _df
                             st.session_state.setdefault("config_curves", {})[target_ccy] = _df
                             set_timestamp("curves", target_ccy)
