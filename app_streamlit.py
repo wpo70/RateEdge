@@ -30939,6 +30939,16 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
     if ccy == "USD":
         ois_curve = curve  # SOFR IS the OIS curve
 
+    # v0406l: USD ATM vol must match the pricer EXACTLY. The pricer's straddle vol is
+    # get_vol_for_strike(F) → smile_vol_pinned(F,F,T,α,β,ρ,ν) (SABR-reconstructed ATM
+    # + pin bumps), NOT the raw grid. Fetch the SABR matrices so we can reproduce it.
+    _usd_sa = _usd_sb = _usd_sr = _usd_sn = None
+    if ccy == "USD":
+        try:
+            _, _usd_sa, _usd_sb, _usd_sr, _usd_sn = get_ccy_vol_data("USD")
+        except Exception:
+            _usd_sa = _usd_sb = _usd_sr = _usd_sn = None
+
     prem_rows = []
     vega_rows = []
 
@@ -30987,10 +30997,23 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
                 # premium matrix is identical to the pricer. The closed-form below (kept for
                 # AUD/NZD/EUR, unchanged) used a truncated 0.3989 constant and diverged.
                 if ccy == "USD":
+                    # Vol EXACTLY as the pricer computes it: SABR-pinned ATM
+                    # (smile_vol_pinned at K=F) when SABR params exist for this
+                    # bucket, else raw grid vol. Mirrors get_vol_for_strike.
+                    _sigma_use = sigma_n
+                    _sabr_p = get_sabr_params_from_matrices(_usd_sa, _usd_sb, _usd_sr, _usd_sn, exp, tenor_y)
+                    if _sabr_p and _sabr_p.get("alpha", 0) > 0:
+                        try:
+                            _sigma_use = smile_vol_pinned(
+                                _fwd, _fwd, exp_y,
+                                _sabr_p["alpha"], _sabr_p["beta"], _sabr_p["rho"], _sabr_p["nu"],
+                                exp_y, tenor_y)
+                        except Exception:
+                            _sigma_use = sigma_n
                     _tk = SwaptionTicket(
                         side="Payer", payoff_type="straddle", notional=1e6, currency="USD",
                         expiry_years=exp_y, swap_tenor_years=tenor_y, forward=_fwd,
-                        strike=_fwd, vol=sigma_n, discount_rate=_r, annuity=ann,
+                        strike=_fwd, vol=_sigma_use, discount_rate=_r, annuity=ann,
                         model="Normal", label="", use_curve=True)
                     _res = price_swaption(_tk)
                     prow[tenor] = round(_res.get("pv_bp_fwd", _res.get("pv_bp", 0.0)), 2)
