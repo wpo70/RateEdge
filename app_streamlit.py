@@ -32123,31 +32123,40 @@ def main():
 
     st.markdown('<style>[data-testid="stMainBlockContainer"]{padding-top:0 !important}[data-testid="stAppViewBlockContainer"]{padding-top:0 !important}</style>', unsafe_allow_html=True)
 
-    # ── Currency flag banner (above tab menu) — always shows the ccy being priced ──
+    # ── Currency flag bar (above tab menu) — always shows the ccy being priced ──
+    # Windows/Chrome do NOT render unicode flag emoji (they fall back to "US"/"AU"),
+    # so use real flag SVGs from flagcdn. ISO code + name are plain text, so the bar
+    # still reads correctly even if a flag image ever fails to load.
     _flag_ccy = str(st.session_state.get("sidebar_ccy", "AUD")).split(" ")[0]
     _CCY_FLAG = {
-        "USD": ("🇺🇸", "#1b6e2e", "United States Dollar"),
-        "AUD": ("🇦🇺", "#0b3d91", "Australian Dollar"),
-        "EUR": ("🇪🇺", "#003399", "Euro"),
-        "NZD": ("🇳🇿", "#00247d", "New Zealand Dollar"),
-        "JPY": ("🇯🇵", "#bc002d", "Japanese Yen"),
-        "GBP": ("🇬🇧", "#012169", "Pound Sterling"),
-        "CAD": ("🇨🇦", "#d80621", "Canadian Dollar"),
+        "USD": ("us", "#3ea35a", "United States Dollar"),
+        "AUD": ("au", "#4a7fc4", "Australian Dollar"),
+        "EUR": ("eu", "#4d6fd0", "Euro"),
+        "NZD": ("nz", "#3f6bb0", "New Zealand Dollar"),
+        "JPY": ("jp", "#d8506a", "Japanese Yen"),
+        "GBP": ("gb", "#5277c2", "Pound Sterling"),
+        "CAD": ("ca", "#e0566a", "Canadian Dollar"),
     }
-    _flag, _fclr, _fname = _CCY_FLAG.get(_flag_ccy, ("🏳️", "#555555", _flag_ccy))
-    _pending_tag = " · PENDING" if "PENDING" in str(st.session_state.get("sidebar_ccy", "")).upper() else ""
+    _cc, _accent, _fname = _CCY_FLAG.get(_flag_ccy, ("", "#7d93a8", _flag_ccy))
+    _pending_tag = "  ·  PENDING" if "PENDING" in str(st.session_state.get("sidebar_ccy", "")).upper() else ""
+    _flag_img = (
+        f'<img src="https://flagcdn.com/{_cc}.svg" alt="{_flag_ccy}" '
+        f'style="width:30px;height:20px;border-radius:3px;object-fit:cover;'
+        f'box-shadow:0 0 0 1px #00000055;display:block;flex:0 0 auto;"/>'
+        if _cc else ""
+    )
     st.markdown(
-        f'<div style="display:flex;align-items:center;gap:14px;'
-        f'background:linear-gradient(90deg,{_fclr} 0%,{_fclr}cc 55%,{_fclr}66 100%);'
-        f'border-left:6px solid {_fclr};border-radius:8px;'
-        f'padding:8px 16px;margin:0 0 8px 0;">'
-        f'<span style="font-size:30px;line-height:1;">{_flag}</span>'
-        f'<span style="font-size:26px;font-weight:800;color:#fff;'
-        f'letter-spacing:2px;line-height:1;">{_flag_ccy}</span>'
-        f'<span style="font-size:13px;font-weight:500;color:#ffffffcc;'
-        f'margin-left:2px;">{_fname}{_pending_tag}</span>'
-        f'<span style="margin-left:auto;font-size:11px;font-weight:600;'
-        f'color:#ffffffaa;letter-spacing:1px;">PRICING CURRENCY</span>'
+        f'<div style="display:flex;align-items:center;gap:12px;'
+        f'background:#0d1b2a;border:1px solid #1f3a52;'
+        f'border-left:4px solid {_accent};border-radius:8px;'
+        f'padding:7px 15px;margin:0 0 8px 0;">'
+        f'{_flag_img}'
+        f'<span style="font-size:21px;font-weight:800;color:#e8eef5;'
+        f'letter-spacing:1.5px;line-height:1;">{_flag_ccy}</span>'
+        f'<span style="font-size:12px;font-weight:500;color:#8aa0b6;'
+        f'line-height:1;">{_fname}{_pending_tag}</span>'
+        f'<span style="margin-left:auto;font-size:10px;font-weight:600;'
+        f'color:#56708a;letter-spacing:1.5px;">PRICING CURRENCY</span>'
         f'</div>',
         unsafe_allow_html=True,
     )
