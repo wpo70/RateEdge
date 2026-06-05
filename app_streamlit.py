@@ -32123,6 +32123,35 @@ def main():
 
     st.markdown('<style>[data-testid="stMainBlockContainer"]{padding-top:0 !important}[data-testid="stAppViewBlockContainer"]{padding-top:0 !important}</style>', unsafe_allow_html=True)
 
+    # ── Currency flag banner (above tab menu) — always shows the ccy being priced ──
+    _flag_ccy = str(st.session_state.get("sidebar_ccy", "AUD")).split(" ")[0]
+    _CCY_FLAG = {
+        "USD": ("🇺🇸", "#1b6e2e", "United States Dollar"),
+        "AUD": ("🇦🇺", "#0b3d91", "Australian Dollar"),
+        "EUR": ("🇪🇺", "#003399", "Euro"),
+        "NZD": ("🇳🇿", "#00247d", "New Zealand Dollar"),
+        "JPY": ("🇯🇵", "#bc002d", "Japanese Yen"),
+        "GBP": ("🇬🇧", "#012169", "Pound Sterling"),
+        "CAD": ("🇨🇦", "#d80621", "Canadian Dollar"),
+    }
+    _flag, _fclr, _fname = _CCY_FLAG.get(_flag_ccy, ("🏳️", "#555555", _flag_ccy))
+    _pending_tag = " · PENDING" if "PENDING" in str(st.session_state.get("sidebar_ccy", "")).upper() else ""
+    st.markdown(
+        f'<div style="display:flex;align-items:center;gap:14px;'
+        f'background:linear-gradient(90deg,{_fclr} 0%,{_fclr}cc 55%,{_fclr}66 100%);'
+        f'border-left:6px solid {_fclr};border-radius:8px;'
+        f'padding:8px 16px;margin:0 0 8px 0;">'
+        f'<span style="font-size:30px;line-height:1;">{_flag}</span>'
+        f'<span style="font-size:26px;font-weight:800;color:#fff;'
+        f'letter-spacing:2px;line-height:1;">{_flag_ccy}</span>'
+        f'<span style="font-size:13px;font-weight:500;color:#ffffffcc;'
+        f'margin-left:2px;">{_fname}{_pending_tag}</span>'
+        f'<span style="margin-left:auto;font-size:11px;font-weight:600;'
+        f'color:#ffffffaa;letter-spacing:1px;">PRICING CURRENCY</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
     _active = st.radio("Navigation", _tab_names, horizontal=True, key="_main_nav",
                         label_visibility="collapsed")
     _active_idx = _tab_names.index(_active) if _active in _tab_names else 0
