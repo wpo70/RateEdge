@@ -32145,8 +32145,7 @@ def main():
     )
     st.markdown(
         f'<div style="display:flex;align-items:center;gap:12px;'
-        f'background:#0d1b2a;border:1px solid #1f3a52;'
-        f'border-left:4px solid {_accent};border-radius:8px;'
+        f'background:#0d1b2a;border:1px solid #1f3a52;border-radius:8px;'
         f'padding:7px 15px;margin:0 0 8px 0;">'
         f'{_flag_img}'
         f'<span style="font-size:21px;font-weight:800;color:#e8eef5;'
