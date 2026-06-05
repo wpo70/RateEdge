@@ -17225,6 +17225,13 @@ def swaptions_tab(vol_mode: str):
             _T_sabr = expiry_y + delay_y if is_midcurve else expiry_y
             sabr = get_sabr_params_from_matrices(a, b, r, n, _sabr_expiry_lbl, tenor_y)
             if vol_mode.startswith("Normal"):
+                # At the money, use the GRID ATM directly — it IS the marked vol.
+                # Reconstructing the ATM point from SABR alpha lets the ATM straddle
+                # drift from the surface whenever alpha is stale (ATM re-marked but
+                # alpha not yet recalibrated → e.g. 80.48 marked, straddle stuck at
+                # the 80.68-equivalent). OTM strikes still use the SABR smile + pins.
+                if abs(k_pct - fwd_pct) < 1e-6:
+                    return atm_val / 10000.0
                 if sabr and sabr.get("alpha", 0) > 0:
                     return smile_vol_pinned(
                         fwd_pct/100.0, k_pct/100.0, _T_sabr,
