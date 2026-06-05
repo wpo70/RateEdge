@@ -8534,6 +8534,54 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         pass
                                     return None
 
+                                import datetime as _dt_agg
+                                def _agg_bucket_norm(_trs, _Ft, _Ty, _ann, _df, _hl_days):
+                                    """Collapse multiple SDR prints on one (expiry,tenor) into a single
+                                    (Kp, Kr, vp_mkt, vr_mkt) with three normalisations, in priority order:
+                                      (2) RECENCY  — primary weight w_rec = exp(-ln2·age_days/half_life);
+                                          old prints fade so a 3-month window isn't smeared.
+                                      (3) MONEYNESS — each trade is normalised to its offset from its own
+                                          mid (mid=(Kp+Kr)/2 ≈ trade-time forward) and inverted to a normal
+                                          vol AT ITS OWN forward, so offset+vol are regime-invariant. The
+                                          aggregated offset is then reconstructed at TODAY's forward _Ft.
+                                      (4) NOTIONAL — secondary weight w_not = √(notional$mm) so size nudges
+                                          but doesn't let one big old clip dominate recency.
+                                    Combined weight w = w_rec · w_not. Returns (None,…) if nothing usable."""
+                                    _now = _dt_agg.datetime.now()
+                                    _ln2 = math.log(2.0)
+                                    _ws = 0.0; _op = 0.0; _orr = 0.0; _vp = 0.0; _vr = 0.0
+                                    for _t in _trs:
+                                        try:
+                                            _kp = float(_t.get("_p_strike") or 0) / 100.0
+                                            _kr = float(_t.get("_r_strike") or 0) / 100.0
+                                            if _kp <= 0 or _kr <= 0: continue
+                                            _pp = float(_t.get("P Prem BP") or 0)
+                                            _rp = float(_t.get("R Prem BP") or 0)
+                                            if _pp <= 0 or _rp <= 0: continue
+                                            _mid = 0.5 * (_kp + _kr)            # trade-time forward proxy
+                                            _sp = _bch_invert_sabr(_pp, _mid, _kp, _Ty, True,  _ann, _df)
+                                            _sr = _bch_invert_sabr(_rp, _mid, _kr, _Ty, False, _ann, _df)
+                                            if not _sp or not _sr: continue
+                                            _tdt = _t.get("_time_dt")
+                                            if _tdt is not None and _hl_days and _hl_days > 0:
+                                                _age = max((_now - _tdt).total_seconds() / 86400.0, 0.0)
+                                                _wr = math.exp(-_ln2 * _age / _hl_days)
+                                            else:
+                                                _wr = 1.0
+                                            _nm = float(_t.get("_notional_num") or 0)
+                                            _wn = math.sqrt(_nm / 1e6) if _nm > 0 else 1.0
+                                            _w = _wr * _wn
+                                            if _w <= 0: continue
+                                            _op  += _w * (_kp - _mid)
+                                            _orr += _w * (_kr - _mid)
+                                            _vp  += _w * _sp
+                                            _vr  += _w * _sr
+                                            _ws  += _w
+                                        except Exception:
+                                            continue
+                                    if _ws <= 0: return None, None, None, None
+                                    return (_Ft + _op/_ws, _Ft + _orr/_ws, _vp/_ws, _vr/_ws)
+
                                 _bucket_map = {}
                                 for _sg in _usd_sg:
                                     _bk = (_sg.get("Opt Expiry", ""), _sg.get("Swp Tenor", ""))
@@ -8542,23 +8590,20 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _sabr_ana_rows = []
                                 for (_exp, _ten), _trades in sorted(_bucket_map.items()):
                                     try:
-                                        _p_ks, _r_ks, _p_ps, _r_ps = [], [], [], []
-                                        for _tr in _trades:
+                                        _T = label_to_years(_exp)
+                                        _F = _atm_F.get((_exp, _ten))
+                                        if not _F:
                                             try:
-                                                _pts = str(_tr.get("Strike","")).replace("P:","").replace("R:","").replace("%","").split("/")
-                                                if len(_pts) == 2:
-                                                    _p_ks.append(float(_pts[0].strip()) / 100.0)
-                                                    _r_ks.append(float(_pts[1].strip()) / 100.0)
-                                            except Exception: pass
-                                            try:
-                                                _p_ps.append(float(_tr.get("P Prem BP") or 0))
-                                                _r_ps.append(float(_tr.get("R Prem BP") or 0))
-                                            except Exception: pass
-                                        if not _p_ks: continue
-                                        _avg_pk = sum(_p_ks)/len(_p_ks); _avg_rk = sum(_r_ks)/len(_r_ks)
-                                        _avg_pp = sum(_p_ps)/len(_p_ps) if _p_ps else 0
-                                        _avg_rp = sum(_r_ps)/len(_r_ps) if _r_ps else 0
-                                        _T = label_to_years(_exp); _F = _atm_F.get((_exp, _ten))
+                                                _F, _, _ = forward_and_annuity_from_curve(
+                                                    _sabr_curve, "USD", _T, label_to_years(_ten), None)
+                                            except Exception:
+                                                _F = None
+                                        _hl = float(st.session_state.get("sdr_half_life", 21))
+                                        _avg_pk = _avg_rk = _mv_p = _mv_r = None
+                                        if _F and _T > 0:
+                                            _avg_pk, _avg_rk, _mv_p, _mv_r = _agg_bucket_norm(
+                                                _trades, _F, _T, _bucket_annuity(_exp,_ten), _bucket_df(_exp), _hl)
+                                        if _avg_pk is None: continue
                                         _a = _sabr_param(_sabr_adf,_exp,_ten); _b = _sabr_param(_sabr_bdf,_exp,_ten)
                                         _r = _sabr_param(_sabr_rdf,_exp,_ten); _n = _sabr_param(_sabr_ndf,_exp,_ten)
                                         _sv_p = _sv_r = _s_skew = None
@@ -8568,11 +8613,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                 _sv_r  = sabr_normal_vol_smile(_F,_avg_rk,_T,_a,_b,_r,_n)*10000
                                                 _s_skew = _sv_p - _sv_r
                                             except Exception: pass
-                                        _mv_p = _mv_r = _m_skew = None
-                                        if _F and _avg_pp > 0 and _T > 0:
-                                            _mv_p = _bch_invert_sabr(_avg_pp,_F,_avg_pk,_T,True, _bucket_annuity(_exp,_ten), _bucket_df(_exp))
-                                            _mv_r = _bch_invert_sabr(_avg_rp,_F,_avg_rk,_T,False, _bucket_annuity(_exp,_ten), _bucket_df(_exp))
-                                            if _mv_p and _mv_r: _m_skew = _mv_p - _mv_r
+                                        _m_skew = (_mv_p - _mv_r) if (_mv_p and _mv_r) else None
                                         _skew_diff = round(_m_skew-_s_skew,1) if (_m_skew is not None and _s_skew is not None) else None
                                         _flag = ("⚠️" if _skew_diff and abs(_skew_diff)>2 else "✅" if _skew_diff is not None else "ℹ️" if not _F else "—")
                                         _sabr_ana_rows.append({
@@ -8631,6 +8672,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         )
 
                                         _blend_w = st.slider("Blend weight (0=keep current, 1=full market)", 0.0, 1.0, 0.5, 0.05, key="sdr_sabr_blend_w")
+                                        st.slider("Recency half-life (days)", 1, 90, 21, key="sdr_half_life",
+                                                  help="Multi-print buckets are recency-weighted: a print this old counts half. "
+                                                       "Trades are also moneyness-normalised (offset from their own mid, applied "
+                                                       "at today's forward) and √notional-weighted. Lower = favour recent prints.")
 
                                         # Diagnostics — always visible
                                         _diag_strangles = len(_usd_sg)
@@ -8685,26 +8730,16 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     _n0 = _sabr_param(_sabr_ndf, _exp, _ten)
                                                     if None in (_a0, _b0, _r0, _n0): continue
 
-                                                    # Get market vols for this bucket
-                                                    _p_ks2, _r_ks2, _p_ps2, _r_ps2 = [], [], [], []
-                                                    for _tr in _trades:
-                                                        try:
-                                                            _pts2 = str(_tr.get("Strike","")).replace("P:","").replace("R:","").replace("%","").split("/")
-                                                            if len(_pts2)==2:
-                                                                _p_ks2.append(float(_pts2[0].strip())/100.0)
-                                                                _r_ks2.append(float(_pts2[1].strip())/100.0)
-                                                        except Exception: pass
-                                                        try:
-                                                            _p_ps2.append(float(_tr.get("P Prem BP") or 0))
-                                                            _r_ps2.append(float(_tr.get("R Prem BP") or 0))
-                                                        except Exception: pass
-                                                    if not _p_ks2: continue
-                                                    if not _p_ps2 or not _r_ps2: continue  # no parseable premiums → skip (was div-by-zero)
-                                                    _Kp = sum(_p_ks2)/len(_p_ks2)
-                                                    _Kr = sum(_r_ks2)/len(_r_ks2)
-                                                    _vp_mkt = _bch_invert_sabr(sum(_p_ps2)/len(_p_ps2), _F, _Kp, _T, True, _bucket_annuity(_exp,_ten), _bucket_df(_exp))
-                                                    _vr_mkt = _bch_invert_sabr(sum(_r_ps2)/len(_r_ps2), _F, _Kr, _T, False, _bucket_annuity(_exp,_ten), _bucket_df(_exp))
-                                                    if not _vp_mkt or not _vr_mkt: continue
+                                                    # Aggregate multi-print buckets with the same
+                                                    # normalisation as the analytics table: moneyness-
+                                                    # normalised, recency-weighted (primary), notional-
+                                                    # weighted (secondary). Replaces the old plain mean of
+                                                    # absolute strikes + mean premium, which smeared a
+                                                    # multi-month window across moved forwards/vol regimes.
+                                                    _hl = float(st.session_state.get("sdr_half_life", 21))
+                                                    _Kp, _Kr, _vp_mkt, _vr_mkt = _agg_bucket_norm(
+                                                        _trades, _F, _T, _bucket_annuity(_exp,_ten), _bucket_df(_exp), _hl)
+                                                    if _Kp is None or not _vp_mkt or not _vr_mkt: continue
 
                                                     # Get ATM vol for this bucket (df hoisted above loop)
                                                     _atm_v = None
