@@ -9121,7 +9121,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                         pass
                                                 _unpinned_grouped = []
                                                 for (_be, _bt) in _bucket_map.keys():
-                                                    _bk_y = (round(label_to_years(_be), 4), round(label_to_years(_bt), 4))
+                                                    try:
+                                                        _bk_y = (round(label_to_years(_be), 4), round(label_to_years(_bt), 4))
+                                                    except Exception:
+                                                        continue
                                                     if _bk_y not in _pinned_bk:
                                                         _unpinned_grouped.append(f"{_be}×{_bt}")
                                                 st.session_state["_sdr_sabr_blended"] = {
