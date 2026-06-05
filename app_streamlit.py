@@ -11631,7 +11631,18 @@ def vol_config_tab():
     
     st.markdown("---")
     st.markdown("#### Currently Loaded Status")
-    
+
+    # Default the load-status filter to the sidebar currency, so this page shows
+    # just the ccy you're working in. Resets to follow the sidebar when it changes;
+    # a manual override (incl. "All") persists until the sidebar ccy changes again.
+    # Same key as the selector below, so the banner and the status cards agree.
+    _sidebar_ccy_st = st.session_state.get("sidebar_ccy", "USD").split(" ")[0]
+    _status_avail = [c for c in SUPPORTED_CURRENCIES
+                     if c not in ({_c.split(" ")[0] for _c in ALL_CURRENCIES if "(PENDING)" in str(_c)} | _HIDDEN_SIDEBAR_CCYS)]
+    if st.session_state.get("_status_filter_sidebar_ccy") != _sidebar_ccy_st:
+        st.session_state["upload_status_ccy_filter"] = _sidebar_ccy_st if _sidebar_ccy_st in _status_avail else "All"
+        st.session_state["_status_filter_sidebar_ccy"] = _sidebar_ccy_st
+
     # v0705o: rebuild banner per-ccy filtered by the selectbox (below).
     # The selectbox key persists in session_state so we can read it before it's drawn.
     _banner_filter = st.session_state.get("upload_status_ccy_filter", "All")
