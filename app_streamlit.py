@@ -8429,10 +8429,21 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         if _sabr_adf is None:
                             st.warning("No USD SABR surface loaded — load a vol snapshot on the Vol Editor tab first.")
                         else:
+                            # v0506l: admit Risk Reversals, not just Strangles. The old
+                            # filter ("Strangle" in Type) silently excluded every plain
+                            # "R/R" row from the SABR fit AND the pin-build → those buckets
+                            # fell back to the raw VCUB backbone and mispriced (6M2Y sign
+                            # flip, 6M30Y 2×). A traded R/R carries a payer+receiver strike
+                            # and premium exactly like a strangle, so the vol inversion is
+                            # structure-agnostic and they belong in the fit. Match any
+                            # strangle or risk-reversal variant, case-insensitively.
+                            def _is_smile_struct(_ty):
+                                _t = str(_ty).lower()
+                                return ("strangle" in _t) or ("r/r" in _t) or ("risk reversal" in _t)
                             _usd_sg = [r for r in _paired_rows
-                                       if "Strangle" in r.get("Type", "") and r.get("CCY") == "USD"]
+                                       if r.get("CCY") == "USD" and _is_smile_struct(r.get("Type", ""))]
                             if not _usd_sg:
-                                st.info("No USD strangles in current date range — widen the date filter to see results.")
+                                st.info("No USD strangles / risk-reversals in current date range — widen the date filter to see results.")
                             else:
                                 _atm_map = {}
                                 for _sr in _paired_rows:
@@ -8959,6 +8970,67 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                         _idx += 1
                                                     _delta_rows.append((_dr_row, _dn_row))
 
+                                                # v0506l: sanity-clamp the blended USD ρ/ν BEFORE the pin map
+                                                # is built. Untraded / dropped buckets carry phantom extreme
+                                                # SABR params from the thin-data VCUB fit (ρ→±0.9 floor, ν→0.05
+                                                # or >1) that price absurd skews (6M2Y ρ=-0.83 → a -39bp
+                                                # receiver skew). Clamping here — before residuals are
+                                                # computed — keeps every PINNED bucket exact (its residual
+                                                # rebuilds against the clamped backbone) while capping
+                                                # un-pinned buckets to a sane band. Alpha is recalibrated to
+                                                # the grid ATM with the clamped ρ/ν so the ATM backbone is
+                                                # unchanged.
+                                                _RHO_LO, _RHO_HI = -0.60, 0.60
+                                                _NU_LO,  _NU_HI  = 0.05, 1.50
+                                                def _cin(_df, _t):
+                                                    if _t in _df.columns: return _t
+                                                    _tl = str(_t).lower().strip()
+                                                    for _c in _df.columns:
+                                                        if str(_c).lower().strip() == _tl: return _c
+                                                    return None
+                                                _n_clamped = 0
+                                                for _exp2 in _GRID_EXP:
+                                                    _mask2 = _new_rho_df["Expiry"].str.lower().str.strip() == _exp2.lower().strip()
+                                                    if not _mask2.any(): continue
+                                                    for _ten2 in _GRID_TEN:
+                                                        _rc2 = _cin(_new_rho_df, _ten2)
+                                                        _nc2 = _cin(_new_nu_df,  _ten2)
+                                                        _ac2 = _cin(_new_alpha_df, _ten2)
+                                                        if _rc2 is None or _nc2 is None: continue
+                                                        try:
+                                                            _rv = float(_new_rho_df.loc[_mask2, _rc2].iloc[0])
+                                                            _nv = float(_new_nu_df.loc[_mask2, _nc2].iloc[0])
+                                                        except Exception:
+                                                            continue
+                                                        _rvc = float(np.clip(_rv, _RHO_LO, _RHO_HI))
+                                                        _nvc = float(np.clip(_nv, _NU_LO, _NU_HI))
+                                                        if abs(_rvc - _rv) < 1e-9 and abs(_nvc - _nv) < 1e-9:
+                                                            continue
+                                                        _new_rho_df.loc[_mask2, _rc2] = _rvc
+                                                        _new_nu_df.loc[_mask2, _nc2]  = _nvc
+                                                        _n_clamped += 1
+                                                        # re-recalibrate alpha to grid ATM with clamped ρ/ν
+                                                        if _atm_df2 is not None and _ac2 is not None:
+                                                            _bb2 = _sabr_param(_sabr_bdf, _exp2, _ten2)
+                                                            _av2c = get_matrix_value(_atm_df2, _exp2, label_to_years(_ten2))
+                                                            _Fc2 = _atm_F.get((_exp2, _ten2))
+                                                            if not _Fc2:
+                                                                try:
+                                                                    _Fc2, _, _ = forward_and_annuity_from_curve(
+                                                                        _sabr_curve, "USD",
+                                                                        label_to_years(_exp2), label_to_years(_ten2), None)
+                                                                except Exception:
+                                                                    _Fc2 = None
+                                                            if _av2c and _Fc2 and _bb2 is not None:
+                                                                try:
+                                                                    _anew = sabr_implied_alpha_from_atm(
+                                                                        _av2c/10000.0, _Fc2,
+                                                                        label_to_years(_exp2), _bb2, _rvc, _nvc)
+                                                                    if _anew > 0:
+                                                                        _new_alpha_df.loc[_mask2, _ac2] = _anew
+                                                                except Exception:
+                                                                    pass
+
                                                 # ── Build the residual-bump pin map (Option B).
                                                 # The smoothed SABR surface can't pass exactly through
                                                 # the traded vols (they don't lie on a SABR smile). So we
@@ -9037,6 +9109,21 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                         return _d.to_dict(orient="records")
                                                     return _d.reset_index().to_dict(orient="records")
                                                 # (pin map built above as residual bumps)
+                                                # v0506l: coverage — which grouped buckets got a pin vs not.
+                                                # Surfaces silently-dropped traded buckets so a missing pin
+                                                # is visible instead of falling back to backbone unseen.
+                                                _pinned_bk = set()
+                                                for _k in _pin_map.keys():
+                                                    try:
+                                                        _ke, _kt, _ = _k.split("|")
+                                                        _pinned_bk.add((round(float(_ke), 4), round(float(_kt), 4)))
+                                                    except Exception:
+                                                        pass
+                                                _unpinned_grouped = []
+                                                for (_be, _bt) in _bucket_map.keys():
+                                                    _bk_y = (round(label_to_years(_be), 4), round(label_to_years(_bt), 4))
+                                                    if _bk_y not in _pinned_bk:
+                                                        _unpinned_grouped.append(f"{_be}×{_bt}")
                                                 st.session_state["_sdr_sabr_blended"] = {
                                                     "rho_rec":   _df_to_rec(_new_rho_df),
                                                     "nu_rec":    _df_to_rec(_new_nu_df),
@@ -9046,6 +9133,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     "pin_map": _pin_map,
                                                     "n_pins": len(_pin_map),
                                                     "pin_skips": _pin_skips,
+                                                    "n_grouped": len(_bucket_map),
+                                                    "n_clamped": _n_clamped,
+                                                    "unpinned_grouped": _unpinned_grouped,
                                                 }
                                                 st.rerun(scope="app")  # rerun so preview renders outside button block
 
@@ -9077,6 +9167,18 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             else:
                                                 st.warning(f"📌 0 pins built — traded R/Rs will NOT reprice exactly. "
                                                            f"Skip reasons: {_psk}")
+                                            # v0506l: pin coverage — flag grouped buckets that got NO pin
+                                            # (they price on backbone, not the trade). _nc = clamp count.
+                                            _ng = _bl_prev.get("n_grouped", 0)
+                                            _ncl = _bl_prev.get("n_clamped", 0)
+                                            _ungp = _bl_prev.get("unpinned_grouped", []) or []
+                                            _n_pinned_bk = max(_ng - len(_ungp), 0)
+                                            st.caption(f"Coverage: {_ng} grouped bucket(s) · "
+                                                       f"{_n_pinned_bk} pinned · {_ncl} clamped to sane ρ/ν.")
+                                            if _ungp:
+                                                st.warning("⚠️ Grouped but **NOT pinned** (price on backbone, not the trade): "
+                                                           + ", ".join(_ungp)
+                                                           + ". These reprice off the SABR backbone — verify or add data.")
                                 else:
                                     st.info("Could not parse strike/premium data from USD strangles in this range.")
 
