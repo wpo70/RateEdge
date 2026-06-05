@@ -31258,19 +31258,17 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
                 # premium matrix is identical to the pricer. The closed-form below (kept for
                 # AUD/NZD/EUR, unchanged) used a truncated 0.3989 constant and diverged.
                 if ccy == "USD":
-                    # Vol EXACTLY as the pricer computes it: SABR-pinned ATM
-                    # (smile_vol_pinned at K=F) when SABR params exist for this
-                    # bucket, else raw grid vol. Mirrors get_vol_for_strike.
+                    # v0506j: ATM straddle uses the RAW GRID ATM vol directly.
+                    # The premium matrix is ALWAYS struck at K=F (ATM), so there is
+                    # no reason to reconstruct the ATM point from SABR alpha —
+                    # smile_vol_pinned(F,F,...) only let the grid drift from the
+                    # marked surface whenever alpha was stale (10y10y stuck on the
+                    # Curves sheet until a manual alpha recalibration). Reading
+                    # sigma_n (the marked grid ATM) makes the matrix immune to alpha
+                    # drift, correct on reload, and identical to the swaption ATM
+                    # straddle path (grid-direct fix, v0506f). OTM smile/alpha is
+                    # irrelevant here because every cell is at-the-money.
                     _sigma_use = sigma_n
-                    _sabr_p = get_sabr_params_from_matrices(_usd_sa, _usd_sb, _usd_sr, _usd_sn, exp, tenor_y)
-                    if _sabr_p and _sabr_p.get("alpha", 0) > 0:
-                        try:
-                            _sigma_use = smile_vol_pinned(
-                                _fwd, _fwd, exp_y,
-                                _sabr_p["alpha"], _sabr_p["beta"], _sabr_p["rho"], _sabr_p["nu"],
-                                exp_y, tenor_y)
-                        except Exception:
-                            _sigma_use = sigma_n
                     _tk = SwaptionTicket(
                         side="Payer", payoff_type="straddle", notional=1e6, currency="USD",
                         expiry_years=exp_y, swap_tenor_years=tenor_y, forward=_fwd,
