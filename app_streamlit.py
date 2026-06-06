@@ -8546,7 +8546,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     return None
 
                                 import datetime as _dt_agg
-                                def _agg_bucket_norm(_trs, _Ft, _Ty, _ann, _df, _hl_days):
+                                def _agg_bucket_norm(_trs, _Ft, _Ty, _ann, _df, _hl_days, _max_age=0):
                                     """Collapse multiple SDR prints on one (expiry,tenor) into a single
                                     (Kp, Kr, vp_mkt, vr_mkt) with three normalisations, in priority order:
                                       (2) RECENCY  — primary weight w_rec = exp(-ln2·age_days/half_life);
@@ -8574,8 +8574,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             _sr = _bch_invert_sabr(_rp, _mid, _kr, _Ty, False, _ann, _df)
                                             if not _sp or not _sr: continue
                                             _tdt = _t.get("_time_dt")
+                                            _age = max((_now - _tdt).total_seconds() / 86400.0, 0.0) if _tdt is not None else 0.0
+                                            # v0506p: hard age cutoff — drop stale-regime prints entirely
+                                            # (not just down-weight) so a multi-week tail can't smear the
+                                            # smile and push ν to its bound.
+                                            if _max_age and _max_age > 0 and _tdt is not None and _age > _max_age:
+                                                continue
                                             if _tdt is not None and _hl_days and _hl_days > 0:
-                                                _age = max((_now - _tdt).total_seconds() / 86400.0, 0.0)
                                                 _wr = math.exp(-_ln2 * _age / _hl_days)
                                             else:
                                                 _wr = 1.0
@@ -8610,10 +8615,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             except Exception:
                                                 _F = None
                                         _hl = float(st.session_state.get("sdr_half_life", 21))
+                                        _mxa = float(st.session_state.get("sdr_max_age", 0))
                                         _avg_pk = _avg_rk = _mv_p = _mv_r = None
                                         if _F and _T > 0:
                                             _avg_pk, _avg_rk, _mv_p, _mv_r = _agg_bucket_norm(
-                                                _trades, _F, _T, _bucket_annuity(_exp,_ten), _bucket_df(_exp), _hl)
+                                                _trades, _F, _T, _bucket_annuity(_exp,_ten), _bucket_df(_exp), _hl, _mxa)
                                         if _avg_pk is None: continue
                                         _a = _sabr_param(_sabr_adf,_exp,_ten); _b = _sabr_param(_sabr_bdf,_exp,_ten)
                                         _r = _sabr_param(_sabr_rdf,_exp,_ten); _n = _sabr_param(_sabr_ndf,_exp,_ten)
@@ -8687,6 +8693,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                   help="Multi-print buckets are recency-weighted: a print this old counts half. "
                                                        "Trades are also moneyness-normalised (offset from their own mid, applied "
                                                        "at today's forward) and √notional-weighted. Lower = favour recent prints.")
+                                        st.slider("Max trade age (cal days, 0 = use all)", 0, 90, 0, key="sdr_max_age",
+                                                  help="Hard cutoff: prints OLDER than this are dropped entirely before fitting "
+                                                       "(not just down-weighted). 0 = keep all. Set to ~21–28 to stop a multi-week "
+                                                       "tail of stale-regime prints from smearing the smile and forcing ν to its bound.")
 
                                         # Diagnostics — always visible
                                         _diag_strangles = len(_usd_sg)
@@ -8716,6 +8726,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             _atm_df = st.session_state.get("vol_data",{}).get("USD",{}).get("atm")
                                             _fit_results = {}
                                             _fit_rows = []
+                                            _fit_drops = {}   # v0506p: bucket → why it dropped out of the fit/pin
                                             _spin_ctx = st.spinner(f"Fitting ρ/ν across {len(_bucket_map)} buckets…")
                                             _spin_ctx.__enter__()
                                             for (_exp, _ten), _trades in _bucket_map.items():
@@ -8733,13 +8744,15 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                                 label_to_years(_exp), label_to_years(_ten), None)
                                                         except Exception:
                                                             _F = None
-                                                    if not _F: continue
+                                                    if not _F:
+                                                        _fit_drops[f"{_exp}×{_ten}"] = "no forward (curve+straddle both missing)"; continue
                                                     _T = label_to_years(_exp)
                                                     _a0 = _sabr_param(_sabr_adf, _exp, _ten)
                                                     _b0 = _sabr_param(_sabr_bdf, _exp, _ten)
                                                     _r0 = _sabr_param(_sabr_rdf, _exp, _ten)
                                                     _n0 = _sabr_param(_sabr_ndf, _exp, _ten)
-                                                    if None in (_a0, _b0, _r0, _n0): continue
+                                                    if None in (_a0, _b0, _r0, _n0):
+                                                        _fit_drops[f"{_exp}×{_ten}"] = "no SABR backbone (surface missing this bucket)"; continue
 
                                                     # Aggregate multi-print buckets with the same
                                                     # normalisation as the analytics table: moneyness-
@@ -8748,15 +8761,18 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     # absolute strikes + mean premium, which smeared a
                                                     # multi-month window across moved forwards/vol regimes.
                                                     _hl = float(st.session_state.get("sdr_half_life", 21))
+                                                    _mxa = float(st.session_state.get("sdr_max_age", 0))
                                                     _Kp, _Kr, _vp_mkt, _vr_mkt = _agg_bucket_norm(
-                                                        _trades, _F, _T, _bucket_annuity(_exp,_ten), _bucket_df(_exp), _hl)
-                                                    if _Kp is None or not _vp_mkt or not _vr_mkt: continue
+                                                        _trades, _F, _T, _bucket_annuity(_exp,_ten), _bucket_df(_exp), _hl, _mxa)
+                                                    if _Kp is None or not _vp_mkt or not _vr_mkt:
+                                                        _fit_drops[f"{_exp}×{_ten}"] = "premium→vol inversion failed for all prints (or no payer/receiver legs / all past max-age)"; continue
 
                                                     # Get ATM vol for this bucket (df hoisted above loop)
                                                     _atm_v = None
                                                     if _atm_df is not None:
                                                         _atm_v = get_matrix_value(_atm_df, _exp, label_to_years(_ten))
-                                                    if not _atm_v: continue
+                                                    if not _atm_v:
+                                                        _fit_drops[f"{_exp}×{_ten}"] = "no ATM vol on surface for this bucket"; continue
                                                     _atm_dec = _atm_v / 10000.0
 
                                                     # 2D optimise: fit ρ, ν to match mkt payer+receiver vols
@@ -8767,7 +8783,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                             if _a_t <= 0: return 1e6
                                                             _vp_s = sabr_normal_vol_smile(_F,_Kp,_T,_a_t,_b0,_rho_t,_nu_t)*10000
                                                             _vr_s = sabr_normal_vol_smile(_F,_Kr,_T,_a_t,_b0,_rho_t,_nu_t)*10000
-                                                            return (_vp_s-_vp_mkt)**2 + (_vr_s-_vr_mkt)**2
+                                                            # v0506p: tiny ridge toward a sane interior (ρ=0, ν=0.5).
+                                                            # λ is small enough that a genuine fit (resid≫λ) is
+                                                            # unchanged; it only breaks the truly-flat degenerate
+                                                            # case where the objective is insensitive and L-BFGS-B
+                                                            # would otherwise wander to a bound.
+                                                            _pen = 0.02 * ((_nu_t - 0.5)**2 + _rho_t**2)
+                                                            return (_vp_s-_vp_mkt)**2 + (_vr_s-_vr_mkt)**2 + _pen
                                                         except Exception:
                                                             return 1e6
 
@@ -8778,23 +8800,31 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     # unchanged → Δ=0 (fit does nothing). Start mid-range.
                                                     _seed_rho = float(np.clip(_r0, -0.6, 0.6)) if (_r0 is not None and abs(_r0) < 0.9) else 0.0
                                                     _seed_nu  = float(_n0) if (_n0 is not None and 0.1 < _n0 < 1.5) else 0.4
+                                                    # v0506p: bound the FIT to the SAME sane band the pricing
+                                                    # clamp (v0506l) enforces, so the displayed/stored fit
+                                                    # equals what is actually priced — no more "fit shows
+                                                    # ν=2.0 but the backbone prices at the 1.5 clamp". Pins
+                                                    # still correct the traded strikes exactly; only the
+                                                    # untraded backbone is bounded.
+                                                    _FIT_BNDS = [(-0.60, 0.60), (0.05, 1.50)]
                                                     _res = _sopt.minimize(
                                                         _obj, [_seed_rho, _seed_nu],
-                                                        bounds=[(-0.95, 0.95), (0.01, 2.0)],
+                                                        bounds=_FIT_BNDS,
                                                         method="L-BFGS-B",
                                                         options={"maxiter": 200, "ftol": 1e-10, "eps": 1e-5}
                                                     )
-                                                    # Retry from a second seed if it stalled at a bound or
-                                                    # left large residual — avoids a single bad start.
+                                                    # Retry from a second/third seed if it stalled at a bound
+                                                    # or left a large residual — avoids a single bad start.
                                                     if _res.fun > 1.0:
-                                                        _res2 = _sopt.minimize(
-                                                            _obj, [0.0, 0.5],
-                                                            bounds=[(-0.95, 0.95), (0.01, 2.0)],
-                                                            method="L-BFGS-B",
-                                                            options={"maxiter": 200, "ftol": 1e-10, "eps": 1e-5}
-                                                        )
-                                                        if _res2.fun < _res.fun:
-                                                            _res = _res2
+                                                        for _seed2 in ([0.0, 0.5], [0.3, 0.9]):
+                                                            _res2 = _sopt.minimize(
+                                                                _obj, _seed2,
+                                                                bounds=_FIT_BNDS,
+                                                                method="L-BFGS-B",
+                                                                options={"maxiter": 200, "ftol": 1e-10, "eps": 1e-5}
+                                                            )
+                                                            if _res2.fun < _res.fun:
+                                                                _res = _res2
                                                     _rho_fit = _res.x[0]; _nu_fit = _res.x[1]
                                                     _dr = _rho_fit - _r0; _dn = _nu_fit - _n0
                                                     _fit_results[(_exp, _ten)] = {
@@ -9139,6 +9169,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     "n_grouped": len(_bucket_map),
                                                     "n_clamped": _n_clamped,
                                                     "unpinned_grouped": _unpinned_grouped,
+                                                    "fit_drops": _fit_drops,
                                                 }
                                                 st.rerun(scope="app")  # rerun so preview renders outside button block
 
@@ -9179,9 +9210,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             st.caption(f"Coverage: {_ng} grouped bucket(s) · "
                                                        f"{_n_pinned_bk} pinned · {_ncl} clamped to sane ρ/ν.")
                                             if _ungp:
-                                                st.warning("⚠️ Grouped but **NOT pinned** (price on backbone, not the trade): "
-                                                           + ", ".join(_ungp)
-                                                           + ". These reprice off the SABR backbone — verify or add data.")
+                                                _fdrops = _bl_prev.get("fit_drops", {}) or {}
+                                                _lines = []
+                                                for _bk in _ungp:
+                                                    _why = _fdrops.get(_bk, "pin not built (see Skipped above)")
+                                                    _lines.append(f"• {_bk} — {_why}")
+                                                st.warning("⚠️ Grouped but **NOT pinned** (price on backbone, not the trade):\n\n"
+                                                           + "\n\n".join(_lines)
+                                                           + "\n\nThese reprice off the SABR backbone — verify or add data.")
                                 else:
                                     st.info("Could not parse strike/premium data from USD strangles in this range.")
 
