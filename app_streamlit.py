@@ -9408,6 +9408,23 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _n_pts = len(_av_pts)
                                 st.markdown(f"**SDR-derived ATM points** ({_n_pts} bucket(s), last {_av_hours}h, recency+√notional weighted):")
                                 st.dataframe(pd.DataFrame(_pts_rows).set_index("Expiry"), use_container_width=True)
+                                # Heatmap — points mapped (NaN where no print)
+                                _pts_num = {"Expiry": []}
+                                for _c in _av_cols: _pts_num[_c] = []
+                                for _i in range(len(_av_atm)):
+                                    _e = _av_atm.iloc[_i]["Expiry"]; _pts_num["Expiry"].append(_e)
+                                    for _c in _av_cols:
+                                        _v = _av_pts_y.get(_yk(_e, _c))
+                                        _pts_num[_c].append(round(_v, 1) if _v else float("nan"))
+                                _pts_ndf = pd.DataFrame(_pts_num).set_index("Expiry")
+                                st.markdown("**Heatmap — SDR points mapped** (blank = no print):")
+                                try:
+                                    st.dataframe(
+                                        _pts_ndf.style.background_gradient(cmap="RdYlGn_r", axis=None)
+                                                .format("{:.1f}", na_rep="·"),
+                                        use_container_width=True)
+                                except Exception:
+                                    st.dataframe(_pts_ndf, use_container_width=True)
 
                                 # 2) blend into current ATM at point cells, optional smooth, anchor points
                                 _bl = _av_atm.copy()
@@ -9447,6 +9464,16 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 st.markdown(f"**Blended ATM surface** (current × {1-_av_w:.0%} + SDR × {_av_w:.0%}"
                                             + (", smoothed" if _av_smooth else "") + "):")
                                 st.dataframe(_bl.set_index("Expiry"), use_container_width=True)
+                                # Heatmap — blended / smoothed surface
+                                _bl_ndf = _bl.set_index("Expiry")[_av_cols].apply(pd.to_numeric, errors="coerce")
+                                st.markdown("**Heatmap — blended / smoothed surface:**")
+                                try:
+                                    st.dataframe(
+                                        _bl_ndf.style.background_gradient(cmap="RdYlGn_r", axis=None)
+                                              .format("{:.1f}"),
+                                        use_container_width=True)
+                                except Exception:
+                                    st.dataframe(_bl_ndf, use_container_width=True)
 
                                 st.session_state["_sdr_atm_blended"] = _bl
                                 if st.button("⬆️ Upload blended ATM to Vol Editor", key="sdr_atm_upload"):
