@@ -9457,26 +9457,32 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     st.warning("⚠️ Rejected as outliers (excluded from blend, deviate >"
                                                f"{_av_devcap}% from surface): " + ", ".join(_rejected))
                                 if _av_smooth and _anchor:
-                                    # one gentle pass: each cell -> 0.6 self + 0.4 mean(up,down,left,right)
+                                    # Smooth THROUGH the blended points (no hard re-anchor): 2 gentle
+                                    # passes of 0.6 self + 0.4 mean(up,down,left,right). Hard-anchoring
+                                    # re-imposed the exact blend at point cells, which re-created spikes
+                                    # (e.g. 1y1Y bulging to 102.6 between ~97.5 neighbours). The blend
+                                    # weight already sets SDR fidelity; smoothing now irons the term
+                                    # structure so 9m/1y/18m flow smoothly.
                                     _grid = _bl[_av_cols].apply(pd.to_numeric, errors="coerce").values.astype(float)
                                     _nr, _nc = _grid.shape
-                                    _sm = _grid.copy()
-                                    for _ri in range(_nr):
-                                        for _ci in range(_nc):
-                                            _ns = []
-                                            if _ri > 0: _ns.append(_grid[_ri-1, _ci])
-                                            if _ri < _nr-1: _ns.append(_grid[_ri+1, _ci])
-                                            if _ci > 0: _ns.append(_grid[_ri, _ci-1])
-                                            if _ci < _nc-1: _ns.append(_grid[_ri, _ci+1])
-                                            _ns = [x for x in _ns if not (x != x)]
-                                            if _ns and not (_grid[_ri, _ci] != _grid[_ri, _ci]):
-                                                _sm[_ri, _ci] = 0.6*_grid[_ri, _ci] + 0.4*(sum(_ns)/len(_ns))
+                                    for _pass in range(2):
+                                        _sm = _grid.copy()
+                                        for _ri in range(_nr):
+                                            for _ci in range(_nc):
+                                                if _grid[_ri, _ci] != _grid[_ri, _ci]: continue
+                                                _ns = []
+                                                if _ri > 0: _ns.append(_grid[_ri-1, _ci])
+                                                if _ri < _nr-1: _ns.append(_grid[_ri+1, _ci])
+                                                if _ci > 0: _ns.append(_grid[_ri, _ci-1])
+                                                if _ci < _nc-1: _ns.append(_grid[_ri, _ci+1])
+                                                _ns = [x for x in _ns if not (x != x)]
+                                                if _ns:
+                                                    _sm[_ri, _ci] = 0.6*_grid[_ri, _ci] + 0.4*(sum(_ns)/len(_ns))
+                                        _grid = _sm
                                     for _ci, _c in enumerate(_av_cols):
                                         for _ri in range(_nr):
-                                            if not (_sm[_ri, _ci] != _sm[_ri, _ci]):
-                                                _bl.iloc[_ri, _bl.columns.get_loc(_c)] = round(float(_sm[_ri, _ci]), 2)
-                                    for (_ri, _c), _val in _anchor.items():   # re-anchor printed points
-                                        _bl.iloc[_ri, _bl.columns.get_loc(_c)] = _val
+                                            if not (_grid[_ri, _ci] != _grid[_ri, _ci]):
+                                                _bl.iloc[_ri, _bl.columns.get_loc(_c)] = round(float(_grid[_ri, _ci]), 2)
 
                                 st.markdown(f"**Blended ATM surface** (current × {1-_av_w:.0%} + SDR × {_av_w:.0%}"
                                             + (", smoothed" if _av_smooth else "") + "):")
@@ -9494,21 +9500,18 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                                 st.session_state["_sdr_atm_blended"] = _bl
                                 if st.button("⬆️ Upload blended ATM to Vol Editor", key="sdr_atm_upload"):
-                                    _imp = _bl.copy()
-                                    # Route through the editor's import channel (same as SOD Implied
-                                    # Open). Writing vol_data['USD']['atm'] alone does NOT populate the
-                                    # editor's grid — the editor loads from _sod_usd_pending_surface.
-                                    st.session_state["_sod_usd_pending_surface"] = _imp
-                                    # also apply live so it's active in pricing immediately
-                                    _tgt = st.session_state.setdefault("vol_data", {}).setdefault("USD", {})
-                                    _tgt["atm"] = _imp
-                                    _tgt["label"] = (str(_tgt.get("label", "USD")).split(" | ")[0]
-                                                     + f" | SDR-ATM blend {_av_w:.0%} {_av_win}")
+                                    # Set the editor's import channel ONLY — do NOT write
+                                    # vol_data['USD']['atm'] here. If we wrote it live, the editor's
+                                    # base would be fetched from vol_data (= the blend) and equal the
+                                    # working copy → every cell shows "no change". Leaving vol_data
+                                    # untouched means base = your ORIGINAL surface, working = the blend,
+                                    # so the edits show and Publish applies them.
+                                    st.session_state["_sod_usd_pending_surface"] = _bl.copy()
                                     st.success(
                                         f"✅ Sent to Vol Editor ({_n_pts} SDR point(s) blended at {_av_w:.0%}). "
-                                        "Open the **Vol Editor** tab and click **📋 Load SOD Implied Open → "
-                                        "Editor** to load it into the grid, then save. (Already applied live "
-                                        "for pricing.)")
+                                        "Open the **Vol Editor** tab, click **📋 Load SOD Implied Open → "
+                                        "Editor** to load the blend, review the highlighted changes, then "
+                                        "**Publish** to apply.")
 
         if _atab5:
             # ── EXPIRY MONITOR — SDR strike exposure for upcoming expiries ──────
