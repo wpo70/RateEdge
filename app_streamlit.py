@@ -9330,7 +9330,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     return None
 
                             import datetime as _av_dtmod
-                            _av_now = _av_dtmod.datetime.now(_av_dtmod.timezone.utc)
+                            _av_now = _av_dtmod.datetime.now()   # naive — _time_dt is naive (matches R/R aggregator)
                             _av_acc = {}   # (exp,ten) -> [sum w*vol, sum w, n]
                             _ln2a = math.log(2.0); _hl_h = _av_hours / 2.0
                             for _r in _paired_rows:
