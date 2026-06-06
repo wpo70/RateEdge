@@ -9376,6 +9376,16 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _av_acc.setdefault(_k, [0.0, 0.0, 0])
                                 _av_acc[_k][0] += _w*_vol; _av_acc[_k][1] += _w; _av_acc[_k][2] += 1
                             _av_pts = {k: (a/b) for k, (a, b, n) in _av_acc.items() if b > 0}   # (exp,ten)->bp
+                            # Match by YEARS, not label strings — SDR labels ("3M","1Y") differ in
+                            # case/format from the surface rows ("3m","1y"), so a string-keyed lookup
+                            # silently missed every point (matrix blank, blend a no-op).
+                            def _yk(_e, _t):
+                                try: return (round(label_to_years(_e), 4), round(label_to_years(_t), 4))
+                                except Exception: return None
+                            _av_pts_y = {}
+                            for (_pe, _pt2), _pv in _av_pts.items():
+                                _kk = _yk(_pe, _pt2)
+                                if _kk: _av_pts_y[_kk] = _pv
 
                             if not _av_pts:
                                 st.info(f"No USD straddles with usable strike/premium in the last {_av_hours}h.")
@@ -9392,7 +9402,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _e = _av_atm.iloc[_i]["Expiry"]
                                     _row = {"Expiry": _e}
                                     for _c in _av_cols:
-                                        _v = _av_pts.get((_e, _c))
+                                        _v = _av_pts_y.get(_yk(_e, _c))
                                         _row[_c] = round(_v, 1) if _v else "—"
                                     _pts_rows.append(_row)
                                 _n_pts = len(_av_pts)
@@ -9405,7 +9415,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 for _i in range(len(_bl)):
                                     _e = _bl.iloc[_i]["Expiry"]
                                     for _c in _av_cols:
-                                        _pt = _av_pts.get((_e, _c))
+                                        _pt = _av_pts_y.get(_yk(_e, _c))
                                         if not _pt: continue
                                         try: _cur = float(_bl.iloc[_i][_c])
                                         except Exception: continue
