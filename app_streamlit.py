@@ -9297,6 +9297,12 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _av_smooth = st.checkbox("Smooth through points", value=True, key="sdr_atm_smooth",
                                                          help="One gentle pass that smooths the surface between printed points; "
                                                               "the printed points themselves stay anchored.")
+                            _av_devcap = st.slider("Reject points deviating from surface by more than (%)", 5, 100, 20, 5,
+                                                   key="sdr_atm_devcap",
+                                                   help="A derived ATM vol this far from the current surface is treated as a "
+                                                        "bad inversion / mismark (e.g. an off-ATM straddle or fat-fingered "
+                                                        "premium) and excluded from the blend, so one bad print can't corrupt "
+                                                        "the surface. Rejected points are listed below.")
                             _av_hours = 24 if _av_win.startswith("24") else 48
                             _av_curve = st.session_state.get("config_curves", {}).get("USD")
                             if _av_curve is None:
@@ -9421,7 +9427,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 try:
                                     st.dataframe(
                                         _pts_ndf.style.background_gradient(cmap="RdYlGn_r", axis=None)
-                                                .format("{:.1f}", na_rep="·"),
+                                                .format("{:.1f}", na_rep="")
+                                                .highlight_null(props="background-color:white;color:white;"),
                                         use_container_width=True)
                                 except Exception:
                                     st.dataframe(_pts_ndf, use_container_width=True)
@@ -9429,6 +9436,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 # 2) blend into current ATM at point cells, optional smooth, anchor points
                                 _bl = _av_atm.copy()
                                 _anchor = {}   # (row_idx, col) -> blended value, to re-impose after smoothing
+                                _rejected = []
                                 for _i in range(len(_bl)):
                                     _e = _bl.iloc[_i]["Expiry"]
                                     for _c in _av_cols:
@@ -9436,9 +9444,18 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         if not _pt: continue
                                         try: _cur = float(_bl.iloc[_i][_c])
                                         except Exception: continue
+                                        # Outlier guard: reject a derived point too far from the surface
+                                        # (bad inversion / off-ATM straddle / mismark) — don't let one
+                                        # bad print corrupt the blend (e.g. 7Y10Y 105 vs ~83 neighbours).
+                                        if _cur > 0 and abs(_pt - _cur) / _cur * 100.0 > _av_devcap:
+                                            _rejected.append(f"{_e}×{_c} ({_pt:.0f} vs surface {_cur:.0f})")
+                                            continue
                                         _nv = (1 - _av_w) * _cur + _av_w * _pt
                                         _bl.iloc[_i, _bl.columns.get_loc(_c)] = round(_nv, 2)
                                         _anchor[(_i, _c)] = round(_nv, 2)
+                                if _rejected:
+                                    st.warning("⚠️ Rejected as outliers (excluded from blend, deviate >"
+                                               f"{_av_devcap}% from surface): " + ", ".join(_rejected))
                                 if _av_smooth and _anchor:
                                     # one gentle pass: each cell -> 0.6 self + 0.4 mean(up,down,left,right)
                                     _grid = _bl[_av_cols].apply(pd.to_numeric, errors="coerce").values.astype(float)
