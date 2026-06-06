@@ -17092,7 +17092,7 @@ def swaptions_tab(vol_mode: str):
     elif structure == "Strangle":
         st.caption("Buy OTM Payer + Buy OTM Receiver (long vol)")
         stg_mode = st.radio("Strike Mode",
-                             ["Symmetric (25bp)", "Symmetric (50bp)", "Symmetric (100bp)", "Symmetric (200bp)", "Manual"],
+                             ["Symmetric OTM 25bp (50w)", "Symmetric OTM 50bp (100w)", "Symmetric OTM 100bp (200w)", "Symmetric OTM 200bp (400w)", "Manual"],
                              horizontal=True, key="sw_stg_mode")
         col_k1, col_k2 = st.columns(2)
         if "Symmetric" in stg_mode:
@@ -17116,7 +17116,7 @@ def swaptions_tab(vol_mode: str):
     elif structure == "Risk Reversal":
         st.caption("Buy Payer + Sell Receiver (or vice versa) - rate protection")
         rr_strike_mode = st.radio("Strike Mode", 
-                                   ["Symmetric (25bp)", "Symmetric (50bp)", "Symmetric (100bp)", "Manual (independent)"], 
+                                   ["Symmetric OTM 25bp (50w)", "Symmetric OTM 50bp (100w)", "Symmetric OTM 100bp (200w)", "Manual (independent)"], 
                                    horizontal=True, key="sw_rr_mode")
         col_k1, col_k2, col_dir = st.columns([1, 1, 1])
         if "Symmetric" in rr_strike_mode:
