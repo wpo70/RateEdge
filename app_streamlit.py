@@ -9125,11 +9125,25 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     # the residual still cancels at the traded strike.
                                                     if _rr_ is None: _rr_ = _v.get("rho_fit")
                                                     if _rn is None: _rn = _v.get("nu_fit")
-                                                    try:
-                                                        _Fb, _, _ = forward_and_annuity_from_curve(
-                                                            _sabr_curve, "USD", _eyk, _tyk, None)
-                                                    except Exception:
-                                                        _Fb = None
+                                                    # v0606c: anchor _Fb to the SAME forward the aggregator
+                                                    # used to reconstruct the strikes (_atm_F straddle
+                                                    # forward, curve fallback) — NOT a fresh curve-only
+                                                    # forward. The pin offset is _Kpin − _Fb; if _Fb is the
+                                                    # curve forward but _Kpin was built at the straddle
+                                                    # forward, the offset carries the straddle-vs-curve basis
+                                                    # instead of pure moneyness. The pricer then centres the
+                                                    # Gaussian bump at pricer_F + offset, which lands off the
+                                                    # ±Nbp moneyness strikes by that basis → the pin partly
+                                                    # misses → backbone bleeds in → the R/R inflates (6M2Y
+                                                    # 2.4 → 7.06). Matching the forward makes offset = pure
+                                                    # moneyness so the bump lands exactly on the priced strike.
+                                                    _Fb = _atm_F.get((_pe, _pt))
+                                                    if not _Fb:
+                                                        try:
+                                                            _Fb, _, _ = forward_and_annuity_from_curve(
+                                                                _sabr_curve, "USD", _eyk, _tyk, None)
+                                                        except Exception:
+                                                            _Fb = None
                                                     if _ra is None and _rr_ is not None and _rn is not None and _Fb:
                                                         # recover alpha from ATM with the fit params
                                                         try:
