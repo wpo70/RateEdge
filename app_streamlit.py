@@ -7647,7 +7647,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _r_bp = round(_r_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
                                     # Net leg prem — near zero suggests R/R (one leg sold)
                                     _net_prem = abs(_p_prem - _r_prem)
-                                    _net_bp = round(_net_prem / _comb_not * 10000, 2) if _comb_not > 0 else 0
+                                    _net_bp = round(_net_prem / _comb_not * 10000, 4) if _comb_not > 0 else 0
                                     _local_time = _to_local(_time_p)
 
                                     if _same_strike and _has_swp:
@@ -7734,7 +7734,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         "Notional": _fmt_notional(_comb_not),
                                         "Premium": _prem_disp,
                                         "Nett Prem BP": f"{_comb_bp:.2f}" if _comb_bp else "—",
-                                        "Nett Leg BP (R/R)": f"{_net_bp:.2f}" if _net_bp else "—",
+                                        "Nett Leg BP (R/R)": f"{_net_bp:.4f}" if _net_bp else "—",
                                         "P Prem BP": f"{_p_bp:.2f}" if _p_bp else "—",
                                         "R Prem BP": f"{_r_bp:.2f}" if _r_bp else "—",
                                         "Platform": PLATFORM_NAMES.get(str(_p.get("platform_identifier","")), str(_p.get("platform_identifier",""))),
@@ -7965,7 +7965,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         _rr["P Prem BP"]        = f"{_pp2/_recon*1e4:.2f}" if _pp2 else "—"
                         _rr["R Prem BP"]        = f"{_rp2/_recon*1e4:.2f}" if _rp2 else "—"
                         _rr["Nett Prem BP"]     = f"{_comb2/_recon*1e4:.2f}" if _comb2 else "—"
-                        _rr["Nett Leg BP (R/R)"]= f"{_net2/_recon*1e4:.2f}" if _net2 else "—"
+                        _rr["Nett Leg BP (R/R)"]= f"{_net2/_recon*1e4:.4f}" if _net2 else "—"
                         _prem_str = _rr.get("Premium", "")
                         if _prem_str and "net" not in _prem_str:
                             _rr["Premium"] = f"{_prem_str}  net {_net2/_recon*1e4:.1f}bp"
@@ -8128,7 +8128,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     # produce a separate Excel-ready df where Time is a real datetime
                     # so Excel auto-recognises it for filtering/sorting.
                     _INTERNAL_COLS = ["_notional_num", "_time_dt", "_p_strike", "_r_strike",
-                                      "_p_prem_raw", "_r_prem_raw", "_opt_raw", "_ten_raw", "_hidden", "_ovrkey", "_hedge_pct"]
+                                      "_p_prem_raw", "_r_prem_raw", "_opt_raw", "_ten_raw", "_hidden", "_ovrkey", "_hedge_pct", "_was_deduped"]
                     _all_df_display = _all_df.drop(columns=_INTERNAL_COLS, errors="ignore")
                     if "Nett Leg BP (R/R)" in _all_df_display.columns:
                         _all_df_display["Nett Leg BP (R/R)"] = _all_df_display["Nett Leg BP (R/R)"].fillna("—")
