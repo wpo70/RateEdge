@@ -8698,6 +8698,46 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                        "(not just down-weighted). 0 = keep all. Set to ~21–28 to stop a multi-week "
                                                        "tail of stale-regime prints from smearing the smile and forcing ν to its bound.")
 
+                                        # Live worked example of how the two controls combine — uses the
+                                        # CURRENT slider values and today's date so it never goes stale.
+                                        with st.expander("ℹ️ How recency half-life + max-age combine (worked example)", expanded=False):
+                                            import datetime as _dt_ex
+                                            _hl_ex = int(st.session_state.get("sdr_half_life", 21))
+                                            _mx_ex = int(st.session_state.get("sdr_max_age", 0))
+                                            st.markdown(
+                                                f"For one bucket, several R/Rs may have printed over the window — on different "
+                                                f"days, forwards and vol regimes. They're collapsed into one representative "
+                                                f"payer/receiver vol before fitting. Two controls shape that average:\n\n"
+                                                f"- **Half-life ({_hl_ex}d) — the fade.** Each print is weighted "
+                                                f"`w = exp(−ln2·age/{_hl_ex})`: today = 1.00, {_hl_ex}d old = 0.50, "
+                                                f"{2*_hl_ex}d old = 0.25. Old prints still count, just less.\n"
+                                                f"- **Max-age ({'off' if _mx_ex==0 else str(_mx_ex)+'d'}) — the guillotine.** "
+                                                + ("0 = keep everything, fade only."
+                                                   if _mx_ex == 0 else
+                                                   f"Prints **older than {_mx_ex}d are dropped entirely** (weight 0), not faded.")
+                                                + "\n\n*Recency is then multiplied by* `√(notional_mm)` *— a 500M print carries "
+                                                  "√500≈22.4× its recency weight, a 100M print √100=10×.*"
+                                            )
+                                            _today_ex = _dt_ex.date.today()
+                                            _ages_ex = sorted(set([0, 1, 2, max(1, _hl_ex // 2), _hl_ex]
+                                                                  + ([_mx_ex, _mx_ex + 1] if _mx_ex > 0 else [2 * _hl_ex])))
+                                            _rows_ex = []
+                                            for _ag in _ages_ex:
+                                                if _ag < 0: continue
+                                                _w = 2.0 ** (-_ag / _hl_ex)
+                                                _kept = (_mx_ex == 0) or (_ag <= _mx_ex)
+                                                _d = _today_ex - _dt_ex.timedelta(days=_ag)
+                                                _rows_ex.append({
+                                                    "Trade date": _d.strftime("%d %b"),
+                                                    "Age (d)": _ag,
+                                                    "Recency w": f"{_w:.3f}" if _kept else "—",
+                                                    "Kept?": "✓" if _kept else "✗ dropped",
+                                                })
+                                            st.dataframe(pd.DataFrame(_rows_ex), hide_index=True, use_container_width=True)
+                                            st.caption(f"Today = {_today_ex.strftime('%a %d %b %Y')}. Age is measured to fractional "
+                                                       f"days, so the cutoff is strictly *greater than* — a print at {_mx_ex or '—'}d + a "
+                                                       f"few hours is dropped; only ≤ {_mx_ex or '—'}.0d survives.")
+
                                         # Diagnostics — always visible
                                         _diag_strangles = len(_usd_sg)
                                         _diag_buckets = len(_bucket_map)
@@ -32151,17 +32191,17 @@ def main():
         ("📋 IRS / Vol Upload",          "tab_show_upload",    vol_config_tab),
         ("📏 Curves",                    "tab_show_curves",    curves_tab),
         ("📡 SDR Live",                  "tab_show_sdr",       sdr_live_tab),
-        ("📈 FWD IRS Analysis",          "tab_show_fwd",       fwd_analysis_tab),
-        ("📊 Historical VOL Analysis",   "tab_show_hva",       backtesting_tab),
+        ("✅ Vol Editor",                "tab_show_voleditor", vol_surface_editor_tab),
         ("📊 Swaptions",                 "tab_show_swaptions", lambda: swaptions_tab(vol_mode)),
         ("🔔 Caps & Floors",             "tab_show_caps",      lambda: caps_floors_tab(vol_mode)),
+        ("📏 USD SOD Report",            "tab_show_usd_sod",   usd_sod_tab),
+        ("📈 FWD IRS Analysis",          "tab_show_fwd",       fwd_analysis_tab),
+        ("📊 Historical VOL Analysis",   "tab_show_hva",       backtesting_tab),
         ("💼 Trade Blotter",             "tab_show_blotter",   portfolio_tab),
         ("⚛️ RV / Calendar",            "tab_show_rv",        rv_tab),
         ("🔍 Vol Lookup",                "tab_show_vollookup", vol_lookup_tab),
         ("🔮 Exotics",                   "tab_show_exotics",   lambda: exotics_tab(vol_mode)),
         ("📏 SOD Report",                "tab_show_sod",       sod_report_tab),
-        ("📏 USD SOD Report",            "tab_show_usd_sod",   usd_sod_tab),
-        ("✅ Vol Editor",                "tab_show_voleditor", vol_surface_editor_tab),
         ("📑 Vol Export",                "tab_show_volexport", vol_export_tab),
         ("📐 Midcurve & Curve Options",  "tab_show_midcurve",  midcurve_tab),
         ("🎫 Trade Ticket",              "tab_show_ticket",    lambda: render_ticket_tab(st.session_state)),
