@@ -9348,10 +9348,19 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     continue
                                 if not _ey or not _ty: continue
                                 try:
-                                    _F, _ann, _df = forward_and_annuity_from_curve(_av_curve, "USD", _ey, _ty, None)
+                                    _F, _ann, _ = forward_and_annuity_from_curve(_av_curve, "USD", _ey, _ty, None)
                                 except Exception:
                                     continue
                                 if not _F: continue
+                                # Expiry discount factor on the SOFR curve (matches _bucket_df / the
+                                # pricer's eff_disc). The 3rd return of forward_and_annuity is a
+                                # SCHEDULE LIST, not a df — must compute df separately.
+                                try:
+                                    _ox = _av_curve[_av_curve.columns[0]].to_numpy().astype(float)
+                                    _oy = _av_curve[_av_curve.columns[1]].to_numpy().astype(float) / 100.0
+                                    _df = math.exp(-float(np.interp(_ey, _ox, _oy)) * _ey)
+                                except Exception:
+                                    _df = 1.0
                                 _ps = _r.get("_p_strike")
                                 _pp = float(_r.get("_p_prem_raw") or 0); _rp = float(_r.get("_r_prem_raw") or 0)
                                 _not = float(_r.get("_notional_num") or 0)
