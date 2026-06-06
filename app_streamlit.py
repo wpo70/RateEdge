@@ -9494,12 +9494,21 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                                 st.session_state["_sdr_atm_blended"] = _bl
                                 if st.button("⬆️ Upload blended ATM to Vol Editor", key="sdr_atm_upload"):
+                                    _imp = _bl.copy()
+                                    # Route through the editor's import channel (same as SOD Implied
+                                    # Open). Writing vol_data['USD']['atm'] alone does NOT populate the
+                                    # editor's grid — the editor loads from _sod_usd_pending_surface.
+                                    st.session_state["_sod_usd_pending_surface"] = _imp
+                                    # also apply live so it's active in pricing immediately
                                     _tgt = st.session_state.setdefault("vol_data", {}).setdefault("USD", {})
-                                    _tgt["atm"] = _bl
+                                    _tgt["atm"] = _imp
                                     _tgt["label"] = (str(_tgt.get("label", "USD")).split(" | ")[0]
                                                      + f" | SDR-ATM blend {_av_w:.0%} {_av_win}")
-                                    st.success(f"✅ Uploaded — {_n_pts} SDR ATM point(s) blended into the USD ATM surface "
-                                               f"at {_av_w:.0%}. Now active in pricing; save it on the Vol Editor tab to persist.")
+                                    st.success(
+                                        f"✅ Sent to Vol Editor ({_n_pts} SDR point(s) blended at {_av_w:.0%}). "
+                                        "Open the **Vol Editor** tab and click **📋 Load SOD Implied Open → "
+                                        "Editor** to load it into the grid, then save. (Already applied live "
+                                        "for pricing.)")
 
         if _atab5:
             # ── EXPIRY MONITOR — SDR strike exposure for upcoming expiries ──────
