@@ -2779,12 +2779,14 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         """Projection discount factor with convention-aware basis adjustment for AUD."""
         xs = crv["MaturityY"].to_numpy().astype(float)
         ys = crv["ZeroRatePct"].to_numpy().astype(float) / 100.0
-        if ccy == "USD":
+        if ccy in ("USD", "EUR"):
             # Log-linear interpolation ON DISCOUNT FACTORS (QuantLib
             # PiecewiseYieldCurve<Discount, LogLinear/LogCubic> convention,
             # which is what BlueGamma uses). Node DF = exp(-z*t); we interpolate
             # log(DF) = -z*t linearly in t, then exp back. This is the market
-            # standard for OIS curves — NOT linear-on-zero.
+            # standard for OIS curves — NOT linear-on-zero. EUR added in v0806b:
+            # ESTR/EURIBOR are now bootstrapped (par→zero) and read back here on
+            # the same DF convention, so spot par swaps reprice. AUD/NZD unchanged.
             _logdf = -ys * xs            # log(DF) at each node
             _ld = float(np.interp(t, xs, _logdf))
             return math.exp(_ld)
@@ -2795,8 +2797,9 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
     def _df_disc(crv: pd.DataFrame, t: float) -> float:
         xs = crv["MaturityY"].to_numpy().astype(float)
         ys = crv["ZeroRatePct"].to_numpy().astype(float) / 100.0
-        if ccy == "USD":
-            # Log-linear interpolation on discount factors (see _df_proj).
+        if ccy in ("USD", "EUR"):
+            # Log-linear interpolation on discount factors (see _df_proj). EUR added
+            # v0806b — ESTR is bootstrapped and read back on this DF convention.
             _logdf = -ys * xs
             _ld = float(np.interp(t, xs, _logdf))
             return math.exp(_ld)
@@ -5956,6 +5959,138 @@ def bootstrap_usd_sofr_ois(par_df: pd.DataFrame) -> pd.DataFrame:
         result_rows.append(new_row)
 
     return pd.DataFrame(result_rows).reset_index(drop=True)
+
+
+def bootstrap_eur_estr_ois(par_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Bootstrap EUR ESTR OIS par swap rates → continuous zero rates.
+
+    ESTR OIS conventions (mirror USD SOFR OIS — single-curve OIS, annual fixed,
+    Act/360, T+2). Input/Output identical format to bootstrap_usd_sofr_ois:
+    MaturityY + ZeroRatePct (in = par %, out = bootstrapped zero %).
+
+    Separate function (not a call into the USD routine) so the USD path is never
+    touched. ESTR is the EUR discount curve; the EURIBOR projection bootstrap
+    below consumes the zeros produced here.
+    """
+    import math
+    SPOT = 1.0 / 252.0
+    DCF_ANNUAL = 365.0 / 360.0  # Act/360 annual
+
+    par_dict = {}
+    for _, row in par_df.iterrows():
+        mat = float(row["MaturityY"]); rate = float(row["ZeroRatePct"])
+        if mat > 0 and rate != 0:
+            par_dict[mat] = rate
+    if len(par_dict) < 3:
+        return par_df
+
+    dfs = {0.0: 1.0, SPOT: 1.0}
+
+    def _dfi(t):
+        ts = sorted(dfs.keys()); dfv = [dfs[x] for x in ts]
+        if t <= ts[0]:
+            return 1.0
+        if t >= ts[-1]:
+            z = -math.log(max(dfv[-1], 1e-10)) / ts[-1]
+            return math.exp(-z * t)
+        return math.exp(float(np.interp(t, ts, np.log(np.maximum(dfv, 1e-10)))))
+
+    for T in sorted(par_dict):
+        c = par_dict[T] / 100.0
+        te = T + SPOT
+        if T <= 1.0:
+            dcf = T * DCF_ANNUAL
+            df_end = 1.0 / (1.0 + c * dcf)
+        else:
+            n_full = int(math.floor(T))
+            ann = 0.0
+            for yr in range(1, n_full):
+                ann += DCF_ANNUAL * _dfi(yr + SPOT)
+            if abs(T - n_full) < 1e-6:
+                dcf_last = DCF_ANNUAL
+            else:
+                ann += DCF_ANNUAL * _dfi(n_full + SPOT)
+                dcf_last = (T - n_full) * DCF_ANNUAL
+            df_end = (1.0 - c * ann) / (1.0 + c * dcf_last)
+        if df_end > 0:
+            dfs[te] = df_end
+
+    result_rows = []
+    for _, row in par_df.iterrows():
+        mat = float(row["MaturityY"])
+        if mat > 0:
+            d = _dfi(mat)
+            zero_pct = -math.log(d) / mat * 100.0 if d > 0 else float(row["ZeroRatePct"])
+        else:
+            zero_pct = float(row["ZeroRatePct"])
+        nr = row.copy(); nr["ZeroRatePct"] = zero_pct
+        result_rows.append(nr)
+    return pd.DataFrame(result_rows).reset_index(drop=True)
+
+
+def bootstrap_eur_euribor_projection(par_df: pd.DataFrame,
+                                     estr_zero_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Bootstrap a EURIBOR projection curve (6M or 3M) given the ESTR discount curve.
+
+    Dual-curve. The pricer's forward swap rate (forward_and_annuity_from_curve)
+    is  fwd = (P_proj(start) − P_proj(end)) / A_disc , with the annuity discounted
+    on ESTR. For a spot par swap to maturity T that is  S = (1 − P_proj(T)) / A_ESTR(T),
+    so the projection discount factor that reprices par is
+
+        P_proj(T) = 1 − S · A_ESTR(T)
+
+    where A_ESTR(T) is the annual 30/360 fixed annuity discounted on ESTR. This
+    defines the projection curve consistently with the (shared) forward formula —
+    repricing EUR spot par swaps exactly — without modifying that formula (so USD
+    and AUD are unaffected). The ESTR/EURIBOR basis is carried correctly because the
+    annuity discounts on ESTR while the projected leg lives on this curve.
+
+    Input  par_df:       MaturityY, ZeroRatePct (= EURIBOR par swap rates %)
+    Input  estr_zero_df: bootstrapped ESTR zeros (MaturityY, ZeroRatePct %)
+    Output:              MaturityY, ZeroRatePct = projection zero rates %
+    """
+    import math
+    if (par_df is None or len(par_df) == 0 or
+            estr_zero_df is None or len(estr_zero_df) == 0):
+        return par_df
+
+    _ex = estr_zero_df["MaturityY"].to_numpy().astype(float)
+    _ez = estr_zero_df["ZeroRatePct"].to_numpy().astype(float) / 100.0
+    _order = np.argsort(_ex)
+    _ex = _ex[_order]; _elogdf = (-_ez * _ex)[_order]
+
+    def _df_estr(t):
+        if t <= 0:
+            return 1.0
+        return math.exp(float(np.interp(t, _ex, _elogdf)))
+
+    def _annuity(T):
+        # annual 30/360 fixed (α≈1.0/yr) + stub, ESTR-discounted
+        a = 0.0
+        n_full = int(math.floor(T + 1e-9))
+        prev = 0.0
+        for yr in range(1, n_full + 1):
+            a += 1.0 * _df_estr(float(yr)); prev = float(yr)
+        if T - prev > 1e-6:
+            a += (T - prev) * _df_estr(T)
+        return a
+
+    rows = []
+    for _, row in par_df.iterrows():
+        T = float(row["MaturityY"]); S = float(row["ZeroRatePct"]) / 100.0
+        if T <= 0:
+            rows.append(row.copy()); continue
+        A = _annuity(T)
+        P = 1.0 - S * A
+        if P <= 0.0 or P >= 1.0:
+            zr = float(row["ZeroRatePct"])  # degenerate fallback (keep par)
+        else:
+            zr = -math.log(P) / T * 100.0
+        nr = row.copy(); nr["ZeroRatePct"] = zr
+        rows.append(nr)
+    return pd.DataFrame(rows).reset_index(drop=True)
 
 
 def load_usd_sofr_from_config(xl: pd.ExcelFile) -> Optional[pd.DataFrame]:
@@ -32184,6 +32319,7 @@ def main():
                     # convention for ≥2Y; EURIBOR 3M for ≤1Y. floating_rate strings match swap_rates DB.
                     "EUR": [("ESTR", "main"), ("EURIBOR 6M", "euribor_6m"), ("EURIBOR 3M", "euribor_3m")],
                 }
+                _eur_estr_zeros = None  # bootstrapped ESTR zeros, consumed by EURIBOR projection
                 for _fr, _role in _curve_map.get(target_ccy, []):
                     try:
                         _df = _load_curve_from_db_latest(_fr, target_ccy)
@@ -32196,13 +32332,24 @@ def main():
                             # pricer discounted off par-as-zero and the 10y10y forward
                             # came out ~9bp low (4.5765 vs BG 4.649). The correct market
                             # method (par → bootstrap → zero, verified vs BlueGamma) lives
-                            # in bootstrap_usd_sofr_ois. AUD/NZD/EUR unchanged.
+                            # in bootstrap_usd_sofr_ois. AUD/NZD unchanged.
                             if target_ccy == "USD":
                                 try:
                                     # Keep the raw par SOFR IRS rates for display
                                     # (bootstrap overwrites _df with zeros).
                                     st.session_state["_usd_sofr_par"] = _df.copy()
                                     _df = bootstrap_usd_sofr_ois(_df)
+                                except Exception:
+                                    pass
+                            elif target_ccy == "EUR":
+                                # v0806b: ESTR was previously stored as raw PAR and
+                                # discounted as zero (same defect USD had). Bootstrap
+                                # ESTR OIS par → zero; keep raw par for display; stash
+                                # the zeros for the EURIBOR projection bootstrap below.
+                                try:
+                                    st.session_state["_eur_estr_par"] = _df.copy()
+                                    _df = bootstrap_eur_estr_ois(_df)
+                                    _eur_estr_zeros = _df.copy()
                                 except Exception:
                                     pass
                             st.session_state.setdefault("curves", {})[target_ccy] = _df
@@ -32225,6 +32372,15 @@ def main():
                             st.session_state.setdefault("config_basis", {}).setdefault(target_ccy, {})[_bk] = _df
                         elif _role in ("euribor_6m", "euribor_3m"):
                             # v0705h: EUR projection curves go to config_basis["EUR"] under their role keys
+                            # v0806b: bootstrap EURIBOR par → projection zeros against the
+                            # ESTR discount curve (dual-curve). Previously stored as raw par
+                            # and projected as zero. Keep raw par for display.
+                            if target_ccy == "EUR" and _eur_estr_zeros is not None:
+                                try:
+                                    st.session_state.setdefault("_eur_euribor_par", {})[_role] = _df.copy()
+                                    _df = bootstrap_eur_euribor_projection(_df, _eur_estr_zeros)
+                                except Exception:
+                                    pass
                             st.session_state.setdefault("config_basis", {}).setdefault(target_ccy, {})[_role] = _df
                     except Exception:
                         pass
