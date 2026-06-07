@@ -9275,243 +9275,247 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 else:
                                     st.info("Could not parse strike/premium data from USD strangles in this range.")
 
-                    # ── SDR ATM Vol Fitter — USD ───────────────────────────────────
-                    with st.expander("📈 SDR ATM Vol Fitter — USD", expanded=False):
-                        st.caption(
-                            "Derives ATM normal vol from recent SDR straddles (Bachelier inversion, each "
-                            "normalised to its own trade-time ATM), prints the points on the expiry×tenor "
-                            "matrix, blends them into the current ATM surface and (optionally) smooths. "
-                            "Upload writes the blended ATM grid to the Vol Editor."
-                        )
-                        _avd = st.session_state.get("vol_data", {}).get("USD", {})
-                        _av_atm = _avd.get("atm")
-                        if _av_atm is None or "Expiry" not in getattr(_av_atm, "columns", []):
-                            st.warning("No USD ATM surface loaded — load a vol snapshot on the Vol Editor tab first.")
-                        else:
-                            _avc1, _avc2, _avc3 = st.columns([1, 1, 1])
-                            with _avc1:
-                                _av_win = st.radio("Trade window", ["24 hours", "48 hours"], horizontal=True, key="sdr_atm_window")
-                            with _avc2:
-                                _av_w = st.slider("Blend weight (0=keep surface, 1=full SDR)", 0.0, 1.0, 0.5, 0.05, key="sdr_atm_blend")
-                            with _avc3:
-                                _av_smooth = st.checkbox("Smooth through points", value=True, key="sdr_atm_smooth",
-                                                         help="One gentle pass that smooths the surface between printed points; "
-                                                              "the printed points themselves stay anchored.")
-                            _av_devcap = st.slider("Reject points deviating from surface by more than (%)", 5, 100, 20, 5,
-                                                   key="sdr_atm_devcap",
-                                                   help="A derived ATM vol this far from the current surface is treated as a "
-                                                        "bad inversion / mismark (e.g. an off-ATM straddle or fat-fingered "
-                                                        "premium) and excluded from the blend, so one bad print can't corrupt "
-                                                        "the surface. Rejected points are listed below.")
-                            _av_hours = 24 if _av_win.startswith("24") else 48
-                            _av_curve = st.session_state.get("config_curves", {}).get("USD")
-                            if _av_curve is None:
-                                try: _av_curve = get_ccy_curve("USD")
-                                except Exception: _av_curve = None
-
-                            def _av_invert(prem_bp, F, K, T, is_payer, annuity=1.0, df=1.0):
-                                # Bachelier premium→normal-vol, same forward-premium convention as the
-                                # R/R fitter (prem is a FORWARD premium): pr = prem_bp/1e4/ann*df.
-                                if prem_bp <= 0 or T <= 0 or F <= 0 or K <= 0: return None
-                                _ann = annuity if annuity and annuity > 0 else 1.0
-                                _df = df if df and df > 0 else 1.0
-                                pr = prem_bp / 10000.0 / _ann * _df
-                                def _err(sig):
-                                    if sig <= 1e-9: return -pr
-                                    d = (F - K) / (sig * math.sqrt(T))
-                                    nd = 0.5 * (1 + math.erf(d / math.sqrt(2)))
-                                    npd = math.exp(-0.5 * d * d) / math.sqrt(2 * math.pi)
-                                    val = ((F-K)*nd + sig*math.sqrt(T)*npd) if is_payer else ((K-F)*(1-nd) + sig*math.sqrt(T)*npd)
-                                    return val - pr
-                                lo, hi = 1e-7, 0.15
-                                try:
-                                    if _err(hi) < 0: return None
-                                    for _ in range(100):
-                                        mid = (lo + hi) / 2.0
-                                        if _err(mid) < 0: lo = mid
-                                        else: hi = mid
-                                        if hi - lo < 1e-9: break
-                                    return mid * 10000.0
-                                except Exception:
-                                    return None
-
-                            import datetime as _av_dtmod
-                            _av_now = _av_dtmod.datetime.now()   # naive — _time_dt is naive (matches R/R aggregator)
-                            _av_acc = {}   # (exp,ten) -> [sum w*vol, sum w, n]
-                            _ln2a = math.log(2.0); _hl_h = _av_hours / 2.0
-                            for _r in _paired_rows:
-                                if _r.get("CCY") != "USD" or _r.get("Type") != "🔵 Straddle": continue
-                                _tdt = _r.get("_time_dt")
-                                if _tdt is None: continue
-                                try: _age_h = (_av_now - _tdt).total_seconds() / 3600.0
-                                except Exception: continue
-                                if _age_h < 0 or _age_h > _av_hours: continue
-                                _exp = _r.get("Opt Expiry", ""); _ten = _r.get("Swp Tenor", "")
-                                if not _exp or not _ten: continue
-                                try:
-                                    _ey = label_to_years(_exp); _ty = label_to_years(_ten)
-                                except Exception:
-                                    continue
-                                if not _ey or not _ty: continue
-                                try:
-                                    _F, _ann, _ = forward_and_annuity_from_curve(_av_curve, "USD", _ey, _ty, None)
-                                except Exception:
-                                    continue
-                                if not _F: continue
-                                # Expiry discount factor on the SOFR curve (matches _bucket_df / the
-                                # pricer's eff_disc). The 3rd return of forward_and_annuity is a
-                                # SCHEDULE LIST, not a df — must compute df separately.
-                                try:
-                                    _ox = _av_curve[_av_curve.columns[0]].to_numpy().astype(float)
-                                    _oy = _av_curve[_av_curve.columns[1]].to_numpy().astype(float) / 100.0
-                                    _df = math.exp(-float(np.interp(_ey, _ox, _oy)) * _ey)
-                                except Exception:
-                                    _df = 1.0
-                                _ps = _r.get("_p_strike")
-                                _pp = float(_r.get("_p_prem_raw") or 0); _rp = float(_r.get("_r_prem_raw") or 0)
-                                _not = float(_r.get("_notional_num") or 0)
-                                if _not <= 0: continue
-                                _K = (float(_ps) / 100.0) if _ps else _F   # _p_strike is stored in PERCENT
-                                _vp = _av_invert(_pp/_not*1e4, _F, _K, _ey, True,  _ann, _df) if _pp > 0 else None
-                                _vr = _av_invert(_rp/_not*1e4, _F, _K, _ey, False, _ann, _df) if _rp > 0 else None
-                                _vs = [v for v in (_vp, _vr) if v and v > 0]
-                                if not _vs: continue
-                                _vol = sum(_vs) / len(_vs)
-                                _w = math.exp(-_ln2a * _age_h / _hl_h) * (math.sqrt(_not/1e6) if _not > 0 else 1.0)
-                                _k = (_exp, _ten)
-                                _av_acc.setdefault(_k, [0.0, 0.0, 0])
-                                _av_acc[_k][0] += _w*_vol; _av_acc[_k][1] += _w; _av_acc[_k][2] += 1
-                            _av_pts = {k: (a/b) for k, (a, b, n) in _av_acc.items() if b > 0}   # (exp,ten)->bp
-                            # Match by YEARS, not label strings — SDR labels ("3M","1Y") differ in
-                            # case/format from the surface rows ("3m","1y"), so a string-keyed lookup
-                            # silently missed every point (matrix blank, blend a no-op).
-                            def _yk(_e, _t):
-                                try: return (round(label_to_years(_e), 4), round(label_to_years(_t), 4))
-                                except Exception: return None
-                            _av_pts_y = {}
-                            for (_pe, _pt2), _pv in _av_pts.items():
-                                _kk = _yk(_pe, _pt2)
-                                if _kk: _av_pts_y[_kk] = _pv
-
-                            if not _av_pts:
-                                st.info(f"No USD straddles with usable strike/premium in the last {_av_hours}h.")
+                    try:
+                        # ── SDR ATM Vol Fitter — USD ───────────────────────────────────
+                        with st.expander("📈 SDR ATM Vol Fitter — USD", expanded=False):
+                            st.caption(
+                                "Derives ATM normal vol from recent SDR straddles (Bachelier inversion, each "
+                                "normalised to its own trade-time ATM), prints the points on the expiry×tenor "
+                                "matrix, blends them into the current ATM surface and (optionally) smooths. "
+                                "Upload writes the blended ATM grid to the Vol Editor."
+                            )
+                            _avd = st.session_state.get("vol_data", {}).get("USD", {})
+                            _av_atm = _avd.get("atm")
+                            if _av_atm is None or "Expiry" not in getattr(_av_atm, "columns", []):
+                                st.warning("No USD ATM surface loaded — load a vol snapshot on the Vol Editor tab first.")
                             else:
-                                _av_cols = [c for c in _av_atm.columns if c != "Expiry"]
-                                def _colmatch(_t):
-                                    _tl = str(_t).lower().strip()
-                                    for _c in _av_cols:
-                                        if str(_c).lower().strip() == _tl: return _c
-                                    return None
-                                # 1) printed-points matrix (— where no print)
-                                _pts_rows = []
-                                for _i in range(len(_av_atm)):
-                                    _e = _av_atm.iloc[_i]["Expiry"]
-                                    _row = {"Expiry": _e}
-                                    for _c in _av_cols:
-                                        _v = _av_pts_y.get(_yk(_e, _c))
-                                        _row[_c] = round(_v, 1) if _v else "—"
-                                    _pts_rows.append(_row)
-                                _n_pts = len(_av_pts)
-                                st.markdown(f"**SDR-derived ATM points** ({_n_pts} bucket(s), last {_av_hours}h, recency+√notional weighted):")
-                                st.dataframe(pd.DataFrame(_pts_rows).set_index("Expiry"), use_container_width=True)
-                                # Heatmap — points mapped (NaN where no print)
-                                _pts_num = {"Expiry": []}
-                                for _c in _av_cols: _pts_num[_c] = []
-                                for _i in range(len(_av_atm)):
-                                    _e = _av_atm.iloc[_i]["Expiry"]; _pts_num["Expiry"].append(_e)
-                                    for _c in _av_cols:
-                                        _v = _av_pts_y.get(_yk(_e, _c))
-                                        _pts_num[_c].append(round(_v, 1) if _v else float("nan"))
-                                _pts_ndf = pd.DataFrame(_pts_num).set_index("Expiry")
-                                st.markdown("**Heatmap — SDR points mapped** (blank = no print):")
-                                try:
-                                    st.dataframe(
-                                        _pts_ndf.style.background_gradient(cmap="RdYlGn_r", axis=None)
-                                                .format("{:.1f}", na_rep="")
-                                                .highlight_null(props="background-color:white;color:white;"),
-                                        use_container_width=True)
-                                except Exception:
-                                    st.dataframe(_pts_ndf, use_container_width=True)
+                                _avc1, _avc2, _avc3 = st.columns([1, 1, 1])
+                                with _avc1:
+                                    _av_win = st.radio("Trade window", ["24 hours", "48 hours"], horizontal=True, key="sdr_atm_window")
+                                with _avc2:
+                                    _av_w = st.slider("Blend weight (0=keep surface, 1=full SDR)", 0.0, 1.0, 0.5, 0.05, key="sdr_atm_blend")
+                                with _avc3:
+                                    _av_smooth = st.checkbox("Smooth through points", value=True, key="sdr_atm_smooth",
+                                                             help="One gentle pass that smooths the surface between printed points; "
+                                                                  "the printed points themselves stay anchored.")
+                                _av_devcap = st.slider("Reject points deviating from surface by more than (%)", 5, 100, 20, 5,
+                                                       key="sdr_atm_devcap",
+                                                       help="A derived ATM vol this far from the current surface is treated as a "
+                                                            "bad inversion / mismark (e.g. an off-ATM straddle or fat-fingered "
+                                                            "premium) and excluded from the blend, so one bad print can't corrupt "
+                                                            "the surface. Rejected points are listed below.")
+                                _av_hours = 24 if _av_win.startswith("24") else 48
+                                _av_curve = st.session_state.get("config_curves", {}).get("USD")
+                                if _av_curve is None:
+                                    try: _av_curve = get_ccy_curve("USD")
+                                    except Exception: _av_curve = None
 
-                                # 2) blend into current ATM at point cells, optional smooth, anchor points
-                                _bl = _av_atm.copy()
-                                _anchor = {}   # (row_idx, col) -> blended value, to re-impose after smoothing
-                                _rejected = []
-                                for _i in range(len(_bl)):
-                                    _e = _bl.iloc[_i]["Expiry"]
-                                    for _c in _av_cols:
-                                        _pt = _av_pts_y.get(_yk(_e, _c))
-                                        if not _pt: continue
-                                        try: _cur = float(_bl.iloc[_i][_c])
-                                        except Exception: continue
-                                        # Outlier guard: reject a derived point too far from the surface
-                                        # (bad inversion / off-ATM straddle / mismark) — don't let one
-                                        # bad print corrupt the blend (e.g. 7Y10Y 105 vs ~83 neighbours).
-                                        if _cur > 0 and abs(_pt - _cur) / _cur * 100.0 > _av_devcap:
-                                            _rejected.append(f"{_e}×{_c} ({_pt:.0f} vs surface {_cur:.0f})")
-                                            continue
-                                        _nv = (1 - _av_w) * _cur + _av_w * _pt
-                                        _bl.iloc[_i, _bl.columns.get_loc(_c)] = round(_nv, 2)
-                                        _anchor[(_i, _c)] = round(_nv, 2)
-                                if _rejected:
-                                    st.warning("⚠️ Rejected as outliers (excluded from blend, deviate >"
-                                               f"{_av_devcap}% from surface): " + ", ".join(_rejected))
-                                if _av_smooth and _anchor:
-                                    # Smooth THROUGH the blended points (no hard re-anchor): 2 gentle
-                                    # passes of 0.6 self + 0.4 mean(up,down,left,right). Hard-anchoring
-                                    # re-imposed the exact blend at point cells, which re-created spikes
-                                    # (e.g. 1y1Y bulging to 102.6 between ~97.5 neighbours). The blend
-                                    # weight already sets SDR fidelity; smoothing now irons the term
-                                    # structure so 9m/1y/18m flow smoothly.
-                                    _grid = _bl[_av_cols].apply(pd.to_numeric, errors="coerce").values.astype(float)
-                                    _nr, _nc = _grid.shape
-                                    for _pass in range(2):
-                                        _sm = _grid.copy()
-                                        for _ri in range(_nr):
-                                            for _ci in range(_nc):
-                                                if _grid[_ri, _ci] != _grid[_ri, _ci]: continue
-                                                _ns = []
-                                                if _ri > 0: _ns.append(_grid[_ri-1, _ci])
-                                                if _ri < _nr-1: _ns.append(_grid[_ri+1, _ci])
-                                                if _ci > 0: _ns.append(_grid[_ri, _ci-1])
-                                                if _ci < _nc-1: _ns.append(_grid[_ri, _ci+1])
-                                                _ns = [x for x in _ns if not (x != x)]
-                                                if _ns:
-                                                    _sm[_ri, _ci] = 0.6*_grid[_ri, _ci] + 0.4*(sum(_ns)/len(_ns))
-                                        _grid = _sm
-                                    for _ci, _c in enumerate(_av_cols):
-                                        for _ri in range(_nr):
-                                            if not (_grid[_ri, _ci] != _grid[_ri, _ci]):
-                                                _bl.iloc[_ri, _bl.columns.get_loc(_c)] = round(float(_grid[_ri, _ci]), 2)
+                                def _av_invert(prem_bp, F, K, T, is_payer, annuity=1.0, df=1.0):
+                                    # Bachelier premium→normal-vol, same forward-premium convention as the
+                                    # R/R fitter (prem is a FORWARD premium): pr = prem_bp/1e4/ann*df.
+                                    if prem_bp <= 0 or T <= 0 or F <= 0 or K <= 0: return None
+                                    _ann = annuity if annuity and annuity > 0 else 1.0
+                                    _df = df if df and df > 0 else 1.0
+                                    pr = prem_bp / 10000.0 / _ann * _df
+                                    def _err(sig):
+                                        if sig <= 1e-9: return -pr
+                                        d = (F - K) / (sig * math.sqrt(T))
+                                        nd = 0.5 * (1 + math.erf(d / math.sqrt(2)))
+                                        npd = math.exp(-0.5 * d * d) / math.sqrt(2 * math.pi)
+                                        val = ((F-K)*nd + sig*math.sqrt(T)*npd) if is_payer else ((K-F)*(1-nd) + sig*math.sqrt(T)*npd)
+                                        return val - pr
+                                    lo, hi = 1e-7, 0.15
+                                    try:
+                                        if _err(hi) < 0: return None
+                                        for _ in range(100):
+                                            mid = (lo + hi) / 2.0
+                                            if _err(mid) < 0: lo = mid
+                                            else: hi = mid
+                                            if hi - lo < 1e-9: break
+                                        return mid * 10000.0
+                                    except Exception:
+                                        return None
 
-                                st.markdown(f"**Blended ATM surface** (current × {1-_av_w:.0%} + SDR × {_av_w:.0%}"
-                                            + (", smoothed" if _av_smooth else "") + "):")
-                                st.dataframe(_bl.set_index("Expiry"), use_container_width=True)
-                                # Heatmap — blended / smoothed surface
-                                _bl_ndf = _bl.set_index("Expiry")[_av_cols].apply(pd.to_numeric, errors="coerce")
-                                st.markdown("**Heatmap — blended / smoothed surface:**")
-                                try:
-                                    st.dataframe(
-                                        _bl_ndf.style.background_gradient(cmap="RdYlGn_r", axis=None)
-                                              .format("{:.1f}"),
-                                        use_container_width=True)
-                                except Exception:
-                                    st.dataframe(_bl_ndf, use_container_width=True)
+                                import datetime as _av_dtmod
+                                _av_now = _av_dtmod.datetime.now()   # naive — _time_dt is naive (matches R/R aggregator)
+                                _av_acc = {}   # (exp,ten) -> [sum w*vol, sum w, n]
+                                _ln2a = math.log(2.0); _hl_h = _av_hours / 2.0
+                                for _r in _paired_rows:
+                                    if _r.get("CCY") != "USD" or _r.get("Type") != "🔵 Straddle": continue
+                                    _tdt = _r.get("_time_dt")
+                                    if _tdt is None: continue
+                                    try: _age_h = (_av_now - _tdt).total_seconds() / 3600.0
+                                    except Exception: continue
+                                    if _age_h < 0 or _age_h > _av_hours: continue
+                                    _exp = _r.get("Opt Expiry", ""); _ten = _r.get("Swp Tenor", "")
+                                    if not _exp or not _ten: continue
+                                    try:
+                                        _ey = label_to_years(_exp); _ty = label_to_years(_ten)
+                                    except Exception:
+                                        continue
+                                    if not _ey or not _ty: continue
+                                    try:
+                                        _F, _ann, _ = forward_and_annuity_from_curve(_av_curve, "USD", _ey, _ty, None)
+                                    except Exception:
+                                        continue
+                                    if not _F: continue
+                                    # Expiry discount factor on the SOFR curve (matches _bucket_df / the
+                                    # pricer's eff_disc). The 3rd return of forward_and_annuity is a
+                                    # SCHEDULE LIST, not a df — must compute df separately.
+                                    try:
+                                        _ox = _av_curve[_av_curve.columns[0]].to_numpy().astype(float)
+                                        _oy = _av_curve[_av_curve.columns[1]].to_numpy().astype(float) / 100.0
+                                        _df = math.exp(-float(np.interp(_ey, _ox, _oy)) * _ey)
+                                    except Exception:
+                                        _df = 1.0
+                                    _ps = _r.get("_p_strike")
+                                    _pp = float(_r.get("_p_prem_raw") or 0); _rp = float(_r.get("_r_prem_raw") or 0)
+                                    _not = float(_r.get("_notional_num") or 0)
+                                    if _not <= 0: continue
+                                    _K = (float(_ps) / 100.0) if _ps else _F   # _p_strike is stored in PERCENT
+                                    _vp = _av_invert(_pp/_not*1e4, _F, _K, _ey, True,  _ann, _df) if _pp > 0 else None
+                                    _vr = _av_invert(_rp/_not*1e4, _F, _K, _ey, False, _ann, _df) if _rp > 0 else None
+                                    _vs = [v for v in (_vp, _vr) if v and v > 0]
+                                    if not _vs: continue
+                                    _vol = sum(_vs) / len(_vs)
+                                    _w = math.exp(-_ln2a * _age_h / _hl_h) * (math.sqrt(_not/1e6) if _not > 0 else 1.0)
+                                    _k = (_exp, _ten)
+                                    _av_acc.setdefault(_k, [0.0, 0.0, 0])
+                                    _av_acc[_k][0] += _w*_vol; _av_acc[_k][1] += _w; _av_acc[_k][2] += 1
+                                _av_pts = {k: (a/b) for k, (a, b, n) in _av_acc.items() if b > 0}   # (exp,ten)->bp
+                                # Match by YEARS, not label strings — SDR labels ("3M","1Y") differ in
+                                # case/format from the surface rows ("3m","1y"), so a string-keyed lookup
+                                # silently missed every point (matrix blank, blend a no-op).
+                                def _yk(_e, _t):
+                                    try: return (round(label_to_years(_e), 4), round(label_to_years(_t), 4))
+                                    except Exception: return None
+                                _av_pts_y = {}
+                                for (_pe, _pt2), _pv in _av_pts.items():
+                                    _kk = _yk(_pe, _pt2)
+                                    if _kk: _av_pts_y[_kk] = _pv
 
-                                st.session_state["_sdr_atm_blended"] = _bl
-                                if st.button("⬆️ Upload blended ATM to Vol Editor", key="sdr_atm_upload"):
-                                    # Set the editor's import channel ONLY — do NOT write
-                                    # vol_data['USD']['atm'] here. If we wrote it live, the editor's
-                                    # base would be fetched from vol_data (= the blend) and equal the
-                                    # working copy → every cell shows "no change". Leaving vol_data
-                                    # untouched means base = your ORIGINAL surface, working = the blend,
-                                    # so the edits show and Publish applies them.
-                                    st.session_state["_sod_usd_pending_surface"] = _bl.copy()
-                                    st.success(
-                                        f"✅ Sent to Vol Editor ({_n_pts} SDR point(s) blended at {_av_w:.0%}). "
-                                        "Open the **Vol Editor** tab, click **📋 Load SOD Implied Open → "
-                                        "Editor** to load the blend, review the highlighted changes, then "
-                                        "**Publish** to apply.")
+                                if not _av_pts:
+                                    st.info(f"No USD straddles with usable strike/premium in the last {_av_hours}h.")
+                                else:
+                                    _av_cols = [c for c in _av_atm.columns if c != "Expiry"]
+                                    def _colmatch(_t):
+                                        _tl = str(_t).lower().strip()
+                                        for _c in _av_cols:
+                                            if str(_c).lower().strip() == _tl: return _c
+                                        return None
+                                    # 1) printed-points matrix (— where no print)
+                                    _pts_rows = []
+                                    for _i in range(len(_av_atm)):
+                                        _e = _av_atm.iloc[_i]["Expiry"]
+                                        _row = {"Expiry": _e}
+                                        for _c in _av_cols:
+                                            _v = _av_pts_y.get(_yk(_e, _c))
+                                            _row[_c] = round(_v, 1) if _v else "—"
+                                        _pts_rows.append(_row)
+                                    _n_pts = len(_av_pts)
+                                    st.markdown(f"**SDR-derived ATM points** ({_n_pts} bucket(s), last {_av_hours}h, recency+√notional weighted):")
+                                    st.dataframe(pd.DataFrame(_pts_rows).set_index("Expiry"), use_container_width=True)
+                                    # Heatmap — points mapped (NaN where no print)
+                                    _pts_num = {"Expiry": []}
+                                    for _c in _av_cols: _pts_num[_c] = []
+                                    for _i in range(len(_av_atm)):
+                                        _e = _av_atm.iloc[_i]["Expiry"]; _pts_num["Expiry"].append(_e)
+                                        for _c in _av_cols:
+                                            _v = _av_pts_y.get(_yk(_e, _c))
+                                            _pts_num[_c].append(round(_v, 1) if _v else float("nan"))
+                                    _pts_ndf = pd.DataFrame(_pts_num).set_index("Expiry")
+                                    st.markdown("**Heatmap — SDR points mapped** (blank = no print):")
+                                    try:
+                                        st.dataframe(
+                                            _pts_ndf.style.background_gradient(cmap="RdYlGn_r", axis=None)
+                                                    .format("{:.1f}", na_rep="")
+                                                    .highlight_null(props="background-color:white;color:white;"),
+                                            use_container_width=True)
+                                    except Exception:
+                                        st.dataframe(_pts_ndf, use_container_width=True)
+
+                                    # 2) blend into current ATM at point cells, optional smooth, anchor points
+                                    _bl = _av_atm.copy()
+                                    _anchor = {}   # (row_idx, col) -> blended value, to re-impose after smoothing
+                                    _rejected = []
+                                    for _i in range(len(_bl)):
+                                        _e = _bl.iloc[_i]["Expiry"]
+                                        for _c in _av_cols:
+                                            _pt = _av_pts_y.get(_yk(_e, _c))
+                                            if not _pt: continue
+                                            try: _cur = float(_bl.iloc[_i][_c])
+                                            except Exception: continue
+                                            # Outlier guard: reject a derived point too far from the surface
+                                            # (bad inversion / off-ATM straddle / mismark) — don't let one
+                                            # bad print corrupt the blend (e.g. 7Y10Y 105 vs ~83 neighbours).
+                                            if _cur > 0 and abs(_pt - _cur) / _cur * 100.0 > _av_devcap:
+                                                _rejected.append(f"{_e}×{_c} ({_pt:.0f} vs surface {_cur:.0f})")
+                                                continue
+                                            _nv = (1 - _av_w) * _cur + _av_w * _pt
+                                            _bl.iloc[_i, _bl.columns.get_loc(_c)] = round(_nv, 2)
+                                            _anchor[(_i, _c)] = round(_nv, 2)
+                                    if _rejected:
+                                        st.warning("⚠️ Rejected as outliers (excluded from blend, deviate >"
+                                                   f"{_av_devcap}% from surface): " + ", ".join(_rejected))
+                                    if _av_smooth and _anchor:
+                                        # Smooth THROUGH the blended points (no hard re-anchor): 2 gentle
+                                        # passes of 0.6 self + 0.4 mean(up,down,left,right). Hard-anchoring
+                                        # re-imposed the exact blend at point cells, which re-created spikes
+                                        # (e.g. 1y1Y bulging to 102.6 between ~97.5 neighbours). The blend
+                                        # weight already sets SDR fidelity; smoothing now irons the term
+                                        # structure so 9m/1y/18m flow smoothly.
+                                        _grid = _bl[_av_cols].apply(pd.to_numeric, errors="coerce").values.astype(float)
+                                        _nr, _nc = _grid.shape
+                                        for _pass in range(2):
+                                            _sm = _grid.copy()
+                                            for _ri in range(_nr):
+                                                for _ci in range(_nc):
+                                                    if _grid[_ri, _ci] != _grid[_ri, _ci]: continue
+                                                    _ns = []
+                                                    if _ri > 0: _ns.append(_grid[_ri-1, _ci])
+                                                    if _ri < _nr-1: _ns.append(_grid[_ri+1, _ci])
+                                                    if _ci > 0: _ns.append(_grid[_ri, _ci-1])
+                                                    if _ci < _nc-1: _ns.append(_grid[_ri, _ci+1])
+                                                    _ns = [x for x in _ns if not (x != x)]
+                                                    if _ns:
+                                                        _sm[_ri, _ci] = 0.6*_grid[_ri, _ci] + 0.4*(sum(_ns)/len(_ns))
+                                            _grid = _sm
+                                        for _ci, _c in enumerate(_av_cols):
+                                            for _ri in range(_nr):
+                                                if not (_grid[_ri, _ci] != _grid[_ri, _ci]):
+                                                    _bl.iloc[_ri, _bl.columns.get_loc(_c)] = round(float(_grid[_ri, _ci]), 2)
+
+                                    st.markdown(f"**Blended ATM surface** (current × {1-_av_w:.0%} + SDR × {_av_w:.0%}"
+                                                + (", smoothed" if _av_smooth else "") + "):")
+                                    st.dataframe(_bl.set_index("Expiry"), use_container_width=True)
+                                    # Heatmap — blended / smoothed surface
+                                    _bl_ndf = _bl.set_index("Expiry")[_av_cols].apply(pd.to_numeric, errors="coerce")
+                                    st.markdown("**Heatmap — blended / smoothed surface:**")
+                                    try:
+                                        st.dataframe(
+                                            _bl_ndf.style.background_gradient(cmap="RdYlGn_r", axis=None)
+                                                  .format("{:.1f}"),
+                                            use_container_width=True)
+                                    except Exception:
+                                        st.dataframe(_bl_ndf, use_container_width=True)
+
+                                    st.session_state["_sdr_atm_blended"] = _bl
+                                    if st.button("⬆️ Upload blended ATM to Vol Editor", key="sdr_atm_upload"):
+                                        # Set the editor's import channel ONLY — do NOT write
+                                        # vol_data['USD']['atm'] here. If we wrote it live, the editor's
+                                        # base would be fetched from vol_data (= the blend) and equal the
+                                        # working copy → every cell shows "no change". Leaving vol_data
+                                        # untouched means base = your ORIGINAL surface, working = the blend,
+                                        # so the edits show and Publish applies them.
+                                        st.session_state["_sod_usd_pending_surface"] = _bl.copy()
+                                        st.success(
+                                            f"✅ Sent to Vol Editor ({_n_pts} SDR point(s) blended at {_av_w:.0%}). "
+                                            "Open the **Vol Editor** tab, click **📋 Load SOD Implied Open → "
+                                            "Editor** to load the blend, review the highlighted changes, then "
+                                            "**Publish** to apply.")
+                    except Exception as _atm_fit_err:
+                        st.warning("⚠️ SDR ATM Vol Fitter hit an error — the rest of Full Trade Analytics is unaffected. Details:")
+                        st.exception(_atm_fit_err)
 
         if _atab5:
             # ── EXPIRY MONITOR — SDR strike exposure for upcoming expiries ──────
