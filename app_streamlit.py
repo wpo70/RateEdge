@@ -32072,12 +32072,13 @@ def main():
                 if _sb_hb_ts.tzinfo is None:
                     _sb_hb_ts = _sb_hb_ts.tz_localize('UTC')
                 _sb_hb_age = (pd.Timestamp.now(tz='UTC') - _sb_hb_ts).total_seconds() / 60
+                _sb_hb_disp = "just now" if _sb_hb_age < 1 else f"{_sb_hb_age:.0f}m ago"
                 if _sb_hb_age < 10:
-                    st.success("🟢 SDR fetcher running")
+                    st.success(f"🟢 SDR fetcher running · {_sb_hb_disp}")
                 elif _sb_hb_age < 30:
-                    st.warning(f"🟡 SDR fetcher delayed ({_sb_hb_age:.0f}m)")
+                    st.warning(f"🟡 SDR fetcher delayed · {_sb_hb_disp}")
                 else:
-                    st.error(f"🔴 SDR fetcher stopped ({_sb_hb_age:.0f}m ago)")
+                    st.error(f"🔴 SDR fetcher stopped · last poll {_sb_hb_disp}")
                 # DTCC API health — informational only, separate from fetcher health
                 if _sb_hb_status and ("ERROR" in str(_sb_hb_status).upper()
                                       or "503" in str(_sb_hb_status)
