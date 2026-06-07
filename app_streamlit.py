@@ -6893,6 +6893,7 @@ def eu_mifir_tab():
             "Style": style, "Expiry": exp_lbl or (str(exp_iso)[:10] if exp_iso else ""),
             "Premium(bp)": r["price"], "Ccy": ccy,
             "Pub": r["publication_mode"], "Inferred": "",
+            "Model ATM(bp)": "", "|Δ|bp": "",
         }
         if can_match and E and E > 0 and r["price"] is not None:
             try:
@@ -6902,6 +6903,8 @@ def eu_mifir_tab():
                     b = m[0]
                     ceiling = max(x[1] for x in m)
                     tenor_lbl = f"{int(b[0])}y"
+                    rec["Model ATM(bp)"] = round(b[1], 1)
+                    rec["|Δ|bp"] = round(b[3], 1)
                     if px > ceiling * 1.05:
                         rec["Inferred"] = f"{exp_lbl}{tenor_lbl} · ITM/away"
                     else:
