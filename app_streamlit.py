@@ -6703,17 +6703,42 @@ def eu_mifir_tab():
         st.warning("EUR surface or curve not loaded — showing raw prints without inferred "
                    "tenor. Open the EUR pricer tab once to load the curve/surface.")
 
+    import re as _re
     disp = []
     for _, r in df.iterrows():
+        desc = str(r["instrument_desc"] or "")
+        dl = desc.lower()
+        # Expiry: prefer column; else parse YYYYMMDD from description (e.g. "...EUR 20260903").
+        exp_iso = r.get("expiry_date") if hasattr(r, "get") else r["expiry_date"]
+        if not exp_iso:
+            mexp = _re.search(r"(\d{8})\s*$", desc) or _re.search(r"(\d{8})", desc)
+            if mexp:
+                g = mexp.group(1)
+                exp_iso = f"{g[:4]}-{g[4:6]}-{g[6:8]}T00:00:00"
+        # Style from description: Epn = European; Call / P = payer/receiver leg.
+        style = r["opt_style"] or ""
+        if not style:
+            if "call" in dl:
+                style = "Call/Eur" if "epn" in dl else "Call"
+            elif _re.search(r"/o p\b", dl) or _re.search(r"\bp epn\b", dl):
+                style = "Put/Eur" if "epn" in dl else "Put"
+            elif "epn" in dl:
+                style = "European"
+        # Currency: prefer column; else first 3-letter token in description.
+        ccy = r["notional_ccy"]
+        if not ccy or "NOT_SET" in str(ccy):
+            mccy = _re.search(r"\b([A-Z]{3})\b", desc)
+            ccy = mccy.group(1) if mccy else ccy
+        src = r["source"] if (r["source"] and r["source"] != "unknown") else (r["venue_mic"] or "—")
         rec = {
-            "Time (UTC)": str(r["exec_utc"])[:19], "Src": r["source"], "MIC": r["venue_mic"],
-            "Style": r["opt_style"], "Expiry": str(r["expiry_date"])[:10],
-            "Premium(bp)": r["price"], "Ccy": r["notional_ccy"],
+            "Time (UTC)": str(r["exec_utc"])[:19], "Src": src, "MIC": r["venue_mic"],
+            "Style": style, "Expiry": str(exp_iso)[:10] if exp_iso else "",
+            "Premium(bp)": r["price"], "Ccy": ccy,
             "Pub": r["publication_mode"], "Inferred": "",
         }
-        if can_match and r["expiry_date"] is not None and r["price"] is not None:
+        if can_match and exp_iso and r["price"] is not None:
             try:
-                ed = _dt.fromisoformat(str(r["expiry_date"]).replace("Z", "").split("+")[0][:19])
+                ed = _dt.fromisoformat(str(exp_iso).replace("Z", "").split("+")[0][:19])
                 td = _dt.fromisoformat(str(r["exec_utc"]).replace("Z", "").split("+")[0][:19])
                 E = (ed - td).days / 365.0
                 if E > 0:
