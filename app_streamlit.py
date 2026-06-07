@@ -6803,6 +6803,15 @@ def _eu_load_iro_prints(hours=168, asset="SWAPTION", limit=500):
         return ("ERR", str(e))
 
 
+def _eu_expiry_label(years: float) -> str:
+    """Map expiry in years to the nearest standard option-expiry bucket label."""
+    grid = [(1/52, "1w"), (1/12, "1m"), (2/12, "2m"), (3/12, "3m"), (6/12, "6m"),
+            (9/12, "9m"), (1.0, "1y"), (1.5, "18m"), (2.0, "2y"), (3.0, "3y"),
+            (4.0, "4y"), (5.0, "5y"), (7.0, "7y"), (10.0, "10y"), (12.0, "12y"),
+            (15.0, "15y"), (20.0, "20y"), (25.0, "25y"), (30.0, "30y")]
+    return min(grid, key=lambda g: abs(g[0] - years))[1]
+
+
 def eu_mifir_tab():
     """EU MiFIR swaption flow (TP ICAP IOTF) with surface-inferred tenor."""
     from datetime import datetime as _dt
@@ -6843,8 +6852,8 @@ def eu_mifir_tab():
     for _, r in df.iterrows():
         desc = str(r["instrument_desc"] or "")
         dl = desc.lower()
-        # Expiry: prefer column; else parse YYYYMMDD from description (e.g. "...EUR 20260903").
-        exp_iso = r.get("expiry_date") if hasattr(r, "get") else r["expiry_date"]
+        # Expiry date: prefer column; else parse YYYYMMDD from description ("...EUR 20260903").
+        exp_iso = r["expiry_date"]
         if not exp_iso:
             mexp = _re.search(r"(\d{8})\s*$", desc) or _re.search(r"(\d{8})", desc)
             if mexp:
@@ -6864,27 +6873,40 @@ def eu_mifir_tab():
         if not ccy or "NOT_SET" in str(ccy):
             mccy = _re.search(r"\b([A-Z]{3})\b", desc)
             ccy = mccy.group(1) if mccy else ccy
-        src = r["source"] if (r["source"] and r["source"] != "unknown") else (r["venue_mic"] or "—")
-        rec = {
-            "Time (UTC)": str(r["exec_utc"])[:19], "Src": src, "MIC": r["venue_mic"],
-            "Style": style, "Expiry": str(exp_iso)[:10] if exp_iso else "",
-            "Premium(bp)": r["price"], "Ccy": ccy,
-            "Pub": r["publication_mode"], "Inferred": "",
-        }
-        if can_match and exp_iso and r["price"] is not None:
+        # Source / MIC: this tab is the TP ICAP IOTF feed; fill sensible defaults.
+        src = r["source"] if (r["source"] and r["source"] != "unknown") else "ICAP"
+        mic = r["venue_mic"] or "IOTF"
+        # Expiry tenor bucket (1m/3m/1y/2y…) from time-to-expiry.
+        E = None
+        exp_lbl = ""
+        if exp_iso:
             try:
                 ed = _dt.fromisoformat(str(exp_iso).replace("Z", "").split("+")[0][:19])
                 td = _dt.fromisoformat(str(r["exec_utc"]).replace("Z", "").split("+")[0][:19])
                 E = (ed - td).days / 365.0
                 if E > 0:
-                    m = _eu_match_print(E, float(r["price"]), surf["df"], curve)
-                    if m:
-                        b = m[0]
-                        ceiling = max(x[1] for x in m)
-                        if float(r["price"]) > ceiling * 1.05:
-                            rec["Inferred"] = f"~{b[0]}Y · ITM/away (prem>ATM)"
-                        else:
-                            rec["Inferred"] = f"{b[0]}Y ATM · model {b[1]:.0f}bp (|Δ|{b[3]:.0f})"
+                    exp_lbl = _eu_expiry_label(E)
+            except Exception:
+                E = None
+        rec = {
+            "Time (UTC)": str(r["exec_utc"])[:19], "Src": src, "MIC": mic,
+            "Style": style, "Expiry": exp_lbl or (str(exp_iso)[:10] if exp_iso else ""),
+            "Premium(bp)": r["price"], "Ccy": ccy,
+            "Pub": r["publication_mode"], "Inferred": "",
+        }
+        if can_match and E and E > 0 and r["price"] is not None:
+            try:
+                px = float(r["price"])
+                m = _eu_match_print(E, px, surf["df"], curve)
+                if m:
+                    b = m[0]
+                    ceiling = max(x[1] for x in m)
+                    tenor_lbl = f"{int(b[0])}y"
+                    if px > ceiling * 1.05:
+                        rec["Inferred"] = f"{exp_lbl}{tenor_lbl} · ITM/away"
+                    else:
+                        conf = max(0.0, min(100.0, 100.0 * (1.0 - b[3] / max(px, 1.0))))
+                        rec["Inferred"] = f"{exp_lbl}{tenor_lbl} · {conf:.0f}%"
             except Exception:
                 pass
         disp.append(rec)
