@@ -6553,6 +6553,188 @@ def publish_vol(ccy: str):
 # ============================
 
 
+
+# ── EU MiFIR Trade Reporting — IOTF swaption capture + surface/time-match ─────
+# Reads eu_iro_prints (written by the EU transparency puller). Premium is bp
+# (BAPO), notional-independent. Strike/tenor inferred by matching the printed
+# ATM premium to the live EUR ATM premium surface (real curve + bachelier).
+EU_MATCH_TENORS = [1, 2, 3, 4, 5, 7, 10, 12, 15, 20, 30]
+
+
+def _eu_latest_eur_surface():
+    """Latest EUR ATM normal-vol surface from vol_history -> {df,label,snapshot}."""
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return None
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT atm_vols, label, snapshot_date FROM vol_history "
+            "WHERE currency='EUR' AND atm_vols IS NOT NULL "
+            "ORDER BY snapshot_date DESC LIMIT 1"
+        )
+        row = cur.fetchone()
+        cur.close()
+        if not row or not row[0]:
+            return None
+        atm_vols, label, snap = row
+        return {"df": pd.DataFrame(atm_vols["values"]), "label": label, "snapshot": snap}
+    except Exception:
+        return None
+
+
+def _eu_surface_vol(surf_df, expiry_years, tenor):
+    """ATM normal vol (decimal) at expiry_years for tenor (int yrs), interp on expiry."""
+    col = f"{int(tenor)}Y"
+    if col not in surf_df.columns:
+        avail = [c for c in surf_df.columns if str(c).endswith("Y") and str(c)[:-1].isdigit()]
+        if not avail:
+            return None
+        col = min(avail, key=lambda c: abs(int(str(c)[:-1]) - tenor))
+    pts = []
+    for _, r in surf_df.iterrows():
+        e = label_to_years(str(r.get("Expiry", "")))
+        v = r.get(col)
+        if e and v is not None and str(v).strip().lower() not in ("", "nan", "none"):
+            try:
+                pts.append((e, float(v)))
+            except (TypeError, ValueError):
+                pass
+    if not pts:
+        return None
+    pts.sort()
+    xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+    E = expiry_years
+    if E <= xs[0]:
+        v = ys[0]
+    elif E >= xs[-1]:
+        v = ys[-1]
+    else:
+        v = ys[-1]
+        for i in range(len(xs) - 1):
+            if xs[i] <= E <= xs[i + 1]:
+                w = (E - xs[i]) / (xs[i + 1] - xs[i])
+                v = ys[i] * (1 - w) + ys[i + 1] * w
+                break
+    return v / 10000.0
+
+
+def _eu_match_print(expiry_years, premium_bp, surf_df, curve, tenors=EU_MATCH_TENORS):
+    """Rank candidate tenors by closeness of model ATM premium (bp) to the print."""
+    out = []
+    for t in tenors:
+        try:
+            F, A, _ = forward_and_annuity_from_curve(curve, "EUR", float(expiry_years), float(t))
+            sig = _eu_surface_vol(surf_df, expiry_years, t)
+            if sig is None or A <= 0:
+                continue
+            tk = SwaptionTicket(
+                side="Payer", payoff_type="vanilla", notional=1e6, currency="EUR",
+                expiry_years=float(expiry_years), swap_tenor_years=float(t),
+                forward=F, strike=F, vol=sig, discount_rate=0.0, annuity=A, model="Normal",
+            )
+            res = bachelier_swaption_vanilla(tk)
+            patm = res.get("pv_bp_fwd") or res.get("pv_bp") or 0.0
+            out.append((t, float(patm), F, abs(premium_bp - float(patm))))
+        except Exception:
+            continue
+    out.sort(key=lambda r: r[3])
+    return out
+
+
+def _eu_load_iro_prints(hours=168, asset="SWAPTION", limit=500):
+    """Load recent EU swaption prints from eu_iro_prints. Returns DataFrame, None
+    (no DB), or ('ERR', detail) when the table/query is unavailable."""
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return None
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT source, venue_mic, instrument_desc, opt_style, exec_utc, expiry_date, "
+            "price, notional_ccy, publication_mode, deferral_flags, asset_class "
+            "FROM eu_iro_prints "
+            "WHERE asset_class = %s AND exec_utc >= now() - (%s || ' hours')::interval "
+            "ORDER BY exec_utc DESC LIMIT %s",
+            (asset, str(int(hours)), int(limit)),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        cols = ["source", "venue_mic", "instrument_desc", "opt_style", "exec_utc",
+                "expiry_date", "price", "notional_ccy", "publication_mode",
+                "deferral_flags", "asset_class"]
+        return pd.DataFrame(rows, columns=cols)
+    except Exception as e:
+        return ("ERR", str(e))
+
+
+def eu_mifir_tab():
+    """EU MiFIR swaption flow (TP ICAP IOTF) with surface-inferred tenor."""
+    from datetime import datetime as _dt
+    st.markdown(
+        '<div class="sdr-header">'
+        '<span style="font-size:20px;font-weight:700;color:#f1f5f9;">🇪🇺 EU — MiFIR Trade Reporting</span>'
+        '<span class="sdr-badge-blue">IDB OTF · APA · 15-min delayed</span>'
+        '</div>', unsafe_allow_html=True)
+    st.caption("EU swaption prints (TP ICAP IOTF). Premium is bp (BAPO); tenor/strike "
+               "inferred by matching the printed ATM premium to the live EUR premium surface.")
+
+    _hrs = {"24h": 24, "72h": 72, "7d": 168, "30d": 720}.get(
+        st.radio("Window", ["24h", "72h", "7d", "30d"], index=2, horizontal=True,
+                 key="_eu_window"), 168)
+
+    df = _eu_load_iro_prints(hours=_hrs)
+    if df is None:
+        st.warning("Database not connected. EU MiFIR requires a Supabase connection.")
+        return
+    if isinstance(df, tuple):
+        st.info("eu_iro_prints not available yet — run the EU transparency puller "
+                "(eu-trade-capture) to populate it, then refresh.")
+        st.caption(f"detail: {df[1]}")
+        return
+    if df.empty:
+        st.info(f"No EU swaption prints in the last {_hrs}h.")
+        return
+
+    surf = _eu_latest_eur_surface()
+    curve = st.session_state.get("config_curves", {}).get("EUR")
+    can_match = surf is not None and curve is not None and not getattr(curve, "empty", True)
+    if not can_match:
+        st.warning("EUR surface or curve not loaded — showing raw prints without inferred "
+                   "tenor. Open the EUR pricer tab once to load the curve/surface.")
+
+    disp = []
+    for _, r in df.iterrows():
+        rec = {
+            "Time (UTC)": str(r["exec_utc"])[:19], "Src": r["source"], "MIC": r["venue_mic"],
+            "Style": r["opt_style"], "Expiry": str(r["expiry_date"])[:10],
+            "Premium(bp)": r["price"], "Ccy": r["notional_ccy"],
+            "Pub": r["publication_mode"], "Inferred": "",
+        }
+        if can_match and r["expiry_date"] is not None and r["price"] is not None:
+            try:
+                ed = _dt.fromisoformat(str(r["expiry_date"]).replace("Z", "").split("+")[0][:19])
+                td = _dt.fromisoformat(str(r["exec_utc"]).replace("Z", "").split("+")[0][:19])
+                E = (ed - td).days / 365.0
+                if E > 0:
+                    m = _eu_match_print(E, float(r["price"]), surf["df"], curve)
+                    if m:
+                        b = m[0]
+                        ceiling = max(x[1] for x in m)
+                        if float(r["price"]) > ceiling * 1.05:
+                            rec["Inferred"] = f"~{b[0]}Y · ITM/away (prem>ATM)"
+                        else:
+                            rec["Inferred"] = f"{b[0]}Y ATM · model {b[1]:.0f}bp (|Δ|{b[3]:.0f})"
+            except Exception:
+                pass
+        disp.append(rec)
+
+    st.dataframe(pd.DataFrame(disp), use_container_width=True, hide_index=True)
+    st.caption(f"{len(disp)} prints. " + (
+        f"Matched vs EUR surface: {surf.get('label','')} ({str(surf.get('snapshot',''))[:19]})"
+        if can_match else "Inferred tenor unavailable (load EUR curve/surface)."))
+
+
 @st.fragment
 def sdr_live_tab():
     """DTCC SDR Live — IRO Blotter with alert notifications."""
@@ -6606,6 +6788,17 @@ def sdr_live_tab():
         unsafe_allow_html=True
     )
     st.caption("DTCC public price dissemination — interest rate options / swaptions / caps & floors")
+
+    # ── Reporting-source sub-menu: DTCC (existing) vs EU MiFIR (new) ──────────
+    _sdr_source = st.radio(
+        "Reporting source",
+        ["\U0001F4E1 SDR DTCC", "\U0001F1EA\U0001F1FA EU \u2014 MiFIR Trade Reporting"],
+        horizontal=True, key="_sdr_source_sel", label_visibility="collapsed",
+    )
+    if _sdr_source.startswith("\U0001F1EA"):
+        eu_mifir_tab()
+        return
+
 
     with st.expander("🔧 Admin — Start/Stop SDR Fetcher", expanded=False):
         _admin_pw = st.text_input("Admin password", type="password", key="_sdr_admin_pw")
