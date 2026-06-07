@@ -13302,12 +13302,25 @@ def curves_tab():
         _estr_eu_bas  = st.session_state.get("config_basis", {}).get("EUR", {}).get("estr_euribor_basis")
         _eu_6m3m_bas  = st.session_state.get("config_basis", {}).get("EUR", {}).get("euribor_6m_3m_basis")
 
+        # v0806c: raw par IRS curves stashed by the DB loader (before bootstrap).
+        # Shown alongside the bootstrapped zeros, and used as the basis source.
+        _estr_par = st.session_state.get("_eur_estr_par")
+        _e6_par   = st.session_state.get("_eur_euribor_par", {}).get("euribor_6m")
+        _e3_par   = st.session_state.get("_eur_euribor_par", {}).get("euribor_3m")
+        # Basis is computed from PAR curves (fall back to the zero curve only if par
+        # wasn't stashed — e.g. an Excel-committed curve).
+        def _nonempty(_d):
+            return _d is not None and hasattr(_d, "empty") and not _d.empty
+        _estr_basis_src = _estr_par if _nonempty(_estr_par) else _estr_curve
+        _e6_basis_src   = _e6_par   if _nonempty(_e6_par)   else _euribor_6m
+        _e3_basis_src   = _e3_par   if _nonempty(_e3_par)   else _euribor_3m
+
         # v0705h: always recompute ESTR-EURIBOR basis from current curves (don't use stale cache)
-        # Mirrors USD SOFR-FF basis logic — basis = projection − discount in bp.
-        if _estr_curve is not None and _euribor_6m is not None and not _estr_curve.empty and not _euribor_6m.empty:
+        # v0806c: basis = projection − discount in bp, computed from the PAR curves.
+        if _nonempty(_estr_basis_src) and _nonempty(_e6_basis_src):
             try:
-                _e_sorted = _estr_curve.sort_values("MaturityY")
-                _b_sorted = _euribor_6m.sort_values("MaturityY")
+                _e_sorted = _estr_basis_src.sort_values("MaturityY")
+                _b_sorted = _e6_basis_src.sort_values("MaturityY")
                 _e_xs = _e_sorted["MaturityY"].to_numpy().astype(float)
                 _e_ys = _e_sorted["ZeroRatePct"].to_numpy().astype(float)
                 _b_xs = _b_sorted["MaturityY"].to_numpy().astype(float)
@@ -13328,10 +13341,11 @@ def curves_tab():
                 pass
 
         # v0705p: EURIBOR 6M-3M tenor basis = (6M EURIBOR − 3M EURIBOR) in bp.
-        if _euribor_6m is not None and _euribor_3m is not None and not _euribor_6m.empty and not _euribor_3m.empty:
+        # v0806c: computed from the PAR curves.
+        if _nonempty(_e6_basis_src) and _nonempty(_e3_basis_src):
             try:
-                _b6_sorted = _euribor_6m.sort_values("MaturityY")
-                _b3_sorted = _euribor_3m.sort_values("MaturityY")
+                _b6_sorted = _e6_basis_src.sort_values("MaturityY")
+                _b3_sorted = _e3_basis_src.sort_values("MaturityY")
                 _b6_xs = _b6_sorted["MaturityY"].to_numpy().astype(float)
                 _b6_ys = _b6_sorted["ZeroRatePct"].to_numpy().astype(float)
                 _b3_xs = _b3_sorted["MaturityY"].to_numpy().astype(float)
@@ -13360,34 +13374,48 @@ def curves_tab():
                 st.warning("⚠️ EURIBOR 6M projection curve not yet loaded — forward matrix falls back to ESTR as a proxy. "
                            "Strikes will be approximate until EURIBOR data is loaded into `swap_rates`.")
 
-            # ── EUR Curve Chart ──────────────────────────────────────────────
+            # ── EUR Curve Chart — 3 par (dotted) + 2 bootstrapped zeros (solid) ──
             _eur_fig = go.Figure()
 
-            # ESTR OIS curve (discount)
-            if _estr_curve is not None and not _estr_curve.empty:
+            # ESTR bootstrapped zero (discount, used in pricing)
+            if _nonempty(_estr_curve):
                 _eur_fig.add_trace(go.Scatter(
                     x=_estr_curve["MaturityY"], y=_estr_curve["ZeroRatePct"],
-                    mode="lines+markers", name="ESTR OIS (discount)",
+                    mode="lines+markers", name="ESTR Zero (bootstrapped)",
                     line=dict(color="#38bdf8", width=2),
                     marker=dict(size=5)
                 ))
-
-            # EURIBOR 6M curve (projection)
-            if _euribor_6m is not None and not _euribor_6m.empty:
+            # EURIBOR 6M bootstrapped projection zero (used in pricing ≥2Y)
+            if _nonempty(_euribor_6m):
                 _eur_fig.add_trace(go.Scatter(
                     x=_euribor_6m["MaturityY"], y=_euribor_6m["ZeroRatePct"],
-                    mode="lines+markers", name="EURIBOR 6M (projection)",
-                    line=dict(color="#f59e0b", width=2, dash="dash"),
+                    mode="lines+markers", name="EURIBOR 6M Zero (bootstrapped)",
+                    line=dict(color="#f59e0b", width=2),
                     marker=dict(size=5)
                 ))
-
-            # EURIBOR 3M curve (short-end projection)
-            if _euribor_3m is not None and not _euribor_3m.empty:
+            # ESTR par IRS (market input)
+            if _nonempty(_estr_par):
                 _eur_fig.add_trace(go.Scatter(
-                    x=_euribor_3m["MaturityY"], y=_euribor_3m["ZeroRatePct"],
-                    mode="lines+markers", name="EURIBOR 3M (≤1Y projection)",
+                    x=_estr_par["MaturityY"], y=_estr_par["ZeroRatePct"],
+                    mode="lines+markers", name="ESTR Par OIS",
+                    line=dict(color="#7dd3fc", width=2, dash="dot"),
+                    marker=dict(size=4)
+                ))
+            # EURIBOR 6M par IRS (market input)
+            if _nonempty(_e6_par):
+                _eur_fig.add_trace(go.Scatter(
+                    x=_e6_par["MaturityY"], y=_e6_par["ZeroRatePct"],
+                    mode="lines+markers", name="EURIBOR 6M Par IRS",
+                    line=dict(color="#fcd34d", width=2, dash="dot"),
+                    marker=dict(size=4)
+                ))
+            # EURIBOR 3M par IRS (market input, ≤1Y short-end projection)
+            if _nonempty(_e3_par):
+                _eur_fig.add_trace(go.Scatter(
+                    x=_e3_par["MaturityY"], y=_e3_par["ZeroRatePct"],
+                    mode="lines+markers", name="EURIBOR 3M Par IRS",
                     line=dict(color="#a855f7", width=2, dash="dot"),
-                    marker=dict(size=5)
+                    marker=dict(size=4)
                 ))
 
             _eur_fig.update_layout(
