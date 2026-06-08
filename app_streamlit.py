@@ -6823,6 +6823,56 @@ def eu_mifir_tab():
     st.caption("EU swaption prints (TP ICAP IOTF). Premium is bp (BAPO); tenor/strike "
                "inferred by matching the printed ATM premium to the live EUR premium surface.")
 
+    with st.expander("🔧 Admin — EU Slice Loader (manual pull + 20-min auto-load)", expanded=False):
+        _eu_admin_pw = st.text_input("Admin password", type="password", key="_eu_admin_pw")
+        if _eu_admin_pw == "1Will-po1":
+            st.markdown(r"""
+**📥 Manually pull a slice (auto-loads within 20 min):**
+1. Log into the TP ICAP portal and download an IOTF trade slice (the `.zip`).
+2. Drop it into: `C:\Users\willp\RateEdge Swaption Pricer\eu-trade-capture\iotf_files`
+3. The scheduled task loads it within 20 min — or force it now (below).
+
+**⚡ Force a load right now:**
+```
+Start-ScheduledTask -TaskName "RateEdge_EU_Load"
+```
+
+**📊 Watch the load log live:**
+```
+Get-Content "C:\Users\willp\RateEdge Swaption Pricer\eu-trade-capture\iotf_files\load_log.txt" -Wait -Tail 30
+```
+
+**🔁 The 20-min auto-loader** is a Windows Scheduled Task (`RateEdge_EU_Load`). It loads any new slice in `iotf_files`, upserts to `eu_iro_prints`, and skips already-processed files. Survives reboot; runs while locked / on battery.
+
+**Task controls:**
+```
+Get-ScheduledTask    -TaskName "RateEdge_EU_Load"   # status (Ready / Running)
+Disable-ScheduledTask -TaskName "RateEdge_EU_Load"  # pause
+Enable-ScheduledTask  -TaskName "RateEdge_EU_Load"  # resume
+```
+
+**One-off manual load (instead of waiting for the task):**
+```
+cd "C:\Users\willp\RateEdge Swaption Pricer\eu-trade-capture"
+python load_idb_slices.py --folder ".\iotf_files" --sink supabase
+```
+(uses the SUPABASE_KEY baked into `run_eu_load.ps1`)
+
+**Re-register the task** (run in an **admin** PowerShell — only if changing the schedule):
+```
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument '-NoProfile -ExecutionPolicy Bypass -File "C:\Users\willp\RateEdge Swaption Pricer\eu-trade-capture\run_eu_load.ps1"'
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 20)
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Limited
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+Register-ScheduledTask -TaskName "RateEdge_EU_Load" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force
+```
+
+⚠️ The auto-loader runs only while this PC is on. The portal download is manual (TP ICAP login is Okta + reCAPTCHA), so a slice only reaches the DB after you drop it in `iotf_files`.
+""")
+        elif _eu_admin_pw:
+            st.error("Incorrect password.")
+
+
     _hrs = {"24h": 24, "72h": 72, "7d": 168, "30d": 720}.get(
         st.radio("Window", ["24h", "72h", "7d", "30d"], index=2, horizontal=True,
                  key="_eu_window"), 168)
