@@ -6942,14 +6942,15 @@ def eu_combined_analysis():
                     iv = sv * 1e4 * (px / model_atm)
                     cells.setdefault((_eu_expiry_label(E), int(tenor)), []).append(
                         (iv, _age_w(r["exec_utc"]), "MiFIR"))
+                    _dlm = desc.lower()
+                    _pcm = "Payer" if "call" in _dlm else ("Rec" if ("/o p" in _dlm or " p epn" in _dlm) else "Eur")
                     trades.append({
-                        "Source": "MiFIR", "Exec (UTC)": str(r["exec_utc"])[:19],
-                        "Expiry": _eu_expiry_label(E), "Tenor": f"{int(tenor)}Y",
-                        "Strike": "ATM(inferred)", "Premium(bp)": round(px, 1),
-                        "Notional(mm)": "masked", "Implied vol(bp)": round(iv, 1),
-                        "Surface vol(bp)": round(sv * 1e4, 1),
-                        "Δ vs surf(bp)": round(iv - sv * 1e4, 1),
-                        "Venue/MIC": r["venue_mic"] or "IOTF",
+                        "Exec (UTC)": str(r["exec_utc"])[:19], "Src": "MiFIR", "P/C": _pcm,
+                        "Expiry": f"{_eu_expiry_label(E)} · {str(exp_iso)[:10]}",
+                        "Tenor": f"{int(tenor)}Y", "Strike": "ATM (inf)",
+                        "Prem(bp)": round(px, 1), "Notional(mm)": "masked",
+                        "Impl vol(bp)": round(iv, 1), "Surf vol(bp)": round(sv * 1e4, 1),
+                        "Δ surf(bp)": round(iv - sv * 1e4, 1), "MIC": r["venue_mic"] or "IOTF",
                     })
                 except Exception:
                     continue
@@ -6984,15 +6985,16 @@ def eu_combined_analysis():
                         (iv, _age_w(r["execution_timestamp"]), "SDR"))
                     _svr = _eu_surface_vol(surf["df"], float(E), tenor)
                     trades.append({
-                        "Source": "SDR", "Exec (UTC)": str(r["execution_timestamp"])[:19],
+                        "Exec (UTC)": str(r["execution_timestamp"])[:19], "Src": "SDR",
+                        "P/C": "Payer" if payer else "Rec",
                         "Expiry": _eu_expiry_label(E), "Tenor": f"{tenor}Y",
                         "Strike": f"{K*100:.3f}%" + (" ATM" if abs(K - F) < 1e-6 else ""),
-                        "Premium(bp)": round(premium_bp, 1),
+                        "Prem(bp)": round(premium_bp, 1),
                         "Notional(mm)": round(notional / 1e6, 1),
-                        "Implied vol(bp)": round(iv, 1),
-                        "Surface vol(bp)": round(_svr * 1e4, 1) if _svr is not None else "",
-                        "Δ vs surf(bp)": round(iv - _svr * 1e4, 1) if _svr is not None else "",
-                        "Venue/MIC": str(r["option_type_decoded"] or ""),
+                        "Impl vol(bp)": round(iv, 1),
+                        "Surf vol(bp)": round(_svr * 1e4, 1) if _svr is not None else "",
+                        "Δ surf(bp)": round(iv - _svr * 1e4, 1) if _svr is not None else "",
+                        "MIC": "DTCC",
                     })
                 except Exception:
                     continue
@@ -7029,38 +7031,54 @@ def eu_combined_analysis():
             n_sdr += ns; n_mif += nm
             cnt_grid[e][col] = f"{ns}S/{nm}M"
 
-    st.caption(f"{n_sdr} SDR + {n_mif} MiFIR EUR trades across {len(cells)} buckets · "
-               f"window {_hrs}h · surface {surf.get('label','')} ({str(surf.get('snapshot',''))[:19]}).")
+    st.caption(f"{n_sdr} SDR + {n_mif} MiFIR EUR trades · window {_hrs:.0f}h · "
+               f"surface {surf.get('label','')} ({str(surf.get('snapshot',''))[:19]}).")
 
-    st.markdown("**Implied ATM normal vol (bp), recency-weighted — SDR + MiFIR pooled**")
-    st.dataframe(pd.DataFrame(impl_grid).T.reindex(exps), use_container_width=True)
-
-    st.markdown("**Implied − surface (bp)** — positive = market richer than your surface")
-    st.dataframe(pd.DataFrame(diff_grid).T.reindex(exps), use_container_width=True)
-
-    st.markdown("**Trades per bucket** (S = SDR strike-correct · M = MiFIR ATM-inferred)")
-    st.dataframe(pd.DataFrame(cnt_grid).T.reindex(exps), use_container_width=True)
-
-    st.caption("SDR vols are strike-correct (real strike from the tape). MiFIR vols are "
-               "ATM-level (vol-masked feed, tenor inferred). Skew fitting needs strikes — "
-               "available on the SDR side; the MiFIR strike-solve is the next step.")
-
-    # ── Combined trade-report download (both repositories, one file) ──────────
+    # ── Combined trade blotter (per-trade, analysed — same style as SDR) ──────
     if trades:
+        _COLS = ["Exec (UTC)", "Src", "P/C", "Expiry", "Tenor", "Strike", "Prem(bp)",
+                 "Notional(mm)", "Impl vol(bp)", "Surf vol(bp)", "Δ surf(bp)", "MIC"]
         _tr_df = pd.DataFrame(trades).sort_values("Exec (UTC)", ascending=False)
+        _tr_df = _tr_df[[c for c in _COLS if c in _tr_df.columns]]
+        st.dataframe(
+            _tr_df, use_container_width=True, hide_index=True,
+            height=min(60 + len(_tr_df) * 35, 700),
+            column_config={
+                "Exec (UTC)":   st.column_config.TextColumn("Exec (UTC)",  width="medium"),
+                "Src":          st.column_config.TextColumn("Src",         width="small"),
+                "P/C":          st.column_config.TextColumn("P/C",         width="small"),
+                "Expiry":       st.column_config.TextColumn("Expiry",      width="medium"),
+                "Tenor":        st.column_config.TextColumn("Tenor",       width="small"),
+                "Strike":       st.column_config.TextColumn("Strike",      width="small"),
+                "Prem(bp)":     st.column_config.NumberColumn("Prem(bp)",  width="small"),
+                "Notional(mm)": st.column_config.TextColumn("Notl(mm)",    width="small"),
+                "Impl vol(bp)": st.column_config.NumberColumn("Impl(bp)",  width="small"),
+                "Surf vol(bp)": st.column_config.NumberColumn("Surf(bp)",  width="small"),
+                "Δ surf(bp)":   st.column_config.NumberColumn("Δ surf",    width="small"),
+                "MIC":          st.column_config.TextColumn("MIC",         width="small"),
+            },
+        )
         _ts = _dt.now(_tz.utc).strftime("%Y%m%d_%H%M")
-        _dl1, _dl2 = st.columns([1, 5])
-        with _dl1:
-            st.download_button(
-                "⬇ Download combined trade report",
-                data=_tr_df.to_csv(index=False),
-                file_name=f"EUR_combined_SDR_MiFIR_{_ts}.csv",
-                mime="text/csv",
-                key="_euc_combined_dl",
-            )
-        with _dl2:
-            st.caption(f"{len(trades)} EUR trades · DTCC SDR + MiFIR IOTF · "
-                       f"per-trade strike, premium (bp), implied vol, Δ vs surface.")
+        st.download_button(
+            "⬇ Download combined trade report",
+            data=_tr_df.to_csv(index=False),
+            file_name=f"EUR_combined_SDR_MiFIR_{_ts}.csv",
+            mime="text/csv", key="_euc_combined_dl",
+        )
+    else:
+        st.info("No per-trade rows to show in this window.")
+
+    # ── Aggregated vol grids (secondary, tucked away) ─────────────────────────
+    with st.expander("📊 Vol surface grids (aggregated by expiry × tenor)", expanded=False):
+        st.markdown("**Implied ATM normal vol (bp), recency-weighted — SDR + MiFIR pooled**")
+        st.dataframe(pd.DataFrame(impl_grid).T.reindex(exps), use_container_width=True)
+        st.markdown("**Implied − surface (bp)** — positive = market richer than your surface")
+        st.dataframe(pd.DataFrame(diff_grid).T.reindex(exps), use_container_width=True)
+        st.markdown("**Trades per bucket** (S = SDR · M = MiFIR)")
+        st.dataframe(pd.DataFrame(cnt_grid).T.reindex(exps), use_container_width=True)
+
+    st.caption("SDR vols are strike-correct (real strike from the tape); MiFIR vols are "
+               "ATM-level (vol-masked feed, tenor inferred).")
 
 
 def _eu_window_hours(label: str) -> float:
@@ -7301,15 +7319,18 @@ def sdr_live_tab():
     )
     st.caption("DTCC public price dissemination — interest rate options / swaptions / caps & floors")
 
-    # ── Reporting-source sub-menu: DTCC (existing) vs EU MiFIR (new) ──────────
-    _sdr_source = st.radio(
-        "Reporting source",
-        ["\U0001F4E1 SDR DTCC", "\U0001F1EA\U0001F1FA EU \u2014 MiFIR Trade Reporting"],
-        horizontal=True, key="_sdr_source_sel", label_visibility="collapsed",
-    )
-    if _sdr_source.startswith("\U0001F1EA"):
-        eu_mifir_tab()
-        return
+    # ── Reporting-source sub-menu: DTCC (existing) vs EU MiFIR ────────────────
+    # EU MiFIR is EUR-only flow, so the toggle only appears on the EUR page.
+    _cur_ccy = st.session_state.get("sidebar_ccy", "AUD").split(" ")[0]
+    if _cur_ccy == "EUR":
+        _sdr_source = st.radio(
+            "Reporting source",
+            ["\U0001F4E1 SDR DTCC", "\U0001F1EA\U0001F1FA EU \u2014 MiFIR Trade Reporting"],
+            horizontal=True, key="_sdr_source_sel", label_visibility="collapsed",
+        )
+        if _sdr_source.startswith("\U0001F1EA"):
+            eu_mifir_tab()
+            return
 
 
     with st.expander("🔧 Admin — Start/Stop SDR Fetcher", expanded=False):
