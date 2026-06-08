@@ -7063,6 +7063,24 @@ def eu_combined_analysis():
                        f"per-trade strike, premium (bp), implied vol, Δ vs surface.")
 
 
+def _eu_window_hours(label: str) -> float:
+    """Lookback hours for the EU window selector. The business-day windows
+    (24h/48h/72h/5d) skip weekends, so on a Monday '24h' reaches back to Friday.
+    '1m' is 30 calendar days."""
+    from datetime import datetime as _d, timedelta as _td, timezone as _tz
+    now = _d.now(_tz.utc)
+    if label == "1m":
+        cutoff = now - _td(days=30)
+    else:
+        bdays = {"24h": 1, "48h": 2, "72h": 3, "5d": 5}.get(label, 1)
+        cutoff = now
+        while bdays > 0:
+            cutoff = cutoff - _td(days=1)
+            if cutoff.weekday() < 5:        # Mon–Fri only
+                bdays -= 1
+    return max(0.0, (now - cutoff).total_seconds() / 3600.0)
+
+
 def eu_mifir_tab():
     """EU MiFIR swaption flow (TP ICAP IOTF) with surface-inferred tenor."""
     from datetime import datetime as _dt
@@ -7130,9 +7148,9 @@ Register-ScheduledTask -TaskName "RateEdge_EU_Load" -Action $action -Trigger $tr
         eu_combined_analysis()
         return
 
-    _hrs = {"24h": 24, "72h": 72, "7d": 168, "30d": 720}.get(
-        st.radio("Window", ["24h", "72h", "7d", "30d"], index=2, horizontal=True,
-                 key="_eu_window"), 168)
+    _hrs = _eu_window_hours(
+        st.radio("Window", ["24h", "48h", "72h", "5d", "1m"], index=0, horizontal=True,
+                 key="_eu_window"))
 
     df = _eu_load_iro_prints(hours=_hrs)
     if df is None:
@@ -7197,7 +7215,9 @@ Register-ScheduledTask -TaskName "RateEdge_EU_Load" -Action $action -Trigger $tr
                 E = None
         rec = {
             "Time (UTC)": str(r["exec_utc"])[:19], "Src": src, "MIC": mic,
-            "Style": style, "Expiry": exp_lbl or (str(exp_iso)[:10] if exp_iso else ""),
+            "Style": style,
+            "Expiry": (f"{exp_lbl} · {str(exp_iso)[:10]}" if (exp_lbl and exp_iso)
+                       else (exp_lbl or (str(exp_iso)[:10] if exp_iso else ""))),
             "Premium(bp)": r["price"], "Ccy": ccy,
             "Pub": r["publication_mode"], "Inferred": "",
             "Model ATM(bp)": "", "|Δ|bp": "",
