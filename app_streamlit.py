@@ -6895,6 +6895,7 @@ def eu_combined_analysis():
 
     now = _dt.now(_tz.utc)
     cells: dict = {}   # (exp_lbl, tenor) -> list of (vol_bp, weight, source)
+    trades: list = []  # per-trade rows for the combined download
 
     def _age_w(ts):
         try:
@@ -6941,6 +6942,15 @@ def eu_combined_analysis():
                     iv = sv * 1e4 * (px / model_atm)
                     cells.setdefault((_eu_expiry_label(E), int(tenor)), []).append(
                         (iv, _age_w(r["exec_utc"]), "MiFIR"))
+                    trades.append({
+                        "Source": "MiFIR", "Exec (UTC)": str(r["exec_utc"])[:19],
+                        "Expiry": _eu_expiry_label(E), "Tenor": f"{int(tenor)}Y",
+                        "Strike": "ATM(inferred)", "Premium(bp)": round(px, 1),
+                        "Notional(mm)": "masked", "Implied vol(bp)": round(iv, 1),
+                        "Surface vol(bp)": round(sv * 1e4, 1),
+                        "Δ vs surf(bp)": round(iv - sv * 1e4, 1),
+                        "Venue/MIC": r["venue_mic"] or "IOTF",
+                    })
                 except Exception:
                     continue
 
@@ -6972,6 +6982,18 @@ def eu_combined_analysis():
                         continue
                     cells.setdefault((_eu_expiry_label(E), tenor), []).append(
                         (iv, _age_w(r["execution_timestamp"]), "SDR"))
+                    _svr = _eu_surface_vol(surf["df"], float(E), tenor)
+                    trades.append({
+                        "Source": "SDR", "Exec (UTC)": str(r["execution_timestamp"])[:19],
+                        "Expiry": _eu_expiry_label(E), "Tenor": f"{tenor}Y",
+                        "Strike": f"{K*100:.3f}%" + (" ATM" if abs(K - F) < 1e-6 else ""),
+                        "Premium(bp)": round(premium_bp, 1),
+                        "Notional(mm)": round(notional / 1e6, 1),
+                        "Implied vol(bp)": round(iv, 1),
+                        "Surface vol(bp)": round(_svr * 1e4, 1) if _svr is not None else "",
+                        "Δ vs surf(bp)": round(iv - _svr * 1e4, 1) if _svr is not None else "",
+                        "Venue/MIC": str(r["option_type_decoded"] or ""),
+                    })
                 except Exception:
                     continue
 
@@ -7022,6 +7044,23 @@ def eu_combined_analysis():
     st.caption("SDR vols are strike-correct (real strike from the tape). MiFIR vols are "
                "ATM-level (vol-masked feed, tenor inferred). Skew fitting needs strikes — "
                "available on the SDR side; the MiFIR strike-solve is the next step.")
+
+    # ── Combined trade-report download (both repositories, one file) ──────────
+    if trades:
+        _tr_df = pd.DataFrame(trades).sort_values("Exec (UTC)", ascending=False)
+        _ts = _dt.now(_tz.utc).strftime("%Y%m%d_%H%M")
+        _dl1, _dl2 = st.columns([1, 5])
+        with _dl1:
+            st.download_button(
+                "⬇ Download combined trade report",
+                data=_tr_df.to_csv(index=False),
+                file_name=f"EUR_combined_SDR_MiFIR_{_ts}.csv",
+                mime="text/csv",
+                key="_euc_combined_dl",
+            )
+        with _dl2:
+            st.caption(f"{len(trades)} EUR trades · DTCC SDR + MiFIR IOTF · "
+                       f"per-trade strike, premium (bp), implied vol, Δ vs surface.")
 
 
 def eu_mifir_tab():
