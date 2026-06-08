@@ -6812,6 +6812,218 @@ def _eu_expiry_label(years: float) -> str:
     return min(grid, key=lambda g: abs(g[0] - years))[1]
 
 
+def _eu_solve_normal_vol(premium_bp, F, K, E, A, payer=True):
+    """Back out the normal (Bachelier) vol that reprices a swaption premium (bp of
+    notional) at strike K. Returns vol in bp, or None if premium is outside the
+    solvable range (e.g. below intrinsic)."""
+    from math import sqrt, pi, erf, exp
+    if E <= 0 or A <= 0:
+        return None
+
+    def _Phi(x):
+        return 0.5 * (1.0 + erf(x / sqrt(2.0)))
+
+    def _nphi(x):
+        return exp(-0.5 * x * x) / sqrt(2.0 * pi)
+
+    def price_bp(sig):
+        sd = sig * sqrt(E)
+        if sd <= 0:
+            return 0.0
+        d = (F - K) / sd
+        if payer:
+            val = A * ((F - K) * _Phi(d) + sd * _nphi(d))
+        else:
+            val = A * ((K - F) * _Phi(-d) + sd * _nphi(d))
+        return val * 1e4
+
+    lo, hi = 1e-6, 0.06
+    if not (price_bp(lo) < premium_bp < price_bp(hi)):
+        return None
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        if price_bp(mid) < premium_bp:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2.0 * 1e4
+
+
+def _eu_load_sdr_eur(hours=720):
+    """EUR swaption trades from the DTCC SDR (the US-facing EUR flow). Returns a
+    DataFrame, None (no DB), or empty if none."""
+    q = ("SELECT option_type_decoded, opt_tenor, swp_tenor, strike_pct, "
+         "premium_amount, notional_leg1, execution_timestamp "
+         "FROM dtcc_sdr "
+         "WHERE notional_ccy='EUR' AND opt_tenor IS NOT NULL AND opt_tenor <> '' "
+         "AND action_type='NEWT' "
+         "AND execution_timestamp >= NOW() - (%s || ' hours')::interval "
+         "ORDER BY execution_timestamp DESC LIMIT 5000")
+    try:
+        return _load_sdr_data_cached(q, (str(int(hours)),))
+    except Exception:
+        return None
+
+
+def eu_combined_analysis():
+    """EU Combined Analysis — pools EUR swaption flow from BOTH reporting sources
+    (DTCC SDR, US-facing + MiFIR IOTF, EU-facing) into one implied ATM-vol surface
+    vs the live EUR surface.
+
+    SDR trades carry strike + tenor, so implied vol is strike-correct. MiFIR prints
+    are vol-masked (ATM premium only), so tenor is inferred and vol is ATM-level.
+    Both are placed on the expiry×tenor grid, recency-weighted, tagged by source.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    from math import sqrt as _sqrt, pi as _pi
+    import numpy as _np
+    import re as _re
+
+    _hrs = {"7d": 168, "30d": 720, "90d": 2160}.get(
+        st.radio("Window", ["7d", "30d", "90d"], index=1, horizontal=True,
+                 key="_euc_window"), 720)
+    _hl = st.slider("Recency half-life (days)", 1, 90, 21, key="_euc_half_life",
+                    help="Prints in a bucket are recency-weighted: a print this old counts half.")
+    _src_pick = st.radio("Sources", ["Combined (SDR + MiFIR)", "SDR only", "MiFIR only"],
+                         horizontal=True, key="_euc_src")
+
+    curve = st.session_state.get("config_curves", {}).get("EUR")
+    surf = _eu_latest_eur_surface()
+    if surf is None or curve is None or getattr(curve, "empty", True):
+        st.warning("EUR surface or curve not loaded — open the EUR pricer tab once, then return.")
+        return
+
+    now = _dt.now(_tz.utc)
+    cells: dict = {}   # (exp_lbl, tenor) -> list of (vol_bp, weight, source)
+
+    def _age_w(ts):
+        try:
+            ex = _dt.fromisoformat(str(ts).replace("Z", "+00:00"))
+            age = max(0.0, (now - ex).total_seconds() / 86400.0)
+        except Exception:
+            age = 0.0
+        return 2.0 ** (-age / _hl)
+
+    # ── MiFIR side (eu_iro_prints): tenor inferred, ATM-level implied vol ──────
+    if _src_pick != "SDR only":
+        mdf = _eu_load_iro_prints(hours=_hrs)
+        if isinstance(mdf, tuple) or mdf is None:
+            mdf = None
+        if mdf is not None and not mdf.empty:
+            for _, r in mdf.iterrows():
+                if r["price"] is None:
+                    continue
+                desc = str(r["instrument_desc"] or "")
+                exp_iso = r["expiry_date"]
+                if not exp_iso:
+                    mexp = _re.search(r"(\d{8})\s*$", desc) or _re.search(r"(\d{8})", desc)
+                    if mexp:
+                        g = mexp.group(1)
+                        exp_iso = f"{g[:4]}-{g[4:6]}-{g[6:8]}T00:00:00"
+                if not exp_iso:
+                    continue
+                try:
+                    ed = _dt.fromisoformat(str(exp_iso).replace("Z", "").split("+")[0][:19])
+                    td = _dt.fromisoformat(str(r["exec_utc"]).replace("Z", "").split("+")[0][:19])
+                    E = (ed - td).days / 365.0
+                    if E <= 0:
+                        continue
+                    px = float(r["price"])
+                    m = _eu_match_print(E, px, surf["df"], curve)
+                    if not m:
+                        continue
+                    tenor, model_atm, _F, _d = m[0]
+                    if model_atm <= 0:
+                        continue
+                    sv = _eu_surface_vol(surf["df"], E, tenor)
+                    if sv is None:
+                        continue
+                    iv = sv * 1e4 * (px / model_atm)
+                    cells.setdefault((_eu_expiry_label(E), int(tenor)), []).append(
+                        (iv, _age_w(r["exec_utc"]), "MiFIR"))
+                except Exception:
+                    continue
+
+    # ── SDR side (dtcc_sdr EUR): strike-correct implied vol ────────────────────
+    if _src_pick != "MiFIR only":
+        sdf = _eu_load_sdr_eur(hours=_hrs)
+        if sdf is not None and not sdf.empty:
+            for _, r in sdf.iterrows():
+                try:
+                    E = label_to_years(str(r["opt_tenor"]))
+                    ten = label_to_years(str(r["swp_tenor"]))
+                    if not E or not ten or E <= 0 or ten <= 0:
+                        continue
+                    tenor = int(round(ten))
+                    notional = float(r["notional_leg1"] or 0)
+                    prem = float(r["premium_amount"] or 0)
+                    if notional <= 0 or prem <= 0:
+                        continue
+                    premium_bp = prem / notional * 1e4
+                    F, A, _ = forward_and_annuity_from_curve(curve, "EUR", float(E), float(tenor))
+                    if A <= 0:
+                        continue
+                    sp = float(r["strike_pct"] or 0) / 100.0
+                    K = sp if sp > 0 else F
+                    od = str(r["option_type_decoded"] or "").lower()
+                    payer = ("pay" in od) or ("call" in od) or ("recv" not in od and "put" not in od)
+                    iv = _eu_solve_normal_vol(premium_bp, F, K, float(E), A, payer)
+                    if iv is None or iv <= 0:
+                        continue
+                    cells.setdefault((_eu_expiry_label(E), tenor), []).append(
+                        (iv, _age_w(r["execution_timestamp"]), "SDR"))
+                except Exception:
+                    continue
+
+    if not cells:
+        st.info(f"No EUR swaption flow matched in the last {_hrs}h for: {_src_pick}.")
+        return
+
+    _EXP_ORDER = ["1w", "1m", "2m", "3m", "6m", "9m", "1y", "18m", "2y", "3y",
+                  "4y", "5y", "7y", "10y", "12y", "15y", "20y", "25y", "30y"]
+    _EY = {"1w":1/52,"1m":1/12,"2m":2/12,"3m":3/12,"6m":6/12,"9m":9/12,"1y":1,
+           "18m":1.5,"2y":2,"3y":3,"4y":4,"5y":5,"7y":7,"10y":10,"12y":12,
+           "15y":15,"20y":20,"25y":25,"30y":30}
+    exps = [e for e in _EXP_ORDER if any(k[0] == e for k in cells)]
+    tens = sorted({k[1] for k in cells})
+
+    impl_grid, diff_grid, cnt_grid = {}, {}, {}
+    n_sdr = n_mif = 0
+    for e in exps:
+        impl_grid[e], diff_grid[e], cnt_grid[e] = {}, {}, {}
+        for t in tens:
+            col = f"{t}Y"
+            vals = cells.get((e, t))
+            if not vals:
+                impl_grid[e][col] = _np.nan; diff_grid[e][col] = _np.nan; cnt_grid[e][col] = ""
+                continue
+            wsum = sum(w for _, w, _s in vals)
+            iv = sum(v * w for v, w, _s in vals) / wsum if wsum else _np.nan
+            impl_grid[e][col] = round(iv, 1)
+            sv = _eu_surface_vol(surf["df"], _EY.get(e, 1.0), t)
+            diff_grid[e][col] = round(iv - sv * 1e4, 1) if sv is not None else _np.nan
+            ns = sum(1 for _, _w, s in vals if s == "SDR")
+            nm = sum(1 for _, _w, s in vals if s == "MiFIR")
+            n_sdr += ns; n_mif += nm
+            cnt_grid[e][col] = f"{ns}S/{nm}M"
+
+    st.caption(f"{n_sdr} SDR + {n_mif} MiFIR EUR trades across {len(cells)} buckets · "
+               f"window {_hrs}h · surface {surf.get('label','')} ({str(surf.get('snapshot',''))[:19]}).")
+
+    st.markdown("**Implied ATM normal vol (bp), recency-weighted — SDR + MiFIR pooled**")
+    st.dataframe(pd.DataFrame(impl_grid).T.reindex(exps), use_container_width=True)
+
+    st.markdown("**Implied − surface (bp)** — positive = market richer than your surface")
+    st.dataframe(pd.DataFrame(diff_grid).T.reindex(exps), use_container_width=True)
+
+    st.markdown("**Trades per bucket** (S = SDR strike-correct · M = MiFIR ATM-inferred)")
+    st.dataframe(pd.DataFrame(cnt_grid).T.reindex(exps), use_container_width=True)
+
+    st.caption("SDR vols are strike-correct (real strike from the tape). MiFIR vols are "
+               "ATM-level (vol-masked feed, tenor inferred). Skew fitting needs strikes — "
+               "available on the SDR side; the MiFIR strike-solve is the next step.")
+
+
 def eu_mifir_tab():
     """EU MiFIR swaption flow (TP ICAP IOTF) with surface-inferred tenor."""
     from datetime import datetime as _dt
@@ -6872,6 +7084,12 @@ Register-ScheduledTask -TaskName "RateEdge_EU_Load" -Action $action -Trigger $tr
         elif _eu_admin_pw:
             st.error("Incorrect password.")
 
+
+    _eu_view = st.radio("View", ["📋 Prints", "📊 Combined Analysis"],
+                        horizontal=True, key="_eu_view", label_visibility="collapsed")
+    if _eu_view.startswith("📊"):
+        eu_combined_analysis()
+        return
 
     _hrs = {"24h": 24, "72h": 72, "7d": 168, "30d": 720}.get(
         st.radio("Window", ["24h", "72h", "7d", "30d"], index=2, horizontal=True,
