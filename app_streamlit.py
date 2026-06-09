@@ -6850,14 +6850,32 @@ def _eu_solve_normal_vol(premium_bp, F, K, E, A, payer=True):
 
 
 _EU_BROKER_NAMES = {
-    "BGCD": "BGC", "BGCO": "BGC", "TWSF": "Tradition", "TSEF": "Tradition", "TPSE": "Tullett Prebon",
-    "IGDL": "ICAP", "ISWE": "ICAP (E)", "ISWV": "ICAP (V)", "GSEF": "GFI",
+    # BGC family
+    "BGCD": "BGC", "BGCO": "BGC", "BGCI": "BGC", "AURO": "Aurel BGC",
+    # Tullett Prebon family
+    "TPSE": "Tullett Prebon", "TPIR": "Tullett Prebon", "TPEU": "Tullett Prebon",
+    # ICAP family
+    "IGDL": "ICAP", "ISWE": "ICAP (E)", "ISWV": "ICAP (V)", "IOTF": "ICAP",
+    "IOIR": "ICAP UK OTF", "IMRD": "TP ICAP UK MTF",
+    # Tradition family
+    "TWSF": "Tradition", "TWEM": "Tradition", "TSEF": "Tradition", "TSIR": "Tradition",
+    "TSAF": "Tradition", "TCDS": "Tradition", "TREU": "Tradition", "TEUR": "Tradition",
+    "TEIR": "Tradition",
+    # GFI (BGC group)
+    "GSEF": "GFI", "GFSO": "GFI",
+    # Bloomberg
+    "BBSF": "Bloomberg", "BMTF": "Bloomberg", "BTFE": "Bloomberg",
+    # Dealers / SIs
+    "HSBC": "HSBC",
+    # Off-venue / bilateral
+    "BILT": "Bilateral", "XXXX": "Bilateral", "XOFF": "Off-venue",
+    # Misc electronic
     "RTSX": "RTX", "RTXS": "RTX", "TRWB": "Tradeweb", "DWSF": "Dealerweb",
-    "BLOM": "Bloomberg", "ICSE": "ICE", "BILT": "Bilateral", "XXXX": "Bilateral",
-    "XOFF": "Off-venue", "IOTF": "ICAP",
+    "BLOM": "Bloomberg", "ICSE": "ICE",
 }
-_PREM_DEDUP_MICS_EU = {"BGCD", "BGCO", "TPSE", "TSEF", "TWSF", "IGDL", "ISWE",
-                       "ISWV", "GSEF", "BILT", "XXXX"}
+_PREM_DEDUP_MICS_EU = {"BGCD", "BGCO", "BGCI", "TPSE", "TPIR", "TPEU", "TSEF", "TSIR",
+                       "TSAF", "TWSF", "TWEM", "IGDL", "ISWE", "ISWV", "IOIR", "IMRD",
+                       "GSEF", "GFSO", "BILT", "XXXX"}
 
 _LONDON_TZ = None
 
@@ -6958,7 +6976,7 @@ def _pair_swaption_legs(df):
                 "p_prem": _p_prem, "r_prem": _r_prem,
                 "notional": float(_p.get("notional_leg1") or 0),
                 "broker": _EU_BROKER_NAMES.get(_mic, _mic or "—"),
-                "time": _time_p, "type": "Straddle" if _same_strike else "Strangle",
+                "time": _time_p, "type": "🔵 Straddle" if _same_strike else "🟠 Strangle",
                 "same_strike": _same_strike,
             })
             break
