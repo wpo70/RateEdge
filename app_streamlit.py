@@ -7104,9 +7104,9 @@ def eu_combined_analysis():
                     _dlm = desc.lower()
                     _pcm = "Payer" if "call" in _dlm else ("Rec" if ("/o p" in _dlm or " p epn" in _dlm) else "Eur")
                     trades.append({
-                        "Exec (LDN)": _eu_to_london(r["exec_utc"]), "Src": "MiFIR", "P/C": _pcm,
+                        "Exec (LDN)": _eu_to_london(r["exec_utc"]), "Src": "MiFIR", "Ccy": "EUR", "Type": _pcm,
                         "Expiry": f"{_eu_expiry_label(E)} · {str(exp_iso)[:10]}",
-                        "Tenor": f"{int(tenor)}Y", "Ccy": "EUR", "Strike": "ATM (inf)",
+                        "Tenor": f"{int(tenor)}Y", "Strike": "ATM (inf)",
                         "Prem(bp)": round(px, 1), "Notional(mm)": "masked",
                         "Impl vol(bp)": round(iv, 1), "Surf vol(bp)": round(sv * 1e4, 1),
                         "Δ surf(bp)": round(iv - sv * 1e4, 1),
@@ -7151,8 +7151,8 @@ def eu_combined_analysis():
                     _K = _Kp if _pair["same_strike"] else (_Kp + _Kr) / 2.0
                     trades.append({
                         "Exec (LDN)": _eu_to_london(_pair["time"]), "Src": "SDR",
-                        "P/C": _pair["type"],
-                        "Expiry": _eu_expiry_label(E), "Tenor": f"{tenor}Y", "Ccy": "EUR",
+                        "Ccy": "EUR", "Type": _pair["type"],
+                        "Expiry": _eu_expiry_label(E), "Tenor": f"{tenor}Y",
                         "Strike": f"{_K*100:.3f}%" + (" ATM" if abs(_K - F) < 1e-4 else ""),
                         "Prem(bp)": round(_pp_bp + _rp_bp, 1),
                         "Notional(mm)": round(_not / 1e6, 1),
@@ -7202,7 +7202,7 @@ def eu_combined_analysis():
 
     # ── Combined trade blotter (per-trade, analysed — same style as SDR) ──────
     if trades:
-        _COLS = ["Exec (LDN)", "Src", "P/C", "Expiry", "Tenor", "Ccy", "Strike", "Prem(bp)",
+        _COLS = ["Exec (LDN)", "Src", "Ccy", "Type", "Expiry", "Tenor", "Strike", "Prem(bp)",
                  "Notional(mm)", "Impl vol(bp)", "Surf vol(bp)", "Δ surf(bp)", "Broker"]
         _tr_df = pd.DataFrame(trades).sort_values("Exec (LDN)", ascending=False)
         _tr_df = _tr_df[[c for c in _COLS if c in _tr_df.columns]]
@@ -7220,7 +7220,8 @@ def eu_combined_analysis():
             column_config={
                 "Exec (LDN)":   st.column_config.TextColumn("Exec (LDN)",  width="medium"),
                 "Src":          st.column_config.TextColumn("Src",         width="small"),
-                "P/C":          st.column_config.TextColumn("P/C",         width="small"),
+                "P/C":          st.column_config.TextColumn("Type",        width="small"),
+                "Type":         st.column_config.TextColumn("Type",        width="small"),
                 "Expiry":       st.column_config.TextColumn("Expiry",      width="medium"),
                 "Tenor":        st.column_config.TextColumn("Tenor",       width="small"),
                 "Ccy":          st.column_config.TextColumn("Ccy",         width="small"),
