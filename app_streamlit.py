@@ -7615,22 +7615,18 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
     # ── Platform code → full name ─────────────────────────────────────────────
     PLATFORM_NAMES = {
-        "BGCD": "BGC",
-        "TWSF": "Tradition",
-        "TSEF": "Tradition",
-        "TPSE": "Tullett Prebon",
-        "IGDL": "ICAP",
-        "ISWE": "ICAP (E)",
-        "ISWV": "ICAP (V)",
-        "GSEF": "GFI",
-        "RTSX": "RTX",
-        "RTXS": "RTX",
-        "TRWB": "Tradeweb",
-        "DWSF": "Dealerweb",
-        "BLOM": "Bloomberg",
-        "ICSE": "ICE",
-        "BILT": "Bilateral",
-        "XXXX": "Bilateral",
+        "BGCD": "BGC", "BGCO": "BGC", "BGCI": "BGC", "AURO": "Aurel BGC",
+        "TWSF": "Tradition", "TWEM": "Tradition", "TSEF": "Tradition", "TSIR": "Tradition",
+        "TSAF": "Tradition", "TCDS": "Tradition", "TREU": "Tradition", "TEUR": "Tradition",
+        "TEIR": "Tradition",
+        "TPSE": "Tullett Prebon", "TPIR": "Tullett Prebon", "TPEU": "Tullett Prebon",
+        "IGDL": "ICAP", "ISWE": "ICAP (E)", "ISWV": "ICAP (V)",
+        "IOIR": "ICAP UK OTF", "IMRD": "TP ICAP UK MTF",
+        "GSEF": "GFI", "GFSO": "GFI",
+        "BBSF": "Bloomberg", "BMTF": "Bloomberg", "BTFE": "Bloomberg", "BLOM": "Bloomberg",
+        "RTSX": "RTX", "RTXS": "RTX", "TRWB": "Tradeweb", "DWSF": "Dealerweb",
+        "ICSE": "ICE", "HSBC": "HSBC",
+        "BILT": "Bilateral", "XXXX": "Bilateral", "XOFF": "Off-venue",
     }
 
     if not HAS_POSTGRES:
@@ -8568,7 +8564,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                                     # Brokers report full straddle prem on EACH leg — but only dedup same-strike
                                     # Strangles/RRs have genuinely different prems; deduping corrupts them
-                                    _PREM_DEDUP_MICS = {"BGCD","TPSE","TSEF","TWSF","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
+                                    _PREM_DEDUP_MICS = {"BGCD","BGCO","BGCI","TPSE","TPIR","TPEU","TSEF","TSIR","TSAF","TWSF","TWEM","IGDL","ISWE","ISWV","IOIR","IMRD","GSEF","GFSO","BILT","XXXX"}
                                     _broker_mic = str(_p.get("platform_identifier", ""))
                                     _prem_deduped = _same_strike and _broker_mic in _PREM_DEDUP_MICS and _p_prem > 0 and _r_prem > 0
                                     if _prem_deduped:
