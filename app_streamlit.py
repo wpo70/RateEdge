@@ -7517,7 +7517,7 @@ def sdr_live_tab():
     if _cur_ccy == "EUR":
         _sdr_source = st.radio(
             "Reporting source",
-            ["\U0001F4E1 SDR DTCC", "\U0001F1EA\U0001F1FA EU \u2014 MiFIR Trade Reporting"],
+            ["\U0001F4E1 SDR DTCC", "\U0001F1EA\U0001F1FA MiFIR Trade Reporting"],
             horizontal=True, key="_sdr_source_sel", label_visibility="collapsed",
         )
         if _sdr_source.startswith("\U0001F1EA"):
