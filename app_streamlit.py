@@ -7203,7 +7203,6 @@ def eu_mifir_tab():
     from datetime import datetime as _dt
     st.markdown(
         '<div class="sdr-header">'
-        '<span style="font-size:20px;font-weight:700;color:#f1f5f9;">🇪🇺 EU — MiFIR Trade Reporting</span>'
         '<span class="sdr-badge-blue">IDB OTF · APA · 15-min delayed</span>'
         '</div>', unsafe_allow_html=True)
     st.caption("EU swaption prints (TP ICAP IOTF). Premium is bp (BAPO); tenor/strike "
