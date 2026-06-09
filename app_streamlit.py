@@ -6971,12 +6971,26 @@ def eu_combined_analysis():
     """
     from datetime import datetime as _dt, timezone as _tz
     from math import sqrt as _sqrt, pi as _pi
+    import datetime as _pydt
     import numpy as _np
     import re as _re
 
-    _hrs = {"7d": 168, "30d": 720, "90d": 2160}.get(
-        st.radio("Window", ["7d", "30d", "90d"], index=1, horizontal=True,
-                 key="_euc_window"), 720)
+    _today = _dt.now(_tz.utc).date()
+    _dc1, _dc2 = st.columns(2)
+    with _dc1:
+        _from_d = st.date_input("From", value=_today - _pydt.timedelta(days=7),
+                                max_value=_today, key="_euc_from")
+    with _dc2:
+        _to_d = st.date_input("To", value=_today, max_value=_today, key="_euc_to")
+    if isinstance(_from_d, (list, tuple)):
+        _from_d = _from_d[0]
+    if isinstance(_to_d, (list, tuple)):
+        _to_d = _to_d[0]
+    if _to_d < _from_d:
+        _from_d, _to_d = _to_d, _from_d
+    _from_utc = _dt(_from_d.year, _from_d.month, _from_d.day, tzinfo=_tz.utc)
+    _to_utc = _dt(_to_d.year, _to_d.month, _to_d.day, 23, 59, 59, tzinfo=_tz.utc)
+    _hrs = max(1.0, (_dt.now(_tz.utc) - _from_utc).total_seconds() / 3600.0)
     _hl = st.slider("Recency half-life (days)", 1, 90, 21, key="_euc_half_life",
                     help="Prints in a bucket are recency-weighted: a print this old counts half.")
     _src_pick = st.radio("Sources", ["Combined (SDR + MiFIR)", "SDR only", "MiFIR only"],
@@ -7000,6 +7014,15 @@ def eu_combined_analysis():
             age = 0.0
         return 2.0 ** (-age / _hl)
 
+    def _in_range(ts):
+        try:
+            ex = _dt.fromisoformat(str(ts).replace("Z", "+00:00"))
+            if ex.tzinfo is None:
+                ex = ex.replace(tzinfo=_tz.utc)
+            return _from_utc <= ex <= _to_utc
+        except Exception:
+            return True
+
     # ── MiFIR side (eu_iro_prints): tenor inferred, ATM-level implied vol ──────
     if _src_pick != "SDR only":
         mdf = _eu_load_iro_prints(hours=_hrs)
@@ -7008,6 +7031,8 @@ def eu_combined_analysis():
         if mdf is not None and not mdf.empty:
             for _, r in mdf.iterrows():
                 if r["price"] is None:
+                    continue
+                if not _in_range(r["exec_utc"]):
                     continue
                 desc = str(r["instrument_desc"] or "")
                 exp_iso = r["expiry_date"]
@@ -7057,6 +7082,8 @@ def eu_combined_analysis():
         if sdf is not None and not sdf.empty:
             for _pair in _pair_swaption_legs(sdf):
                 try:
+                    if not _in_range(_pair["time"]):
+                        continue
                     E = label_to_years(str(_pair["exp"]))
                     ten = label_to_years(str(_pair["ten"]))
                     if not E or not ten or E <= 0 or ten <= 0:
@@ -7130,7 +7157,8 @@ def eu_combined_analysis():
             n_sdr += ns; n_mif += nm
             cnt_grid[e][col] = f"{ns}S/{nm}M"
 
-    st.caption(f"{n_sdr} SDR + {n_mif} MiFIR EUR trades · window {_hrs:.0f}h · "
+    st.caption(f"{n_sdr} SDR + {n_mif} MiFIR EUR trades · "
+               f"{_from_d.strftime('%d-%b-%Y')} → {_to_d.strftime('%d-%b-%Y')} · "
                f"surface {surf.get('label','')} ({str(surf.get('snapshot',''))[:19]}).")
 
     # ── Combined trade blotter (per-trade, analysed — same style as SDR) ──────
@@ -7139,6 +7167,14 @@ def eu_combined_analysis():
                  "Notional(mm)", "Impl vol(bp)", "Surf vol(bp)", "Δ surf(bp)", "Broker"]
         _tr_df = pd.DataFrame(trades).sort_values("Exec (UTC)", ascending=False)
         _tr_df = _tr_df[[c for c in _COLS if c in _tr_df.columns]]
+        # Broker / platform filter (SEF, ICAP, BGC, Bilateral …).
+        _bopts = sorted({str(b) for b in _tr_df["Broker"].dropna().unique()}) if "Broker" in _tr_df.columns else []
+        if _bopts:
+            _bsel = st.multiselect("Broker / platform", _bopts, default=_bopts,
+                                   key="_euc_broker_filter",
+                                   help="Filter the blotter by reporting broker / SEF.")
+            if _bsel:
+                _tr_df = _tr_df[_tr_df["Broker"].isin(_bsel)]
         st.dataframe(
             _tr_df, use_container_width=True, hide_index=True,
             height=min(60 + len(_tr_df) * 35, 700),
@@ -7264,9 +7300,23 @@ Register-ScheduledTask -TaskName "RateEdge_EU_Load" -Action $action -Trigger $tr
         eu_combined_analysis()
         return
 
-    _hrs = _eu_window_hours(
-        st.radio("Window", ["24h", "48h", "72h", "5d", "1m"], index=0, horizontal=True,
-                 key="_eu_window"))
+    import datetime as _pydt
+    _ptoday = _dt.now().date()
+    _pc1, _pc2 = st.columns(2)
+    with _pc1:
+        _pfrom = st.date_input("From", value=_ptoday - _pydt.timedelta(days=2),
+                               max_value=_ptoday, key="_eu_prints_from")
+    with _pc2:
+        _pto = st.date_input("To", value=_ptoday, max_value=_ptoday, key="_eu_prints_to")
+    if isinstance(_pfrom, (list, tuple)):
+        _pfrom = _pfrom[0]
+    if isinstance(_pto, (list, tuple)):
+        _pto = _pto[0]
+    if _pto < _pfrom:
+        _pfrom, _pto = _pto, _pfrom
+    _pfrom_s = _pfrom.strftime("%Y-%m-%d")
+    _pto_s = _pto.strftime("%Y-%m-%d")
+    _hrs = ((_ptoday - _pfrom).days + 2) * 24
 
     df = _eu_load_iro_prints(hours=_hrs)
     if df is None:
@@ -7278,7 +7328,7 @@ Register-ScheduledTask -TaskName "RateEdge_EU_Load" -Action $action -Trigger $tr
         st.caption(f"detail: {df[1]}")
         return
     if df.empty:
-        st.info(f"No EU swaption prints in the last {_hrs}h.")
+        st.info(f"No EU swaption prints between {_pfrom_s} and {_pto_s}.")
         return
 
     surf = _eu_latest_eur_surface()
@@ -7291,6 +7341,9 @@ Register-ScheduledTask -TaskName "RateEdge_EU_Load" -Action $action -Trigger $tr
     import re as _re
     disp = []
     for _, r in df.iterrows():
+        _exec_day = str(r["exec_utc"])[:10]
+        if _exec_day and not (_pfrom_s <= _exec_day <= _pto_s):
+            continue
         desc = str(r["instrument_desc"] or "")
         dl = desc.lower()
         # Expiry date: prefer column; else parse YYYYMMDD from description ("...EUR 20260903").
