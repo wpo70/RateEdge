@@ -6899,6 +6899,15 @@ def _pair_swaption_legs(df):
         cand = rec[(~rec.index.isin(matched_r)) & (rec["opt_tenor"] == _e_p)]
         if _t_p and _t_p not in ("—", "NA", "None", ""):
             cand = cand[cand["swp_tenor"] == _t_p]
+        # Straddle legs are the same notional — a 50M payer must not pair with a
+        # 100M receiver (it would inherit the larger leg's premium and double the bp).
+        try:
+            _np_p = float(_p.get("notional_leg1") or 0)
+            if _np_p > 0 and "notional_leg1" in cand.columns:
+                _rn = cand["notional_leg1"].astype(float)
+                cand = cand[(_rn - _np_p).abs() <= 0.01 * _np_p]
+        except Exception:
+            pass
         if cand.empty or _time_p is _pd.NaT:
             continue
         try:
@@ -8412,6 +8421,18 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _match = _match[_match["swp_tenor"] == _t_p]
                         else:
                             _match = _match[_match["swp_tenor"].isin(["","—","NA","None",None]) | _match["swp_tenor"].isna()]
+                        # Straddle/strangle legs are the SAME notional — require the receiver
+                        # leg's notional to match the payer's (within 1%). Without this a 50M
+                        # payer can grab a 100M receiver at the same strike/time, inheriting the
+                        # larger leg's full premium onto the smaller notional and doubling the bp
+                        # (the 5Y5Y ICAP/BGC case). Legs that aren't the same size aren't one trade.
+                        try:
+                            _np_p = float(_p.get("notional_leg1") or 0)
+                            if _np_p > 0:
+                                _rn = _match["notional_leg1"].astype(float)
+                                _match = _match[(_rn - _np_p).abs() <= 0.01 * _np_p]
+                        except Exception:
+                            pass
 
                         if not _match.empty and _time_p is not pd.NaT:
                             # GROUPING IS PRIMARY, TIME IS SECONDARY. Candidates already
@@ -10164,6 +10185,22 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _av_now = _av_dtmod.datetime.now()   # naive — _time_dt is naive (matches R/R aggregator)
                                 _av_acc = {}   # (exp,ten) -> [sum w*vol, sum w, n]
                                 _av_debug = []  # per-print inversion trace
+                                # Surface vol per bucket (year-keyed) for the per-print outlier guard.
+                                _av_surf_y = {}
+                                try:
+                                    for _si in range(len(_av_atm)):
+                                        _se = _av_atm.iloc[_si]["Expiry"]
+                                        for _sc in [c for c in _av_atm.columns if c != "Expiry"]:
+                                            try:
+                                                _sy = (round(label_to_years(_se), 4), round(label_to_years(_sc), 4))
+                                                _sval = float(_av_atm.iloc[_si][_sc])
+                                                if _sval > 0:
+                                                    _av_surf_y[_sy] = _sval
+                                            except Exception:
+                                                continue
+                                except Exception:
+                                    pass
+                                _av_rejected_prints = []
                                 _ln2a = math.log(2.0); _hl_h = _av_hours / 2.0
                                 for _r in _paired_rows:
                                     if _r.get("CCY") != "USD" or _r.get("Type") != "🔵 Straddle": continue
@@ -10203,6 +10240,27 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _vs = [v for v in (_vp, _vr) if v and v > 0]
                                     if not _vs: continue
                                     _vol = sum(_vs) / len(_vs)
+                                    # Per-PRINT outlier rejection vs the surface, BEFORE averaging into
+                                    # the bucket. A single mis-reported straddle — e.g. full-size premium
+                                    # on half the notional, which doubles its bp and vol — would otherwise
+                                    # corrupt the bucket average and slip under the bucket-level cap
+                                    # (the averaged value sits closer to surface than the bad print does).
+                                    _svchk = _av_surf_y.get((round(_ey, 4), round(_ty, 4)))
+                                    if _svchk and _svchk > 0 and abs(_vol - _svchk) / _svchk * 100.0 > _av_devcap:
+                                        _av_rejected_prints.append(
+                                            f"{_exp}×{_ten} {_vol:.0f}bp vs surface {_svchk:.0f} "
+                                            f"({_r.get('Platform','')}, {_not/1e6:.0f}mm)")
+                                        _av_debug.append({
+                                            "Exp": _exp, "Ten": _ten, "Notl(mm)": round(_not/1e6, 0),
+                                            "Pay prem(bp)": round(_pp/_not*1e4, 2) if _pp > 0 else None,
+                                            "Rec prem(bp)": round(_rp/_not*1e4, 2) if _rp > 0 else None,
+                                            "F(%)": round(_F*100, 4), "K(%)": round(_K*100, 4),
+                                            "Annuity": round(_ann, 4), "DF": round(_df, 5),
+                                            "Pay vol(bp)": round(_vp, 1) if _vp else None,
+                                            "Rec vol(bp)": round(_vr, 1) if _vr else None,
+                                            "Vol(bp)": round(_vol, 1), "Wt": "✗ rejected",
+                                        })
+                                        continue
                                     _w = math.exp(-_ln2a * _age_h / _hl_h) * (math.sqrt(_not/1e6) if _not > 0 else 1.0)
                                     _av_debug.append({
                                         "Exp": _exp, "Ten": _ten,
@@ -10251,6 +10309,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _n_pts = len(_av_pts)
                                     st.markdown(f"**SDR-derived ATM points** ({_n_pts} bucket(s), last {_av_hours}h, recency+√notional weighted):")
                                     st.dataframe(pd.DataFrame(_pts_rows).set_index("Expiry"), use_container_width=True)
+                                    if _av_rejected_prints:
+                                        st.warning("⚠️ Rejected prints (per-print vol deviates >"
+                                                   f"{_av_devcap}% from surface — excluded before bucket averaging): "
+                                                   + "; ".join(_av_rejected_prints))
                                     if _av_debug:
                                         with st.expander(f"🔬 Inversion trace ({len(_av_debug)} prints) — premium → vol per straddle", expanded=False):
                                             st.caption("Each printed straddle: notional, per-leg premium (bp), forward F, "
