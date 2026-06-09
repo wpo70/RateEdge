@@ -6849,11 +6849,97 @@ def _eu_solve_normal_vol(premium_bp, F, K, E, A, payer=True):
     return (lo + hi) / 2.0 * 1e4
 
 
+_EU_BROKER_NAMES = {
+    "BGCD": "BGC", "TWSF": "Tradition", "TSEF": "Tradition", "TPSE": "Tullett Prebon",
+    "IGDL": "ICAP", "ISWE": "ICAP (E)", "ISWV": "ICAP (V)", "GSEF": "GFI",
+    "RTSX": "RTX", "RTXS": "RTX", "TRWB": "Tradeweb", "DWSF": "Dealerweb",
+    "BLOM": "Bloomberg", "ICSE": "ICE", "BILT": "Bilateral", "XXXX": "Bilateral",
+    "IOTF": "ICAP",
+}
+_PREM_DEDUP_MICS_EU = {"BGCD", "TPSE", "TSEF", "TWSF", "IGDL", "ISWE",
+                       "ISWV", "GSEF", "BILT", "XXXX"}
+
+
+def _pair_swaption_legs(df):
+    """Pair payer (CALL) and receiver (PUT) swaption legs into straddles/strangles,
+    using the SAME matching logic as the USD SDR analytics: same expiry + swap tenor,
+    within a 10-minute window, ranked by same-strike → nearest-strike → time. Same-strike
+    straddle premiums are de-duped for brokers that report the full straddle on each leg
+    (so each leg carries half). Returns a list of paired-trade dicts (straddles + strangles).
+    Unpaired legs are not returned — vol inference needs both legs."""
+    import pandas as _pd
+    out = []
+    if df is None or getattr(df, "empty", True) or "option_type_decoded" not in df.columns:
+        return out
+    pay = df[df["option_type_decoded"] == "CALL"].copy()
+    rec = df[df["option_type_decoded"] == "PUT"].copy()
+    if pay.empty or rec.empty or "strike_pct" not in df.columns:
+        return out
+    matched_p, matched_r = set(), set()
+    # Order payers so those with a same-strike receiver (straddle legs) match first.
+    try:
+        _rk = set(round(float(x), 2) for x in rec["strike_pct"].dropna())
+        pay = pay.assign(_hs=pay["strike_pct"].apply(
+            lambda v: 1 if (_pd.notna(v) and round(float(v), 2) in _rk) else 0)
+        ).sort_values("_hs", ascending=False)
+    except Exception:
+        pass
+
+    def _tt(_row):
+        return _pd.to_datetime(_row.get("execution_timestamp") or _row.get("event_timestamp"),
+                               errors="coerce")
+
+    for _pi, _p in pay.iterrows():
+        if _pi in matched_p:
+            continue
+        _s_p = round(float(_p.get("strike_pct") or 0), 2)
+        _e_p = str(_p.get("opt_tenor", "") or "").strip()
+        _t_p = str(_p.get("swp_tenor", "") or "").strip()
+        _time_p = _tt(_p)
+        cand = rec[(~rec.index.isin(matched_r)) & (rec["opt_tenor"] == _e_p)]
+        if _t_p and _t_p not in ("—", "NA", "None", ""):
+            cand = cand[cand["swp_tenor"] == _t_p]
+        if cand.empty or _time_p is _pd.NaT:
+            continue
+        try:
+            _sp = cand["strike_pct"].astype(float)
+            _gap = (_sp - _s_p).abs()
+            _same = (_gap < 0.01).astype(int)
+            _tsec = cand.apply(lambda _row: abs((_time_p - _tt(_row)).total_seconds())
+                               if _tt(_row) is not _pd.NaT else 9e9, axis=1)
+            cand = cand.assign(_is_same=_same, _sg=_gap, _ts=_tsec).sort_values(
+                ["_is_same", "_sg", "_ts"], ascending=[False, True, True])
+        except Exception:
+            pass
+        for _ri, _r in cand.iterrows():
+            _time_r = _tt(_r)
+            if _time_r is _pd.NaT or abs((_time_p - _time_r).total_seconds()) > 600:
+                continue
+            matched_p.add(_pi); matched_r.add(_ri)
+            _s_r = round(float(_r.get("strike_pct") or 0), 2)
+            _p_prem = float(_p.get("premium_amount") or 0)
+            _r_prem = float(_r.get("premium_amount") or 0)
+            _same_strike = abs(_s_p - _s_r) < 0.01
+            _mic = str(_p.get("platform_identifier", "") or "")
+            if _same_strike and _mic in _PREM_DEDUP_MICS_EU and _p_prem > 0 and _r_prem > 0:
+                _c = max(_p_prem, _r_prem); _p_prem = _c / 2.0; _r_prem = _c / 2.0
+            out.append({
+                "exp": _e_p, "ten": _t_p, "p_strike": _s_p, "r_strike": _s_r,
+                "p_prem": _p_prem, "r_prem": _r_prem,
+                "notional": float(_p.get("notional_leg1") or 0),
+                "broker": _EU_BROKER_NAMES.get(_mic, _mic or "—"),
+                "time": _time_p, "type": "Straddle" if _same_strike else "Strangle",
+                "same_strike": _same_strike,
+            })
+            break
+    return out
+
+
 def _eu_load_sdr_eur(hours=720):
     """EUR swaption trades from the DTCC SDR (the US-facing EUR flow). Returns a
     DataFrame, None (no DB), or empty if none."""
     q = ("SELECT option_type_decoded, opt_tenor, swp_tenor, strike_pct, "
-         "premium_amount, notional_leg1, execution_timestamp "
+         "premium_amount, notional_leg1, execution_timestamp, platform_identifier "
          "FROM dtcc_sdr "
          "WHERE notional_ccy='EUR' AND opt_tenor IS NOT NULL AND opt_tenor <> '' "
          "AND action_type='NEWT' "
@@ -6950,7 +7036,8 @@ def eu_combined_analysis():
                         "Tenor": f"{int(tenor)}Y", "Strike": "ATM (inf)",
                         "Prem(bp)": round(px, 1), "Notional(mm)": "masked",
                         "Impl vol(bp)": round(iv, 1), "Surf vol(bp)": round(sv * 1e4, 1),
-                        "Δ surf(bp)": round(iv - sv * 1e4, 1), "MIC": r["venue_mic"] or "IOTF",
+                        "Δ surf(bp)": round(iv - sv * 1e4, 1),
+                        "Broker": _EU_BROKER_NAMES.get(r["venue_mic"] or "IOTF", "ICAP"),
                     })
                 except Exception:
                     continue
@@ -6959,42 +7046,45 @@ def eu_combined_analysis():
     if _src_pick != "MiFIR only":
         sdf = _eu_load_sdr_eur(hours=_hrs)
         if sdf is not None and not sdf.empty:
-            for _, r in sdf.iterrows():
+            for _pair in _pair_swaption_legs(sdf):
                 try:
-                    E = label_to_years(str(r["opt_tenor"]))
-                    ten = label_to_years(str(r["swp_tenor"]))
+                    E = label_to_years(str(_pair["exp"]))
+                    ten = label_to_years(str(_pair["ten"]))
                     if not E or not ten or E <= 0 or ten <= 0:
                         continue
                     tenor = int(round(ten))
-                    notional = float(r["notional_leg1"] or 0)
-                    prem = float(r["premium_amount"] or 0)
-                    if notional <= 0 or prem <= 0:
+                    _not = float(_pair["notional"] or 0)
+                    if _not <= 0:
                         continue
-                    premium_bp = prem / notional * 1e4
                     F, A, _ = forward_and_annuity_from_curve(curve, "EUR", float(E), float(tenor))
                     if A <= 0:
                         continue
-                    sp = float(r["strike_pct"] or 0) / 100.0
-                    K = sp if sp > 0 else F
-                    od = str(r["option_type_decoded"] or "").lower()
-                    payer = ("pay" in od) or ("call" in od) or ("recv" not in od and "put" not in od)
-                    iv = _eu_solve_normal_vol(premium_bp, F, K, float(E), A, payer)
-                    if iv is None or iv <= 0:
+                    _Kp = (_pair["p_strike"] / 100.0) if _pair["p_strike"] else F
+                    _Kr = (_pair["r_strike"] / 100.0) if _pair["r_strike"] else F
+                    _pp_bp = _pair["p_prem"] / _not * 1e4 if _pair["p_prem"] > 0 else 0.0
+                    _rp_bp = _pair["r_prem"] / _not * 1e4 if _pair["r_prem"] > 0 else 0.0
+                    # Invert each leg (payer + receiver) and average — same as USD ATM fitter.
+                    _vp = _eu_solve_normal_vol(_pp_bp, F, _Kp, float(E), A, True) if _pp_bp > 0 else None
+                    _vr = _eu_solve_normal_vol(_rp_bp, F, _Kr, float(E), A, False) if _rp_bp > 0 else None
+                    _vs = [v for v in (_vp, _vr) if v and v > 0]
+                    if not _vs:
                         continue
+                    iv = sum(_vs) / len(_vs)
                     cells.setdefault((_eu_expiry_label(E), tenor), []).append(
-                        (iv, _age_w(r["execution_timestamp"]), "SDR"))
+                        (iv, _age_w(_pair["time"]), "SDR"))
                     _svr = _eu_surface_vol(surf["df"], float(E), tenor)
+                    _K = _Kp if _pair["same_strike"] else (_Kp + _Kr) / 2.0
                     trades.append({
-                        "Exec (UTC)": str(r["execution_timestamp"])[:19], "Src": "SDR",
-                        "P/C": "Payer" if payer else "Rec",
+                        "Exec (UTC)": str(_pair["time"])[:19], "Src": "SDR",
+                        "P/C": _pair["type"],
                         "Expiry": _eu_expiry_label(E), "Tenor": f"{tenor}Y",
-                        "Strike": f"{K*100:.3f}%" + (" ATM" if abs(K - F) < 1e-6 else ""),
-                        "Prem(bp)": round(premium_bp, 1),
-                        "Notional(mm)": round(notional / 1e6, 1),
+                        "Strike": f"{_K*100:.3f}%" + (" ATM" if abs(_K - F) < 1e-4 else ""),
+                        "Prem(bp)": round(_pp_bp + _rp_bp, 1),
+                        "Notional(mm)": round(_not / 1e6, 1),
                         "Impl vol(bp)": round(iv, 1),
                         "Surf vol(bp)": round(_svr * 1e4, 1) if _svr is not None else "",
                         "Δ surf(bp)": round(iv - _svr * 1e4, 1) if _svr is not None else "",
-                        "MIC": "DTCC",
+                        "Broker": _pair["broker"],
                     })
                 except Exception:
                     continue
@@ -7037,7 +7127,7 @@ def eu_combined_analysis():
     # ── Combined trade blotter (per-trade, analysed — same style as SDR) ──────
     if trades:
         _COLS = ["Exec (UTC)", "Src", "P/C", "Expiry", "Tenor", "Strike", "Prem(bp)",
-                 "Notional(mm)", "Impl vol(bp)", "Surf vol(bp)", "Δ surf(bp)", "MIC"]
+                 "Notional(mm)", "Impl vol(bp)", "Surf vol(bp)", "Δ surf(bp)", "Broker"]
         _tr_df = pd.DataFrame(trades).sort_values("Exec (UTC)", ascending=False)
         _tr_df = _tr_df[[c for c in _COLS if c in _tr_df.columns]]
         st.dataframe(
@@ -7055,7 +7145,7 @@ def eu_combined_analysis():
                 "Impl vol(bp)": st.column_config.NumberColumn("Impl(bp)",  width="small"),
                 "Surf vol(bp)": st.column_config.NumberColumn("Surf(bp)",  width="small"),
                 "Δ surf(bp)":   st.column_config.NumberColumn("Δ surf",    width="small"),
-                "MIC":          st.column_config.TextColumn("MIC",         width="small"),
+                "Broker":       st.column_config.TextColumn("Broker",      width="small"),
             },
         )
         _ts = _dt.now(_tz.utc).strftime("%Y%m%d_%H%M")
@@ -7599,7 +7689,15 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 label_visibility="collapsed", on_change=_save_sdr_filters)
             sel_type = [_type_options[l] for l in sel_type_labels]
             ccy_opts = _sdr_get_distinct("notional_ccy")
-            _ccy_default = [x for x in ["AUD"] if x in ccy_opts] if ccy_opts else []
+            # CCY filter follows the sidebar pricing currency. When the sidebar ccy
+            # changes, reset the filter so it defaults to the newly-selected currency
+            # (a manual override still sticks until the next sidebar change).
+            _side_ccy = st.session_state.get("sidebar_ccy", "AUD").split(" ")[0]
+            if st.session_state.get("_sdr_ccy_track") != _side_ccy:
+                st.session_state["_sdr_ccy_track"] = _side_ccy
+                st.session_state.pop("sdr_ccy", None)
+                _sv.pop("sdr_ccy", None)
+            _ccy_default = [x for x in [_side_ccy] if x in ccy_opts] if ccy_opts else []
             _sv_ccy = _sv.get("sdr_ccy", _ccy_default)
             _sv_ccy = [c for c in _sv_ccy if c in ccy_opts] if _sv_ccy else _ccy_default
             sel_ccy = st.multiselect("CCY", ccy_opts,
