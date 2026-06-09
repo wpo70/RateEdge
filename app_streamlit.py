@@ -10065,6 +10065,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 import datetime as _av_dtmod
                                 _av_now = _av_dtmod.datetime.now()   # naive — _time_dt is naive (matches R/R aggregator)
                                 _av_acc = {}   # (exp,ten) -> [sum w*vol, sum w, n]
+                                _av_debug = []  # per-print inversion trace
                                 _ln2a = math.log(2.0); _hl_h = _av_hours / 2.0
                                 for _r in _paired_rows:
                                     if _r.get("CCY") != "USD" or _r.get("Type") != "🔵 Straddle": continue
@@ -10105,6 +10106,17 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     if not _vs: continue
                                     _vol = sum(_vs) / len(_vs)
                                     _w = math.exp(-_ln2a * _age_h / _hl_h) * (math.sqrt(_not/1e6) if _not > 0 else 1.0)
+                                    _av_debug.append({
+                                        "Exp": _exp, "Ten": _ten,
+                                        "Notl(mm)": round(_not/1e6, 0),
+                                        "Pay prem(bp)": round(_pp/_not*1e4, 2) if _pp > 0 else None,
+                                        "Rec prem(bp)": round(_rp/_not*1e4, 2) if _rp > 0 else None,
+                                        "F(%)": round(_F*100, 4), "K(%)": round(_K*100, 4),
+                                        "Annuity": round(_ann, 4), "DF": round(_df, 5),
+                                        "Pay vol(bp)": round(_vp, 1) if _vp else None,
+                                        "Rec vol(bp)": round(_vr, 1) if _vr else None,
+                                        "Vol(bp)": round(_vol, 1), "Wt": round(_w, 3),
+                                    })
                                     _k = (_exp, _ten)
                                     _av_acc.setdefault(_k, [0.0, 0.0, 0])
                                     _av_acc[_k][0] += _w*_vol; _av_acc[_k][1] += _w; _av_acc[_k][2] += 1
@@ -10141,6 +10153,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _n_pts = len(_av_pts)
                                     st.markdown(f"**SDR-derived ATM points** ({_n_pts} bucket(s), last {_av_hours}h, recency+√notional weighted):")
                                     st.dataframe(pd.DataFrame(_pts_rows).set_index("Expiry"), use_container_width=True)
+                                    if _av_debug:
+                                        with st.expander(f"🔬 Inversion trace ({len(_av_debug)} prints) — premium → vol per straddle", expanded=False):
+                                            st.caption("Each printed straddle: notional, per-leg premium (bp), forward F, "
+                                                       "strike K, annuity, discount factor, and the inverted normal vol per "
+                                                       "leg. The bucket value is the √notional·recency-weighted mean of Vol(bp).")
+                                            _dbg_df = pd.DataFrame(_av_debug).sort_values(["Exp", "Ten"])
+                                            st.dataframe(_dbg_df, use_container_width=True, hide_index=True)
                                     # Heatmap — points mapped (NaN where no print)
                                     _pts_num = {"Expiry": []}
                                     for _c in _av_cols: _pts_num[_c] = []
@@ -10210,6 +10229,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             for _ri in range(_nr):
                                                 if not (_grid[_ri, _ci] != _grid[_ri, _ci]):
                                                     _bl.iloc[_ri, _bl.columns.get_loc(_c)] = round(float(_grid[_ri, _ci]), 2)
+                                        # Re-anchor PRINTED cells to their blended value. The smoother
+                                        # otherwise drags a printed corner toward steep neighbours (e.g.
+                                        # 1m1Y blend 74.8 lifted to ~80 by 2m1Y/1m2Y), pushing it above
+                                        # both the close and the SDR print. The outlier guard above already
+                                        # rejects bad prints, so pinning the good ones back is safe.
+                                        for (_ri, _c), _av in _anchor.items():
+                                            _bl.iloc[_ri, _bl.columns.get_loc(_c)] = _av
 
                                     st.markdown(f"**Blended ATM surface** (current × {1-_av_w:.0%} + SDR × {_av_w:.0%}"
                                                 + (", smoothed" if _av_smooth else "") + "):")
