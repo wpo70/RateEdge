@@ -7106,7 +7106,7 @@ def eu_combined_analysis():
                     trades.append({
                         "Exec (LDN)": _eu_to_london(r["exec_utc"]), "Src": "MiFIR", "P/C": _pcm,
                         "Expiry": f"{_eu_expiry_label(E)} · {str(exp_iso)[:10]}",
-                        "Tenor": f"{int(tenor)}Y", "Strike": "ATM (inf)",
+                        "Tenor": f"{int(tenor)}Y", "Ccy": "EUR", "Strike": "ATM (inf)",
                         "Prem(bp)": round(px, 1), "Notional(mm)": "masked",
                         "Impl vol(bp)": round(iv, 1), "Surf vol(bp)": round(sv * 1e4, 1),
                         "Δ surf(bp)": round(iv - sv * 1e4, 1),
@@ -7152,7 +7152,7 @@ def eu_combined_analysis():
                     trades.append({
                         "Exec (LDN)": _eu_to_london(_pair["time"]), "Src": "SDR",
                         "P/C": _pair["type"],
-                        "Expiry": _eu_expiry_label(E), "Tenor": f"{tenor}Y",
+                        "Expiry": _eu_expiry_label(E), "Tenor": f"{tenor}Y", "Ccy": "EUR",
                         "Strike": f"{_K*100:.3f}%" + (" ATM" if abs(_K - F) < 1e-4 else ""),
                         "Prem(bp)": round(_pp_bp + _rp_bp, 1),
                         "Notional(mm)": round(_not / 1e6, 1),
@@ -7202,7 +7202,7 @@ def eu_combined_analysis():
 
     # ── Combined trade blotter (per-trade, analysed — same style as SDR) ──────
     if trades:
-        _COLS = ["Exec (LDN)", "Src", "P/C", "Expiry", "Tenor", "Strike", "Prem(bp)",
+        _COLS = ["Exec (LDN)", "Src", "P/C", "Expiry", "Tenor", "Ccy", "Strike", "Prem(bp)",
                  "Notional(mm)", "Impl vol(bp)", "Surf vol(bp)", "Δ surf(bp)", "Broker"]
         _tr_df = pd.DataFrame(trades).sort_values("Exec (LDN)", ascending=False)
         _tr_df = _tr_df[[c for c in _COLS if c in _tr_df.columns]]
@@ -7223,6 +7223,7 @@ def eu_combined_analysis():
                 "P/C":          st.column_config.TextColumn("P/C",         width="small"),
                 "Expiry":       st.column_config.TextColumn("Expiry",      width="medium"),
                 "Tenor":        st.column_config.TextColumn("Tenor",       width="small"),
+                "Ccy":          st.column_config.TextColumn("Ccy",         width="small"),
                 "Strike":       st.column_config.TextColumn("Strike",      width="small"),
                 "Prem(bp)":     st.column_config.NumberColumn("Prem(bp)",  width="small"),
                 "Notional(mm)": st.column_config.TextColumn("Notl(mm)",    width="small"),
