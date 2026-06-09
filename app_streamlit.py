@@ -6850,14 +6850,35 @@ def _eu_solve_normal_vol(premium_bp, F, K, E, A, payer=True):
 
 
 _EU_BROKER_NAMES = {
-    "BGCD": "BGC", "TWSF": "Tradition", "TSEF": "Tradition", "TPSE": "Tullett Prebon",
+    "BGCD": "BGC", "BGCO": "BGC", "TWSF": "Tradition", "TSEF": "Tradition", "TPSE": "Tullett Prebon",
     "IGDL": "ICAP", "ISWE": "ICAP (E)", "ISWV": "ICAP (V)", "GSEF": "GFI",
     "RTSX": "RTX", "RTXS": "RTX", "TRWB": "Tradeweb", "DWSF": "Dealerweb",
     "BLOM": "Bloomberg", "ICSE": "ICE", "BILT": "Bilateral", "XXXX": "Bilateral",
-    "IOTF": "ICAP",
+    "XOFF": "Off-venue", "IOTF": "ICAP",
 }
-_PREM_DEDUP_MICS_EU = {"BGCD", "TPSE", "TSEF", "TWSF", "IGDL", "ISWE",
+_PREM_DEDUP_MICS_EU = {"BGCD", "BGCO", "TPSE", "TSEF", "TWSF", "IGDL", "ISWE",
                        "ISWV", "GSEF", "BILT", "XXXX"}
+
+_LONDON_TZ = None
+
+
+def _eu_to_london(ts):
+    """Format a UTC timestamp string as London local time (handles BST/GMT)."""
+    from datetime import datetime as _d, timezone as _z
+    global _LONDON_TZ
+    if _LONDON_TZ is None:
+        try:
+            from zoneinfo import ZoneInfo
+            _LONDON_TZ = ZoneInfo("Europe/London")
+        except Exception:
+            _LONDON_TZ = _z.utc
+    try:
+        ex = _d.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if ex.tzinfo is None:
+            ex = ex.replace(tzinfo=_z.utc)
+        return ex.astimezone(_LONDON_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return str(ts)[:19]
 
 
 def _pair_swaption_legs(df):
@@ -7065,7 +7086,7 @@ def eu_combined_analysis():
                     _dlm = desc.lower()
                     _pcm = "Payer" if "call" in _dlm else ("Rec" if ("/o p" in _dlm or " p epn" in _dlm) else "Eur")
                     trades.append({
-                        "Exec (UTC)": str(r["exec_utc"])[:19], "Src": "MiFIR", "P/C": _pcm,
+                        "Exec (LDN)": _eu_to_london(r["exec_utc"]), "Src": "MiFIR", "P/C": _pcm,
                         "Expiry": f"{_eu_expiry_label(E)} · {str(exp_iso)[:10]}",
                         "Tenor": f"{int(tenor)}Y", "Strike": "ATM (inf)",
                         "Prem(bp)": round(px, 1), "Notional(mm)": "masked",
@@ -7111,7 +7132,7 @@ def eu_combined_analysis():
                     _svr = _eu_surface_vol(surf["df"], float(E), tenor)
                     _K = _Kp if _pair["same_strike"] else (_Kp + _Kr) / 2.0
                     trades.append({
-                        "Exec (UTC)": str(_pair["time"])[:19], "Src": "SDR",
+                        "Exec (LDN)": _eu_to_london(_pair["time"]), "Src": "SDR",
                         "P/C": _pair["type"],
                         "Expiry": _eu_expiry_label(E), "Tenor": f"{tenor}Y",
                         "Strike": f"{_K*100:.3f}%" + (" ATM" if abs(_K - F) < 1e-4 else ""),
@@ -7163,9 +7184,9 @@ def eu_combined_analysis():
 
     # ── Combined trade blotter (per-trade, analysed — same style as SDR) ──────
     if trades:
-        _COLS = ["Exec (UTC)", "Src", "P/C", "Expiry", "Tenor", "Strike", "Prem(bp)",
+        _COLS = ["Exec (LDN)", "Src", "P/C", "Expiry", "Tenor", "Strike", "Prem(bp)",
                  "Notional(mm)", "Impl vol(bp)", "Surf vol(bp)", "Δ surf(bp)", "Broker"]
-        _tr_df = pd.DataFrame(trades).sort_values("Exec (UTC)", ascending=False)
+        _tr_df = pd.DataFrame(trades).sort_values("Exec (LDN)", ascending=False)
         _tr_df = _tr_df[[c for c in _COLS if c in _tr_df.columns]]
         # Broker / platform filter (SEF, ICAP, BGC, Bilateral …).
         _bopts = sorted({str(b) for b in _tr_df["Broker"].dropna().unique()}) if "Broker" in _tr_df.columns else []
@@ -7179,7 +7200,7 @@ def eu_combined_analysis():
             _tr_df, use_container_width=True, hide_index=True,
             height=min(60 + len(_tr_df) * 35, 700),
             column_config={
-                "Exec (UTC)":   st.column_config.TextColumn("Exec (UTC)",  width="medium"),
+                "Exec (LDN)":   st.column_config.TextColumn("Exec (LDN)",  width="medium"),
                 "Src":          st.column_config.TextColumn("Src",         width="small"),
                 "P/C":          st.column_config.TextColumn("P/C",         width="small"),
                 "Expiry":       st.column_config.TextColumn("Expiry",      width="medium"),
@@ -7383,7 +7404,7 @@ Register-ScheduledTask -TaskName "RateEdge_EU_Load" -Action $action -Trigger $tr
             except Exception:
                 E = None
         rec = {
-            "Time (UTC)": str(r["exec_utc"])[:19], "Src": src, "MIC": mic,
+            "Time (LDN)": _eu_to_london(r["exec_utc"]), "Src": src, "MIC": mic,
             "Style": style,
             "Expiry": (f"{exp_lbl} · {str(exp_iso)[:10]}" if (exp_lbl and exp_iso)
                        else (exp_lbl or (str(exp_iso)[:10] if exp_iso else ""))),
