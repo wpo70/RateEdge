@@ -10173,18 +10173,19 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     st.info("Could not parse strike/premium data from USD strangles in this range.")
 
                     try:
-                        # ── SDR ATM Vol Fitter — USD ───────────────────────────────────
-                        with st.expander("📈 SDR ATM Vol Fitter — USD", expanded=False):
+                        # ── SDR ATM Vol Fitter — follows the active (sidebar) currency ──
+                        _fit_ccy = st.session_state.get("sidebar_ccy", "USD").split(" ")[0]
+                        with st.expander(f"📈 SDR ATM Vol Fitter — {_fit_ccy}", expanded=False):
                             st.caption(
                                 "Derives ATM normal vol from recent SDR straddles (Bachelier inversion, each "
                                 "normalised to its own trade-time ATM), prints the points on the expiry×tenor "
                                 "matrix, blends them into the current ATM surface and (optionally) smooths. "
                                 "Upload writes the blended ATM grid to the Vol Editor."
                             )
-                            _avd = st.session_state.get("vol_data", {}).get("USD", {})
+                            _avd = st.session_state.get("vol_data", {}).get(_fit_ccy, {})
                             _av_atm = _avd.get("atm")
                             if _av_atm is None or "Expiry" not in getattr(_av_atm, "columns", []):
-                                st.warning("No USD ATM surface loaded — load a vol snapshot on the Vol Editor tab first.")
+                                st.warning(f"No {_fit_ccy} ATM surface loaded — load a vol snapshot on the Vol Editor tab first.")
                             else:
                                 _avc1, _avc2, _avc3 = st.columns([1, 1, 1])
                                 with _avc1:
@@ -10202,9 +10203,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                             "premium) and excluded from the blend, so one bad print can't corrupt "
                                                             "the surface. Rejected points are listed below.")
                                 _av_hours = 24 if _av_win.startswith("24") else 48
-                                _av_curve = st.session_state.get("config_curves", {}).get("USD")
+                                _av_curve = st.session_state.get("config_curves", {}).get(_fit_ccy)
                                 if _av_curve is None:
-                                    try: _av_curve = get_ccy_curve("USD")
+                                    try: _av_curve = get_ccy_curve(_fit_ccy)
                                     except Exception: _av_curve = None
 
                                 def _av_invert(prem_bp, F, K, T, is_payer, annuity=1.0, df=1.0):
@@ -10269,7 +10270,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         continue
                                     if not _ey or not _ty: continue
                                     try:
-                                        _F, _ann, _ = forward_and_annuity_from_curve(_av_curve, "USD", _ey, _ty, None)
+                                        _F, _ann, _ = forward_and_annuity_from_curve(_av_curve, _fit_ccy, _ey, _ty, None)
                                     except Exception:
                                         continue
                                     if not _F: continue
@@ -10500,9 +10501,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         # working copy → every cell shows "no change". Leaving vol_data
                                         # untouched means base = your ORIGINAL surface, working = the blend,
                                         # so the edits show and Publish applies them.
-                                        st.session_state["_sod_usd_pending_surface"] = _bl.copy()
+                                        st.session_state[f"_sod_{_fit_ccy.lower()}_pending_surface"] = _bl.copy()
                                         st.success(
-                                            f"✅ Sent to Vol Editor ({_n_pts} SDR point(s) blended at {_av_w:.0%}). "
+                                            f"✅ Sent to {_fit_ccy} Vol Editor ({_n_pts} SDR point(s) blended at {_av_w:.0%}). "
                                             "Open the **Vol Editor** tab, click **📋 Load SOD Implied Open → "
                                             "Editor** to load the blend, review the highlighted changes, then "
                                             "**Publish** to apply.")
