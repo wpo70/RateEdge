@@ -7770,7 +7770,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 "Payer (C)":             "CALL",
                 "Receiver (P)":          "PUT",
                 "Straddle (D/EC)":       "STR",
-                "Euro Swn (EC/OPET)":    "EC",
+                "Cancelable (EC/OPET)":  "EC",
                 "Bermudan Payer":        "BCALL",
                 "Non-standard":          "NSTD",
                 "XCCY Swn":              "XCS",
@@ -7779,7 +7779,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 "Mand. Term (MDET)":     "MDET",
                 "Other":                 "OTH",
             }
-            _type_defaults = ["Payer (C)", "Receiver (P)", "Straddle (D/EC)", "Euro Swn (EC/OPET)"]
+            _type_defaults = ["Payer (C)", "Receiver (P)", "Straddle (D/EC)"]
             _sv_type = _sv.get("sdr_type", _type_defaults)
             _sv_type = [t for t in _sv_type if t in _type_options] if _sv_type else _type_defaults
             sel_type_labels = st.multiselect("P/C", list(_type_options.keys()),
@@ -8101,7 +8101,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
         "CALL":  "Payer",
         "PUT":   "Receiver",
         "STR":   "Straddle",
-        "EC":    "Euro Swn",
+        "EC":    "Cancelable",
         "BCALL": "Berm Payer",
         "NSTD":  "Non-std",
         "XCS":   "XCCY Swn",
