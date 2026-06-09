@@ -10410,6 +10410,35 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     except Exception:
                                         st.dataframe(_bl_ndf, use_container_width=True)
 
+                                    # Change vs the currently loaded surface — the +/- bp that
+                                    # this blend would APPLY on upload (blended − current).
+                                    try:
+                                        _cur_ndf = _av_atm.set_index("Expiry")[_av_cols].apply(pd.to_numeric, errors="coerce")
+                                        _chg_ndf = (_bl_ndf - _cur_ndf).round(1)
+                                        st.markdown("**Change to apply vs loaded surface (bp)** — "
+                                                    "blended − current; + = upload raises that cell:")
+                                        try:
+                                            _cmax = float(_chg_ndf.abs().to_numpy()[~pd.isna(_chg_ndf.to_numpy())].max()) if _chg_ndf.notna().to_numpy().any() else 0.0
+                                        except Exception:
+                                            _cmax = 0.0
+                                        _cmax = max(_cmax, 0.1)
+                                        try:
+                                            st.dataframe(
+                                                _chg_ndf.style.background_gradient(cmap="RdBu", axis=None,
+                                                                                   vmin=-_cmax, vmax=_cmax)
+                                                       .format("{:+.1f}", na_rep=""),
+                                                use_container_width=True)
+                                        except Exception:
+                                            st.dataframe(_chg_ndf, use_container_width=True)
+                                        try:
+                                            _nz = int((_chg_ndf.abs() >= 0.05).to_numpy().sum())
+                                            _mx = float(_chg_ndf.abs().to_numpy()[~pd.isna(_chg_ndf.to_numpy())].max())
+                                            st.caption(f"{_nz} cell(s) move on upload · largest move {_mx:+.1f}bp.")
+                                        except Exception:
+                                            pass
+                                    except Exception:
+                                        pass
+
                                     st.session_state["_sdr_atm_blended"] = _bl
                                     if st.button("⬆️ Upload blended ATM to Vol Editor", key="sdr_atm_upload"):
                                         # Set the editor's import channel ONLY — do NOT write
