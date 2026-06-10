@@ -7290,7 +7290,7 @@ def eu_mifir_tab():
         if _eu_admin_pw == "1Will-po1":
             st.markdown(r"""
 **📥 Manually pull a slice (auto-loads within 20 min):**
-1. Log into the TP ICAP portal and download an IOTF trade slice (the `.zip`).
+1. Log into the [TP ICAP IOTF portal](https://mifidslicefiles.tpicapcloud.com) and download an IOTF trade slice (the `.zip`).
 2. Drop it into: `C:\Users\willp\RateEdge Swaption Pricer\eu-trade-capture\iotf_files`
 3. The scheduled task loads it within 20 min — or force it now (below).
 
@@ -7330,6 +7330,21 @@ Register-ScheduledTask -TaskName "RateEdge_EU_Load" -Action $action -Trigger $tr
 ```
 
 ⚠️ The auto-loader runs only while this PC is on. The portal download is manual (TP ICAP login is Okta + reCAPTCHA), so a slice only reaches the DB after you drop it in `iotf_files`.
+
+---
+
+**🔵 BGC / GFI / Aurel (Fenics) — richer source (real notional + swap tenor):**
+1. Log into the [BGC Fenics MiFID portal](https://regdata.fenicsmd.com/dashboard) → **Reports** tab.
+2. Refresh the session cookie (it expires often): DevTools → Application → Cookies → copy `JSESSIONID`, paste into `eu-trade-capture\fenics_cookie.txt`.
+3. Pull + load:
+```
+cd "C:\Users\willp\RateEdge Swaption Pricer\eu-trade-capture"
+python pull_fenics.py
+python load_fenics.py --folder ".\fenics_files" --sink supabase
+```
+Keeps `HR*` swaptions only (drops `HF*` FX options), decodes payer/receiver, keeps real notional, derives expiry + swap tenor from Effective/Maturity.
+
+⚠️ Unlike the IOTF token, the Fenics `JSESSIONID` is short-lived — if `pull_fenics.py` reports a login page, refresh the cookie (step 2).
 """)
         elif _eu_admin_pw:
             st.error("Incorrect password.")
@@ -7517,10 +7532,10 @@ def sdr_live_tab():
     if _cur_ccy == "EUR":
         _sdr_source = st.radio(
             "Reporting source",
-            ["\U0001F4E1 SDR DTCC", "\U0001F1EA\U0001F1FA MiFIR Trade Reporting"],
+            ["SDR DTCC", "EU MiFIR"],
             horizontal=True, key="_sdr_source_sel", label_visibility="collapsed",
         )
-        if _sdr_source.startswith("\U0001F1EA"):
+        if _sdr_source == "EU MiFIR":
             eu_mifir_tab()
             return
 
@@ -10295,7 +10310,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _av_rejected_prints = []
                                 _ln2a = math.log(2.0); _hl_h = _av_hours / 2.0
                                 for _r in _paired_rows:
-                                    if _r.get("CCY") != "USD" or _r.get("Type") != "🔵 Straddle": continue
+                                    if _r.get("CCY") != _fit_ccy or _r.get("Type") != "🔵 Straddle": continue
                                     _tdt = _r.get("_time_dt")
                                     if _tdt is None: continue
                                     try: _age_h = (_av_now - _tdt).total_seconds() / 3600.0
@@ -10381,7 +10396,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     if _kk: _av_pts_y[_kk] = _pv
 
                                 if not _av_pts:
-                                    st.info(f"No USD straddles with usable strike/premium in the last {_av_hours}h.")
+                                    st.info(f"No {_fit_ccy} straddles with usable strike/premium in the last {_av_hours}h.")
                                 else:
                                     _av_cols = [c for c in _av_atm.columns if c != "Expiry"]
                                     def _colmatch(_t):
