@@ -7309,6 +7309,8 @@ def eu_surface_bias():
                "market printed ABOVE your surface (you're marking cheap); negative = "
                "you're marking rich. Deferral-proof: like-time comparison.")
 
+    import datetime as _pydt
+    from datetime import datetime as _dt
     _today = _dt.now().date()
     _c1, _c2, _c3 = st.columns(3)
     with _c1:
