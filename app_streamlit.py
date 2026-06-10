@@ -7275,6 +7275,107 @@ def _eu_window_hours(label: str) -> float:
     return max(0.0, (now - cutoff).total_seconds() / 3600.0)
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def _eu_load_residuals(since_iso: str = "2026-01-01"):
+    """EU print residuals (time-matched print-vs-surface). Populated by
+    eu_residuals.py after each EU load."""
+    conn = get_db_connection()
+    if not conn:
+        return pd.DataFrame()
+    try:
+        df = pd.read_sql(
+            "SELECT row_hash, exec_utc, pub_utc, deferral_days, source, venue_mic, "
+            "expiry_bucket, tenor_bucket, expiry_years, tenor_years, tenor_inferred, "
+            "prem_bp, notional, print_vol_bp, surf_vol_bp, residual_bp "
+            "FROM eu_print_residuals WHERE exec_utc >= %s ORDER BY exec_utc DESC",
+            conn, params=[since_iso])
+        conn.close()
+        return df
+    except Exception:
+        try: conn.close()
+        except: pass
+        return pd.DataFrame()
+
+
+def eu_surface_bias():
+    """Per-bucket print-vs-surface bias monitor, built from time-matched
+    residuals (eu_print_residuals). Deferred prints are usable here because each
+    residual compares the print's trade-time vol to the surface AT THAT TIME, so
+    staleness cancels. Tells you where your marks are systematically rich/cheap."""
+    import datetime as _pydt
+    st.markdown("##### 📐 Surface Bias — print vs mark (time-matched)")
+    st.caption("Each EU swaption print is inverted to its trade-time ATM vol and "
+               "compared to your vol_history surface AT THAT TIMESTAMP. Positive = "
+               "market printed ABOVE your surface (you're marking cheap); negative = "
+               "you're marking rich. Deferral-proof: like-time comparison.")
+
+    _today = _dt.now().date()
+    _c1, _c2, _c3 = st.columns(3)
+    with _c1:
+        _bfrom = st.date_input("From", value=_today - _pydt.timedelta(days=45),
+                               max_value=_today, key="_eu_bias_from")
+    with _c2:
+        _maxdef = st.number_input("Max deferral (days, 0=all)", min_value=0, max_value=120,
+                                  value=0, step=1, key="_eu_bias_maxdef")
+    with _c3:
+        _incteninf = st.checkbox("Include inferred-tenor (IOTF)", value=False,
+                                 key="_eu_bias_tinf",
+                                 help="IOTF masks swap tenor, so its bucket is best-fit "
+                                      "to the surface — circular for bias. Off by default.")
+
+    _rdf = _eu_load_residuals(_bfrom.isoformat())
+    if _rdf.empty:
+        st.info("No residuals yet. Run `python eu_residuals.py` after an EU load "
+                "to populate the eu_print_residuals table.")
+        return
+    _rdf = _rdf[_rdf["residual_bp"].notna()].copy()
+    if _maxdef > 0:
+        _rdf = _rdf[(_rdf["deferral_days"].isna()) | (_rdf["deferral_days"] <= _maxdef)]
+    if not _incteninf:
+        _rdf = _rdf[~_rdf["tenor_inferred"].fillna(False)]
+    if _rdf.empty:
+        st.info("No residuals match the current filters.")
+        return
+
+    _n = len(_rdf)
+    _meanres = _rdf["residual_bp"].mean()
+    _m1, _m2, _m3 = st.columns(3)
+    _m1.metric("Prints matched", f"{_n}")
+    _m2.metric("Mean bias (bp)", f"{_meanres:+.1f}")
+    _m3.metric("Sources", ", ".join(sorted(_rdf["source"].dropna().unique())) or "—")
+
+    # bucket pivot: mean residual per expiry × tenor
+    _piv = _rdf.pivot_table(index="expiry_bucket", columns="tenor_bucket",
+                            values="residual_bp", aggfunc="mean")
+    # order buckets sensibly
+    _ord = ["1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","7y","10y","15y","20y","30y"]
+    _piv = _piv.reindex(index=[b for b in _ord if b in _piv.index],
+                        columns=[b for b in _ord if b in _piv.columns])
+    st.markdown("**Mean residual (bp) by expiry × tenor** — print minus surface:")
+    try:
+        _sty = _piv.style.format("{:+.0f}", na_rep="·").background_gradient(
+            cmap="RdBu_r", vmin=-15, vmax=15, axis=None)
+        st.dataframe(_sty, use_container_width=True)
+    except Exception:
+        st.dataframe(_piv.round(1), use_container_width=True)
+
+    # count pivot for confidence
+    with st.expander("Sample counts per bucket", expanded=False):
+        _cnt = _rdf.pivot_table(index="expiry_bucket", columns="tenor_bucket",
+                                values="residual_bp", aggfunc="count")
+        _cnt = _cnt.reindex(index=[b for b in _ord if b in _cnt.index],
+                            columns=[b for b in _ord if b in _cnt.columns])
+        st.dataframe(_cnt.fillna(0).astype(int), use_container_width=True)
+
+    # raw prints
+    with st.expander(f"All {_n} matched prints", expanded=False):
+        _show = _rdf[["exec_utc","source","venue_mic","expiry_bucket","tenor_bucket",
+                      "tenor_inferred","prem_bp","notional","print_vol_bp","surf_vol_bp",
+                      "residual_bp","deferral_days"]].copy()
+        _show["exec_utc"] = _show["exec_utc"].astype(str).str[:16]
+        st.dataframe(_show, use_container_width=True, hide_index=True)
+
+
 def eu_mifir_tab():
     """EU MiFIR swaption flow (TP ICAP IOTF) with surface-inferred tenor."""
     from datetime import datetime as _dt
@@ -7350,10 +7451,13 @@ Keeps `HR*` swaptions only (drops `HF*` FX options), decodes payer/receiver, kee
             st.error("Incorrect password.")
 
 
-    _eu_view = st.radio("View", ["📋 Prints", "📊 Combined Analysis"],
+    _eu_view = st.radio("View", ["📋 Prints", "📊 Combined Analysis", "📐 Surface Bias"],
                         horizontal=True, key="_eu_view", label_visibility="collapsed")
     if _eu_view.startswith("📊"):
         eu_combined_analysis()
+        return
+    if _eu_view.startswith("📐"):
+        eu_surface_bias()
         return
 
     import datetime as _pydt
