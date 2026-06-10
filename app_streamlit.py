@@ -7570,6 +7570,22 @@ Keeps `HR*` swaptions only (drops `HF*` FX options), decodes payer/receiver, kee
                 pass
         disp.append(rec)
 
+    # ── Trade-count summary (like the SDR tab) ──────────────────────────────
+    def _eu_dir(s):
+        sl = str(s or "").lower()
+        if "call" in sl: return "payer"
+        if "put" in sl: return "receiver"
+        return "other"
+    _tot = len(disp)
+    _pay = sum(1 for r in disp if _eu_dir(r.get("Style")) == "payer")
+    _rec = sum(1 for r in disp if _eu_dir(r.get("Style")) == "receiver")
+    _oth = _tot - _pay - _rec
+    _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+    _mc1.metric("Total prints", _tot)
+    _mc2.metric("Payers", _pay)
+    _mc3.metric("Receivers", _rec)
+    _mc4.metric("Other / Eur", _oth)
+
     st.dataframe(pd.DataFrame(disp), use_container_width=True, hide_index=True)
     st.caption(f"{len(disp)} prints. " + (
         f"Matched vs EUR surface: {surf.get('label','')} ({str(surf.get('snapshot',''))[:19]})"
