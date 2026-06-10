@@ -7298,62 +7298,88 @@ def _eu_load_residuals(since_iso: str = "2026-01-01"):
 
 
 def eu_surface_bias():
-    """Per-bucket print-vs-surface bias monitor, built from time-matched
-    residuals (eu_print_residuals). Deferred prints are usable here because each
-    residual compares the print's trade-time vol to the surface AT THAT TIME, so
-    staleness cancels. Tells you where your marks are systematically rich/cheap."""
-    import datetime as _pydt
-    st.markdown("##### 📐 Surface Bias — print vs mark (time-matched)")
-    st.caption("Each EU swaption print is inverted to its trade-time ATM vol and "
-               "compared to your vol_history surface AT THAT TIMESTAMP. Positive = "
-               "market printed ABOVE your surface (you're marking cheap); negative = "
-               "you're marking rich. Deferral-proof: like-time comparison.")
-
+    """Decay-weighted print-vs-surface bias, pooling SDR + EU MiFIR (IOTF + BGC)
+    residuals over a business-day window. Each print is inverted to its trade-time
+    vol and compared to the surface AT THAT TIME (staleness cancels); prints are
+    then weighted by recency of EXECUTION date (spot=100%, decaying λ^bd back), so
+    a deep multi-day pool gives a stable bias map vs the current surface."""
     import datetime as _pydt
     from datetime import datetime as _dt
-    _today = _dt.now().date()
-    _c1, _c2, _c3 = st.columns(3)
-    with _c1:
-        _bfrom = st.date_input("From", value=_today - _pydt.timedelta(days=45),
-                               max_value=_today, key="_eu_bias_from")
-    with _c2:
-        _maxdef = st.number_input("Max deferral (days, 0=all)", min_value=0, max_value=120,
-                                  value=0, step=1, key="_eu_bias_maxdef")
-    with _c3:
-        _incteninf = st.checkbox("Include inferred-tenor (IOTF)", value=False,
-                                 key="_eu_bias_tinf",
-                                 help="IOTF masks swap tenor, so its bucket is best-fit "
-                                      "to the surface — circular for bias. Off by default.")
+    import numpy as _np
+    st.markdown("##### 📐 Surface Bias — decay-weighted print vs mark")
+    st.caption("Pools SDR + EU MiFIR swaption prints. Each is inverted to its "
+               "trade-time ATM vol vs your surface at that timestamp, then weighted "
+               "by execution recency (today=100%, λ^business-days back). Positive = "
+               "market printed ABOVE your surface (marking cheap); negative = rich.")
 
-    _rdf = _eu_load_residuals(_bfrom.isoformat())
+    _today = _dt.now().date()
+    _c1, _c2, _c3, _c4 = st.columns(4)
+    with _c1:
+        _win = st.selectbox("Window (business days)", [5, 10, 15, 20], index=1,
+                            key="_eu_bias_win")
+    with _c2:
+        _lam = st.slider("Decay λ (per bd)", 0.50, 1.00, 0.80, 0.05, key="_eu_bias_lam",
+                         help="weight = λ^(business days since execution). "
+                              "1.00 = no decay (flat average); 0.80 ≈ 5bd→33%, 10bd→11%.")
+    with _c3:
+        _srcs = st.multiselect("Sources", ["sdr", "icap", "bgc"],
+                               default=["sdr", "icap", "bgc"], key="_eu_bias_src")
+    with _c4:
+        _incteninf = st.checkbox("Incl. inferred-tenor (IOTF)", value=False,
+                                 key="_eu_bias_tinf",
+                                 help="IOTF masks swap tenor (best-fit to surface — "
+                                      "circular). Off by default.")
+
+    # pull a generous history then window by business days below
+    _since = (_today - _pydt.timedelta(days=_win * 2 + 14)).isoformat()
+    _rdf = _eu_load_residuals(_since)
     if _rdf.empty:
         st.info("No residuals yet. Run `python eu_residuals.py` after an EU load "
-                "to populate the eu_print_residuals table.")
+                "to populate eu_print_residuals.")
         return
     _rdf = _rdf[_rdf["residual_bp"].notna()].copy()
-    if _maxdef > 0:
-        _rdf = _rdf[(_rdf["deferral_days"].isna()) | (_rdf["deferral_days"] <= _maxdef)]
+    if _srcs:
+        _rdf = _rdf[_rdf["source"].isin(_srcs)]
     if not _incteninf:
         _rdf = _rdf[~_rdf["tenor_inferred"].fillna(False)]
     if _rdf.empty:
         st.info("No residuals match the current filters.")
         return
 
-    _n = len(_rdf)
-    _meanres = _rdf["residual_bp"].mean()
-    _m1, _m2, _m3 = st.columns(3)
-    _m1.metric("Prints matched", f"{_n}")
-    _m2.metric("Mean bias (bp)", f"{_meanres:+.1f}")
-    _m3.metric("Sources", ", ".join(sorted(_rdf["source"].dropna().unique())) or "—")
+    # business-days-ago by EXECUTION date, then decay weight
+    _rdf["_exd"] = pd.to_datetime(_rdf["exec_utc"], errors="coerce", utc=True).dt.date
+    def _bdays(d):
+        if d is None or pd.isna(d):
+            return None
+        return int(_np.busday_count(min(d, _today), _today)) if d <= _today else 0
+    _rdf["_bd"] = _rdf["_exd"].map(_bdays)
+    _rdf = _rdf[_rdf["_bd"].notna() & (_rdf["_bd"] <= _win)]
+    if _rdf.empty:
+        st.info(f"No prints in the last {_win} business days.")
+        return
+    _rdf["_w"] = _lam ** _rdf["_bd"].astype(float)
 
-    # bucket pivot: mean residual per expiry × tenor
-    _piv = _rdf.pivot_table(index="expiry_bucket", columns="tenor_bucket",
-                            values="residual_bp", aggfunc="mean")
-    # order buckets sensibly
+    # weighted overall stats
+    _W = _rdf["_w"].sum()
+    _wmean = (_rdf["residual_bp"] * _rdf["_w"]).sum() / _W if _W else float("nan")
+    _effN = (_W ** 2) / (_rdf["_w"] ** 2).sum() if _W else 0.0
+    _m1, _m2, _m3, _m4 = st.columns(4)
+    _m1.metric("Prints (window)", f"{len(_rdf)}")
+    _m2.metric("Eff. N (weighted)", f"{_effN:.0f}")
+    _m3.metric("Wtd bias (bp)", f"{_wmean:+.1f}")
+    _m4.metric("Sources", ", ".join(sorted(_rdf["source"].dropna().unique())) or "—")
+
     _ord = ["1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","7y","10y","15y","20y","30y"]
+
+    # weighted mean residual per expiry × tenor bucket
+    def _wm(g):
+        w = g["_w"].sum()
+        return (g["residual_bp"] * g["_w"]).sum() / w if w else _np.nan
+    _grp = _rdf.groupby(["expiry_bucket", "tenor_bucket"])
+    _piv = _grp.apply(_wm).unstack()
     _piv = _piv.reindex(index=[b for b in _ord if b in _piv.index],
                         columns=[b for b in _ord if b in _piv.columns])
-    st.markdown("**Mean residual (bp) by expiry × tenor** — print minus surface:")
+    st.markdown(f"**Decay-weighted residual (bp), last {_win} bd, λ={_lam:.2f}** — print minus surface:")
     try:
         _sty = _piv.style.format("{:+.0f}", na_rep="·").background_gradient(
             cmap="RdBu_r", vmin=-15, vmax=15, axis=None)
@@ -7361,20 +7387,33 @@ def eu_surface_bias():
     except Exception:
         st.dataframe(_piv.round(1), use_container_width=True)
 
-    # count pivot for confidence
-    with st.expander("Sample counts per bucket", expanded=False):
-        _cnt = _rdf.pivot_table(index="expiry_bucket", columns="tenor_bucket",
-                                values="residual_bp", aggfunc="count")
-        _cnt = _cnt.reindex(index=[b for b in _ord if b in _cnt.index],
-                            columns=[b for b in _ord if b in _cnt.columns])
-        st.dataframe(_cnt.fillna(0).astype(int), use_container_width=True)
+    # effective-N per bucket (weighted support, so you trust the cells with depth)
+    with st.expander("Weighted support (effective N) per bucket", expanded=False):
+        def _en(g):
+            w = g["_w"].sum()
+            return (w ** 2) / (g["_w"] ** 2).sum() if w else 0.0
+        _ncnt = _grp.apply(_en).unstack()
+        _ncnt = _ncnt.reindex(index=[b for b in _ord if b in _ncnt.index],
+                              columns=[b for b in _ord if b in _ncnt.columns])
+        st.dataframe(_ncnt.round(1).fillna(0), use_container_width=True)
 
-    # raw prints
-    with st.expander(f"All {_n} matched prints", expanded=False):
-        _show = _rdf[["exec_utc","source","venue_mic","expiry_bucket","tenor_bucket",
+    # source mix
+    with st.expander("By source (weighted)", expanded=False):
+        _sg = _rdf.groupby("source").apply(
+            lambda g: pd.Series({
+                "prints": len(g),
+                "eff_N": round((g["_w"].sum() ** 2) / (g["_w"] ** 2).sum(), 1) if g["_w"].sum() else 0,
+                "wtd_resid_bp": round((g["residual_bp"] * g["_w"]).sum() / g["_w"].sum(), 1) if g["_w"].sum() else _np.nan,
+            }))
+        st.dataframe(_sg, use_container_width=True)
+
+    with st.expander(f"All {len(_rdf)} prints in window", expanded=False):
+        _show = _rdf[["exec_utc","_bd","_w","source","venue_mic","expiry_bucket","tenor_bucket",
                       "tenor_inferred","prem_bp","notional","print_vol_bp","surf_vol_bp",
-                      "residual_bp","deferral_days"]].copy()
+                      "residual_bp"]].copy()
         _show["exec_utc"] = _show["exec_utc"].astype(str).str[:16]
+        _show["_w"] = _show["_w"].round(3)
+        _show = _show.rename(columns={"_bd": "bd_ago", "_w": "weight"})
         st.dataframe(_show, use_container_width=True, hide_index=True)
 
 
