@@ -6969,7 +6969,15 @@ def _pair_swaption_legs(df):
             _r_prem = float(_r.get("premium_amount") or 0)
             _same_strike = abs(_s_p - _s_r) < 0.01
             _mic = str(_p.get("platform_identifier", "") or "")
-            if _same_strike and _mic in _PREM_DEDUP_MICS_EU and _p_prem > 0 and _r_prem > 0:
+            # Straddle double-report: when a same-strike payer+receiver both carry
+            # the SAME premium, that premium is the FULL straddle (both legs) repeated
+            # on each leg — halve to per-leg. This is the actual data signature, so it
+            # catches every venue that double-reports (BILT/ISWV/ICAP/Tullett/BGC/…),
+            # not just a hardcoded MIC list. Genuine separate legs (different premiums)
+            # are left untouched.
+            _dbl = (_same_strike and _p_prem > 0 and _r_prem > 0
+                    and abs(_p_prem - _r_prem) <= 0.01 * max(_p_prem, _r_prem))
+            if _dbl or (_same_strike and _mic in _PREM_DEDUP_MICS_EU and _p_prem > 0 and _r_prem > 0):
                 _c = max(_p_prem, _r_prem); _p_prem = _c / 2.0; _r_prem = _c / 2.0
             out.append({
                 "exp": _e_p, "ten": _t_p, "p_strike": _s_p, "r_strike": _s_r,
@@ -7320,6 +7328,14 @@ def eu_surface_bias():
     if surf is None or curve is None or getattr(curve, "empty", True):
         st.warning("EUR surface or curve not loaded — open the EUR pricer tab once, then return.")
         return
+
+    _eur_b = st.session_state.get("config_basis", {}).get("EUR", {})
+    _has_euribor = any((_eur_b.get(k) is not None and not getattr(_eur_b.get(k), "empty", True))
+                       for k in ("euribor_6m", "euribor_3m"))
+    if not _has_euribor:
+        st.error("⚠️ EURIBOR projection curves not loaded — forwards fall back to ESTR, "
+                 "which inflates short-expiry implied vols. Load EURIBOR 3M/6M (EUR pricer "
+                 "tab) before trusting these numbers.")
 
     _today = _dt.now(_tz.utc).date()
     _c1, _c2, _c3, _c4 = st.columns(4)
