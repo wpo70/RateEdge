@@ -7172,6 +7172,9 @@ def eu_combined_analysis():
                         continue
                     _Kp = (_pair["p_strike"] / 100.0) if _pair["p_strike"] else F
                     _Kr = (_pair["r_strike"] / 100.0) if _pair["r_strike"] else F
+                    # bad/mis-scaled strike field (e.g. DTCC 100x error) -> snap to ATM
+                    if abs(_Kp - F) > 0.015: _Kp = F
+                    if abs(_Kr - F) > 0.015: _Kr = F
                     _pp_bp = _pair["p_prem"] / _not * 1e4 if _pair["p_prem"] > 0 else 0.0
                     _rp_bp = _pair["r_prem"] / _not * 1e4 if _pair["r_prem"] > 0 else 0.0
                     # Invert each leg (payer + receiver) and average — same as USD ATM fitter.
@@ -7417,6 +7420,9 @@ def eu_surface_bias():
                         continue
                     _Kp = (_pair["p_strike"] / 100.0) if _pair["p_strike"] else F
                     _Kr = (_pair["r_strike"] / 100.0) if _pair["r_strike"] else F
+                    # bad/mis-scaled strike field (e.g. DTCC 100x error) -> snap to ATM
+                    if abs(_Kp - F) > 0.015: _Kp = F
+                    if abs(_Kr - F) > 0.015: _Kr = F
                     _pp_bp = _pair["p_prem"] / _not * 1e4 if _pair["p_prem"] > 0 else 0.0
                     _rp_bp = _pair["r_prem"] / _not * 1e4 if _pair["r_prem"] > 0 else 0.0
                     _vp = _eu_solve_normal_vol(_pp_bp, F, _Kp, float(E), A, True) if _pp_bp > 0 else None
@@ -7469,6 +7475,7 @@ def eu_surface_bias():
                     if A <= 0:
                         continue
                     _K = (float(_sr.get("strike_pct")) / 100.0) if _sr.get("strike_pct") else F
+                    if abs(_K - F) > 0.015: _K = F   # mis-scaled strike -> ATM
                     _leg_bp = (_pa / _not * 1e4) / 2.0   # straddle premium -> per leg
                     iv = _eu_solve_normal_vol(_leg_bp, F, _K, float(E), A, True)
                     if not iv or iv <= 0:
