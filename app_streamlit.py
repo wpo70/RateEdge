@@ -6991,6 +6991,31 @@ def _pair_swaption_legs(df):
     return out
 
 
+def _eur_proj_forward(E, tenor):
+    """Forward swap rate off the EURIBOR projection curve — the SAME formula the
+    Curves-tab EUR forward matrix uses: F = (z2*t2 - z1*t1)/tenor, EURIBOR 3M for
+    ≤1Y tenor else EURIBOR 6M. Returns a decimal rate, or None if EURIBOR isn't
+    loaded (caller then falls back to the curve forward). This is what stops the
+    forward collapsing to ESTR and exploding short-expiry implied vols."""
+    try:
+        _eb = st.session_state.get("config_basis", {}).get("EUR", {})
+        _c = _eb.get("euribor_3m") if tenor <= 1.0 else _eb.get("euribor_6m")
+        if _c is None or getattr(_c, "empty", True):
+            _c = _eb.get("euribor_6m")
+            if _c is None or getattr(_c, "empty", True):
+                _c = _eb.get("euribor_3m")
+        if _c is None or getattr(_c, "empty", True):
+            return None
+        xs = _c["MaturityY"].to_numpy().astype(float)
+        ys = _c["ZeroRatePct"].to_numpy().astype(float)
+        t1, t2 = float(E), float(E) + float(tenor)
+        z1 = float(np.interp(t1, xs, ys)) / 100.0
+        z2 = float(np.interp(t2, xs, ys)) / 100.0
+        return (z2 * t2 - z1 * t1) / float(tenor)
+    except Exception:
+        return None
+
+
 def _eu_load_sdr_eur(hours=720):
     """EUR swaption trades from the DTCC SDR (the US-facing EUR flow). Returns a
     DataFrame, None (no DB), or empty if none."""
@@ -7140,6 +7165,9 @@ def eu_combined_analysis():
                     if _not <= 0:
                         continue
                     F, A, _ = forward_and_annuity_from_curve(curve, "EUR", float(E), float(tenor))
+                    _Feur = _eur_proj_forward(float(E), float(tenor))
+                    if _Feur is not None and _Feur > 0:
+                        F = _Feur   # EURIBOR projection fwd (Curves-tab formula), not ESTR
                     if A <= 0:
                         continue
                     _Kp = (_pair["p_strike"] / 100.0) if _pair["p_strike"] else F
@@ -7382,6 +7410,9 @@ def eu_surface_bias():
                     if _not <= 0:
                         continue
                     F, A, _ = forward_and_annuity_from_curve(curve, "EUR", float(E), float(tenor))
+                    _Feur = _eur_proj_forward(float(E), float(tenor))
+                    if _Feur is not None and _Feur > 0:
+                        F = _Feur   # EURIBOR projection fwd (Curves-tab formula), not ESTR
                     if A <= 0:
                         continue
                     _Kp = (_pair["p_strike"] / 100.0) if _pair["p_strike"] else F
@@ -7432,6 +7463,9 @@ def eu_surface_bias():
                     if _not <= 0 or _pa <= 0:
                         continue
                     F, A, _ = forward_and_annuity_from_curve(curve, "EUR", float(E), float(tenor))
+                    _Feur = _eur_proj_forward(float(E), float(tenor))
+                    if _Feur is not None and _Feur > 0:
+                        F = _Feur   # EURIBOR projection fwd (Curves-tab formula), not ESTR
                     if A <= 0:
                         continue
                     _K = (float(_sr.get("strike_pct")) / 100.0) if _sr.get("strike_pct") else F
@@ -7484,6 +7518,9 @@ def eu_surface_bias():
                     if str(r.get("source") or "").lower() in ("bgc", "gfi", "aurel"):
                         px = px / 2.0   # BGC straddle premium -> per leg
                     F, A, _ = forward_and_annuity_from_curve(curve, "EUR", float(E), float(tenor))
+                    _Feur = _eur_proj_forward(float(E), float(tenor))
+                    if _Feur is not None and _Feur > 0:
+                        F = _Feur   # EURIBOR projection fwd (Curves-tab formula), not ESTR
                     if A <= 0:
                         continue
                     iv = _eu_solve_normal_vol(px, F, F, float(E), A, True)  # ATM
