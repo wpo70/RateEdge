@@ -7299,84 +7299,177 @@ def _eu_load_residuals(since_iso: str = "2026-01-01"):
 
 def eu_surface_bias():
     """Decay-weighted print-vs-surface bias, pooling SDR + EU MiFIR (IOTF + BGC)
-    residuals over a business-day window. Each print is inverted to its trade-time
-    vol and compared to the surface AT THAT TIME (staleness cancels); prints are
-    then weighted by recency of EXECUTION date (spot=100%, decaying λ^bd back), so
-    a deep multi-day pool gives a stable bias map vs the current surface."""
+    swaption prints over a business-day window. Each print is inverted LIVE using
+    the app's own curve math (forward_and_annuity_from_curve + _eu_solve_normal_vol
+    — the SAME inversion the EUR/USD fitters use), so the numbers are consistent
+    with the pricer by construction. Prints are weighted by execution recency
+    (today=100%, λ^business-days back). Positive = market printed ABOVE the
+    surface (marking cheap); negative = rich."""
+    from datetime import datetime as _dt, timezone as _tz
     import datetime as _pydt
-    from datetime import datetime as _dt
     import numpy as _np
-    st.markdown("##### 📐 Surface Bias — decay-weighted print vs mark")
-    st.caption("Pools SDR + EU MiFIR swaption prints. Each is inverted to its "
-               "trade-time ATM vol vs your surface at that timestamp, then weighted "
-               "by execution recency (today=100%, λ^business-days back). Positive = "
-               "market printed ABOVE your surface (marking cheap); negative = rich.")
+    import re as _re
+    st.markdown("##### 📐 Surface Bias — decay-weighted print vs mark (live curve)")
+    st.caption("Pools SDR + EU MiFIR swaption prints, each inverted with the app's "
+               "live EUR curve + surface (same math as the pricer/fitter), then "
+               "weighted by execution recency (today=100%, λ^business-days back). "
+               "Positive = printed ABOVE surface (cheap marks); negative = rich.")
 
-    _today = _dt.now().date()
+    curve = st.session_state.get("config_curves", {}).get("EUR")
+    surf = _eu_latest_eur_surface()
+    if surf is None or curve is None or getattr(curve, "empty", True):
+        st.warning("EUR surface or curve not loaded — open the EUR pricer tab once, then return.")
+        return
+
+    _today = _dt.now(_tz.utc).date()
     _c1, _c2, _c3, _c4 = st.columns(4)
     with _c1:
-        _win = st.selectbox("Window (business days)", [5, 10, 15, 20], index=1,
-                            key="_eu_bias_win")
+        _win = st.selectbox("Window (business days)", [5, 10, 15, 20], index=1, key="_eu_bias_win")
     with _c2:
         _lam = st.slider("Decay λ (per bd)", 0.50, 1.00, 0.80, 0.05, key="_eu_bias_lam",
                          help="weight = λ^(business days since execution). "
-                              "1.00 = no decay (flat average); 0.80 ≈ 5bd→33%, 10bd→11%.")
+                              "1.00 = flat average; 0.80 ≈ 5bd→33%, 10bd→11%.")
     with _c3:
-        _srcs = st.multiselect("Sources", ["sdr", "icap", "bgc"],
-                               default=["sdr", "icap", "bgc"], key="_eu_bias_src")
+        _srcs = st.multiselect("Sources", ["SDR", "MiFIR"], default=["SDR", "MiFIR"],
+                               key="_eu_bias_src")
     with _c4:
-        _incteninf = st.checkbox("Incl. inferred-tenor (IOTF)", value=False,
-                                 key="_eu_bias_tinf",
-                                 help="IOTF masks swap tenor (best-fit to surface — "
-                                      "circular). Off by default.")
+        _devcap = st.slider("Reject |residual|>", 20, 300, 150, 10, key="_eu_bias_dev",
+                            help="drop inversion outliers (bp) beyond this from surface")
 
-    # pull a generous history then window by business days below
-    _since = (_today - _pydt.timedelta(days=_win * 2 + 14)).isoformat()
-    _rdf = _eu_load_residuals(_since)
-    if _rdf.empty:
-        st.info("No residuals yet. Run `python eu_residuals.py` after an EU load "
-                "to populate eu_print_residuals.")
-        return
-    _rdf = _rdf[_rdf["residual_bp"].notna()].copy()
-    if _srcs:
-        _rdf = _rdf[_rdf["source"].isin(_srcs)]
-    if not _incteninf:
-        _rdf = _rdf[~_rdf["tenor_inferred"].fillna(False)]
-    if _rdf.empty:
-        st.info("No residuals match the current filters.")
-        return
+    _hrs = _win * 24 * 1.6 + 72   # generous pull; we window by business days below
+    _rows = []   # (exec_dt, source, exp_y, ten_y, resid_bp, iv, sv, prem_bp, notl)
 
-    # business-days-ago by EXECUTION date, then decay weight
-    _rdf["_exd"] = pd.to_datetime(_rdf["exec_utc"], errors="coerce", utc=True).dt.date
-    def _bdays(d):
-        if d is None or pd.isna(d):
+    def _bd_ago(d):
+        if d is None:
             return None
-        return int(_np.busday_count(min(d, _today), _today)) if d <= _today else 0
-    _rdf["_bd"] = _rdf["_exd"].map(_bdays)
-    _rdf = _rdf[_rdf["_bd"].notna() & (_rdf["_bd"] <= _win)]
-    if _rdf.empty:
-        st.info(f"No prints in the last {_win} business days.")
-        return
-    _rdf["_w"] = _lam ** _rdf["_bd"].astype(float)
+        dd = d.date() if hasattr(d, "date") else d
+        return int(_np.busday_count(min(dd, _today), _today)) if dd <= _today else 0
 
-    # weighted overall stats
-    _W = _rdf["_w"].sum()
-    _wmean = (_rdf["residual_bp"] * _rdf["_w"]).sum() / _W if _W else float("nan")
-    _effN = (_W ** 2) / (_rdf["_w"] ** 2).sum() if _W else 0.0
+    # ── SDR side: strike-correct inversion (same as Combined Analysis) ──────────
+    if "SDR" in _srcs:
+        try:
+            sdf = _eu_load_sdr_eur(hours=_hrs)
+        except Exception:
+            sdf = None
+        if sdf is not None and not sdf.empty:
+            for _pair in _pair_swaption_legs(sdf):
+                try:
+                    _t = _pair["time"]
+                    _bd = _bd_ago(_t)
+                    if _bd is None or _bd > _win:
+                        continue
+                    E = label_to_years(str(_pair["exp"])); ten = label_to_years(str(_pair["ten"]))
+                    if not E or not ten or E <= 0 or ten <= 0:
+                        continue
+                    tenor = int(round(ten))
+                    _not = float(_pair["notional"] or 0)
+                    if _not <= 0:
+                        continue
+                    F, A, _ = forward_and_annuity_from_curve(curve, "EUR", float(E), float(tenor))
+                    if A <= 0:
+                        continue
+                    _Kp = (_pair["p_strike"] / 100.0) if _pair["p_strike"] else F
+                    _Kr = (_pair["r_strike"] / 100.0) if _pair["r_strike"] else F
+                    _pp_bp = _pair["p_prem"] / _not * 1e4 if _pair["p_prem"] > 0 else 0.0
+                    _rp_bp = _pair["r_prem"] / _not * 1e4 if _pair["r_prem"] > 0 else 0.0
+                    _vp = _eu_solve_normal_vol(_pp_bp, F, _Kp, float(E), A, True) if _pp_bp > 0 else None
+                    _vr = _eu_solve_normal_vol(_rp_bp, F, _Kr, float(E), A, False) if _rp_bp > 0 else None
+                    _vs = [v for v in (_vp, _vr) if v and v > 0]
+                    if not _vs:
+                        continue
+                    iv = sum(_vs) / len(_vs)
+                    _sv = _eu_surface_vol(surf["df"], float(E), tenor)
+                    if _sv is None or _sv <= 0:
+                        continue
+                    sv = _sv * 1e4
+                    resid = iv - sv
+                    if abs(resid) > _devcap:
+                        continue
+                    _rows.append((_t, "SDR", float(E), float(tenor), resid, iv, sv,
+                                  round(_pp_bp + _rp_bp, 1), _not))
+                except Exception:
+                    continue
+
+    # ── MiFIR side (IOTF + BGC): ATM-premium inversion ──────────────────────────
+    if "MiFIR" in _srcs:
+        try:
+            _pr = _eu_load_iro_prints(hours=_hrs, asset="SWAPTION", limit=5000)
+        except Exception:
+            _pr = None
+        if isinstance(_pr, tuple):
+            _pr = None
+        if _pr is not None and not _pr.empty:
+            for _, r in _pr.iterrows():
+                try:
+                    _t = r.get("exec_utc")
+                    _t = pd.to_datetime(_t, utc=True).to_pydatetime() if _t is not None else None
+                    _bd = _bd_ago(_t)
+                    if _bd is None or _bd > _win:
+                        continue
+                    desc = str(r.get("instrument_desc") or "")
+                    _dts = _re.findall(r"(20\d{6})", desc)
+                    if not _dts:
+                        continue
+                    _exp = _dt.strptime(_dts[0], "%Y%m%d").replace(tzinfo=_tz.utc)
+                    E = max((_exp - _t).days / 365.25, 1/365.0)
+                    if len(_dts) > 1:
+                        _mat = _dt.strptime(_dts[1], "%Y%m%d").replace(tzinfo=_tz.utc)
+                        tenor = max(int(round((_mat - _exp).days / 365.25)), 1)
+                    else:
+                        continue   # IOTF (no tenor in desc) — skip; inferred-tenor not used here
+                    px = float(r.get("price") or 0)
+                    if px <= 0:
+                        continue
+                    if str(r.get("source") or "").lower() in ("bgc", "gfi", "aurel"):
+                        px = px / 2.0   # BGC straddle premium -> per leg
+                    F, A, _ = forward_and_annuity_from_curve(curve, "EUR", float(E), float(tenor))
+                    if A <= 0:
+                        continue
+                    iv = _eu_solve_normal_vol(px, F, F, float(E), A, True)  # ATM
+                    if not iv or iv <= 0:
+                        continue
+                    _sv = _eu_surface_vol(surf["df"], float(E), tenor)
+                    if _sv is None or _sv <= 0:
+                        continue
+                    sv = _sv * 1e4
+                    resid = iv - sv
+                    if abs(resid) > _devcap:
+                        continue
+                    _rows.append((_t, "MiFIR", float(E), float(tenor), resid, iv, sv,
+                                  round(px, 1), 0.0))
+                except Exception:
+                    continue
+
+    if not _rows:
+        st.info(f"No invertible prints in the last {_win} business days for the selected sources.")
+        return
+
+    _df = pd.DataFrame(_rows, columns=["exec", "source", "exp_y", "ten_y", "resid", "iv", "sv", "prem_bp", "notl"])
+    _df["_bd"] = _df["exec"].map(_bd_ago)
+    _df["_w"] = _lam ** _df["_bd"].astype(float)
+
+    _ord_y = [(1/12,"1m"),(2/12,"2m"),(3/12,"3m"),(6/12,"6m"),(9/12,"9m"),(1,"1y"),
+              (1.5,"18m"),(2,"2y"),(3,"3y"),(4,"4y"),(5,"5y"),(7,"7y"),(10,"10y"),
+              (15,"15y"),(20,"20y"),(30,"30y")]
+    def _bkt(y):
+        return min(_ord_y, key=lambda b: abs(b[0]-y))[1] if y and y > 0 else ""
+    _df["exp_b"] = _df["exp_y"].map(_bkt)
+    _df["ten_b"] = _df["ten_y"].map(_bkt)
+    _ord = [b for _, b in _ord_y]
+
+    _W = _df["_w"].sum()
+    _wmean = (_df["resid"] * _df["_w"]).sum() / _W if _W else float("nan")
+    _effN = (_W ** 2) / (_df["_w"] ** 2).sum() if _W else 0.0
     _m1, _m2, _m3, _m4 = st.columns(4)
-    _m1.metric("Prints (window)", f"{len(_rdf)}")
+    _m1.metric("Prints (window)", f"{len(_df)}")
     _m2.metric("Eff. N (weighted)", f"{_effN:.0f}")
     _m3.metric("Wtd bias (bp)", f"{_wmean:+.1f}")
-    _m4.metric("Sources", ", ".join(sorted(_rdf["source"].dropna().unique())) or "—")
+    _m4.metric("Sources", ", ".join(sorted(_df["source"].unique())))
 
-    _ord = ["1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","7y","10y","15y","20y","30y"]
-
-    # weighted mean residual per expiry × tenor bucket
     def _wm(g):
         w = g["_w"].sum()
-        return (g["residual_bp"] * g["_w"]).sum() / w if w else _np.nan
-    _grp = _rdf.groupby(["expiry_bucket", "tenor_bucket"])
-    _piv = _grp.apply(_wm).unstack()
+        return (g["resid"] * g["_w"]).sum() / w if w else _np.nan
+    _piv = _df.groupby(["exp_b", "ten_b"]).apply(_wm).unstack()
     _piv = _piv.reindex(index=[b for b in _ord if b in _piv.index],
                         columns=[b for b in _ord if b in _piv.columns])
     st.markdown(f"**Decay-weighted residual (bp), last {_win} bd, λ={_lam:.2f}** — print minus surface:")
@@ -7387,33 +7480,21 @@ def eu_surface_bias():
     except Exception:
         st.dataframe(_piv.round(1), use_container_width=True)
 
-    # effective-N per bucket (weighted support, so you trust the cells with depth)
-    with st.expander("Weighted support (effective N) per bucket", expanded=False):
-        def _en(g):
-            w = g["_w"].sum()
-            return (w ** 2) / (g["_w"] ** 2).sum() if w else 0.0
-        _ncnt = _grp.apply(_en).unstack()
-        _ncnt = _ncnt.reindex(index=[b for b in _ord if b in _ncnt.index],
-                              columns=[b for b in _ord if b in _ncnt.columns])
-        st.dataframe(_ncnt.round(1).fillna(0), use_container_width=True)
-
-    # source mix
     with st.expander("By source (weighted)", expanded=False):
-        _sg = _rdf.groupby("source").apply(
+        _sg = _df.groupby("source").apply(
             lambda g: pd.Series({
                 "prints": len(g),
-                "eff_N": round((g["_w"].sum() ** 2) / (g["_w"] ** 2).sum(), 1) if g["_w"].sum() else 0,
-                "wtd_resid_bp": round((g["residual_bp"] * g["_w"]).sum() / g["_w"].sum(), 1) if g["_w"].sum() else _np.nan,
+                "wtd_resid_bp": round((g["resid"] * g["_w"]).sum() / g["_w"].sum(), 1) if g["_w"].sum() else _np.nan,
             }))
         st.dataframe(_sg, use_container_width=True)
 
-    with st.expander(f"All {len(_rdf)} prints in window", expanded=False):
-        _show = _rdf[["exec_utc","_bd","_w","source","venue_mic","expiry_bucket","tenor_bucket",
-                      "tenor_inferred","prem_bp","notional","print_vol_bp","surf_vol_bp",
-                      "residual_bp"]].copy()
-        _show["exec_utc"] = _show["exec_utc"].astype(str).str[:16]
+    with st.expander(f"All {len(_df)} prints in window", expanded=False):
+        _show = _df[["exec", "_bd", "_w", "source", "exp_b", "ten_b", "prem_bp",
+                     "notl", "iv", "sv", "resid"]].copy()
+        _show["exec"] = _show["exec"].astype(str).str[:16]
         _show["_w"] = _show["_w"].round(3)
-        _show = _show.rename(columns={"_bd": "bd_ago", "_w": "weight"})
+        _show["iv"] = _show["iv"].round(1); _show["sv"] = _show["sv"].round(1); _show["resid"] = _show["resid"].round(1)
+        _show = _show.rename(columns={"_bd": "bd_ago", "_w": "weight", "iv": "impl_bp", "sv": "surf_bp", "resid": "resid_bp"})
         st.dataframe(_show, use_container_width=True, hide_index=True)
 
 
