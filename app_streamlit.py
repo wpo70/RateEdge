@@ -7390,6 +7390,51 @@ def eu_surface_bias():
                 except Exception:
                     continue
 
+            # Pre-combined STR rows (single row = both legs, one premium). The
+            # CALL/PUT pairing above skips these, but they're the bulk of EUR
+            # straddle flow. Same DTCC fields the USD report reads (opt_tenor /
+            # swp_tenor labels, strike_pct, premium_amount, notional_leg1);
+            # premium is the straddle (both legs) so halve to per-leg.
+            try:
+                _strs = sdf[sdf["option_type_decoded"] == "STR"] if "option_type_decoded" in sdf.columns else sdf.iloc[0:0]
+            except Exception:
+                _strs = sdf.iloc[0:0]
+            for _, _sr in _strs.iterrows():
+                try:
+                    _t = pd.to_datetime(_sr.get("execution_timestamp"), errors="coerce", utc=True)
+                    _t = _t.to_pydatetime() if _t is not pd.NaT else None
+                    _bd = _bd_ago(_t)
+                    if _bd is None or _bd > _win:
+                        continue
+                    E = label_to_years(str(_sr.get("opt_tenor") or "").strip())
+                    ten = label_to_years(str(_sr.get("swp_tenor") or "").strip())
+                    if not E or not ten or E <= 0 or ten <= 0:
+                        continue
+                    tenor = int(round(ten))
+                    _not = float(_sr.get("notional_leg1") or 0)
+                    _pa = float(_sr.get("premium_amount") or 0)
+                    if _not <= 0 or _pa <= 0:
+                        continue
+                    F, A, _ = forward_and_annuity_from_curve(curve, "EUR", float(E), float(tenor))
+                    if A <= 0:
+                        continue
+                    _K = (float(_sr.get("strike_pct")) / 100.0) if _sr.get("strike_pct") else F
+                    _leg_bp = (_pa / _not * 1e4) / 2.0   # straddle premium -> per leg
+                    iv = _eu_solve_normal_vol(_leg_bp, F, _K, float(E), A, True)
+                    if not iv or iv <= 0:
+                        continue
+                    _sv = _eu_surface_vol(surf["df"], float(E), tenor)
+                    if _sv is None or _sv <= 0:
+                        continue
+                    sv = _sv * 1e4
+                    resid = iv - sv
+                    if abs(resid) > _devcap:
+                        continue
+                    _rows.append((_t, "SDR", float(E), float(tenor), resid, iv, sv,
+                                  round(_pa / _not * 1e4, 1), _not))
+                except Exception:
+                    continue
+
     # ── MiFIR side (IOTF + BGC): ATM-premium inversion ──────────────────────────
     if "MiFIR" in _srcs:
         try:
