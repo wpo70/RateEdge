@@ -19869,6 +19869,13 @@ def caps_floors_tab(vol_mode: str):
                     st.session_state.pop(f"{_k}_temp", None)
                     st.session_state.pop(f"{_k}_new", None)
         st.session_state["_cf_last_active_ccy"] = ccy
+        # v1206e: mark this ccy restored + snapshot the loaded values as the
+        # save baseline. USD type-to-persist (below) only writes when the live
+        # values differ from this baseline, so cold-start/default state can
+        # never overwrite a good DB curve.
+        st.session_state[f"_cf_restored_{ccy}"] = True
+        st.session_state[f"_cf_baseline_{ccy}"] = {
+            _bk: float(st.session_state.get(_bk, 0.0)) for _bk in _cf_spread_keys}
         # Bust caplet cache so curve rebuilds with new ccy's wedges
         st.session_state.pop("_caplet_curve_key", None)
         st.session_state.pop("_atm_cfs_cache_key", None)
@@ -20946,6 +20953,41 @@ def caps_floors_tab(vol_mode: str):
                         st.text(_m)
 
             st.markdown("<hr style='margin:4px 0;border-color:#334155'>", unsafe_allow_html=True)
+
+            # ── v1206e: USD type-to-persist ──────────────────────────────
+            # Save wedge edits to the DB on change — no Calculate click needed.
+            # Gated on (a) this ccy restored from DB this session AND (b) a real
+            # edit vs the loaded/last-saved baseline, so cold-start defaults can
+            # never overwrite a good curve. USD only — AUD/NZD/EUR keep their
+            # existing Calculate-only persistence, untouched.
+            if ccy == "USD" and HAS_POSTGRES and st.session_state.get("_cf_restored_USD"):
+                _ts_keys = ["cf_spr_3m1y","cf_spr_1y1y","cf_spr_2y1y","cf_spr_3y1y",
+                            "cf_spr_4y1y","cf_spr_5y2y","cf_spr_7y3y","cf_spr_10y2y",
+                            "cf_spr_12y3y","cf_spr_15v20","cf_spr_20v30"]
+                _ts_cur = {k: float(st.session_state.get(f"{k}_new",
+                                    st.session_state.get(k, 0.0))) for k in _ts_keys}
+                _ts_base = st.session_state.get("_cf_baseline_USD", {})
+                _ts_dirty = any(abs(_ts_cur[k] - float(_ts_base.get(k, 0.0))) > 0.001
+                                for k in _ts_keys)
+                _ts_nz = [v for v in _ts_cur.values() if abs(v) > 0.001]
+                if _ts_dirty and len(_ts_nz) >= 1:
+                    for k in _ts_keys:
+                        st.session_state[k] = _ts_cur[k]
+                    _ts_uid = st.session_state.get("username", "default")
+                    try:
+                        _ts_conn = get_db_connection()
+                        if _ts_conn:
+                            try:
+                                save_user_config(_ts_uid, "cf_spreads", "USD", _ts_cur, _conn=_ts_conn)
+                                for _ts_alt in ["wpo@rateedge.au", "wpo70@icloud.com"]:
+                                    if _ts_alt != _ts_uid:
+                                        save_user_config(_ts_alt, "cf_spreads", "USD", _ts_cur, _conn=_ts_conn)
+                                _ts_conn.commit()
+                            finally:
+                                _ts_conn.close()
+                        st.session_state["_cf_baseline_USD"] = dict(_ts_cur)
+                    except Exception:
+                        pass
 
             bl, _, br = st.columns([2, 0.2, 2])
             if bl.button("🧮 Calculate CFS Curve", key="apply_spreads", type="primary",
