@@ -2775,38 +2775,53 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
     else:
         _proj_curve = curve
 
-    def _df_proj(crv: pd.DataFrame, t: float, freq: float) -> float:
-        """Projection discount factor with convention-aware basis adjustment for AUD."""
+    def _mk_logcubic(crv: pd.DataFrame):
+        """Natural cubic spline through log(DF) = -z*t at curve nodes (QuantLib
+        PiecewiseYieldCurve<Discount, LogCubic> — market practice). Built once per
+        call; returns (spline_or_None, xs, logdf) for a log-linear fallback."""
         xs = crv["MaturityY"].to_numpy().astype(float)
         ys = crv["ZeroRatePct"].to_numpy().astype(float) / 100.0
-        if ccy in ("USD", "EUR"):
-            # Log-linear interpolation ON DISCOUNT FACTORS (QuantLib
-            # PiecewiseYieldCurve<Discount, LogLinear/LogCubic> convention,
-            # which is what BlueGamma uses). Node DF = exp(-z*t); we interpolate
-            # log(DF) = -z*t linearly in t, then exp back. This is the market
-            # standard for OIS curves — NOT linear-on-zero. EUR added in v0806b:
-            # ESTR/EURIBOR are now bootstrapped (par→zero) and read back here on
-            # the same DF convention, so spot par swaps reprice. AUD/NZD unchanged.
-            _logdf = -ys * xs            # log(DF) at each node
-            _ld = float(np.interp(t, xs, _logdf))
-            return math.exp(_ld)
+        logdf = -ys * xs
+        _ord = np.argsort(xs)
+        xs = xs[_ord]; logdf = logdf[_ord]
+        ux, _ui = np.unique(xs, return_index=True)
+        logdf = logdf[_ui]
+        if len(ux) and ux[0] > 1e-9:
+            ux = np.insert(ux, 0, 0.0); logdf = np.insert(logdf, 0, 0.0)
+        try:
+            from scipy.interpolate import CubicSpline
+            return (CubicSpline(ux, logdf, bc_type="natural", extrapolate=True), ux, logdf)
+        except Exception:
+            return (None, ux, logdf)
+
+    # Build log-cubic splines once (USD/EUR only); AUD/NZD use linear-on-zero.
+    disc_curve = ois_curve if ois_curve is not None else _proj_curve
+    _proj_sp = _mk_logcubic(_proj_curve) if ccy in ("USD", "EUR") else None
+    _disc_sp = _mk_logcubic(disc_curve) if ccy in ("USD", "EUR") else None
+
+    def _df_proj(crv: pd.DataFrame, t: float, freq: float) -> float:
+        """Projection DF. USD/EUR: log-cubic on DFs (market practice, matches
+        BlueGamma). AUD/NZD: linear-on-zero (unchanged)."""
+        if ccy in ("USD", "EUR") and _proj_sp is not None:
+            _sp, _ux, _ld = _proj_sp
+            if _sp is not None:
+                return math.exp(float(_sp(t)))
+            return math.exp(float(np.interp(t, _ux, _ld)))
+        xs = crv["MaturityY"].to_numpy().astype(float)
+        ys = crv["ZeroRatePct"].to_numpy().astype(float) / 100.0
         z = float(np.interp(t, xs, ys))
-        # Basis already incorporated in QQ-full and SS projection curves - no double adjustment
         return math.exp(-z * t)
 
     def _df_disc(crv: pd.DataFrame, t: float) -> float:
+        if ccy in ("USD", "EUR") and _disc_sp is not None:
+            _sp, _ux, _ld = _disc_sp
+            if _sp is not None:
+                return math.exp(float(_sp(t)))
+            return math.exp(float(np.interp(t, _ux, _ld)))
         xs = crv["MaturityY"].to_numpy().astype(float)
         ys = crv["ZeroRatePct"].to_numpy().astype(float) / 100.0
-        if ccy in ("USD", "EUR"):
-            # Log-linear interpolation on discount factors (see _df_proj). EUR added
-            # v0806b — ESTR is bootstrapped and read back on this DF convention.
-            _logdf = -ys * xs
-            _ld = float(np.interp(t, xs, _logdf))
-            return math.exp(_ld)
         z = float(np.interp(t, xs, ys))
         return math.exp(-z * t)
-
-    disc_curve = ois_curve if ois_curve is not None else _proj_curve
 
     # Determine effective frequency from schedule (periods per year → years per period)
     _n_periods = len(sched)
@@ -2817,7 +2832,16 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
     for T_i, accrual in sched:
         ann += _df_disc(disc_curve, T_i) * accrual
 
-    swap_start = sched[0][0] - sched[0][1]
+    # swap_start = TRUE forward-start time, Act/365 from today to the forward-start
+    # date. The old `sched[0][0] - sched[0][1]` subtracted an Act/360 (USD) or 30/360
+    # (EUR) accrual from an Act/365 payment time — a day-count mix that pushed the
+    # forward high. AUD accrual is already Act/365 so its result is unchanged.
+    try:
+        _spot_lag_bd = 1 if ccy == "AUD" else 2
+        _fs_date = _fwd_start_date(expiry, spot_lag_bd=_spot_lag_bd)
+        swap_start = _act365(_pricing_date(), _fs_date)
+    except Exception:
+        swap_start = sched[0][0] - sched[0][1]   # safe fallback
     df_start = _df_proj(_proj_curve, swap_start, _sched_freq)
     df_end   = _df_proj(_proj_curve, sched[-1][0], _sched_freq)
     fwd = (df_start - df_end) / ann if ann > 0 else 0.0
