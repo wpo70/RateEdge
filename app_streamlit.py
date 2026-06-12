@@ -20720,12 +20720,12 @@ def caps_floors_tab(vol_mode: str):
                     dc = "#22c55e" if delta > 0 else "#ef4444" if delta < 0 else "#94a3b8"
                     rc[3].markdown(f"<div style='{fs};text-align:right;color:{dc}'>{delta:+.1f}</div>", unsafe_allow_html=True)
                     if swpt is not None:
-                        cfs = swpt + new_val
-                        st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs
-                        # FWD premium = spot / df(expiry) — read from atm_prem_matrix
+                        # ── Resolve the FORWARD swaption premium from atm_prem_matrix FIRST ──
+                        # (it is the base the USD CFS curve is built on, in fwd-premium space)
                         _prem_df_row = st.session_state.get("atm_prem_matrix", {}).get(ccy, {}).get("prem")
                         _exp_lbl_row = tdata.get("_exp_lbl", "")
                         fwd_swpt_str = "—"
+                        _fv = None
                         _fwd_debug = None
                         if _prem_df_row is not None and not _prem_df_row.empty:
                             try:
@@ -20754,8 +20754,31 @@ def caps_floors_tab(vol_mode: str):
                         # Stash debug info for optional display below table
                         if _fwd_debug:
                             st.session_state.setdefault("_wedge_fwd_debug", []).append(_fwd_debug)
-                        spot_str = f"{swpt:.4f}"
-                        cfs_str  = f"{cfs:.4f}"
+
+                        # ── CFS premium construction ──
+                        # v1206b (USD): wedge spread adds to the FORWARD swaption premium to
+                        # build the FORWARD-premium CFS curve — 1y1y fwd + wedge = 1x2 CFS fwd
+                        # (matches the SDR prints). Each CFS fixed point is then converted back
+                        # to SPOT at the 3m forward-start (SOFR discounting) for the caplet
+                        # bootstrap, which prices on a discounted (spot) basis.
+                        # Non-USD keep the prior spot-based add (AUD/NZD/EUR untouched).
+                        if ccy == "USD" and _fv is not None:
+                            try:
+                                _sofr_usd = st.session_state.get("config_curves", {}).get("USD")
+                                _df_3m = df_from_curve(_sofr_usd, 0.25) if _sofr_usd is not None else math.exp(-0.04 * 0.25)
+                            except Exception:
+                                _df_3m = math.exp(-0.04 * 0.25)
+                            cfs_fwd  = _fv + new_val           # FORWARD CFS premium (matches SDR)
+                            cfs_spot = cfs_fwd * _df_3m        # SPOT CFS premium (3m fwd-start)
+                            cfs = cfs_spot
+                            st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs_spot
+                            spot_str = f"{_fv * _df_3m:.4f}"   # swaption SPOT (3m fwd-start)
+                            cfs_str  = f"{cfs_fwd:.4f}"        # column shows the FORWARD CFS curve
+                        else:
+                            cfs = swpt + new_val
+                            st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs
+                            spot_str = f"{swpt:.4f}"
+                            cfs_str  = f"{cfs:.4f}"
                     else:
                         cfs = None
                         fwd_swpt_str = "  —  "
