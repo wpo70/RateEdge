@@ -19649,6 +19649,45 @@ def swaptions_tab(vol_mode: str):
 # that change the widget tree structure — every one causes a Streamlit
 # delta protocol crash inside a fragment. Full-page reruns are slightly
 # slower but never crash.
+def _usd_wedge_fwd_prem(exp_lbl: str, tenor_y: float):
+    """USD ATM straddle FORWARD premium (bp), priced through the EXACT pricer
+    engine — price_swaption + forward_and_annuity_from_curve + working-surface
+    grid ATM vol — identical to calculate_atm_premium_matrix's USD path and to
+    the swaption pricer (e.g. 1y1y = 76.75). Used as the wedge/CFS anchor so the
+    CFS curve tracks the pricer to the decimal, NOT a possibly-stale
+    atm_prem_matrix cell. Returns None on failure (caller falls back to matrix)."""
+    try:
+        curve = st.session_state.get("config_curves", {}).get("USD")
+        if curve is None or (hasattr(curve, "empty") and curve.empty):
+            return None
+        ois = curve  # USD single-curve SOFR (projection == discount)
+        exp_y = label_to_years(exp_lbl)
+        if exp_y is None or exp_y <= 0:
+            return None
+        surf = get_working_atm_surface("USD")
+        if surf is None:
+            return None
+        vol_bp = get_matrix_value(surf, exp_lbl, tenor_y)
+        if vol_bp is None or pd.isna(vol_bp):
+            return None
+        fwd, ann, _ = forward_and_annuity_from_curve(curve, "USD", exp_y, tenor_y, ois)
+        try:
+            _ox = ois[ois.columns[0]].to_numpy().astype(float)
+            _oy = ois[ois.columns[1]].to_numpy().astype(float) / 100.0
+            _r  = float(np.interp(exp_y, _ox, _oy))
+        except Exception:
+            _r = 0.04
+        tk = SwaptionTicket(
+            side="Payer", payoff_type="straddle", notional=1e6, currency="USD",
+            expiry_years=exp_y, swap_tenor_years=tenor_y, forward=fwd,
+            strike=fwd, vol=float(vol_bp) / 10000.0, discount_rate=_r, annuity=ann,
+            model="Normal", label="", use_curve=True)
+        res = price_swaption(tk)
+        return float(res.get("pv_bp_fwd", res.get("pv_bp", 0.0)))
+    except Exception:
+        return None
+
+
 def caps_floors_tab(vol_mode: str):
     st.subheader("Caps & Floors")
     
@@ -20762,17 +20801,33 @@ def caps_floors_tab(vol_mode: str):
                         # to SPOT at the 3m forward-start (SOFR discounting) for the caplet
                         # bootstrap, which prices on a discounted (spot) basis.
                         # Non-USD keep the prior spot-based add (AUD/NZD/EUR untouched).
-                        if ccy == "USD" and _fv is not None:
+                        if ccy == "USD":
+                            # exp / tenor for this wedge row (independent of the matrix lookup)
+                            _exp_w = {"3m1y":"3m","1y1y":"1y","2y1y":"2y","3y1y":"3y","4y1y":"4y",
+                                      "5y2y":"5y","7y3y":"7y","10y2y":"10y","12y3y":"12y"}.get(tbl_lbl)
+                            _ten_w = {"3m1y":1.0,"1y1y":1.0,"2y1y":1.0,"3y1y":1.0,"4y1y":1.0,
+                                      "5y2y":2.0,"7y3y":3.0,"10y2y":2.0,"12y3y":3.0}.get(tbl_lbl)
+                            # v1206c: FORWARD swaption premium priced LIVE through the pricer
+                            # engine (= 1y1y 76.75), so the CFS curve matches the pricer to the
+                            # decimal. atm_prem_matrix (_fv) is only a fallback — it can be stale.
+                            _fv_use = _usd_wedge_fwd_prem(_exp_w, _ten_w) if (_exp_w and _ten_w) else None
+                            if _fv_use is None:
+                                _fv_use = _fv
+                        else:
+                            _fv_use = None
+
+                        if ccy == "USD" and _fv_use is not None:
                             try:
                                 _sofr_usd = st.session_state.get("config_curves", {}).get("USD")
                                 _df_3m = df_from_curve(_sofr_usd, 0.25) if _sofr_usd is not None else math.exp(-0.04 * 0.25)
                             except Exception:
                                 _df_3m = math.exp(-0.04 * 0.25)
-                            cfs_fwd  = _fv + new_val           # FORWARD CFS premium (matches SDR)
-                            cfs_spot = cfs_fwd * _df_3m        # SPOT CFS premium (3m fwd-start)
+                            fwd_swpt_str = f"{_fv_use:.4f}"    # Swptn col = live pricer fwd prem (76.75)
+                            cfs_fwd  = _fv_use + new_val       # FORWARD CFS (76.75 + 18 = 94.75)
+                            cfs_spot = cfs_fwd * _df_3m        # SPOT CFS (3m fwd-start)
                             cfs = cfs_spot
                             st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs_spot
-                            spot_str = f"{_fv * _df_3m:.4f}"   # swaption SPOT (3m fwd-start)
+                            spot_str = f"{_fv_use * _df_3m:.4f}"  # swaption SPOT (3m fwd-start)
                             cfs_str  = f"{cfs_fwd:.4f}"        # column shows the FORWARD CFS curve
                         else:
                             cfs = swpt + new_val
