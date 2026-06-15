@@ -7001,7 +7001,14 @@ def _pair_swaption_legs(df):
             # are left untouched.
             _dbl = (_same_strike and _p_prem > 0 and _r_prem > 0
                     and abs(_p_prem - _r_prem) <= 0.01 * max(_p_prem, _r_prem))
-            if _dbl or (_same_strike and _mic in _PREM_DEDUP_MICS_EU and _p_prem > 0 and _r_prem > 0):
+            # One-sided full-straddle report: a same-strike straddle whose FULL premium
+            # is booked on ONE leg, the other leg reporting 0. Without this the lone leg
+            # inverts to ~2x vol (e.g. 1m2Y 121 vs ~70, 1m30Y 78 vs 44). The data signature
+            # is observed-too-high (lone premium = full straddle), so treat it as the full
+            # straddle and halve onto both legs. Genuine two-leg reports (both > 0) and real
+            # single-direction trades (no same-strike partner) are unaffected.
+            _one_sided = _same_strike and ((_p_prem > 0) != (_r_prem > 0))
+            if _dbl or _one_sided or (_same_strike and _mic in _PREM_DEDUP_MICS_EU and _p_prem > 0 and _r_prem > 0):
                 _c = max(_p_prem, _r_prem); _p_prem = _c / 2.0; _r_prem = _c / 2.0
             out.append({
                 "exp": _e_p, "ten": _t_p, "p_strike": _s_p, "r_strike": _s_r,
