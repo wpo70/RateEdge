@@ -7815,6 +7815,13 @@ def _fenics_pull_load(cookie, date_str=""):
         for _id, name in pairs:
             if _id not in seen:
                 seen.add(_id); items.append((_id, name))
+        if not items:
+            # Nothing listed — tell the user WHY (portal-empty vs cookie not working)
+            _logged_in = any(k in low for k in ("logout", "sign out", "signed in", "wilpo"))
+            if _logged_in:
+                return {"status": "EMPTY", "listed": 0, "http": r.status_code,
+                        "page": "logged_in_empty"}
+            return {"status": "EXPIRED", "http": r.status_code, "page": "no_session"}
         ymd = date_str.replace("-", "_") if date_str else None
         want = [(i, n) for (i, n) in items
                 if "_ORDERS_" not in n and (not ymd or ymd in n)]
@@ -7889,6 +7896,45 @@ def eu_mifir_tab():
         '</div>', unsafe_allow_html=True)
     st.caption("EU swaption prints (TP ICAP IOTF). Premium is bp (BAPO); tenor/strike "
                "inferred by matching the printed ATM premium to the live EUR premium surface.")
+
+    # ── Feed freshness (always visible — no password) ──
+    try:
+        _frconn = get_db_connection()
+        if _frconn is not None:
+            _frc = _frconn.cursor()
+            _frc.execute(
+                "SELECT CASE WHEN venue_mic IN ('BGCO','BGCI','GFSO','GFSM','GFIC','AURO','AURB') "
+                "              OR source IN ('bgc','gfi','aurel') THEN 'BGC/GFI' "
+                "            WHEN venue_mic='IOTF' OR source='icap' "
+                "              OR instrument_desc LIKE 'NA/O %' THEN 'IOTF' "
+                "            ELSE 'other' END AS feed, "
+                "       MAX(ingested_utc) AS last_load "
+                "FROM eu_iro_prints WHERE asset_class='SWAPTION' GROUP BY 1")
+            _frrows = _frc.fetchall()
+            _frc.close()
+            from datetime import datetime as _frdt, timezone as _frtz
+            _frnow = _frdt.now(_frtz.utc)
+            _frstale, _frok = [], []
+            for _ffeed, _flast in _frrows:
+                if _ffeed == "other" or _flast is None:
+                    continue
+                try:
+                    _fld = _flast if hasattr(_flast, "tzinfo") else _frdt.fromisoformat(str(_flast))
+                    if _fld.tzinfo is None:
+                        _fld = _fld.replace(tzinfo=_frtz.utc)
+                    _fage = (_frnow - _fld).total_seconds() / 86400.0
+                except Exception:
+                    continue
+                if _fage > 1.5:
+                    _frstale.append(f"{_ffeed} {int(_fage)}d ago")
+                else:
+                    _frok.append(_ffeed)
+            if _frstale:
+                st.warning("⚠️ Feed stale — last load: " + " · ".join(_frstale)
+                           + ".  Refresh the cookie/token and pull (admin below)."
+                           + (f"   Fresh: {', '.join(_frok)}." if _frok else ""))
+    except Exception:
+        pass
 
     with st.expander("🔧 Admin — EU Slice Loader (manual pull + 20-min auto-load)", expanded=False):
         _eu_admin_pw = st.text_input("Admin password", type="password", key="_eu_admin_pw")
@@ -7970,6 +8016,13 @@ Keeps `HR*` swaptions only (drops `HF*` FX options), decodes payer/receiver, kee
                         f"{_fres.get('upserted', 0)} swaption print(s) to eu_iro_prints.")
                     if _fres.get("upserted", 0) == 0:
                         st.caption("No swaptions in the pulled slices (likely all bonds/other for that day).")
+                elif _fs == "EMPTY":
+                    st.info("Logged in OK, but Fenics is listing **0 reports** right now "
+                            "(matches the portal's 'No data available'). Either there are no "
+                            "live reports at the moment, or this cookie only works from your "
+                            "browser's IP (a JSESSIONID is often IP-bound, so the cloud app "
+                            "can't use it). If the portal shows reports in your browser but "
+                            "this says 0, it's the IP binding — pull locally with pull_fenics.py.")
                 elif _fs == "EXPIRED":
                     st.error("🔴 FENICS COOKIE EXPIRED — refresh the JSESSIONID above and try again. "
                              "Nothing was pulled.")
