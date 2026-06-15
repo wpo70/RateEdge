@@ -7208,13 +7208,36 @@ def eu_combined_analysis():
                     if abs(_Kr - F) > 0.015: _Kr = F
                     _pp_bp = _pair["p_prem"] / _not * 1e4 if _pair["p_prem"] > 0 else 0.0
                     _rp_bp = _pair["r_prem"] / _not * 1e4 if _pair["r_prem"] > 0 else 0.0
-                    # Invert each leg (payer + receiver) and average — same as USD ATM fitter.
-                    _vp = _eu_solve_normal_vol(_pp_bp, F, _Kp, float(E), A, True) if _pp_bp > 0 else None
-                    _vr = _eu_solve_normal_vol(_rp_bp, F, _Kr, float(E), A, False) if _rp_bp > 0 else None
-                    _vs = [v for v in (_vp, _vr) if v and v > 0]
-                    if not _vs:
-                        continue
-                    iv = sum(_vs) / len(_vs)
+                    _svr = _eu_surface_vol(surf["df"], float(E), tenor)
+                    if _pair["same_strike"]:
+                        # Same-strike straddle: how a venue splits the premium across the two
+                        # legs is unreliable (full-on-each-leg, one-sided, or uneven), and a
+                        # mis-read inverts to ~2x vol. Invert the straddle as a WHOLE under both
+                        # possible total-premium readings — sum of the two legs, or the larger
+                        # single leg (double/one-sided report) — and keep whichever ATM-inverts
+                        # closest to the live surface. Real basis survives (correct reading sits
+                        # near surface ± the move); the 2x mis-split artifacts drop out.
+                        _cands = []
+                        for _Sbp in {round(_pp_bp + _rp_bp, 6), round(max(_pp_bp, _rp_bp), 6)}:
+                            if _Sbp <= 0:
+                                continue
+                            _vv = _eu_solve_normal_vol(_Sbp / 2.0, F, F, float(E), A, True)
+                            if _vv and _vv > 0:
+                                _cands.append(_vv)
+                        if not _cands:
+                            continue
+                        if _svr and _svr > 0:
+                            iv = min(_cands, key=lambda v: abs(v - _svr * 1e4))
+                        else:
+                            iv = min(_cands)   # no surface ref: take the lower (avoids the 2x artifact)
+                    else:
+                        # Strangle / different strikes: invert each leg at its own strike.
+                        _vp = _eu_solve_normal_vol(_pp_bp, F, _Kp, float(E), A, True) if _pp_bp > 0 else None
+                        _vr = _eu_solve_normal_vol(_rp_bp, F, _Kr, float(E), A, False) if _rp_bp > 0 else None
+                        _vs = [v for v in (_vp, _vr) if v and v > 0]
+                        if not _vs:
+                            continue
+                        iv = sum(_vs) / len(_vs)
                     cells.setdefault((_eu_expiry_label(E), tenor), []).append(
                         (iv, _age_w(_pair["time"]), "SDR"))
                     _svr = _eu_surface_vol(surf["df"], float(E), tenor)
