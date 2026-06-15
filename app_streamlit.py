@@ -7216,7 +7216,15 @@ def eu_combined_analysis():
                         #   L = max       reported figure is a single leg (straddle = 2x)
                         _tot = _pp_bp + _rp_bp
                         _mx = max(_pp_bp, _rp_bp)
-                        _Lset = {round(_tot / 2.0, 6), round(_mx / 2.0, 6), round(_mx, 6)}
+                        # Always try: legs-summed (true halves) and single-leg (reported figure
+                        # is one leg → straddle is 2x). Only add the double-report half (max/2)
+                        # when BOTH legs are present and ~equal — its real signature. Offering
+                        # max/2 unconditionally gave a one-sided/single trade a spurious quarter-
+                        # premium candidate that the snap could grab and halve the vol
+                        # (6m10Y read 33 vs 62, which then bled into 9m1Y via grid smoothing).
+                        _Lset = {round(_tot / 2.0, 6), round(_mx, 6)}
+                        if _pp_bp > 0 and _rp_bp > 0 and abs(_pp_bp - _rp_bp) <= 0.05 * _mx:
+                            _Lset.add(round(_mx / 2.0, 6))
                         _cands = []
                         for _L in _Lset:
                             if _L <= 0:
