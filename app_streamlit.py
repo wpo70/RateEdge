@@ -7239,6 +7239,7 @@ def eu_combined_analysis():
                         else:
                             iv, _Lc = min(_cands, key=lambda x: x[0])
                         _straddle_bp = 2.0 * _Lc
+                        _cand_str = "/".join(f"{c[0]:.0f}" for c in sorted(_cands))
                     else:
                         # Strangle / different strikes: invert each leg at its own strike.
                         _vp = _eu_solve_normal_vol(_pp_bp, F, _Kp, float(E), A, True) if _pp_bp > 0 else None
@@ -7248,6 +7249,7 @@ def eu_combined_analysis():
                             continue
                         iv = sum(_vs) / len(_vs)
                         _straddle_bp = _pp_bp + _rp_bp
+                        _cand_str = ""
                     cells.setdefault((_eu_expiry_label(E), tenor), []).append(
                         (iv, _age_w(_pair["time"]), "SDR"))
                     _svr = _eu_surface_vol(surf["df"], float(E), tenor)
@@ -7258,6 +7260,9 @@ def eu_combined_analysis():
                         "Expiry": _eu_expiry_label(E), "Tenor": f"{tenor}Y",
                         "Strike": f"{_K*100:.3f}%" + (" ATM" if abs(_K - F) < 1e-4 else ""),
                         "Prem(bp)": round(_straddle_bp, 1),
+                        "p(bp)": round(_pp_bp, 1), "r(bp)": round(_rp_bp, 1),
+                        "F(%)": round(F * 100, 3), "A": round(A, 3),
+                        "cands(bp)": _cand_str,
                         "Notional(mm)": round(_not / 1e6, 1),
                         "Impl vol(bp)": round(iv, 1),
                         "Surf vol(bp)": round(_svr * 1e4, 1) if _svr is not None else "",
@@ -7306,6 +7311,7 @@ def eu_combined_analysis():
     # ── Combined trade blotter (per-trade, analysed — same style as SDR) ──────
     if trades:
         _COLS = ["Exec (LDN)", "Src", "Ccy", "Type", "Expiry", "Tenor", "Strike", "Prem(bp)",
+                 "p(bp)", "r(bp)", "F(%)", "A", "cands(bp)",
                  "Notional(mm)", "Impl vol(bp)", "Surf vol(bp)", "Δ surf(bp)", "Broker"]
         _tr_df = pd.DataFrame(trades).sort_values("Exec (LDN)", ascending=False)
         _tr_df = _tr_df[[c for c in _COLS if c in _tr_df.columns]]
