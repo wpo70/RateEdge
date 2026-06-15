@@ -6999,17 +6999,12 @@ def _pair_swaption_legs(df):
             # catches every venue that double-reports (BILT/ISWV/ICAP/Tullett/BGC/…),
             # not just a hardcoded MIC list. Genuine separate legs (different premiums)
             # are left untouched.
-            _dbl = (_same_strike and _p_prem > 0 and _r_prem > 0
-                    and abs(_p_prem - _r_prem) <= 0.01 * max(_p_prem, _r_prem))
-            # One-sided full-straddle report: a same-strike straddle whose FULL premium
-            # is booked on ONE leg, the other leg reporting 0. Without this the lone leg
-            # inverts to ~2x vol (e.g. 1m2Y 121 vs ~70, 1m30Y 78 vs 44). The data signature
-            # is observed-too-high (lone premium = full straddle), so treat it as the full
-            # straddle and halve onto both legs. Genuine two-leg reports (both > 0) and real
-            # single-direction trades (no same-strike partner) are unaffected.
-            _one_sided = _same_strike and ((_p_prem > 0) != (_r_prem > 0))
-            if _dbl or _one_sided or (_same_strike and _mic in _PREM_DEDUP_MICS_EU and _p_prem > 0 and _r_prem > 0):
-                _c = max(_p_prem, _r_prem); _p_prem = _c / 2.0; _r_prem = _c / 2.0
+            # Premium-convention handling is done in the inversion (it tries every plausible
+            # straddle-premium reading — legs summed, larger leg as a double/one-sided full
+            # report, or the reported figure as a single leg — and snaps to the live surface).
+            # Legs therefore pass through RAW here; the old leg-level halving over-fired on
+            # genuine two-leg reports (made 3m1Y read 34 vs 64) and is removed.
+            _dbl = _one_sided = False
             out.append({
                 "exp": _e_p, "ten": _t_p, "p_strike": _s_p, "r_strike": _s_r,
                 "p_prem": _p_prem, "r_prem": _r_prem,
@@ -7210,26 +7205,32 @@ def eu_combined_analysis():
                     _rp_bp = _pair["r_prem"] / _not * 1e4 if _pair["r_prem"] > 0 else 0.0
                     _svr = _eu_surface_vol(surf["df"], float(E), tenor)
                     if _pair["same_strike"]:
-                        # Same-strike straddle: how a venue splits the premium across the two
-                        # legs is unreliable (full-on-each-leg, one-sided, or uneven), and a
-                        # mis-read inverts to ~2x vol. Invert the straddle as a WHOLE under both
-                        # possible total-premium readings — sum of the two legs, or the larger
-                        # single leg (double/one-sided report) — and keep whichever ATM-inverts
-                        # closest to the live surface. Real basis survives (correct reading sits
-                        # near surface ± the move); the 2x mis-split artifacts drop out.
+                        # The per-leg premium split a venue reports is unreliable: it may be the
+                        # two true halves (sum = straddle), the full straddle repeated on each
+                        # leg or booked one-sided (max = straddle), or a single leg only
+                        # (reported figure = HALF the straddle → 3m1Y reading low). Rather than
+                        # guess, build the candidate per-leg premium L under each reading and
+                        # keep whichever ATM-inverts closest to the live surface:
+                        #   L = (p+r)/2   legs are the two halves
+                        #   L = max/2     double / one-sided FULL-straddle report
+                        #   L = max       reported figure is a single leg (straddle = 2x)
+                        _tot = _pp_bp + _rp_bp
+                        _mx = max(_pp_bp, _rp_bp)
+                        _Lset = {round(_tot / 2.0, 6), round(_mx / 2.0, 6), round(_mx, 6)}
                         _cands = []
-                        for _Sbp in {round(_pp_bp + _rp_bp, 6), round(max(_pp_bp, _rp_bp), 6)}:
-                            if _Sbp <= 0:
+                        for _L in _Lset:
+                            if _L <= 0:
                                 continue
-                            _vv = _eu_solve_normal_vol(_Sbp / 2.0, F, F, float(E), A, True)
+                            _vv = _eu_solve_normal_vol(_L, F, F, float(E), A, True)
                             if _vv and _vv > 0:
-                                _cands.append(_vv)
+                                _cands.append((_vv, _L))
                         if not _cands:
                             continue
                         if _svr and _svr > 0:
-                            iv = min(_cands, key=lambda v: abs(v - _svr * 1e4))
+                            iv, _Lc = min(_cands, key=lambda x: abs(x[0] - _svr * 1e4))
                         else:
-                            iv = min(_cands)   # no surface ref: take the lower (avoids the 2x artifact)
+                            iv, _Lc = min(_cands, key=lambda x: x[0])
+                        _straddle_bp = 2.0 * _Lc
                     else:
                         # Strangle / different strikes: invert each leg at its own strike.
                         _vp = _eu_solve_normal_vol(_pp_bp, F, _Kp, float(E), A, True) if _pp_bp > 0 else None
@@ -7238,6 +7239,7 @@ def eu_combined_analysis():
                         if not _vs:
                             continue
                         iv = sum(_vs) / len(_vs)
+                        _straddle_bp = _pp_bp + _rp_bp
                     cells.setdefault((_eu_expiry_label(E), tenor), []).append(
                         (iv, _age_w(_pair["time"]), "SDR"))
                     _svr = _eu_surface_vol(surf["df"], float(E), tenor)
@@ -7247,7 +7249,7 @@ def eu_combined_analysis():
                         "Ccy": "EUR", "Type": _pair["type"],
                         "Expiry": _eu_expiry_label(E), "Tenor": f"{tenor}Y",
                         "Strike": f"{_K*100:.3f}%" + (" ATM" if abs(_K - F) < 1e-4 else ""),
-                        "Prem(bp)": round(_pp_bp + _rp_bp, 1),
+                        "Prem(bp)": round(_straddle_bp, 1),
                         "Notional(mm)": round(_not / 1e6, 1),
                         "Impl vol(bp)": round(iv, 1),
                         "Surf vol(bp)": round(_svr * 1e4, 1) if _svr is not None else "",
