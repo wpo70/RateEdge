@@ -11018,11 +11018,24 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     pass
                                 _av_rejected_prints = []
                                 _ln2a = math.log(2.0); _hl_h = _av_hours / 2.0
+                                # Business-hours age: count only Mon–Fri so a 48h window on a
+                                # Monday still reaches back through Friday/Thursday (SDR trades
+                                # don't print on weekends, so calendar hours wrongly drop them).
+                                def _av_bhours(_t0, _t1):
+                                    if _t1 <= _t0: return 0.0
+                                    _tot = 0.0; _cur = _t0; _step = _av_dtmod.timedelta(hours=1); _i = 0
+                                    while _cur < _t1 and _i < 100000:
+                                        _nxt = _cur + _step
+                                        if _nxt > _t1: _nxt = _t1
+                                        if _cur.weekday() < 5:
+                                            _tot += (_nxt - _cur).total_seconds() / 3600.0
+                                        _cur = _nxt; _i += 1
+                                    return _tot
                                 for _r in _paired_rows:
                                     if _r.get("CCY") != _fit_ccy or _r.get("Type") != "🔵 Straddle": continue
                                     _tdt = _r.get("_time_dt")
                                     if _tdt is None: continue
-                                    try: _age_h = (_av_now - _tdt).total_seconds() / 3600.0
+                                    try: _age_h = _av_bhours(_tdt, _av_now)
                                     except Exception: continue
                                     if _age_h < 0 or _age_h > _av_hours: continue
                                     _exp = _r.get("Opt Expiry", ""); _ten = _r.get("Swp Tenor", "")
