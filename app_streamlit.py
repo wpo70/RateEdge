@@ -7787,6 +7787,72 @@ def _fen_parse_csv(raw, fname):
     return out
 
 
+def _fenics_check_cookie(cookie):
+    """Read-only Fenics cookie probe: lists /reports, no download, no DB write.
+    Returns dict(status: VALID | EMPTY | EXPIRED | NO_COOKIE | NET_ERR | ERR, listed)."""
+    try:
+        ck = (cookie or "").strip()
+        if not ck:
+            return {"status": "NO_COOKIE"}
+        if "JSESSIONID" not in ck:
+            ck = f"cookieconsent_status=dismiss; JSESSIONID={ck}"
+        hdr = {"Cookie": ck, "X-Requested-With": "XMLHttpRequest",
+               "User-Agent": "Mozilla/5.0", "Referer": f"{_FEN_BASE}/dashboard"}
+        try:
+            import urllib3
+            urllib3.disable_warnings()
+        except Exception:
+            pass
+        try:
+            r = requests.get(f"{_FEN_BASE}/reports", headers=hdr, timeout=45,
+                             verify=False, allow_redirects=False)
+        except Exception as e:
+            return {"status": "NET_ERR", "detail": str(e)}
+        if r.status_code in (301, 302, 303, 307, 401, 403):
+            return {"status": "EXPIRED", "http": r.status_code}
+        html = r.text
+        items = {m for m, _n in _FEN_ROW_RE.findall(html)}
+        if items:
+            return {"status": "VALID", "listed": len(items)}
+        low = html.lower()
+        if any(k in low for k in ("logout", "sign out", "signed in")):
+            return {"status": "EMPTY", "listed": 0}
+        return {"status": "EXPIRED", "http": r.status_code}
+    except Exception as e:
+        return {"status": "ERR", "detail": str(e)}
+
+
+def _fenics_heartbeat_read():
+    """Read the auto-pull heartbeat the scheduled task writes. Returns dict or None.
+    Tolerant of the table not existing yet."""
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return None
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT last_run, login_ok, reports_listed, detail "
+                        "FROM fenics_heartbeat WHERE id = 1")
+            row = cur.fetchone()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            row = None
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass
+        if not row:
+            return None
+        return {"last_run": row[0], "login_ok": row[1],
+                "reports_listed": row[2], "detail": row[3]}
+    except Exception:
+        return None
+
+
 def _fenics_pull_load(cookie, date_str=""):
     """In-app Fenics pull+parse+upsert. Returns a status dict; never raises.
     status: OK | EMPTY | EXPIRED | NO_COOKIE | NET_ERR | NO_DB | DB_ERR | ERR"""
@@ -7898,6 +7964,30 @@ def eu_mifir_tab():
     st.caption("EU swaption prints (TP ICAP IOTF). Premium is bp (BAPO); tenor/strike "
                "inferred by matching the printed ATM premium to the live EUR premium surface.")
 
+    # ── Always-visible Fenics auto-pull cookie status (no password needed) ──
+    try:
+        _hb_top = _fenics_heartbeat_read()
+        if _hb_top is not None:
+            from datetime import datetime as _hbtd, timezone as _hbtz2
+            _age_top = "recently"
+            try:
+                _lr2 = _hb_top["last_run"]
+                _lrd2 = _lr2 if hasattr(_lr2, "tzinfo") else _hbtd.fromisoformat(str(_lr2))
+                if _lrd2.tzinfo is None:
+                    _lrd2 = _lrd2.replace(tzinfo=_hbtz2.utc)
+                _mn2 = (_hbtd.now(_hbtz2.utc) - _lrd2).total_seconds() / 60.0
+                _age_top = (f"{_mn2/60:.1f}h ago" if _mn2 >= 60 else f"{_mn2:.0f}m ago")
+            except Exception:
+                pass
+            if _hb_top.get("login_ok"):
+                st.success(f"🟢 Fenics auto-pull cookie OK — last login {_age_top}, "
+                           f"{_hb_top.get('reports_listed') or 0} reports listed.")
+            else:
+                st.error(f"🔴 Fenics auto-pull cookie FAILED ({_age_top}) — refresh the "
+                         f"JSESSIONID in Admin until the next auto-login succeeds.")
+    except Exception:
+        pass
+
     with st.expander("🔧 Admin — EU Slice Loader (manual pull + 20-min auto-load)", expanded=False):
         _eu_admin_pw = st.text_input("Admin password", type="password", key="_eu_admin_pw")
         if _eu_admin_pw == "1Will-po1":
@@ -7960,6 +8050,30 @@ Keeps `HR*` swaptions only (drops `HF*` FX options), decodes payer/receiver, kee
 ⚠️ Unlike the IOTF token, the Fenics `JSESSIONID` is short-lived — if `pull_fenics.py` reports a login page, refresh the cookie (step 2).
 """)
             # ── In-app Fenics pull (no PowerShell; isolated from the editor) ──
+            st.markdown("---")
+            # Manual cookie probe (the fallback you load until it expires). The auto-pull
+            # status banner is shown at the top of the tab, outside this password.
+            _cc1, _cc2 = st.columns([3, 1])
+            with _cc1:
+                _chk_ck = st.text_input("Check a Fenics JSESSIONID (read-only)", type="password",
+                                        key="_fen_ck_check")
+            with _cc2:
+                _do_chk = st.button("🔑 Check cookie", key="_fen_check_btn")
+            if _do_chk:
+                _cr = _fenics_check_cookie(_chk_ck)
+                _cs = _cr.get("status")
+                if _cs == "VALID":
+                    st.success(f"🟢 Cookie valid — {_cr.get('listed', 0)} reports listed right now.")
+                elif _cs == "EMPTY":
+                    st.info("🟡 Cookie valid (logged in) but 0 reports listed at the moment.")
+                elif _cs == "EXPIRED":
+                    st.error("🔴 Cookie expired / not authenticated — refresh the JSESSIONID.")
+                elif _cs == "NO_COOKIE":
+                    st.warning("Paste a JSESSIONID to check.")
+                elif _cs == "NET_ERR":
+                    st.error(f"Couldn't reach Fenics: {_cr.get('detail', '')}")
+                else:
+                    st.error(f"Check failed: {_cr}")
             st.markdown("---")
             st.markdown("**🔵 Pull Fenics (BGC / GFI / Aurel) from here — no PowerShell:**")
             _fck = st.text_input(
@@ -8036,6 +8150,42 @@ Keeps `HR*` swaptions only (drops `HF*` FX options), decodes payer/receiver, kee
     if df.empty:
         st.info(f"No EU swaption prints between {_pfrom_s} and {_pto_s}.")
         return
+
+    # ── Coverage matrix: which broker has prints on which day (capture gaps) ──
+    try:
+        _cov = df.copy()
+        _cov["_day"] = _cov["exec_utc"].astype(str).str[:10]
+        _cov = _cov[(_cov["_day"] >= _pfrom_s) & (_cov["_day"] <= _pto_s)]
+
+        def _cov_brk(_row):
+            _m = str(_row.get("venue_mic") or "").upper()
+            _s = str(_row.get("source") or "").lower()
+            if _m in ("BGCO", "BGCI") or _s == "bgc":
+                return "BGC"
+            if _m in ("GFSO", "GFSM", "GFIC") or _s == "gfi":
+                return "GFI"
+            if _m in ("AURO", "AURB") or _s == "aurel":
+                return "Aurel"
+            if _m == "IOTF" or _s == "icap":
+                return "ICAP"
+            return (_s or _m or "other").upper()
+
+        _cov["Broker"] = _cov.apply(_cov_brk, axis=1)
+        if not _cov.empty:
+            _piv = _cov.pivot_table(index="_day", columns="Broker", values="price",
+                                    aggfunc="count", fill_value=0).sort_index(ascending=False)
+            _piv.index.name = "Date"
+            _piv["Total"] = _piv.sum(axis=1)
+            st.markdown("**Coverage — swaption prints per broker per day** "
+                        "(blank/0 = no slice captured that day):")
+            st.dataframe(_piv, use_container_width=True,
+                         height=min(60 + len(_piv) * 35, 340))
+            _absent = [b for b in ("ICAP", "BGC", "GFI") if b not in _piv.columns]
+            if _absent:
+                st.caption("⚠️ Zero prints in this range for: " + ", ".join(_absent)
+                           + " — capture gap (slices never pulled/loaded for those).")
+    except Exception:
+        pass
 
     surf = _eu_latest_eur_surface()
     curve = st.session_state.get("config_curves", {}).get("EUR")
