@@ -6778,7 +6778,8 @@ def _eu_surface_vol(surf_df, expiry_years, tenor):
     return v / 10000.0
 
 
-def _eu_match_print(expiry_years, premium_bp, surf_df, curve, tenors=EU_MATCH_TENORS):
+def _eu_match_print(expiry_years, premium_bp, surf_df, curve, tenors=EU_MATCH_TENORS,
+                    straddle=True):
     """Rank candidate tenors by closeness of model ATM premium (bp) to the print."""
     out = []
     for t in tenors:
@@ -6796,10 +6797,10 @@ def _eu_match_print(expiry_years, premium_bp, surf_df, curve, tenors=EU_MATCH_TE
             patm = res.get("pv_bp_fwd") or res.get("pv_bp") or 0.0
             # IOTF masked prints are ATM STRADDLES (premium = payer + receiver). At F=K the
             # payer and receiver legs are equal, so the straddle premium is 2x the one-way
-            # leg priced above. Match the print against the straddle premium so both the
-            # tenor inference and the vol scale (iv = surface_vol * print/model) use a
-            # like-for-like convention — e.g. 573bp resolves to 6m30y, not ~2x too long.
-            patm = 2.0 * float(patm)
+            # leg priced above. Use 2x for straddles, 1x for explicit single Payer/Rec prints,
+            # so the tenor inference and vol scale (iv = surface_vol * print/model) match the
+            # print's own convention — straddle 573bp -> 6m30y; one-way 12.5bp 1y1Y stays one-way.
+            patm = (2.0 if straddle else 1.0) * float(patm)
             out.append((t, patm, F, abs(premium_bp - patm)))
         except Exception:
             continue
@@ -7152,7 +7153,11 @@ def eu_combined_analysis():
                     if E <= 0:
                         continue
                     px = float(r["price"])
-                    m = _eu_match_print(E, px, surf["df"], curve)
+                    # Explicit Payer/Rec prints are single legs; unmarked European prints
+                    # are straddles. Match each against its own premium convention.
+                    _dlm0 = desc.lower()
+                    _single = ("call" in _dlm0) or ("/o p" in _dlm0) or (" p epn" in _dlm0)
+                    m = _eu_match_print(E, px, surf["df"], curve, straddle=not _single)
                     if not m:
                         continue
                     tenor, model_atm, _F, _d = m[0]
@@ -8300,7 +8305,8 @@ Keeps `HR*` swaptions only (drops `HF*` FX options), decodes payer/receiver, kee
         if can_match and E and E > 0 and r["price"] is not None:
             try:
                 px = float(r["price"])
-                m = _eu_match_print(E, px, surf["df"], curve)
+                _single_b = ("call" in dl) or ("/o p" in dl) or (" p epn" in dl)
+                m = _eu_match_print(E, px, surf["df"], curve, straddle=not _single_b)
                 if m:
                     b = m[0]
                     ceiling = max(x[1] for x in m)
