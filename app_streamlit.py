@@ -6948,6 +6948,26 @@ _PREM_DEDUP_MICS_EU = {"BGCD", "BGCO", "BGCI", "TPSE", "TPIR", "TPEU", "TSEF", "
 _LONDON_TZ = None
 
 
+def _eu_to_london_short(ts):
+    """London local time as 'DD-Mon HH:MM' — matches the SDR cache's _time_dt format so
+    both venues read identically in the combined blotter."""
+    from datetime import datetime as _d, timezone as _z
+    global _LONDON_TZ
+    if _LONDON_TZ is None:
+        try:
+            from zoneinfo import ZoneInfo
+            _LONDON_TZ = ZoneInfo("Europe/London")
+        except Exception:
+            _LONDON_TZ = _z.utc
+    try:
+        ex = _d.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if ex.tzinfo is None:
+            ex = ex.replace(tzinfo=_z.utc)
+        return ex.astimezone(_LONDON_TZ).strftime("%d-%b %H:%M")
+    except Exception:
+        return str(ts)[:16]
+
+
 def _eu_to_london(ts):
     """Format a UTC timestamp string as London local time (handles BST/GMT)."""
     from datetime import datetime as _d, timezone as _z
@@ -7214,7 +7234,7 @@ def eu_combined_analysis():
                             else ("\U0001f534 Receiver" if ("/o p" in _dlm or " p epn" in _dlm)
                                   else "\U0001f535 Straddle"))
                     trades.append({
-                        "Exec (LDN)": _eu_to_london(r["exec_utc"]), "Src": "MiFIR", "Ccy": "EUR", "Type": _pcm,
+                        "Exec (LDN)": _eu_to_london_short(r["exec_utc"]), "Src": "MiFIR", "Ccy": "EUR", "Type": _pcm,
                         "Expiry": _eu_expiry_label(E),
                         "Tenor": f"{int(tenor)}Y", "Strike": "ATM (inf)",
                         "Prem(bp)": round(px, 1), "Notional(mm)": "masked",
