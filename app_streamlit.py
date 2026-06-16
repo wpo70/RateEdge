@@ -7112,6 +7112,8 @@ def eu_combined_analysis():
     def _age_w(ts):
         try:
             ex = _dt.fromisoformat(str(ts).replace("Z", "+00:00"))
+            if ex.tzinfo is None:
+                ex = ex.replace(tzinfo=_tz.utc)
             age = max(0.0, (now - ex).total_seconds() / 86400.0)
         except Exception:
             age = 0.0
@@ -7183,60 +7185,77 @@ def eu_combined_analysis():
                 except Exception:
                     continue
 
-    # ── SDR side (dtcc_sdr EUR): strike-correct implied vol ────────────────────
+    # ── SDR side: REUSE the perfect decode from sdr_live_tab (cached paired rows). ──
+    #    No re-pairing here. sdr_live_tab already produced clean per-leg bp (P/R Prem BP,
+    #    deduped, broker-correct); we consume those numbers verbatim, invert to vol, and
+    #    pool. SDR and MiFIR are computed SEPARATELY then combined — never one shared blend.
     if _src_pick != "MiFIR only":
-        sdf = _eu_load_sdr_eur(hours=_hrs)
-        if sdf is not None and not sdf.empty:
-            for _pair in _pair_swaption_legs(sdf):
-                try:
-                    if not _in_range(_pair["time"]):
-                        continue
-                    E = label_to_years(str(_pair["exp"]))
-                    ten = label_to_years(str(_pair["ten"]))
-                    if not E or not ten or E <= 0 or ten <= 0:
-                        continue
-                    tenor = int(round(ten))
-                    _not = float(_pair["notional"] or 0)
-                    if _not <= 0:
-                        continue
-                    F, A, _ = forward_and_annuity_from_curve(curve, "EUR", float(E), float(tenor))
-                    _Feur = _eur_proj_forward(float(E), float(tenor))
-                    if _Feur is not None and _Feur > 0:
-                        F = _Feur   # EURIBOR projection fwd (Curves-tab formula), not ESTR
-                    if A <= 0:
-                        continue
-                    _Kp = (_pair["p_strike"] / 100.0) if _pair["p_strike"] else F
-                    _Kr = (_pair["r_strike"] / 100.0) if _pair["r_strike"] else F
-                    # bad/mis-scaled strike field (e.g. DTCC 100x error) -> snap to ATM
-                    if abs(_Kp - F) > 0.015: _Kp = F
-                    if abs(_Kr - F) > 0.015: _Kr = F
-                    _pp_bp = _pair["p_prem"] / _not * 1e4 if _pair["p_prem"] > 0 else 0.0
-                    _rp_bp = _pair["r_prem"] / _not * 1e4 if _pair["r_prem"] > 0 else 0.0
-                    # Invert each leg (payer + receiver) and average — same as USD ATM fitter.
-                    _vp = _eu_solve_normal_vol(_pp_bp, F, _Kp, float(E), A, True) if _pp_bp > 0 else None
-                    _vr = _eu_solve_normal_vol(_rp_bp, F, _Kr, float(E), A, False) if _rp_bp > 0 else None
-                    _vs = [v for v in (_vp, _vr) if v and v > 0]
-                    if not _vs:
-                        continue
-                    iv = sum(_vs) / len(_vs)
-                    cells.setdefault((_eu_expiry_label(E), tenor), []).append(
-                        (iv, _age_w(_pair["time"]), "SDR"))
-                    _svr = _eu_surface_vol(surf["df"], float(E), tenor)
-                    _K = _Kp if _pair["same_strike"] else (_Kp + _Kr) / 2.0
-                    trades.append({
-                        "Exec (LDN)": _eu_to_london(_pair["time"]), "Src": "SDR",
-                        "Ccy": "EUR", "Type": _pair["type"],
-                        "Expiry": _eu_expiry_label(E), "Tenor": f"{tenor}Y",
-                        "Strike": f"{_K*100:.3f}%" + (" ATM" if abs(_K - F) < 1e-4 else ""),
-                        "Prem(bp)": round(_pp_bp + _rp_bp, 1),
-                        "Notional(mm)": round(_not / 1e6, 1),
-                        "Impl vol(bp)": round(iv, 1),
-                        "Surf vol(bp)": round(_svr * 1e4, 1) if _svr is not None else "",
-                        "Δ surf(bp)": round(iv - _svr * 1e4, 1) if _svr is not None else "",
-                        "Broker": _pair["broker"],
-                    })
-                except Exception:
+        _sdr_cache = st.session_state.get("_sdr_pairing_trades", {})
+        _sdr_paired = _sdr_cache.get("paired", []) if isinstance(_sdr_cache, dict) else []
+        if not _sdr_paired:
+            st.caption("ℹ️ SDR side: open the **SDR Live** tab once so its prints load, then "
+                       "return — the combined grid reuses that exact SDR decode (no re-pairing).")
+
+        def _pf(x):
+            try:
+                return float(str(x).replace(",", "").replace("—", "").strip() or 0)
+            except Exception:
+                return 0.0
+
+        for _row in _sdr_paired:
+            try:
+                if str(_row.get("CCY", "")).upper() != "EUR":
                     continue
+                _ty = str(_row.get("Type", ""))
+                # swaption straddles/strangles only — skip C/F straddles, collars, caps/floors
+                if ("Straddle" not in _ty and "Strangle" not in _ty) or "C/F" in _ty:
+                    continue
+                _tdt = _row.get("_time_dt")
+                if _tdt is not None and not _in_range(_tdt):
+                    continue
+                E = label_to_years(str(_row.get("_opt_raw") or _row.get("Opt Expiry") or ""))
+                ten = label_to_years(str(_row.get("_ten_raw") or _row.get("Swp Tenor") or ""))
+                if not E or not ten or E <= 0 or ten <= 0:
+                    continue
+                tenor = int(round(ten))
+                _not = float(_row.get("_notional_num") or 0)
+                F, A, _ = forward_and_annuity_from_curve(curve, "EUR", float(E), float(tenor))
+                _Feur = _eur_proj_forward(float(E), float(tenor))
+                if _Feur is not None and _Feur > 0:
+                    F = _Feur   # EURIBOR projection fwd (Curves-tab formula), not ESTR
+                if A <= 0:
+                    continue
+                _Kp = (float(_row.get("_p_strike") or 0) / 100.0) or F
+                _Kr = (float(_row.get("_r_strike") or 0) / 100.0) or F
+                if abs(_Kp - F) > 0.015: _Kp = F
+                if abs(_Kr - F) > 0.015: _Kr = F
+                # per-leg bp taken DIRECTLY from sdr_live_tab's output (already deduped/correct)
+                _pp_bp = _pf(_row.get("P Prem BP"))
+                _rp_bp = _pf(_row.get("R Prem BP"))
+                _vp = _eu_solve_normal_vol(_pp_bp, F, _Kp, float(E), A, True) if _pp_bp > 0 else None
+                _vr = _eu_solve_normal_vol(_rp_bp, F, _Kr, float(E), A, False) if _rp_bp > 0 else None
+                _vs = [v for v in (_vp, _vr) if v and v > 0]
+                if not _vs:
+                    continue
+                iv = sum(_vs) / len(_vs)
+                cells.setdefault((_eu_expiry_label(E), tenor), []).append(
+                    (iv, _age_w(_tdt), "SDR"))
+                _svr = _eu_surface_vol(surf["df"], float(E), tenor)
+                _K = _Kp if abs(_Kp - _Kr) < 1e-9 else (_Kp + _Kr) / 2.0
+                trades.append({
+                    "Exec (LDN)": (_tdt.strftime("%d-%b %H:%M") if _tdt is not None else ""),
+                    "Src": "SDR", "Ccy": "EUR", "Type": _ty,
+                    "Expiry": _eu_expiry_label(E), "Tenor": f"{tenor}Y",
+                    "Strike": f"{_K*100:.3f}%" + (" ATM" if abs(_K - F) < 1e-4 else ""),
+                    "Prem(bp)": round(_pp_bp + _rp_bp, 1),
+                    "Notional(mm)": round(_not / 1e6, 1),
+                    "Impl vol(bp)": round(iv, 1),
+                    "Surf vol(bp)": round(_svr * 1e4, 1) if _svr is not None else "",
+                    "Δ surf(bp)": round(iv - _svr * 1e4, 1) if _svr is not None else "",
+                    "Broker": str(_row.get("Platform", "")),
+                })
+            except Exception:
+                continue
 
     if not cells:
         st.info(f"No EUR swaption flow matched in the last {_hrs}h for: {_src_pick}.")
