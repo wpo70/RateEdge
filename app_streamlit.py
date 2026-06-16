@@ -7967,7 +7967,7 @@ def eu_mifir_tab():
     # ── Always-visible Fenics auto-pull cookie status (no password needed) ──
     try:
         _hb_top = _fenics_heartbeat_read()
-        if _hb_top is not None:
+        if _hb_top is not None and _hb_top.get("last_run") is not None:
             from datetime import datetime as _hbtd, timezone as _hbtz2
             _age_top = "recently"
             try:
@@ -7983,8 +7983,11 @@ def eu_mifir_tab():
                 st.success(f"🟢 Fenics auto-pull cookie OK — last login {_age_top}, "
                            f"{_hb_top.get('reports_listed') or 0} reports listed.")
             else:
-                st.error(f"🔴 Fenics auto-pull cookie FAILED ({_age_top}) — refresh the "
-                         f"JSESSIONID in Admin until the next auto-login succeeds.")
+                st.error(f"🔴 Fenics auto-pull login FAILED ({_age_top}) — the scheduled "
+                         f"task on your machine couldn't log in. Check FENICS_USER/PASS.")
+        else:
+            st.caption("⚪ Fenics auto-pull: no run recorded yet. Run fenics_auto.py once on "
+                       "your machine (it logs in locally and writes a heartbeat here).")
     except Exception:
         pass
 
@@ -8051,30 +8054,11 @@ Keeps `HR*` swaptions only (drops `HF*` FX options), decodes payer/receiver, kee
 """)
             # ── In-app Fenics pull (no PowerShell; isolated from the editor) ──
             st.markdown("---")
-            # Manual cookie probe (the fallback you load until it expires). The auto-pull
-            # status banner is shown at the top of the tab, outside this password.
-            _cc1, _cc2 = st.columns([3, 1])
-            with _cc1:
-                _chk_ck = st.text_input("Check a Fenics JSESSIONID (read-only)", type="password",
-                                        key="_fen_ck_check")
-            with _cc2:
-                _do_chk = st.button("🔑 Check cookie", key="_fen_check_btn")
-            if _do_chk:
-                _cr = _fenics_check_cookie(_chk_ck)
-                _cs = _cr.get("status")
-                if _cs == "VALID":
-                    st.success(f"🟢 Cookie valid — {_cr.get('listed', 0)} reports listed right now.")
-                elif _cs == "EMPTY":
-                    st.info("🟡 Cookie valid (logged in) but 0 reports listed at the moment.")
-                elif _cs == "EXPIRED":
-                    st.error("🔴 Cookie expired / not authenticated — refresh the JSESSIONID.")
-                elif _cs == "NO_COOKIE":
-                    st.warning("Paste a JSESSIONID to check.")
-                elif _cs == "NET_ERR":
-                    st.error(f"Couldn't reach Fenics: {_cr.get('detail', '')}")
-                else:
-                    st.error(f"Check failed: {_cr}")
-            st.markdown("---")
+            # Note: there is no manual cookie check here. Fenics binds the JSESSIONID to the
+            # browser's IP, so a cookie minted in your browser cannot be validated from this
+            # app (which runs on a different server IP). The reliable status is the auto-pull
+            # heartbeat banner at the top of the tab — it reflects the LOCAL scheduled task,
+            # which runs from your machine where the cookie actually works.
             st.markdown("**🔵 Pull Fenics (BGC / GFI / Aurel) from here — no PowerShell:**")
             _fck = st.text_input(
                 "Fenics JSESSIONID", type="password", key="_fen_ck_inapp",
