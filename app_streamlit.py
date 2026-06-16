@@ -6794,7 +6794,13 @@ def _eu_match_print(expiry_years, premium_bp, surf_df, curve, tenors=EU_MATCH_TE
             )
             res = bachelier_swaption_vanilla(tk)
             patm = res.get("pv_bp_fwd") or res.get("pv_bp") or 0.0
-            out.append((t, float(patm), F, abs(premium_bp - float(patm))))
+            # IOTF masked prints are ATM STRADDLES (premium = payer + receiver). At F=K the
+            # payer and receiver legs are equal, so the straddle premium is 2x the one-way
+            # leg priced above. Match the print against the straddle premium so both the
+            # tenor inference and the vol scale (iv = surface_vol * print/model) use a
+            # like-for-like convention — e.g. 573bp resolves to 6m30y, not ~2x too long.
+            patm = 2.0 * float(patm)
+            out.append((t, patm, F, abs(premium_bp - patm)))
         except Exception:
             continue
     out.sort(key=lambda r: r[3])
@@ -6999,12 +7005,10 @@ def _pair_swaption_legs(df):
             # catches every venue that double-reports (BILT/ISWV/ICAP/Tullett/BGC/…),
             # not just a hardcoded MIC list. Genuine separate legs (different premiums)
             # are left untouched.
-            # Premium-convention handling is done in the inversion (it tries every plausible
-            # straddle-premium reading — legs summed, larger leg as a double/one-sided full
-            # report, or the reported figure as a single leg — and snaps to the live surface).
-            # Legs therefore pass through RAW here; the old leg-level halving over-fired on
-            # genuine two-leg reports (made 3m1Y read 34 vs 64) and is removed.
-            _dbl = _one_sided = False
+            _dbl = (_same_strike and _p_prem > 0 and _r_prem > 0
+                    and abs(_p_prem - _r_prem) <= 0.01 * max(_p_prem, _r_prem))
+            if _dbl or (_same_strike and _mic in _PREM_DEDUP_MICS_EU and _p_prem > 0 and _r_prem > 0):
+                _c = max(_p_prem, _r_prem); _p_prem = _c / 2.0; _r_prem = _c / 2.0
             out.append({
                 "exp": _e_p, "ten": _t_p, "p_strike": _s_p, "r_strike": _s_r,
                 "p_prem": _p_prem, "r_prem": _r_prem,
@@ -7203,53 +7207,13 @@ def eu_combined_analysis():
                     if abs(_Kr - F) > 0.015: _Kr = F
                     _pp_bp = _pair["p_prem"] / _not * 1e4 if _pair["p_prem"] > 0 else 0.0
                     _rp_bp = _pair["r_prem"] / _not * 1e4 if _pair["r_prem"] > 0 else 0.0
-                    _svr = _eu_surface_vol(surf["df"], float(E), tenor)
-                    if _pair["same_strike"]:
-                        # The per-leg premium split a venue reports is unreliable: it may be the
-                        # two true halves (sum = straddle), the full straddle repeated on each
-                        # leg or booked one-sided (max = straddle), or a single leg only
-                        # (reported figure = HALF the straddle → 3m1Y reading low). Rather than
-                        # guess, build the candidate per-leg premium L under each reading and
-                        # keep whichever ATM-inverts closest to the live surface:
-                        #   L = (p+r)/2   legs are the two halves
-                        #   L = max/2     double / one-sided FULL-straddle report
-                        #   L = max       reported figure is a single leg (straddle = 2x)
-                        _tot = _pp_bp + _rp_bp
-                        _mx = max(_pp_bp, _rp_bp)
-                        # Always try: legs-summed (true halves) and single-leg (reported figure
-                        # is one leg → straddle is 2x). Only add the double-report half (max/2)
-                        # when BOTH legs are present and ~equal — its real signature. Offering
-                        # max/2 unconditionally gave a one-sided/single trade a spurious quarter-
-                        # premium candidate that the snap could grab and halve the vol
-                        # (6m10Y read 33 vs 62, which then bled into 9m1Y via grid smoothing).
-                        _Lset = {round(_tot / 2.0, 6), round(_mx, 6)}
-                        if _pp_bp > 0 and _rp_bp > 0 and abs(_pp_bp - _rp_bp) <= 0.05 * _mx:
-                            _Lset.add(round(_mx / 2.0, 6))
-                        _cands = []
-                        for _L in _Lset:
-                            if _L <= 0:
-                                continue
-                            _vv = _eu_solve_normal_vol(_L, F, F, float(E), A, True)
-                            if _vv and _vv > 0:
-                                _cands.append((_vv, _L))
-                        if not _cands:
-                            continue
-                        if _svr and _svr > 0:
-                            iv, _Lc = min(_cands, key=lambda x: abs(x[0] - _svr * 1e4))
-                        else:
-                            iv, _Lc = min(_cands, key=lambda x: x[0])
-                        _straddle_bp = 2.0 * _Lc
-                        _cand_str = "/".join(f"{c[0]:.0f}" for c in sorted(_cands))
-                    else:
-                        # Strangle / different strikes: invert each leg at its own strike.
-                        _vp = _eu_solve_normal_vol(_pp_bp, F, _Kp, float(E), A, True) if _pp_bp > 0 else None
-                        _vr = _eu_solve_normal_vol(_rp_bp, F, _Kr, float(E), A, False) if _rp_bp > 0 else None
-                        _vs = [v for v in (_vp, _vr) if v and v > 0]
-                        if not _vs:
-                            continue
-                        iv = sum(_vs) / len(_vs)
-                        _straddle_bp = _pp_bp + _rp_bp
-                        _cand_str = ""
+                    # Invert each leg (payer + receiver) and average — same as USD ATM fitter.
+                    _vp = _eu_solve_normal_vol(_pp_bp, F, _Kp, float(E), A, True) if _pp_bp > 0 else None
+                    _vr = _eu_solve_normal_vol(_rp_bp, F, _Kr, float(E), A, False) if _rp_bp > 0 else None
+                    _vs = [v for v in (_vp, _vr) if v and v > 0]
+                    if not _vs:
+                        continue
+                    iv = sum(_vs) / len(_vs)
                     cells.setdefault((_eu_expiry_label(E), tenor), []).append(
                         (iv, _age_w(_pair["time"]), "SDR"))
                     _svr = _eu_surface_vol(surf["df"], float(E), tenor)
@@ -7259,10 +7223,7 @@ def eu_combined_analysis():
                         "Ccy": "EUR", "Type": _pair["type"],
                         "Expiry": _eu_expiry_label(E), "Tenor": f"{tenor}Y",
                         "Strike": f"{_K*100:.3f}%" + (" ATM" if abs(_K - F) < 1e-4 else ""),
-                        "Prem(bp)": round(_straddle_bp, 1),
-                        "p(bp)": round(_pp_bp, 1), "r(bp)": round(_rp_bp, 1),
-                        "F(%)": round(F * 100, 3), "A": round(A, 3),
-                        "cands(bp)": _cand_str,
+                        "Prem(bp)": round(_pp_bp + _rp_bp, 1),
                         "Notional(mm)": round(_not / 1e6, 1),
                         "Impl vol(bp)": round(iv, 1),
                         "Surf vol(bp)": round(_svr * 1e4, 1) if _svr is not None else "",
@@ -7311,7 +7272,6 @@ def eu_combined_analysis():
     # ── Combined trade blotter (per-trade, analysed — same style as SDR) ──────
     if trades:
         _COLS = ["Exec (LDN)", "Src", "Ccy", "Type", "Expiry", "Tenor", "Strike", "Prem(bp)",
-                 "p(bp)", "r(bp)", "F(%)", "A", "cands(bp)",
                  "Notional(mm)", "Impl vol(bp)", "Surf vol(bp)", "Δ surf(bp)", "Broker"]
         _tr_df = pd.DataFrame(trades).sort_values("Exec (LDN)", ascending=False)
         _tr_df = _tr_df[[c for c in _COLS if c in _tr_df.columns]]
