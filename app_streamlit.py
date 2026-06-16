@@ -7283,6 +7283,13 @@ def eu_combined_analysis():
                 _not = float(_row.get("_notional_num") or 0)
                 if _not <= 0:
                     continue
+                # Single-line straddle: when only one leg carries a premium (R_BP "—"),
+                # that figure is the FULL straddle premium, not a per-leg. Halve it onto
+                # both legs so it inverts like a normal straddle (else it doubles and the
+                # outlier guard silently drops it — which is why 6m5y went missing).
+                if "Straddle" in _ty and (_pp > 0) != (_rp > 0):
+                    _full = _pp if _pp > 0 else _rp
+                    _pp = _rp = _full / 2.0
                 _K = (float(_ps) / 100.0) if _ps else _F
                 _sig = (str(_tdt), round(_ey, 3), tenor, round(_K, 5), round(_not, 0))
                 if _sig in _sdr_seen:
