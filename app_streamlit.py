@@ -7435,6 +7435,123 @@ def eu_combined_analysis():
     st.caption("SDR vols are strike-correct (real strike from the tape); MiFIR vols are "
                "ATM-level (vol-masked feed, tenor inferred).")
 
+    # ── SDR/MiFIR ATM Vol Fitter — pools both sources, 70/30 real-vs-inferred ──────
+    with st.expander("📈 SDR/MiFIR ATM Vol Fitter — EUR (blend into surface)", expanded=False):
+        st.caption("Pools the SDR + MiFIR flow above into a fitted ATM grid. Per bucket: "
+                   "SDR (real strike) 70% / MiFIR (inferred ATM) 30% when both are present; "
+                   "100% of whichever source is alone. Recency + notional weighting within "
+                   "each source; per-print outlier guard vs your surface.")
+        _fit_devcap = st.slider("Reject points deviating from surface by more than (%)",
+                                5, 100, 35, 5, key="_euc_fit_devcap")
+        _fit_blendw = st.slider("Blend weight onto surface (%)", 0, 100, 100, 5,
+                                key="_euc_fit_blendw",
+                                help="100% = fitted vol replaces the surface at that bucket; "
+                                     "lower = pull the surface part-way toward the fit.") / 100.0
+        _SDR_BIAS, _MIF_BIAS = 0.70, 0.30   # real strike vs inferred-ATM split
+
+        # Per-bucket fit with source split + outlier guard
+        _fit_pts = {}   # (exp_label, tenor) -> fitted vol bp
+        for (e, t), vals in cells.items():
+            _sv = _eu_surface_vol(surf["df"], _EY.get(e, label_to_years(e) or 1.0), t)
+            _svbp = _sv * 1e4 if _sv else None
+
+            def _src_vol(_src):
+                _vw = [(v, w) for v, w, s in vals if s == _src and v and v > 0]
+                if _svbp:   # outlier guard vs surface
+                    _vw = [(v, w) for v, w in _vw
+                           if abs(v - _svbp) / _svbp * 100.0 <= _fit_devcap]
+                _ws = sum(w for _, w in _vw)
+                return (sum(v * w for v, w in _vw) / _ws) if _ws > 0 else None
+
+            _vsdr = _src_vol("SDR")
+            _vmif = _src_vol("MiFIR")
+            if _vsdr is not None and _vmif is not None:
+                _fit_pts[(e, t)] = _SDR_BIAS * _vsdr + _MIF_BIAS * _vmif
+            elif _vsdr is not None:
+                _fit_pts[(e, t)] = _vsdr
+            elif _vmif is not None:
+                _fit_pts[(e, t)] = _vmif
+
+        if not _fit_pts:
+            st.info("No buckets survive the outlier guard at this deviation cap.")
+        else:
+            _fexps = [e for e in _EXP_ORDER if any(k[0] == e for k in _fit_pts)]
+            _ftens = sorted({k[1] for k in _fit_pts})
+            _fit_grid = {e: {f"{t}Y": round(_fit_pts[(e, t)], 1) if (e, t) in _fit_pts else _np.nan
+                             for t in _ftens} for e in _fexps}
+            st.markdown("**Fitted ATM normal vol (bp) — SDR 70 / MiFIR 30 blended**")
+            st.dataframe(pd.DataFrame(_fit_grid).T.reindex(_fexps), use_container_width=True)
+
+            # Blend the fitted points into the current EUR ATM surface matrix
+            _eur_atm = st.session_state.get("vol_data", {}).get("EUR", {}).get("atm")
+            if _eur_atm is None or getattr(_eur_atm, "empty", True):
+                st.warning("No EUR ATM surface loaded — load a EUR vol snapshot on the Vol "
+                           "Editor tab first to blend/upload.")
+            else:
+                _bl = _eur_atm.copy()
+                _acols = [c for c in _bl.columns if c != "Expiry"]
+                # year-keyed lookup of fitted points (labels differ in case/format)
+                _fit_y = {}
+                for (e, t), v in _fit_pts.items():
+                    _ey = label_to_years(e)
+                    if _ey:
+                        _fit_y[(round(_ey, 4), float(t))] = v
+                _applied = 0
+                for _ri in range(len(_bl)):
+                    _erow = label_to_years(str(_bl.iloc[_ri]["Expiry"]))
+                    if not _erow:
+                        continue
+                    for _c in _acols:
+                        _tc = label_to_years(_c)
+                        if not _tc:
+                            continue
+                        _fv = _fit_y.get((round(_erow, 4), float(round(_tc))))
+                        if _fv is None:
+                            continue
+                        try:
+                            _cur = float(_bl.iloc[_ri][_c])
+                        except Exception:
+                            _cur = None
+                        _bl.iat[_ri, _bl.columns.get_loc(_c)] = (
+                            round(_fv, 2) if _cur is None
+                            else round(_cur + _fit_blendw * (_fv - _cur), 2))
+                        _applied += 1
+
+                _bl_ndf = _bl.set_index("Expiry")[_acols].apply(pd.to_numeric, errors="coerce")
+                st.markdown("**Blended surface (fitted points merged in):**")
+                try:
+                    st.dataframe(_bl_ndf.style.background_gradient(cmap="RdYlGn_r", axis=None)
+                                 .format("{:.1f}", na_rep=""), use_container_width=True)
+                except Exception:
+                    st.dataframe(_bl_ndf, use_container_width=True)
+
+                # Change vs current
+                try:
+                    _cur_ndf = _eur_atm.set_index("Expiry")[_acols].apply(pd.to_numeric, errors="coerce")
+                    _chg = (_bl_ndf - _cur_ndf).round(1)
+                    st.markdown("**Change to apply vs loaded surface (bp)** — + = upload raises that cell:")
+                    try:
+                        _cmax = max(0.1, float(_chg.abs().to_numpy()[~pd.isna(_chg.to_numpy())].max()))
+                    except Exception:
+                        _cmax = 0.1
+                    try:
+                        st.dataframe(_chg.style.background_gradient(cmap="RdBu", axis=None,
+                                     vmin=-_cmax, vmax=_cmax).format("{:+.1f}", na_rep=""),
+                                     use_container_width=True)
+                    except Exception:
+                        st.dataframe(_chg, use_container_width=True)
+                except Exception:
+                    pass
+
+                st.session_state["_euc_atm_blended"] = _bl
+                if st.button("⬆️ Upload blended ATM to EUR Vol Editor", key="_euc_fit_upload"):
+                    st.session_state["_sod_eur_pending_surface"] = _bl.copy()
+                    st.success(
+                        f"✅ Sent to EUR Vol Editor ({_applied} cell(s) blended at "
+                        f"{_fit_blendw:.0%}, SDR 70 / MiFIR 30). Open the **Vol Editor** tab, "
+                        "click **📋 Load SOD Implied Open → Editor**, review the highlighted "
+                        "changes, then **Publish** to apply.")
+
 
 def _eu_window_hours(label: str) -> float:
     """Lookback hours for the EU window selector. The business-day windows
