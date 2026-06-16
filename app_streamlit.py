@@ -6778,6 +6778,43 @@ def _eu_surface_vol(surf_df, expiry_years, tenor):
     return v / 10000.0
 
 
+def _sdr_av_invert(prem_bp, F, K, T, is_payer, annuity=1.0, df=1.0):
+    """Module-level copy of the SDR ATM fitter's _av_invert — IDENTICAL math, so the
+    Combined Analysis inverts SDR straddles the exact same way the SDR tab does
+    (forward-premium convention: pr = prem_bp/1e4/annuity*df). Do not diverge from the
+    nested _av_invert in sdr_live_tab."""
+    if prem_bp <= 0 or T <= 0 or F <= 0 or K <= 0:
+        return None
+    _ann = annuity if annuity and annuity > 0 else 1.0
+    _df = df if df and df > 0 else 1.0
+    pr = prem_bp / 10000.0 / _ann * _df
+
+    def _err(sig):
+        if sig <= 1e-9:
+            return -pr
+        d = (F - K) / (sig * math.sqrt(T))
+        nd = 0.5 * (1 + math.erf(d / math.sqrt(2)))
+        npd = math.exp(-0.5 * d * d) / math.sqrt(2 * math.pi)
+        val = ((F - K) * nd + sig * math.sqrt(T) * npd) if is_payer else ((K - F) * (1 - nd) + sig * math.sqrt(T) * npd)
+        return val - pr
+
+    lo, hi = 1e-7, 0.15
+    try:
+        if _err(hi) < 0:
+            return None
+        for _ in range(100):
+            mid = (lo + hi) / 2.0
+            if _err(mid) < 0:
+                lo = mid
+            else:
+                hi = mid
+            if hi - lo < 1e-9:
+                break
+        return mid * 10000.0
+    except Exception:
+        return None
+
+
 def _eu_match_print(expiry_years, premium_bp, surf_df, curve, tenors=EU_MATCH_TENORS,
                     straddle=True):
     """Rank candidate tenors by closeness of model ATM premium (bp) to the print."""
@@ -7172,10 +7209,13 @@ def eu_combined_analysis():
                     cells.setdefault((_eu_expiry_label(E), int(tenor)), []).append(
                         (iv, _age_w(r["exec_utc"]), "MiFIR"))
                     _dlm = desc.lower()
-                    _pcm = "Payer" if "call" in _dlm else ("Rec" if ("/o p" in _dlm or " p epn" in _dlm) else "Eur")
+                    # normalise Type + Expiry to SDR's labelling so the two venues read alike
+                    _pcm = ("\U0001f7e2 Payer" if "call" in _dlm
+                            else ("\U0001f534 Receiver" if ("/o p" in _dlm or " p epn" in _dlm)
+                                  else "\U0001f535 Straddle"))
                     trades.append({
                         "Exec (LDN)": _eu_to_london(r["exec_utc"]), "Src": "MiFIR", "Ccy": "EUR", "Type": _pcm,
-                        "Expiry": f"{_eu_expiry_label(E)} · {str(exp_iso)[:10]}",
+                        "Expiry": _eu_expiry_label(E),
                         "Tenor": f"{int(tenor)}Y", "Strike": "ATM (inf)",
                         "Prem(bp)": round(px, 1), "Notional(mm)": "masked",
                         "Impl vol(bp)": round(iv, 1), "Surf vol(bp)": round(sv * 1e4, 1),
@@ -7185,77 +7225,96 @@ def eu_combined_analysis():
                 except Exception:
                     continue
 
-    # ── SDR side: REUSE the perfect decode from sdr_live_tab (cached paired rows). ──
-    #    No re-pairing here. sdr_live_tab already produced clean per-leg bp (P/R Prem BP,
-    #    deduped, broker-correct); we consume those numbers verbatim, invert to vol, and
-    #    pool. SDR and MiFIR are computed SEPARATELY then combined — never one shared blend.
+    # ── SDR side: invert EXACTLY like the SDR ATM fitter (sdr_live_tab). ──────────
+    #    Reads the same cached paired rows the fitter reads, uses the SAME raw per-leg
+    #    premium (_p_prem_raw/_r_prem_raw ÷ notional), the SAME _av_invert math (module
+    #    copy _sdr_av_invert), the SAME annuity+discount-factor, and the SAME per-print
+    #    outlier guard vs the surface. So SDR vols here == SDR ATM fitter vols. SDR and
+    #    MiFIR stay separate, then pool. No re-pairing, no bespoke inversion.
     if _src_pick != "MiFIR only":
         _sdr_cache = st.session_state.get("_sdr_pairing_trades", {})
         _sdr_paired = _sdr_cache.get("paired", []) if isinstance(_sdr_cache, dict) else []
         if not _sdr_paired:
-            st.caption("ℹ️ SDR side: open the **SDR Live** tab once so its prints load, then "
-                       "return — the combined grid reuses that exact SDR decode (no re-pairing).")
-
-        def _pf(x):
-            try:
-                return float(str(x).replace(",", "").replace("—", "").strip() or 0)
-            except Exception:
-                return 0.0
-
+            st.caption("\u2139\ufe0f SDR side: open the **SDR Live** tab once so its prints load, then "
+                       "return \u2014 the combined grid reuses that exact SDR decode + inversion.")
+        # discount-factor curve points (same as the fitter)
+        try:
+            _ox = curve[curve.columns[0]].to_numpy().astype(float)
+            _oy = curve[curve.columns[1]].to_numpy().astype(float) / 100.0
+        except Exception:
+            _ox = _oy = None
+        _sdr_devcap = 35.0   # reject a print whose inverted vol deviates >35% from surface
+        _sdr_seen = set()
         for _row in _sdr_paired:
             try:
                 if str(_row.get("CCY", "")).upper() != "EUR":
                     continue
                 _ty = str(_row.get("Type", ""))
-                # swaption straddles/strangles only — skip C/F straddles, collars, caps/floors
-                if ("Straddle" not in _ty and "Strangle" not in _ty) or "C/F" in _ty:
+                if _ty != "\U0001f535 Straddle":   # ATM fitter uses straddles only
                     continue
                 _tdt = _row.get("_time_dt")
-                if _tdt is not None and not _in_range(_tdt):
+                if _tdt is None:
                     continue
-                E = label_to_years(str(_row.get("_opt_raw") or _row.get("Opt Expiry") or ""))
-                ten = label_to_years(str(_row.get("_ten_raw") or _row.get("Swp Tenor") or ""))
-                if not E or not ten or E <= 0 or ten <= 0:
+                try:
+                    if not (_from_d <= _tdt.date() <= _to_d):
+                        continue
+                except Exception:
                     continue
-                tenor = int(round(ten))
-                _not = float(_row.get("_notional_num") or 0)
-                F, A, _ = forward_and_annuity_from_curve(curve, "EUR", float(E), float(tenor))
-                _Feur = _eur_proj_forward(float(E), float(tenor))
+                _exp = _row.get("Opt Expiry", ""); _ten = _row.get("Swp Tenor", "")
+                if not _exp or not _ten:
+                    continue
+                _ey = label_to_years(_exp); _ty2 = label_to_years(_ten)
+                if not _ey or not _ty2:
+                    continue
+                tenor = int(round(_ty2))
+                _F, _ann, _ = forward_and_annuity_from_curve(curve, "EUR", _ey, _ty2, None)
+                _Feur = _eur_proj_forward(float(_ey), float(_ty2))
                 if _Feur is not None and _Feur > 0:
-                    F = _Feur   # EURIBOR projection fwd (Curves-tab formula), not ESTR
-                if A <= 0:
+                    _F = _Feur
+                if not _F:
                     continue
-                _Kp = (float(_row.get("_p_strike") or 0) / 100.0) or F
-                _Kr = (float(_row.get("_r_strike") or 0) / 100.0) or F
-                if abs(_Kp - F) > 0.015: _Kp = F
-                if abs(_Kr - F) > 0.015: _Kr = F
-                # per-leg bp taken DIRECTLY from sdr_live_tab's output (already deduped/correct)
-                _pp_bp = _pf(_row.get("P Prem BP"))
-                _rp_bp = _pf(_row.get("R Prem BP"))
-                _vp = _eu_solve_normal_vol(_pp_bp, F, _Kp, float(E), A, True) if _pp_bp > 0 else None
-                _vr = _eu_solve_normal_vol(_rp_bp, F, _Kr, float(E), A, False) if _rp_bp > 0 else None
+                try:
+                    _df = math.exp(-float(np.interp(_ey, _ox, _oy)) * _ey) if _ox is not None else 1.0
+                except Exception:
+                    _df = 1.0
+                _ps = _row.get("_p_strike")
+                _pp = float(_row.get("_p_prem_raw") or 0)
+                _rp = float(_row.get("_r_prem_raw") or 0)
+                _not = float(_row.get("_notional_num") or 0)
+                if _not <= 0:
+                    continue
+                _K = (float(_ps) / 100.0) if _ps else _F
+                _sig = (str(_tdt), round(_ey, 3), tenor, round(_K, 5), round(_not, 0))
+                if _sig in _sdr_seen:
+                    continue
+                _sdr_seen.add(_sig)
+                _vp = _sdr_av_invert(_pp / _not * 1e4, _F, _K, _ey, True, _ann, _df) if _pp > 0 else None
+                _vr = _sdr_av_invert(_rp / _not * 1e4, _F, _K, _ey, False, _ann, _df) if _rp > 0 else None
                 _vs = [v for v in (_vp, _vr) if v and v > 0]
                 if not _vs:
                     continue
                 iv = sum(_vs) / len(_vs)
-                cells.setdefault((_eu_expiry_label(E), tenor), []).append(
+                _svr = _eu_surface_vol(surf["df"], float(_ey), tenor)
+                # per-print outlier guard vs surface — same idea as the fitter
+                if _svr and _svr > 0 and abs(iv - _svr * 1e4) / (_svr * 1e4) * 100.0 > _sdr_devcap:
+                    continue
+                cells.setdefault((_eu_expiry_label(_ey), tenor), []).append(
                     (iv, _age_w(_tdt), "SDR"))
-                _svr = _eu_surface_vol(surf["df"], float(E), tenor)
-                _K = _Kp if abs(_Kp - _Kr) < 1e-9 else (_Kp + _Kr) / 2.0
                 trades.append({
-                    "Exec (LDN)": (_tdt.strftime("%d-%b %H:%M") if _tdt is not None else ""),
+                    "Exec (LDN)": _tdt.strftime("%d-%b %H:%M"),
                     "Src": "SDR", "Ccy": "EUR", "Type": _ty,
-                    "Expiry": _eu_expiry_label(E), "Tenor": f"{tenor}Y",
-                    "Strike": f"{_K*100:.3f}%" + (" ATM" if abs(_K - F) < 1e-4 else ""),
-                    "Prem(bp)": round(_pp_bp + _rp_bp, 1),
+                    "Expiry": _eu_expiry_label(_ey), "Tenor": f"{tenor}Y",
+                    "Strike": f"{_K*100:.3f}%" + (" ATM" if abs(_K - _F) < 1e-4 else ""),
+                    "Prem(bp)": round((_pp + _rp) / _not * 1e4, 1),
                     "Notional(mm)": round(_not / 1e6, 1),
                     "Impl vol(bp)": round(iv, 1),
                     "Surf vol(bp)": round(_svr * 1e4, 1) if _svr is not None else "",
-                    "Δ surf(bp)": round(iv - _svr * 1e4, 1) if _svr is not None else "",
+                    "\u0394 surf(bp)": round(iv - _svr * 1e4, 1) if _svr is not None else "",
                     "Broker": str(_row.get("Platform", "")),
                 })
             except Exception:
                 continue
+
 
     if not cells:
         st.info(f"No EUR swaption flow matched in the last {_hrs}h for: {_src_pick}.")
