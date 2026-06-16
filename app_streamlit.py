@@ -7822,6 +7822,42 @@ def _fenics_check_cookie(cookie):
         return {"status": "ERR", "detail": str(e)}
 
 
+def _icap_feed_freshness():
+    """ICAP/IOTF feed health by data freshness (the IOTF token pipeline has no cookie
+    heartbeat). Returns dict(last_ingest, last_exec_day, n_recent) or None.
+    The IOTF token is the only thing that can silently stop this feed, and that shows
+    up as IOTF prints no longer arriving."""
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return None
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT MAX(ingested_utc), MAX(exec_utc), "
+                "COUNT(*) FILTER (WHERE ingested_utc >= now() - interval '36 hours') "
+                "FROM eu_iro_prints "
+                "WHERE asset_class = 'SWAPTION' AND (source = 'icap' OR venue_mic = 'IOTF')"
+            )
+            row = cur.fetchone()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            row = None
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass
+        if not row:
+            return None
+        return {"last_ingest": row[0], "last_exec": row[1], "n_recent": row[2] or 0}
+    except Exception:
+        return None
+
+
 def _fenics_heartbeat_read():
     """Read the auto-pull heartbeat the scheduled task writes. Returns dict or None.
     Tolerant of the table not existing yet."""
@@ -7988,6 +8024,36 @@ def eu_mifir_tab():
         else:
             st.caption("⚪ Fenics auto-pull: no run recorded yet. Run fenics_auto.py once on "
                        "your machine (it logs in locally and writes a heartbeat here).")
+    except Exception:
+        pass
+
+    # ── ICAP / IOTF feed status (separate token pipeline → judged by data freshness) ──
+    try:
+        _icf = _icap_feed_freshness()
+        if _icf is not None and _icf.get("last_ingest") is not None:
+            from datetime import datetime as _ictd, timezone as _ictz
+            _iage = "recently"
+            try:
+                _li = _icf["last_ingest"]
+                _lid = _li if hasattr(_li, "tzinfo") else _ictd.fromisoformat(str(_li))
+                if _lid.tzinfo is None:
+                    _lid = _lid.replace(tzinfo=_ictz.utc)
+                _ihrs = (_ictd.now(_ictz.utc) - _lid).total_seconds() / 3600.0
+                _iage = (f"{_ihrs/24:.1f}d ago" if _ihrs >= 24 else f"{_ihrs:.0f}h ago")
+            except Exception:
+                _ihrs = 999
+            _lastexec = str(_icf.get("last_exec") or "")[:10]
+            if _ihrs <= 36:
+                st.success(f"🟢 ICAP (IOTF) feed OK — last print loaded {_iage}, "
+                           f"{_icf.get('n_recent', 0)} in last 36h (latest trade {_lastexec}).")
+            elif _ihrs <= 96:
+                st.warning(f"🟡 ICAP (IOTF) feed quiet — no print loaded for {_iage}. "
+                           f"Normal over a weekend; otherwise check the IOTF token.")
+            else:
+                st.error(f"🔴 ICAP (IOTF) feed STALE — no print loaded for {_iage}. "
+                         f"The IOTF token has likely expired — refresh it.")
+        else:
+            st.caption("⚪ ICAP (IOTF) feed: no prints recorded yet.")
     except Exception:
         pass
 
