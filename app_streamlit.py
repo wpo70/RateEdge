@@ -44764,14 +44764,15 @@ RateEdge Options Platform""",
                 _snap_type = "Intraday"
 
         if _snap_type:
-            _label = f"{_ccys_str} {_local_ts_str}" if _snap_type == "Intraday" else f"{_ccys_str} {_snap_type} {_local_ts_str}"
+            _label = f"{_sidebar_ccy_snap} {_local_ts_str}" if _snap_type == "Intraday" else f"{_sidebar_ccy_snap} {_snap_type} {_local_ts_str}"
             if not HAS_POSTGRES:
                 st.error("Database not connected.")
-            elif not export_currencies:
-                st.error("Select at least one currency above first.")
             else:
+                # Save the SIDEBAR currency (the surface currently loaded/displayed),
+                # matching the USD branch above — NOT export_currencies, which is the
+                # email/export selection and can differ from what you're looking at.
                 _saved, _failed = [], []
-                for _ccy in export_currencies:
+                for _ccy in [_sidebar_ccy_snap]:
                     _sid = save_vol_snapshot(user_id, _ccy, _label, _eod_notes.strip())
                     if _sid:
                         _saved.append(_ccy)
