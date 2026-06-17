@@ -35161,16 +35161,26 @@ def _sr3_parse_underlying(underlying: str, ref_year: int = 2026):
         return None, None
 
 
-def _sr3_front_quarterly(today_year: int, today_month: int):
+def _sr3_front_quarterly(today_year: int, today_month: int, today_day: int = 1):
     """
-    Given today's (year, month), return (year, month) of the nearest
-    upcoming (or current) quarterly SR3 contract. Quarterlies = Mar/Jun/Sep/Dec.
-    Simple rule: first quarterly with delivery month ≥ today_month in the same
-    year; else first quarterly next year (March).
+    Given today's (year, month, day), return (year, month) of the nearest
+    quarterly SR3 contract that has NOT yet expired. Quarterlies = Mar/Jun/Sep/Dec.
+    A quarterly stops trading on the 3rd Wednesday of its delivery month, so once
+    today is on/after that date the front rolls to the next quarterly. This is an
+    expiry-aware roll (not just calendar-month), so e.g. on 18-Jun the front is
+    Sep, not Jun — keeping the white/red pack banding aligned to live contracts.
     """
+    import calendar
+
+    def _third_wed(y, m):
+        first_wd = calendar.monthrange(y, m)[0]   # weekday of the 1st (Mon=0)
+        return 1 + ((2 - first_wd) % 7) + 14      # day-of-month of 3rd Wednesday
+
     for m in SR3_QUARTERLY_MONTHS:
-        if m >= today_month:
+        if m > today_month:
             return today_year, m
+        if m == today_month and today_day < _third_wed(today_year, m):
+            return today_year, m   # current quarterly still trading
     return today_year + 1, 3
 
 
@@ -35200,7 +35210,7 @@ def _sr3_pack_index(underlying: str, today=None) -> int:
         else:
             u_mo = 3
             u_yr += 1
-    f_yr, f_mo = _sr3_front_quarterly(today.year, today.month)
+    f_yr, f_mo = _sr3_front_quarterly(today.year, today.month, today.day)
     f_idx_abs = f_yr * 4 + SR3_QUARTERLY_MONTHS.index(f_mo)
     u_idx_abs = u_yr * 4 + SR3_QUARTERLY_MONTHS.index(u_mo)
     return u_idx_abs - f_idx_abs
