@@ -21477,6 +21477,7 @@ def caps_floors_tab(vol_mode: str):
                     _skip_wedge_keys.add("3m1y")
                     if _lf_pack == "both":
                         _skip_wedge_keys.add("1y1y")
+                        _skip_wedge_keys.add("2y1y")
 
                 for spr_key, wedge_lbl, tbl_lbl, tbl_wedge, cfs_lbl, spread in ROW_DATA:
                     _row_skipped = tbl_lbl in _skip_wedge_keys
