@@ -21468,11 +21468,14 @@ def caps_floors_tab(vol_mode: str):
                 new_spread_values = {}
                 # Reset wedge debug buffer each render
                 st.session_state["_wedge_fwd_debug"] = []
-                # ── Determine which wedges are SKIPPED by Listed Front (USD only) ──
-                # When Use Listed Front toggle is ON, the listed contracts handle
-                # the front of the curve and certain OTC wedges are inactive.
+                # ── Determine which wedges are SKIPPED by the listed front ──
+                # Strike through the front wedges ONLY when the ACTIVE pricer feed
+                # is "Listed bootstrap" (futures front). Under "OTC only" the wedges
+                # ARE the curve and must stay live — do not strike them. (Keyed off
+                # cfs_active_vol_src, NOT the _cfs_use_listed editor toggle, which
+                # can be on independent of the selected feed.)
                 _skip_wedge_keys = set()
-                if ccy == "USD" and st.session_state.get("_cfs_use_listed", False):
+                if ccy == "USD" and st.session_state.get("cfs_active_vol_src", "Listed bootstrap") == "Listed bootstrap":
                     _lf_pack = st.session_state.get("_cfs_listed_pack", "whites")
                     _skip_wedge_keys.add("3m1y")
                     if _lf_pack == "both":
