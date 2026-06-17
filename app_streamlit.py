@@ -21722,8 +21722,15 @@ def caps_floors_tab(vol_mode: str):
                 _ts_base = st.session_state.get("_cf_baseline_USD", {})
                 _ts_dirty = any(abs(_ts_cur[k] - float(_ts_base.get(k, 0.0))) > 0.001
                                 for k in _ts_keys)
-                _ts_nz = [v for v in _ts_cur.values() if abs(v) > 0.001]
-                if _ts_dirty and len(_ts_nz) >= 1:
+                # Guard: count non-zero MAIN wedges only. The two vol-spreads
+                # (15v20/20v30) are ~always non-zero and were masking an all-zero
+                # main-wedge collapse on cold start — the surviving -2/-1.5 let the
+                # old `>= 1` guard pass and persist a wiped row. Require several real
+                # wedges present. Strictly stricter: only ever blocks a bad write.
+                _ts_main_nz = [v for k, v in _ts_cur.items()
+                               if k not in ("cf_spr_15v20", "cf_spr_20v30")
+                               and abs(v) > 0.001]
+                if _ts_dirty and len(_ts_main_nz) >= 4:
                     for k in _ts_keys:
                         st.session_state[k] = _ts_cur[k]
                     _ts_uid = st.session_state.get("username", "default")
