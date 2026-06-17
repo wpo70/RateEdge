@@ -7253,10 +7253,56 @@ def eu_combined_analysis():
     #    MiFIR stay separate, then pool. No re-pairing, no bespoke inversion.
     if _src_pick != "MiFIR only":
         _sdr_cache = st.session_state.get("_sdr_pairing_trades", {})
-        _sdr_paired = _sdr_cache.get("paired", []) if isinstance(_sdr_cache, dict) else []
+        _sdr_paired = list(_sdr_cache.get("paired", []) if isinstance(_sdr_cache, dict) else [])
+
+        # ── Fill the date range independent of the SDR Live cache window ──────
+        # The cache only spans whatever range the SDR Live tab last loaded, which
+        # tainted the pool (MiFIR honoured the full range, SDR rode the cache).
+        # Keep the cache rows AS-IS for the dates they cover (verified vols don't
+        # move), and fill every OTHER date in the range from a fresh full-range
+        # EUR SDR load, paired with the same matching (_pair_swaption_legs) and
+        # fed through the SAME inversion loop below (perfect _sdr_av_invert +
+        # single-leg straddle halving + outlier guard + dedup). Times are
+        # converted UTC→London to match the cache rows.
+        try:
+            _cache_dates = set()
+            for _cr in _sdr_paired:
+                _ct = _cr.get("_time_dt")
+                if _ct is not None:
+                    try:
+                        _cache_dates.add(_ct.date())
+                    except Exception:
+                        pass
+            _sdf_full = _eu_load_sdr_eur(hours=_hrs)
+            if _sdf_full is not None and not getattr(_sdf_full, "empty", True):
+                for _pl in _pair_swaption_legs(_sdf_full):
+                    try:
+                        _pts = pd.Timestamp(_pl.get("time"))
+                        if _pts.tzinfo is None:
+                            _pts = _pts.tz_localize("UTC")
+                        _ptd = _pts.tz_convert("Europe/London").to_pydatetime().replace(tzinfo=None)
+                    except Exception:
+                        _ptd = None
+                    if _ptd is None or _ptd.date() in _cache_dates:
+                        continue   # no time, or date already covered by the verified cache
+                    _sdr_paired.append({
+                        "CCY": "EUR",
+                        "Type": _pl.get("type", "\U0001f535 Straddle"),
+                        "_time_dt": _ptd,
+                        "Opt Expiry": _pl.get("exp", ""),
+                        "Swp Tenor": _pl.get("ten", ""),
+                        "_p_strike": _pl.get("p_strike"),
+                        "_r_strike": _pl.get("r_strike"),
+                        "_p_prem_raw": _pl.get("p_prem", 0),
+                        "_r_prem_raw": _pl.get("r_prem", 0),
+                        "_notional_num": _pl.get("notional", 0),
+                        "Platform": _pl.get("broker", ""),
+                    })
+        except Exception:
+            pass
+
         if not _sdr_paired:
-            st.caption("\u2139\ufe0f SDR side: open the **SDR Live** tab once so its prints load, then "
-                       "return \u2014 the combined grid reuses that exact SDR decode + inversion.")
+            st.caption("\u2139\ufe0f SDR side: no EUR SDR prints found in this date range.")
         # discount-factor curve points (same as the fitter)
         try:
             _ox = curve[curve.columns[0]].to_numpy().astype(float)
