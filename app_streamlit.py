@@ -8620,6 +8620,32 @@ def sdr_live_tab():
     )
     st.caption("DTCC public price dissemination — interest rate options / swaptions / caps & floors")
 
+    # ── SDR Fetcher status (moved here from sidebar — shows for all currencies) ──
+    # GREEN = fetcher process running (heartbeat fresh); RED only if heartbeat stale
+    # = fetcher actually stopped. DTCC API health is a separate informational line.
+    try:
+        _sb_hb_last, _sb_hb_status = _sdr_heartbeat_cached()
+        if _sb_hb_last:
+            _sb_hb_ts = pd.Timestamp(_sb_hb_last)
+            if _sb_hb_ts.tzinfo is None:
+                _sb_hb_ts = _sb_hb_ts.tz_localize('UTC')
+            _sb_hb_age = (pd.Timestamp.now(tz='UTC') - _sb_hb_ts).total_seconds() / 60
+            _sb_hb_disp = "just now" if _sb_hb_age < 1 else f"{_sb_hb_age:.0f}m ago"
+            if _sb_hb_age < 10:
+                st.success(f"🟢 SDR fetcher running · {_sb_hb_disp}")
+            elif _sb_hb_age < 30:
+                st.warning(f"🟡 SDR fetcher delayed · {_sb_hb_disp}")
+            else:
+                st.error(f"🔴 SDR fetcher stopped · last poll {_sb_hb_disp}")
+            if _sb_hb_status and ("ERROR" in str(_sb_hb_status).upper()
+                                  or "503" in str(_sb_hb_status)
+                                  or "FAIL" in str(_sb_hb_status).upper()):
+                st.caption("⚠️ DTCC API last poll errored (their side) — fetcher will retry")
+        else:
+            st.warning("🟡 SDR — awaiting heartbeat")
+    except Exception:
+        pass
+
     # ── Reporting-source sub-menu: DTCC (existing) vs EU MiFIR ────────────────
     # EU MiFIR is EUR-only flow, so the toggle only appears on the EUR page.
     _cur_ccy = st.session_state.get("sidebar_ccy", "AUD").split(" ")[0]
@@ -34373,36 +34399,6 @@ def main():
         )
         
         st.markdown("###  Settings")
-        
-        # ── SDR Fetcher status ──
-        # GREEN = fetcher process is running (heartbeat fresh), regardless of DTCC
-        # or trade volume (quiet weekends are normal). RED only if the heartbeat
-        # has gone stale = the fetcher actually stopped. DTCC API up/down is shown
-        # as a SEPARATE informational line — a DTCC outage is their side, not the
-        # fetcher dying.
-        try:
-            _sb_hb_last, _sb_hb_status = _sdr_heartbeat_cached()
-            if _sb_hb_last:
-                _sb_hb_ts = pd.Timestamp(_sb_hb_last)
-                if _sb_hb_ts.tzinfo is None:
-                    _sb_hb_ts = _sb_hb_ts.tz_localize('UTC')
-                _sb_hb_age = (pd.Timestamp.now(tz='UTC') - _sb_hb_ts).total_seconds() / 60
-                _sb_hb_disp = "just now" if _sb_hb_age < 1 else f"{_sb_hb_age:.0f}m ago"
-                if _sb_hb_age < 10:
-                    st.success(f"🟢 SDR fetcher running · {_sb_hb_disp}")
-                elif _sb_hb_age < 30:
-                    st.warning(f"🟡 SDR fetcher delayed · {_sb_hb_disp}")
-                else:
-                    st.error(f"🔴 SDR fetcher stopped · last poll {_sb_hb_disp}")
-                # DTCC API health — informational only, separate from fetcher health
-                if _sb_hb_status and ("ERROR" in str(_sb_hb_status).upper()
-                                      or "503" in str(_sb_hb_status)
-                                      or "FAIL" in str(_sb_hb_status).upper()):
-                    st.caption("⚠️ DTCC API last poll errored (their side) — fetcher will retry")
-            else:
-                st.warning("🟡 SDR — awaiting heartbeat")
-        except Exception:
-            pass
         
         # Theme
         theme_choice = st.selectbox(
