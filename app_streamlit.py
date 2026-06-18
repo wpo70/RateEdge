@@ -6989,34 +6989,52 @@ def _bayes_bucket_posterior(prior_mean, prior_var, obs,
 
 
 def _bayes_spatial_smooth(post, atm, cols, lam):
-    """Mild local smoothing AMONG OBSERVED BUCKETS ONLY. A bucket that actually has
-    SDR data is nudged toward the precision-weighted mean of its immediately
-    adjacent OBSERVED neighbours; buckets with no data stay exactly at the prior
-    (surface) and are NEVER invented. This stops a single print smearing across an
-    empty row/column — the artefact the old 'spread' pass produced. lam in [0,1] =
-    strength (0 = off). Returns {(exp_label, tenor_col): smoothed_mean}."""
+    """Smooth like the SDR tab's blended surface: diffuse the posterior across the
+    WHOLE grid (2 gentle passes of self + neighbour-mean) so a moved bucket's change
+    flows smoothly into its unchanged neighbours, THEN re-anchor the buckets that
+    actually have an SDR point back to their posterior value. lam in [0,1] scales the
+    neighbour pull (1.0 = the SDR tab's 0.6 self / 0.4 neighbours). Returns
+    {(exp,col): value} for ALL cells, so the change tapers from each moved point out
+    into the surrounding surface instead of being a hard step next to a flat +0.0."""
     exps = [atm.iloc[i]["Expiry"] for i in range(len(atm))]
-    ci = {c: i for i, c in enumerate(cols)}
-    out = {}
-    for _i, e in enumerate(exps):
-        for _c in cols:
-            p = post.get((e, _c))
-            if not p:
+    nr, nc = len(exps), len(cols)
+    grid = [[None] * nc for _ in range(nr)]
+    anchor = {}
+    for ri, e in enumerate(exps):
+        for ci, c in enumerate(cols):
+            p = post.get((e, c))
+            if p is None:
+                try: grid[ri][ci] = float(atm.iloc[ri][c])     # fall back to surface
+                except Exception: grid[ri][ci] = None
                 continue
-            if p.get("gain", 0.0) <= 1e-6:
-                out[(e, _c)] = p["mean"]; continue
-            neigh = []
-            for de, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                ne, nc = _i + de, ci[_c] + dc
-                if 0 <= ne < len(exps) and 0 <= nc < len(cols):
-                    q = post.get((exps[ne], cols[nc]))
-                    if q and q.get("gain", 0.0) > 1e-6:
-                        neigh.append((q["mean"], 1.0 / max(q["var"], 1e-9)))
-            if not neigh:
-                out[(e, _c)] = p["mean"]; continue
-            wsum = sum(w for _, w in neigh)
-            nbar = sum(m * w for m, w in neigh) / wsum
-            out[(e, _c)] = (1 - lam) * p["mean"] + lam * nbar
+            grid[ri][ci] = p["mean"]
+            if p.get("gain", 0.0) > 1e-6:
+                anchor[(ri, ci)] = p["mean"]                    # this bucket has an SDR point
+    if not anchor:
+        return {(e, c): post[(e, c)]["mean"] for e in exps for c in cols if post.get((e, c))}
+    f = 0.4 * max(0.0, min(1.0, float(lam)))                    # neighbour weight per pass
+    for _pass in range(2):
+        sm = [row[:] for row in grid]
+        for ri in range(nr):
+            for ci in range(nc):
+                v = grid[ri][ci]
+                if v is None:
+                    continue
+                ns = []
+                if ri > 0 and grid[ri-1][ci] is not None: ns.append(grid[ri-1][ci])
+                if ri < nr-1 and grid[ri+1][ci] is not None: ns.append(grid[ri+1][ci])
+                if ci > 0 and grid[ri][ci-1] is not None: ns.append(grid[ri][ci-1])
+                if ci < nc-1 and grid[ri][ci+1] is not None: ns.append(grid[ri][ci+1])
+                if ns:
+                    sm[ri][ci] = (1 - f) * v + f * (sum(ns) / len(ns))
+        grid = sm
+    for (ri, ci), av in anchor.items():                        # re-anchor printed cells
+        grid[ri][ci] = av
+    out = {}
+    for ri, e in enumerate(exps):
+        for ci, c in enumerate(cols):
+            if grid[ri][ci] is not None:
+                out[(e, c)] = grid[ri][ci]
     return out
 
 
