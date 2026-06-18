@@ -22085,7 +22085,9 @@ def caps_floors_tab(vol_mode: str):
                     _skip_wedge_keys.add("3m1y")
                     if _lf_pack == "both":
                         _skip_wedge_keys.add("1y1y")
-                        _skip_wedge_keys.add("2y1y")
+                        # 2y1y NOT struck under whites+reds — that's only 2yr of
+                        # futures, and the 2y1y wedge builds the 3Y CFS point.
+                        # It gets struck once the green (3rd-year) pack is added.
 
                 for spr_key, wedge_lbl, tbl_lbl, tbl_wedge, cfs_lbl, spread in ROW_DATA:
                     _row_skipped = tbl_lbl in _skip_wedge_keys
@@ -23435,8 +23437,22 @@ def caps_floors_tab(vol_mode: str):
                           except Exception:
                               return 999.0
 
+                      # Roll forward: drop contracts whose option expiry is before
+                      # today's trade date, so expired fronts (K6/M6) fall off.
+                      # Pure list filter — no pricing / override / ratio logic touched.
+                      def _le_not_expired(_row):
+                          _ed = _row.get("expiry_date")
+                          if not _ed:
+                              return True
+                          try:
+                              from datetime import date as _d_exp
+                              _ed_d = _ed if hasattr(_ed, "toordinal") else _d_exp.fromisoformat(str(_ed)[:10])
+                              return _ed_d >= _today_le
+                          except Exception:
+                              return True
                       _all_rows = [(c, r) for c, r in _sr3_rows_le.items()
-                                   if "MC" not in r.get("contract_type", "")]
+                                   if "MC" not in r.get("contract_type", "")
+                                   and _le_not_expired(r)]
                       _all_rows.sort(key=lambda x: _t_mid(x[1]))
 
                       # Split by pack via pack index on underlying (W=0..3, R=4..7)
@@ -23451,6 +23467,31 @@ def caps_floors_tab(vol_mode: str):
                               _white_rows.append((c, r))
                           elif 4 <= pidx <= 7:
                               _red_rows.append((c, r))
+
+                      # ── Roll the saved white selection forward ──
+                      # If any previously-ticked contract has rolled off (expired /
+                      # no longer in the live pool), keep the still-live picks and top
+                      # up from the front of the live whites to 4, then reseed the
+                      # checkbox widgets. Touches ONLY white-selection session keys —
+                      # never the committed ratio edits.
+                      _live_white_codes = [c for c, _ in _white_rows]
+                      _live_white_set = set(_live_white_codes)
+                      _saved_white_sel = st.session_state.get("_cfs_white_selected")
+                      if _saved_white_sel is not None and not _saved_white_sel.issubset(_live_white_set):
+                          _kept = [c for c in _live_white_codes if c in _saved_white_sel]
+                          for _cw in _live_white_codes:
+                              if len(_kept) >= 4:
+                                  break
+                              if _cw not in _kept:
+                                  _kept.append(_cw)
+                          _rolled_sel = set(_kept[:4])
+                          st.session_state["_cfs_white_selected"] = _rolled_sel
+                          for _cw in _live_white_codes:
+                              st.session_state[f"_cfs_white_cb_{_cw}"] = (_cw in _rolled_sel)
+                          for _k in [k for k in list(st.session_state.keys())
+                                     if k.startswith("_cfs_white_cb_")
+                                     and k[len("_cfs_white_cb_"):] not in _live_white_set]:
+                              del st.session_state[_k]
 
                       # ── White selection: checkbox per row, must pick exactly 4 ──
                       # Session state stores the selected contract codes as a set.
@@ -35689,6 +35730,7 @@ SR3_CONTRACTS_CANONICAL = [
     ("SFRQ6",  "Serial",     "2026-08-14", "SFRQ6 Comdty", "2026-12-15"),
     ("SFRU6",  "Quarterly",  "2026-09-11", "SFRU6 Comdty", "2026-12-15"),
     ("SFRV6",  "Serial",     "2026-10-16", "SFRV6 Comdty", "2027-03-16"),
+    ("SFRX6",  "Serial",     "2026-11-13", "SFRX6 Comdty", "2027-03-16"),
     ("SFRZ6",  "Quarterly",  "2026-12-11", "SFRZ6 Comdty", "2027-03-16"),
     ("SFRH7",  "Quarterly",  "2027-03-12", "SFRH7 Comdty", "2027-06-15"),
     ("SFRM7",  "Quarterly",  "2027-06-11", "SFRM7 Comdty", "2027-09-14"),
@@ -35728,7 +35770,7 @@ SR3_CONTRACTS_CANONICAL = [
     ("5QZ26",  "5Y MC",      "2026-12-11", "5QZ26 Comdty", "2032-03-17"),
     ("5QH27",  "5Y MC",      "2027-03-12", "5QH27 Comdty", "2032-06-16"),
 ]
-SR3_SPLIT_INDEX = 23  # rows 0..22 = standards/serials, 23..38 = mid-curves
+SR3_SPLIT_INDEX = 24  # rows 0..23 = standards/serials, 24..39 = mid-curves
 
 
 def _sr3_parse_underlying(underlying: str, ref_year: int = 2026):
