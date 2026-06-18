@@ -7195,6 +7195,10 @@ def _bayesian_atm_view():
                     row[_c] = round(p["var"] ** 0.5, nd) if p else None
                 elif field == "gain":
                     row[_c] = round(p["gain"], 2) if p else None
+                elif field == "delta":
+                    try: _cur = float(_atm.iloc[_i][_c])
+                    except Exception: _cur = None
+                    row[_c] = round(p["mean"] - _cur, nd) if (p and _cur is not None) else None
             rows.append(row)
         return pd.DataFrame(rows).set_index("Expiry")
 
@@ -7205,6 +7209,19 @@ def _bayesian_atm_view():
                      .format("{:.1f}"), use_container_width=True)
     except Exception:
         st.dataframe(_post_mean, use_container_width=True)
+
+    st.markdown("**Change vs current surface (bp)** — posterior − loaded "
+                "(🔴 up · ⚪ unchanged · 🔵 down):")
+    _delta = _matrix("delta")
+    try:
+        _dv = _delta.to_numpy(dtype=float)
+        _m = float(np.nanmax(np.abs(_dv))) if np.isfinite(_dv).any() else 1.0
+        _m = _m if _m > 0 else 1.0
+        st.dataframe(_delta.style.background_gradient(cmap="RdBu_r", axis=None,
+                                                      vmin=-_m, vmax=_m)
+                     .format("{:+.1f}", na_rep="·"), use_container_width=True)
+    except Exception:
+        st.dataframe(_delta, use_container_width=True)
 
     st.markdown("**Confidence — posterior σ (bp, lower = tighter):**")
     _sig = _matrix("sigma")
