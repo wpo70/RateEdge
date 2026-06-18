@@ -7016,14 +7016,27 @@ def _bayesian_atm_view():
         return
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    with c1: _win_h = st.slider("Window (hours)", 6, 96, 24, 6, key="_bayes_win")
-    with c2: _prior_sig = st.slider("Prior σ (bp)", 1.0, 20.0, 6.0, 0.5, key="_bayes_psig",
-                                    help="how much to trust the current surface, per bucket")
-    with c3: _sig_obs = st.slider("Obs σ (bp)", 1.0, 12.0, 4.0, 0.5, key="_bayes_osig",
-                                  help="assumed noise of one straddle inversion")
-    with c4: _hl = st.slider("Recency half-life (h)", 2, 48, 12, 2, key="_bayes_hl")
-    with c5: _nu = st.slider("Robustness ν", 1.0, 30.0, 4.0, 1.0, key="_bayes_nu",
-                             help="low = aggressive outlier rejection; high → Gaussian")
+    with c1:
+        _win_h = st.slider("Window (hours)", 6, 96, 24, 6, key="_bayes_win")
+        st.caption("How far back to pull SDR straddle prints. Wider catches more "
+                   "flow but mixes in older, staler trades.")
+    with c2:
+        _prior_sig = st.slider("Prior σ (bp)", 1.0, 20.0, 6.0, 0.5, key="_bayes_psig")
+        st.caption("Trust in the current surface. **Low** = surface anchors hard, "
+                   "prints barely move it. **High** = let the prints dominate.")
+    with c3:
+        _sig_obs = st.slider("Obs σ (bp)", 1.0, 12.0, 4.0, 0.5, key="_bayes_osig")
+        st.caption("Assumed noise in one inverted straddle. **Low** = trust each "
+                   "print a lot. **High** = treat each as noisy (needs more to move).")
+    with c4:
+        _hl = st.slider("Recency half-life (h)", 2, 48, 12, 2, key="_bayes_hl")
+        st.caption("Age at which a print's weight halves. 12h ⇒ a 12-hour-old print "
+                   "counts ½, a 24-hour-old ¼.")
+    with c5:
+        _nu = st.slider("Robustness ν", 1.0, 30.0, 4.0, 1.0, key="_bayes_nu")
+        st.caption("Outlier control (Student-t dof). **Low** = reject fat-tail "
+                   "outliers hard. **High** → plain Gaussian, no rejection.")
+
 
     _atm = get_working_atm_surface("USD")
     if _atm is None or "Expiry" not in getattr(_atm, "columns", []):
