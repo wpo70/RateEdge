@@ -1058,6 +1058,35 @@ def save_user_config(user_id: str, config_type: str, currency: str, data: dict, 
         return False
 
 
+def save_cf_spreads_daily(user_id: str, currency: str, data: dict, _conn=None):
+    """Write a dated daily backup of the CFS wedge spreads to cf_spreads_daily so
+    a wipe is always recoverable from history. Last-write-wins per (date, ccy,
+    user). Caller should only pass a validated (non-collapsed) wedge set."""
+    from psycopg2.extras import Json as _JsonD
+    own_conn = _conn is None
+    conn = get_db_connection() if own_conn else _conn
+    if not conn:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO cf_spreads_daily (snap_date, currency, user_id, data, updated_at)
+            VALUES (CURRENT_DATE, %s, %s, %s, NOW())
+            ON CONFLICT (snap_date, currency, user_id)
+            DO UPDATE SET data = %s, updated_at = NOW()
+        """, (currency, user_id, _JsonD(data), _JsonD(data)))
+        if own_conn:
+            conn.commit(); cur.close(); conn.close()
+        else:
+            cur.close()
+        return True
+    except Exception:
+        if own_conn:
+            try: conn.close()
+            except Exception: pass
+        return False
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def load_user_config(user_id: str, config_type: str, currency: str) -> Optional[dict]:
     """Load user config from database"""
@@ -21795,6 +21824,26 @@ def caps_floors_tab(vol_mode: str):
                     except Exception:
                         pass
 
+                # ── Daily backup: snapshot valid wedges to dated history ──
+                # Once per session per day, write the current wedges to
+                # cf_spreads_daily so any future wipe is recoverable from history.
+                # Reuses the same ≥4-main-wedge guard — never backs up a collapsed
+                # set. Runs even without an edit (no _ts_dirty requirement).
+                if len(_ts_main_nz) >= 4 and st.session_state.get("_cf_daily_done_USD") != str(date.today()):
+                    try:
+                        _cfd_base = st.session_state.get("username", "default")
+                        _cfd_conn = get_db_connection()
+                        if _cfd_conn:
+                            try:
+                                for _cfd_uid in {_cfd_base, "wpo@rateedge.au", "wpo70@icloud.com"}:
+                                    save_cf_spreads_daily(_cfd_uid, "USD", _ts_cur, _conn=_cfd_conn)
+                                _cfd_conn.commit()
+                            finally:
+                                _cfd_conn.close()
+                        st.session_state["_cf_daily_done_USD"] = str(date.today())
+                    except Exception:
+                        pass
+
             bl, _, br = st.columns([2, 0.2, 2])
             if bl.button("🧮 Calculate CFS Curve", key="apply_spreads", type="primary",
                          help="Builds caplet vol curve from wedge spreads. Derives cumulative "
@@ -22856,22 +22905,8 @@ def caps_floors_tab(vol_mode: str):
                           except Exception:
                               return 999.0
 
-                      # Roll forward: drop contracts whose option expiry is before
-                      # today's trade date, so the front reflects live contracts only.
-                      # Pure list filter — no pricing / override / curve logic touched.
-                      def _le_not_expired(_row):
-                          _ed = _row.get("expiry_date")
-                          if not _ed:
-                              return True
-                          try:
-                              from datetime import date as _d_exp
-                              _ed_d = _ed if hasattr(_ed, "toordinal") else _d_exp.fromisoformat(str(_ed)[:10])
-                              return _ed_d >= _today_le
-                          except Exception:
-                              return True
                       _all_rows = [(c, r) for c, r in _sr3_rows_le.items()
-                                   if "MC" not in r.get("contract_type", "")
-                                   and _le_not_expired(r)]
+                                   if "MC" not in r.get("contract_type", "")]
                       _all_rows.sort(key=lambda x: _t_mid(x[1]))
 
                       # Split by pack via pack index on underlying (W=0..3, R=4..7)
@@ -22886,30 +22921,6 @@ def caps_floors_tab(vol_mode: str):
                               _white_rows.append((c, r))
                           elif 4 <= pidx <= 7:
                               _red_rows.append((c, r))
-
-                      # ── Roll the saved white selection forward ──
-                      # If any previously-ticked contract has rolled off (expired /
-                      # no longer in the live pool), keep the still-live picks and top
-                      # up from the front of the live whites to 4, then reseed the
-                      # checkbox widgets. Contract-list housekeeping only — no pricing.
-                      _live_white_codes = [c for c, _ in _white_rows]
-                      _live_white_set = set(_live_white_codes)
-                      _saved_white_sel = st.session_state.get("_cfs_white_selected")
-                      if _saved_white_sel is not None and not _saved_white_sel.issubset(_live_white_set):
-                          _kept = [c for c in _live_white_codes if c in _saved_white_sel]
-                          for _cw in _live_white_codes:
-                              if len(_kept) >= 4:
-                                  break
-                              if _cw not in _kept:
-                                  _kept.append(_cw)
-                          _rolled_sel = set(_kept[:4])
-                          st.session_state["_cfs_white_selected"] = _rolled_sel
-                          for _cw in _live_white_codes:
-                              st.session_state[f"_cfs_white_cb_{_cw}"] = (_cw in _rolled_sel)
-                          for _k in [k for k in list(st.session_state.keys())
-                                     if k.startswith("_cfs_white_cb_")
-                                     and k[len("_cfs_white_cb_"):] not in _live_white_set]:
-                              del st.session_state[_k]
 
                       # ── White selection: checkbox per row, must pick exactly 4 ──
                       # Session state stores the selected contract codes as a set.
@@ -35148,7 +35159,6 @@ SR3_CONTRACTS_CANONICAL = [
     ("SFRQ6",  "Serial",     "2026-08-14", "SFRQ6 Comdty", "2026-12-15"),
     ("SFRU6",  "Quarterly",  "2026-09-11", "SFRU6 Comdty", "2026-12-15"),
     ("SFRV6",  "Serial",     "2026-10-16", "SFRV6 Comdty", "2027-03-16"),
-    ("SFRX6",  "Serial",     "2026-11-13", "SFRX6 Comdty", "2027-03-16"),
     ("SFRZ6",  "Quarterly",  "2026-12-11", "SFRZ6 Comdty", "2027-03-16"),
     ("SFRH7",  "Quarterly",  "2027-03-12", "SFRH7 Comdty", "2027-06-15"),
     ("SFRM7",  "Quarterly",  "2027-06-11", "SFRM7 Comdty", "2027-09-14"),
@@ -35188,7 +35198,7 @@ SR3_CONTRACTS_CANONICAL = [
     ("5QZ26",  "5Y MC",      "2026-12-11", "5QZ26 Comdty", "2032-03-17"),
     ("5QH27",  "5Y MC",      "2027-03-12", "5QH27 Comdty", "2032-06-16"),
 ]
-SR3_SPLIT_INDEX = 24  # rows 0..23 = standards/serials, 24..39 = mid-curves
+SR3_SPLIT_INDEX = 23  # rows 0..22 = standards/serials, 23..38 = mid-curves
 
 
 def _sr3_parse_underlying(underlying: str, ref_year: int = 2026):
@@ -35214,26 +35224,16 @@ def _sr3_parse_underlying(underlying: str, ref_year: int = 2026):
         return None, None
 
 
-def _sr3_front_quarterly(today_year: int, today_month: int, today_day: int = 1):
+def _sr3_front_quarterly(today_year: int, today_month: int):
     """
-    Given today's (year, month, day), return (year, month) of the nearest
-    quarterly SR3 contract that has NOT yet expired. Quarterlies = Mar/Jun/Sep/Dec.
-    A quarterly stops trading on the 3rd Wednesday of its delivery month, so once
-    today is on/after that date the front rolls to the next quarterly. This is an
-    expiry-aware roll (not just calendar-month), so e.g. on 18-Jun the front is
-    Sep, not Jun — keeping the white/red pack banding aligned to live contracts.
+    Given today's (year, month), return (year, month) of the nearest
+    upcoming (or current) quarterly SR3 contract. Quarterlies = Mar/Jun/Sep/Dec.
+    Simple rule: first quarterly with delivery month ≥ today_month in the same
+    year; else first quarterly next year (March).
     """
-    import calendar
-
-    def _third_wed(y, m):
-        first_wd = calendar.monthrange(y, m)[0]   # weekday of the 1st (Mon=0)
-        return 1 + ((2 - first_wd) % 7) + 14      # day-of-month of 3rd Wednesday
-
     for m in SR3_QUARTERLY_MONTHS:
-        if m > today_month:
+        if m >= today_month:
             return today_year, m
-        if m == today_month and today_day < _third_wed(today_year, m):
-            return today_year, m   # current quarterly still trading
     return today_year + 1, 3
 
 
@@ -35263,7 +35263,7 @@ def _sr3_pack_index(underlying: str, today=None) -> int:
         else:
             u_mo = 3
             u_yr += 1
-    f_yr, f_mo = _sr3_front_quarterly(today.year, today.month, today.day)
+    f_yr, f_mo = _sr3_front_quarterly(today.year, today.month)
     f_idx_abs = f_yr * 4 + SR3_QUARTERLY_MONTHS.index(f_mo)
     u_idx_abs = u_yr * 4 + SR3_QUARTERLY_MONTHS.index(u_mo)
     return u_idx_abs - f_idx_abs
