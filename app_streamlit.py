@@ -7096,13 +7096,14 @@ def _bayesian_atm_view():
         st.warning("No USD curve available.")
         return
 
-    # ── Collect prints EXACTLY like the SDR fitter ────────────────────────────
-    # Same path as the SDR analytics/fitter: pair CALL/PUT legs via
-    # _pair_swaption_legs (straddles + strangles) AND pick up pre-combined STR
-    # rows. No bespoke query/inversion — identical reading, just aggregated
-    # Bayesianly. (USD uses the curve forward directly; no EUR projection.)
-    q = ("SELECT option_type_decoded, opt_tenor, swp_tenor, strike_pct, "
-         "premium_amount, notional_leg1, platform_identifier, "
+    # ── Collect prints via the SDR full-analytics straddle logic ──────────────
+    # Pair CALL/PUT into straddles the SAME way the "Straddle Detection" analytics
+    # does, INCLUDING its per-venue premium-convention handling: MICs that report
+    # the full straddle on each leg are deduped with max(p,r); everyone else (genuine
+    # per-leg, e.g. Dealerweb) is summed p+r. This is the handling already built and
+    # verified in the analytics — no bespoke heuristic, no surface anchor.
+    q = ("SELECT action_type, option_type_decoded, opt_tenor, swp_tenor, strike_pct, "
+         "premium_amount, notional_leg1, platform_identifier, notional_ccy, "
          "execution_timestamp, event_timestamp "
          "FROM dtcc_sdr WHERE notional_ccy='USD' "
          "AND execution_timestamp > NOW() - INTERVAL '1 hour' * %s "
@@ -7130,6 +7131,7 @@ def _bayesian_atm_view():
 
     _now = _dt.datetime.now(_dt.timezone.utc)
     obs_by_key = {}
+    _audit = []
     _nused = 0
 
     def _age_h(_t):
@@ -7147,41 +7149,66 @@ def _bayesian_atm_view():
             return True
         return False
 
-    # 1) paired CALL/PUT legs (same matching as the USD SDR analytics)
-    for _pair in _pair_swaption_legs(sdf):
-        try:
-            # ATM straddles only. Strangles are skew trades — they don't inform ATM
-            # vol, so they're excluded from the ATM estimate (per desk: SDR ATM
-            # straddles are the real ATM signal; skew / CSF won't move ATM vol).
-            if not _pair.get("same_strike"):
+    # 1) Payer/Receiver pairs -> straddles (Straddle Detection logic + MIC dedup)
+    _PREM_DEDUP_MICS_SD = {"BGCD", "TPSE", "TSEF", "TWSF", "IGDL", "ISWE", "ISWV",
+                           "GSEF", "BILT", "XXXX"}
+    _newt = sdf[sdf["action_type"] == "NEWT"].copy() if "action_type" in sdf.columns else sdf.copy()
+    _pay = _newt[_newt["option_type_decoded"] == "CALL"].copy()
+    _rcv = _newt[_newt["option_type_decoded"] == "PUT"].copy()
+    _matched_r = set()
+    if not _pay.empty and not _rcv.empty and "strike_pct" in sdf.columns:
+        for _, _p in _pay.iterrows():
+            try:
+                _s_p = round(float(_p.get("strike_pct") or 0), 2)
+                _e_p = str(_p.get("opt_tenor", "")); _t_p = str(_p.get("swp_tenor", ""))
+                _time_p = pd.to_datetime(_p.get("execution_timestamp") or _p.get("event_timestamp"),
+                                         errors="coerce")
+                if _time_p is pd.NaT:
+                    continue
+                _cand = _rcv[(~_rcv.index.isin(_matched_r)) &
+                             (_rcv["opt_tenor"] == _e_p) & (_rcv["swp_tenor"] == _t_p) &
+                             (_rcv["strike_pct"].apply(lambda x: abs(float(x or 0) - _s_p) < 0.01))]
+                for _ri, _r in _cand.iterrows():
+                    _time_r = pd.to_datetime(_r.get("execution_timestamp") or _r.get("event_timestamp"),
+                                             errors="coerce")
+                    if _time_r is pd.NaT or abs((_time_p - _time_r).total_seconds()) > 120:
+                        continue
+                    _matched_r.add(_ri)
+                    _p_prem = float(_p.get("premium_amount") or 0)
+                    _r_prem = float(_r.get("premium_amount") or 0)
+                    _mic = str(_p.get("platform_identifier", ""))
+                    # per-venue convention: double-reporters -> max(p,r); per-leg -> p+r
+                    if _mic in _PREM_DEDUP_MICS_SD and _p_prem > 0 and _r_prem > 0:
+                        _strd_prem = max(_p_prem, _r_prem)
+                    else:
+                        _strd_prem = _p_prem + _r_prem
+                    _not = float(_p.get("notional_leg1") or 0)
+                    E = label_to_years(_e_p); ten = label_to_years(_t_p)
+                    if _not <= 0 or _strd_prem <= 0 or not E or not ten or E <= 0 or ten <= 0:
+                        break
+                    tenor = int(round(ten))
+                    F, A, _ = forward_and_annuity_from_curve(_curve, "USD", float(E), float(tenor))
+                    if not F or A <= 0:
+                        break
+                    _K = (_s_p / 100.0) if _s_p else F
+                    if abs(_K - F) > 0.015: _K = F
+                    _strd_bp = _strd_prem / _not * 1e4         # FULL straddle premium bp
+                    _leg_bp = _strd_bp / 2.0                   # -> per leg
+                    iv = _eu_solve_normal_vol(_leg_bp, F, _K, float(E), A, True)
+                    if not iv or iv <= 0:
+                        break
+                    if _add(E, tenor, iv, _not, _age_h(_p.get("execution_timestamp"))):
+                        _nused += 1
+                        _audit.append({"src": "pair", "Exp": _e_p, "Ten": f"{tenor}Y",
+                                       "Notl(M)": round(_not / 1e6, 0),
+                                       "Strd bp": round(_strd_bp, 1), "Leg bp": round(_leg_bp, 1),
+                                       "Vol bp": round(iv, 1), "MIC": _mic,
+                                       "dedup": "max(p,r)" if _mic in _PREM_DEDUP_MICS_SD else "p+r"})
+                    break  # one match per payer
+            except Exception:
                 continue
-            E = label_to_years(str(_pair["exp"])); ten = label_to_years(str(_pair["ten"]))
-            if not E or not ten or E <= 0 or ten <= 0:
-                continue
-            tenor = int(round(ten))
-            _not = float(_pair["notional"] or 0)
-            if _not <= 0:
-                continue
-            F, A, _ = forward_and_annuity_from_curve(_curve, "USD", float(E), float(tenor))
-            if not F or A <= 0:
-                continue
-            _Kp = (_pair["p_strike"] / 100.0) if _pair["p_strike"] else F
-            _Kr = (_pair["r_strike"] / 100.0) if _pair["r_strike"] else F
-            if abs(_Kp - F) > 0.015: _Kp = F
-            if abs(_Kr - F) > 0.015: _Kr = F
-            _pp_bp = _pair["p_prem"] / _not * 1e4 if _pair["p_prem"] > 0 else 0.0
-            _rp_bp = _pair["r_prem"] / _not * 1e4 if _pair["r_prem"] > 0 else 0.0
-            _vp = _eu_solve_normal_vol(_pp_bp, F, _Kp, float(E), A, True) if _pp_bp > 0 else None
-            _vr = _eu_solve_normal_vol(_rp_bp, F, _Kr, float(E), A, False) if _rp_bp > 0 else None
-            _vs = [v for v in (_vp, _vr) if v and v > 0]
-            if not _vs:
-                continue
-            if _add(E, tenor, sum(_vs) / len(_vs), _not, _age_h(_pair.get("time"))):
-                _nused += 1
-        except Exception:
-            continue
 
-    # 2) pre-combined STR rows (single row = both legs, one premium)
+    # 2) pre-combined STR rows (single row = the full straddle premium)
     try:
         _strs = sdf[sdf["option_type_decoded"] == "STR"] if "option_type_decoded" in sdf.columns else sdf.iloc[0:0]
     except Exception:
@@ -7203,12 +7230,18 @@ def _bayesian_atm_view():
             _K = (float(_sr.get("strike_pct")) / 100.0) if _sr.get("strike_pct") else F
             if abs(_K - F) > 0.015:
                 _K = F
-            _leg_bp = (_pa / _not * 1e4) / 2.0           # straddle premium -> per leg
+            _strd_bp = _pa / _not * 1e4
+            _leg_bp = _strd_bp / 2.0                      # straddle premium -> per leg
             iv = _eu_solve_normal_vol(_leg_bp, F, _K, float(E), A, True)
             if not iv or iv <= 0:
                 continue
             if _add(E, tenor, iv, _not, _age_h(_sr.get("execution_timestamp"))):
                 _nused += 1
+                _audit.append({"src": "STR", "Exp": str(_sr.get("opt_tenor")), "Ten": f"{tenor}Y",
+                               "Notl(M)": round(_not / 1e6, 0),
+                               "Strd bp": round(_strd_bp, 1), "Leg bp": round(_leg_bp, 1),
+                               "Vol bp": round(iv, 1), "MIC": str(_sr.get("platform_identifier", "")),
+                               "dedup": "STR/2"})
         except Exception:
             continue
 
@@ -7232,7 +7265,29 @@ def _bayesian_atm_view():
     st.caption(f"{_nused} USD straddle print(s) → {n_data} bucket(s) updated "
                f"(last {_win_h}h). Empty buckets stay at the prior (gain 0).")
 
+    if _audit:
+        with st.expander(f"🔍 Print audit — every straddle feeding the fit "
+                         f"({len(_audit)} prints: per-leg premium bp & implied vol)"):
+            _adf = pd.DataFrame(_audit).sort_values(["Exp", "Ten"]).reset_index(drop=True)
+            st.dataframe(_adf, use_container_width=True, height=320)
+            st.caption("Each straddle's full-straddle premium, per-leg premium, implied vol, "
+                       "venue MIC, and which premium convention was applied — **max(p,r)** for "
+                       "double-reporting venues, **p+r** for genuine per-leg venues (same handling "
+                       "as the Straddle Detection analytics).")
+
     # build mean / sigma / gain matrices over the surface
+    # Final surface = smoothed (if smoothing enabled) else raw posterior. Computed
+    # up-front so the Change-vs-current delta reflects what actually gets uploaded.
+    _smoothed = None
+    if _smooth_on and _smooth_lam > 0:
+        _smoothed = _bayes_spatial_smooth(post, _atm, _cols, float(_smooth_lam))
+
+    def _final_mean(e, c):
+        if _smoothed is not None and (e, c) in _smoothed:
+            return _smoothed[(e, c)]
+        p = post.get((e, c))
+        return p["mean"] if p else None
+
     def _matrix(field, nd=1):
         rows = []
         for _i in range(len(_atm)):
@@ -7246,9 +7301,11 @@ def _bayesian_atm_view():
                 elif field == "gain":
                     row[_c] = round(p["gain"], 2) if p else None
                 elif field == "delta":
+                    # net change being uploaded = final (smoothed if on) − current
                     try: _cur = float(_atm.iloc[_i][_c])
                     except Exception: _cur = None
-                    row[_c] = round(p["mean"] - _cur, nd) if (p and _cur is not None) else None
+                    _fm = _final_mean(_e, _c)
+                    row[_c] = round(_fm - _cur, nd) if (_fm is not None and _cur is not None) else None
             rows.append(row)
         return pd.DataFrame(rows).set_index("Expiry")
 
@@ -7260,7 +7317,13 @@ def _bayesian_atm_view():
         except Exception:
             st.dataframe(_post_mean, use_container_width=True)
 
-    with st.expander("🔺 Change vs current surface (bp) — 🔴 up · ⚪ unchanged · 🔵 down"):
+    _delta_title = ("🔺 Change vs current surface (bp) — *smoothed* · 🔴 up · ⚪ unchanged · 🔵 down"
+                    if _smoothed is not None
+                    else "🔺 Change vs current surface (bp) — 🔴 up · ⚪ unchanged · 🔵 down")
+    with st.expander(_delta_title):
+        if _smoothed is not None:
+            st.caption("Reflects the smoothed surface (what the upload sends), so smoothing "
+                       "spread shows here too.")
         _delta = _matrix("delta")
         try:
             _dv = _delta.to_numpy(dtype=float)
@@ -7288,11 +7351,7 @@ def _bayesian_atm_view():
         except Exception:
             st.dataframe(_g, use_container_width=True)
 
-    # Final surface = smoothed (if enabled) else raw posterior. The smoothed pass
-    # is shown as a separate surface so it's visible before it feeds the upload.
-    _smoothed = None
-    if _smooth_on and _smooth_lam > 0:
-        _smoothed = _bayes_spatial_smooth(post, _atm, _cols, float(_smooth_lam))
+    if _smoothed is not None:
         _sm_rows = []
         for _i in range(len(_atm)):
             _e = _atm.iloc[_i]["Expiry"]; row = {"Expiry": _e}
