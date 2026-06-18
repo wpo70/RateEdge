@@ -7003,7 +7003,6 @@ def _bayes_spatial_smooth(post, atm, cols, lam):
             p = post.get((e, _c))
             if not p:
                 continue
-            # only touch buckets that actually moved (have data); priors stay put
             if p.get("gain", 0.0) <= 1e-6:
                 out[(e, _c)] = p["mean"]; continue
             neigh = []
@@ -7011,7 +7010,7 @@ def _bayes_spatial_smooth(post, atm, cols, lam):
                 ne, nc = _i + de, ci[_c] + dc
                 if 0 <= ne < len(exps) and 0 <= nc < len(cols):
                     q = post.get((exps[ne], cols[nc]))
-                    if q and q.get("gain", 0.0) > 1e-6:      # observed neighbours only
+                    if q and q.get("gain", 0.0) > 1e-6:
                         neigh.append((q["mean"], 1.0 / max(q["var"], 1e-9)))
             if not neigh:
                 out[(e, _c)] = p["mean"]; continue
@@ -7110,96 +7109,55 @@ def _sdr_agg_bucket_norm(_trs, _Ft, _Ty, _ann, _df, _hl_days, _max_age=0):
 
 
 def _sdr_bucket_atm_vols(sdf, curve, hl_days=21.0, max_age=0.0):
-    """Raw USD SDR rows -> {(expiry,tenor): {vol, n}} ATM vols, replicating the SDR
-    analytics fitter's straddle pairing EXACTLY (same-strike swaption pairs only,
-    notional-matched within 1%, same-strike→nearest→closest-time ranking, 600s
-    window, full venue dedup set, caps/floors & strangles excluded), then the
-    fitter's aggregation/inversion. Self-contained — no tab needs to be visited."""
+    """Raw USD SDR rows -> {(expiry,tenor): {vol, n}} ATM market vols, using the
+    SAME pairing (Straddle Detection + per-venue premium dedup) and the SAME
+    aggregation/inversion as the analytics fitter. Self-contained: no tab needs to
+    have been visited. `vol` is the bucket's ATM normal vol in bp."""
     out = {}
     if sdf is None or getattr(sdf, "empty", True) or "strike_pct" not in sdf.columns:
         return out
-    _DED = {"BGCD","BGCO","BGCI","TPSE","TPIR","TPEU","TSEF","TSIR","TSAF","TWSF",
-            "TWEM","IGDL","ISWE","ISWV","IOIR","IMRD","GSEF","GFSO","BILT","XXXX"}
+    _DED = {"BGCD", "TPSE", "TSEF", "TWSF", "IGDL", "ISWE", "ISWV", "GSEF", "BILT", "XXXX"}
     _newt = sdf[sdf["action_type"] == "NEWT"].copy() if "action_type" in sdf.columns else sdf.copy()
     _pay = _newt[_newt["option_type_decoded"] == "CALL"].copy()
     _rcv = _newt[_newt["option_type_decoded"] == "PUT"].copy()
     if _pay.empty or _rcv.empty:
         return out
-
-    # Order payers: those with a same-strike receiver (straddle legs) FIRST, so they
-    # consume the straddle partner before an R/R payer can steal it (fitter rule).
-    try:
-        _rcv_strk = set(round(float(x), 2) for x in _rcv["strike_pct"].dropna())
-        _pay = _pay.assign(_has_same=_pay["strike_pct"].apply(
-            lambda v: 1 if (pd.notna(v) and round(float(v), 2) in _rcv_strk) else 0)
-        ).sort_values("_has_same", ascending=False)
-    except Exception:
-        pass
-
     _matched = set(); _bmap = {}
-    for _pi, _p in _pay.iterrows():
+    for _, _p in _pay.iterrows():
         try:
             _s_p = round(float(_p.get("strike_pct") or 0), 2)
-            _e_p = str(_p.get("opt_tenor", "") or "").strip()
-            _t_p = str(_p.get("swp_tenor", "") or "").strip()
-            _ccy_p = str(_p.get("notional_ccy", ""))
-            # swaptions only (no caps/floors) for ATM — fitter's _has_swp
-            if not (_t_p and _t_p not in ("—", "NA", "None", "")):
-                continue
+            _e_p = str(_p.get("opt_tenor", "")); _t_p = str(_p.get("swp_tenor", ""))
             _tp = pd.to_datetime(_p.get("execution_timestamp") or _p.get("event_timestamp"), errors="coerce")
             if _tp is pd.NaT:
                 continue
-            _np_p = float(_p.get("notional_leg1") or 0)
-            # candidates: same expiry, ccy, swp tenor, unconsumed
             _cand = _rcv[(~_rcv.index.isin(_matched)) &
-                         (_rcv["opt_tenor"] == _e_p) &
-                         (_rcv["notional_ccy"] == _ccy_p) &
-                         (_rcv["swp_tenor"] == _t_p)]
-            if _np_p > 0 and not _cand.empty:
-                _rn = _cand["notional_leg1"].astype(float)
-                _cand = _cand[(_rn - _np_p).abs() <= 0.01 * _np_p]   # same-size legs only
-            if _cand.empty:
-                continue
-            # rank: exact same-strike, then nearest strike, then closest in time
-            _sp = _cand["strike_pct"].astype(float)
-            _gap = (_sp - _s_p).abs()
-            _same = (_gap < 0.01).astype(int)
-            _tsec = _cand.apply(lambda _row: abs((_tp - pd.to_datetime(
-                _row.get("execution_timestamp") or _row.get("event_timestamp"), errors="coerce")
-                ).total_seconds()) if pd.notna(pd.to_datetime(
-                _row.get("execution_timestamp") or _row.get("event_timestamp"), errors="coerce")) else 9e9, axis=1)
-            _cand = _cand.assign(_is_same=_same, _gap=_gap, _tsec=_tsec).sort_values(
-                ["_is_same", "_gap", "_tsec"], ascending=[False, True, True])
+                         (_rcv["opt_tenor"] == _e_p) & (_rcv["swp_tenor"] == _t_p) &
+                         (_rcv["strike_pct"].apply(lambda x: abs(float(x or 0) - _s_p) < 0.01))]
             for _ri, _r in _cand.iterrows():
                 _tr = pd.to_datetime(_r.get("execution_timestamp") or _r.get("event_timestamp"), errors="coerce")
-                if _tr is pd.NaT or abs((_tp - _tr).total_seconds()) > 600:
+                if _tr is pd.NaT or abs((_tp - _tr).total_seconds()) > 120:
                     continue
-                _s_r = round(float(_r.get("strike_pct") or 0), 2)
-                if abs(_s_p - _s_r) >= 0.01:
-                    break   # best partner is a strangle, not a straddle -> not ATM, skip
                 _matched.add(_ri)
                 _pp = float(_p.get("premium_amount") or 0); _rp = float(_r.get("premium_amount") or 0)
                 _not = float(_p.get("notional_leg1") or 0)
                 if _not <= 0:
                     break
                 _mic = str(_p.get("platform_identifier", ""))
-                # same-strike venue dedup: both legs report full straddle -> max, split 50/50
+                # per-venue premium convention -> PER-LEG premium bp (what _agg expects)
                 if _mic in _DED and _pp > 0 and _rp > 0:
-                    _comb = max(_pp, _rp); _pp2 = _rp2 = _comb / 2.0
+                    _leg = (max(_pp, _rp) / 2.0) / _not * 1e4   # double-report: full straddle/2
+                    _pbp = _rbp = _leg
                 else:
-                    _pp2 = _pp; _rp2 = _rp
-                _pbp = _pp2 / _not * 1e4; _rbp = _rp2 / _not * 1e4
-                if _pbp <= 0 or _rbp <= 0:
-                    break
+                    _pbp = _pp / _not * 1e4                      # genuine per-leg
+                    _rbp = _rp / _not * 1e4
                 _bmap.setdefault((_e_p, _t_p), []).append({
-                    "_p_strike": _s_p, "_r_strike": _s_r,
+                    "_p_strike": _s_p, "_r_strike": round(float(_r.get("strike_pct") or 0), 2),
                     "P Prem BP": _pbp, "R Prem BP": _rbp,
                     "_time_dt": _tp.to_pydatetime().replace(tzinfo=None) if _tp is not pd.NaT else None,
                     "_notional_num": _not})
                 break
         except Exception:
             continue
-
     for (_e, _t), _trs in _bmap.items():
         try:
             _T = label_to_years(_e); _ten = label_to_years(_t)
@@ -7292,30 +7250,18 @@ def _bayesian_atm_view():
         st.warning("No USD curve available.")
         return
 
-    # ── Compute the fitter's per-bucket ATM vols here, via the shared function ──
-    # _sdr_bucket_atm_vols is the analytics fitter's exact pairing + aggregation +
-    # inversion, lifted to module level — so the Bayesian gets identical numbers
-    # with NO dependency on having opened the SDR analytics tab first.
-    q = ("SELECT action_type, option_type_decoded, opt_tenor, swp_tenor, strike_pct, "
-         "premium_amount, notional_leg1, platform_identifier, notional_ccy, "
-         "execution_timestamp, event_timestamp "
-         "FROM dtcc_sdr WHERE notional_ccy='USD' "
-         "AND execution_timestamp > NOW() - INTERVAL '1 hour' * %s "
-         "ORDER BY execution_timestamp DESC LIMIT 20000")
-    try:
-        sdf = _load_sdr_data_cached(q, (int(_win_h),))
-    except Exception as _e:
-        st.error(f"SDR load failed: {_e}")
-        return
-    if sdf is None or sdf.empty:
-        st.info("No USD SDR swaption prints in this window.")
-        return
-
-    _hl_d = float(st.session_state.get("sdr_half_life", 21))
-    _mxa_d = float(st.session_state.get("sdr_max_age", 0))
-    _fitter = _sdr_bucket_atm_vols(sdf, _curve, hl_days=_hl_d, max_age=_mxa_d)
-    if not _fitter:
-        st.info("No USD straddles in this window mapped to a bucket vol.")
+    # ── Consume the SDR framework's EXACT ATM points ──────────────────────────
+    # These are the identical numbers shown in the SDR Live "SDR-derived ATM points"
+    # table (image 1): the fitter's own straddle pairing, per-leg inversion at the
+    # trade strike, recency+√notional weighting AND per-print outlier rejection.
+    # We do NOT re-pair or re-invert here — that is what kept diverging.
+    _pts_y = st.session_state.get("_sdr_atm_pts_y", {})
+    _pts_n = st.session_state.get("_sdr_atm_pts_n", {})
+    _pts_meta = st.session_state.get("_sdr_atm_pts_meta", {})
+    if not _pts_y:
+        st.info("No SDR ATM points yet. Open **SDR Live** (the DTCC view with the "
+                "“SDR-derived ATM points” table) once so the framework computes them — "
+                "the Bayesian then blends those exact points onto the surface.")
         return
 
     def _yk(e, t):
@@ -7333,26 +7279,31 @@ def _bayesian_atm_view():
     obs_by_key = {}
     _audit = []
     _nused = 0
-    for (_exp, _ten), _rec in _fitter.items():
+    for _ykey, _vol in _pts_y.items():
         try:
-            _vol = float(_rec.get("vol") or 0); _n = int(_rec.get("n") or 1)
-            if _vol <= 0:
+            _vol = float(_vol or 0)
+            if _vol <= 0 or _ykey not in _skeys:
                 continue
-            key = _yk(_exp, _ten)
-            if key is None or key not in _skeys:
-                continue
-            # one observation per bucket = the fitter's ATM vol; precision scales
-            # with trade count (notional slot carries n, ref_notional=1 below, age 0
-            # since the fitter already recency-weighted inside the bucket).
-            obs_by_key.setdefault(key, []).append((_vol, float(_n), 0.0))
+            _n = int(_pts_n.get(_ykey, 1) or 1)
+            # one observation per bucket = the framework's ATM point; precision scales
+            # with the number of prints behind it (notional slot carries n, ref_notional=1
+            # below, age 0 — recency/outlier handling already done by the framework).
+            obs_by_key.setdefault(_ykey, []).append((_vol, float(_n), 0.0))
             _nused += 1
-            _audit.append({"Exp": _exp, "Ten": _ten, "Trades": _n, "Fitter vol bp": round(_vol, 1)})
+            _e_lbl, _c_lbl = _skeys[_ykey]
+            _audit.append({"Expiry": _e_lbl, "Tenor": _c_lbl, "Prints": _n,
+                           "SDR point bp": round(_vol, 1)})
         except Exception:
             continue
 
     if _nused == 0:
-        st.info("No SDR fitter buckets map onto the current surface grid.")
+        st.info("SDR ATM points don't map onto the current surface grid.")
         return
+
+    if _pts_meta:
+        st.caption(f"Using {_nused} SDR-derived ATM point(s) "
+                   f"(last {_pts_meta.get('hours','?')}h, ±{_pts_meta.get('devcap','?')}% outlier cap) "
+                   f"— identical to the SDR Live points table.")
 
 
     # ── Per-bucket posterior across the surface ───────────────────────────────
@@ -7368,16 +7319,16 @@ def _bayesian_atm_view():
             sigma_obs=_sig_obs, half_life_h=float(_hl), nu=float(_nu), ref_notional=1.0)
 
     n_data = sum(1 for k in _skeys if obs_by_key.get(k))
-    st.caption(f"{_nused} SDR fitter bucket(s) read → {n_data} bucket(s) updated. "
+    st.caption(f"{_nused} SDR ATM point(s) → {n_data} bucket(s) updated. "
                f"Empty buckets stay at the prior (gain 0).")
 
     if _audit:
-        with st.expander(f"🔍 Bucket audit — SDR fitter vols feeding the fit ({len(_audit)})"):
-            _adf = pd.DataFrame(_audit).sort_values(["Exp", "Ten"]).reset_index(drop=True)
+        with st.expander(f"🔍 Points audit — SDR-derived ATM points feeding the fit ({len(_audit)})"):
+            _adf = pd.DataFrame(_audit).sort_values(["Expiry", "Tenor"]).reset_index(drop=True)
             st.dataframe(_adf, use_container_width=True, height=320)
-            st.caption("ATM vol per bucket read straight from the SDR analytics fitter "
-                       "(its own pairing, venue dedup, inversion and recency/notional weighting). "
-                       "Trades = prints the fitter aggregated for that bucket.")
+            st.caption("These are the identical points from the SDR Live “SDR-derived ATM "
+                       "points” table — the framework's own pairing, per-leg inversion at the "
+                       "trade strike, recency+√notional weighting and per-print outlier rejection.")
 
     # build mean / sigma / gain matrices over the surface
     # Final surface = smoothed (if smoothing enabled) else raw posterior. Computed
@@ -12160,6 +12111,17 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 for (_pe, _pt2), _pv in _av_pts.items():
                                     _kk = _yk(_pe, _pt2)
                                     if _kk: _av_pts_y[_kk] = _pv
+                                # Publish the framework's exact points so the Bayesian view
+                                # consumes IDENTICAL numbers (no separate pairing/inversion).
+                                try:
+                                    st.session_state["_sdr_atm_pts_y"] = dict(_av_pts_y)
+                                    st.session_state["_sdr_atm_pts_n"] = {
+                                        _yk(_pe, _pt2): _av_acc[(_pe, _pt2)][2]
+                                        for (_pe, _pt2) in _av_pts.keys() if _yk(_pe, _pt2)}
+                                    st.session_state["_sdr_atm_pts_meta"] = {
+                                        "hours": _av_hours, "devcap": _av_devcap, "ccy": _fit_ccy}
+                                except Exception:
+                                    pass
 
                                 if not _av_pts:
                                     st.info(f"No {_fit_ccy} straddles with usable strike/premium in the last {_av_hours}h.")
