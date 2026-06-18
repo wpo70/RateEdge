@@ -6946,6 +6946,283 @@ def _eu_solve_normal_vol(premium_bp, F, K, E, A, payer=True):
     return (lo + hi) / 2.0 * 1e4
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  BAYESIAN ATM FITTER (optional, additive) — per-bucket Normal-Normal posterior.
+#  Prior = current ATM surface; each SDR straddle = a noisy observation. The blend
+#  weight is the emergent Kalman gain (per bucket, from data density/recency/
+#  notional); outliers are softly down-weighted via a Student-t likelihood; the
+#  posterior variance is a confidence per cell. Leaves the deterministic fitter
+#  untouched. USD-only for now. AUD/EUR/NZD untouched.
+# ══════════════════════════════════════════════════════════════════════════════
+def _bayes_obs_var(notional, age_hours, sigma_obs, half_life_h, ref_notional):
+    """Observation variance σ_k² for one print (smaller = more trusted).
+    w_k = recency_decay × √notional;  σ_k² = σ_obs² / w_k."""
+    recency = 0.5 ** (max(age_hours, 0.0) / max(half_life_h, 1e-6))
+    nf = math.sqrt(notional / ref_notional) if (notional and notional > 0) else 1.0
+    return sigma_obs ** 2 / max(recency * nf, 1e-6)
+
+
+def _bayes_bucket_posterior(prior_mean, prior_var, obs,
+                            sigma_obs=4.0, half_life_h=12.0, ref_notional=100e6,
+                            nu=4.0, iters=4):
+    """Normal-Normal posterior for one bucket with Student-t robustness.
+    obs = list of (vol_bp, notional, age_hours). Returns dict with
+    mean, var, gain (=Kalman gain), eff_n, n."""
+    P0 = 1.0 / prior_var
+    if not obs:
+        return {"mean": prior_mean, "var": prior_var, "gain": 0.0, "eff_n": 0.0, "n": 0}
+    y = np.array([o[0] for o in obs], float)
+    s2 = np.array([_bayes_obs_var(o[1], o[2], sigma_obs, half_life_h, ref_notional)
+                   for o in obs], float)
+    mu = prior_mean
+    rw = np.ones_like(y)
+    for _ in range(max(int(iters), 1)):
+        prec = rw / s2
+        Pd = prec.sum()
+        mu = (prior_mean * P0 + (prec * y).sum()) / (P0 + Pd)
+        r2 = ((y - mu) ** 2) / s2
+        rw = (nu + 1.0) / (nu + r2)          # Student-t EM weight
+    prec = rw / s2
+    Pd = prec.sum()
+    return {"mean": mu, "var": 1.0 / (P0 + Pd), "gain": Pd / (P0 + Pd),
+            "eff_n": float(rw.sum()), "n": len(obs)}
+
+
+def _bayesian_atm_view():
+    """Optional Bayesian per-bucket ATM-vol fitter on USD SDR straddles. Additive —
+    the deterministic ATM fitter is untouched. USD-only for now; MiFIR / other
+    currencies are scaffolded but disabled until mapped in. Whole body is wrapped
+    in try/except by the caller so it can never take down the SDR panel."""
+    import datetime as _dt
+    st.markdown("### 🧮 Bayesian ATM Fitter — USD  ·  *optional*")
+    st.caption("Per-bucket Normal-Normal posterior. Prior = current ATM surface; each SDR "
+               "straddle is a noisy observation. The blend weight is the Kalman gain — it "
+               "emerges per bucket from data density, recency and notional, so there's no "
+               "global 0.5 slider. Outliers are softly down-weighted (Student-t, no hard "
+               "cliff) and every cell gets a confidence (posterior σ).")
+
+    _cur = st.session_state.get("sidebar_ccy", "AUD").split(" ")[0]
+    if _cur != "USD":
+        st.info("Bayesian fitter is USD-only for now — switch the sidebar currency to USD.")
+        return
+
+    # Source toggle (scaffold). Only SDR is wired in; the rest light up once the
+    # EUR / multi-currency mapping lands.
+    _bsrc = st.radio("Source", ["SDR", "MiFIR (EUR — soon)", "Combined (soon)"],
+                     horizontal=True, key="_bayes_src")
+    if _bsrc != "SDR":
+        st.info("Only SDR is wired in right now. MiFIR / combined switch on once the "
+                "EUR + multi-currency mapping is in.")
+        return
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1: _win_h = st.slider("Window (hours)", 6, 96, 24, 6, key="_bayes_win")
+    with c2: _prior_sig = st.slider("Prior σ (bp)", 1.0, 20.0, 6.0, 0.5, key="_bayes_psig",
+                                    help="how much to trust the current surface, per bucket")
+    with c3: _sig_obs = st.slider("Obs σ (bp)", 1.0, 12.0, 4.0, 0.5, key="_bayes_osig",
+                                  help="assumed noise of one straddle inversion")
+    with c4: _hl = st.slider("Recency half-life (h)", 2, 48, 12, 2, key="_bayes_hl")
+    with c5: _nu = st.slider("Robustness ν", 1.0, 30.0, 4.0, 1.0, key="_bayes_nu",
+                             help="low = aggressive outlier rejection; high → Gaussian")
+
+    _atm = get_working_atm_surface("USD")
+    if _atm is None or "Expiry" not in getattr(_atm, "columns", []):
+        st.warning("No USD ATM surface loaded — load one via the Vol Editor / IRS upload first.")
+        return
+    _cols = [c for c in _atm.columns if c != "Expiry"]
+
+    _curve = st.session_state.get("config_curves", {}).get("USD")
+    if _curve is None:
+        _curve = get_ccy_curve("USD")
+    if _curve is None:
+        st.warning("No USD curve available.")
+        return
+
+    # ── Collect prints EXACTLY like the SDR fitter ────────────────────────────
+    # Same path as the SDR analytics/fitter: pair CALL/PUT legs via
+    # _pair_swaption_legs (straddles + strangles) AND pick up pre-combined STR
+    # rows. No bespoke query/inversion — identical reading, just aggregated
+    # Bayesianly. (USD uses the curve forward directly; no EUR projection.)
+    q = ("SELECT option_type_decoded, opt_tenor, swp_tenor, strike_pct, "
+         "premium_amount, notional_leg1, platform_identifier, "
+         "execution_timestamp, event_timestamp "
+         "FROM dtcc_sdr WHERE notional_ccy='USD' "
+         "AND execution_timestamp > NOW() - INTERVAL '1 hour' * %s "
+         "ORDER BY execution_timestamp DESC LIMIT 20000")
+    try:
+        sdf = _load_sdr_data_cached(q, (int(_win_h),))
+    except Exception as _e:
+        st.error(f"SDR load failed: {_e}")
+        return
+    if sdf is None or sdf.empty:
+        st.info("No USD SDR swaption prints in this window.")
+        return
+
+    def _yk(e, t):
+        try: return (round(label_to_years(e), 4), round(label_to_years(t), 4))
+        except Exception: return None
+
+    # surface buckets keyed by (exp_years, tenor_years) -> (Expiry label, tenor col)
+    _skeys = {}
+    for _i in range(len(_atm)):
+        _e = _atm.iloc[_i]["Expiry"]
+        for _c in _cols:
+            k = _yk(_e, _c)
+            if k: _skeys[k] = (_e, _c)
+
+    _now = _dt.datetime.now(_dt.timezone.utc)
+    obs_by_key = {}
+    _nused = 0
+
+    def _age_h(_t):
+        try:
+            _t = pd.to_datetime(_t, errors="coerce", utc=True)
+            return max((_now - _t.to_pydatetime()).total_seconds() / 3600.0, 0.0) \
+                if _t is not pd.NaT else 0.0
+        except Exception:
+            return 0.0
+
+    def _add(E, tenor, iv, notional, age):
+        key = (round(float(E), 4), round(float(tenor), 4))
+        if key in _skeys and iv and iv > 0:
+            obs_by_key.setdefault(key, []).append((iv, notional, age))
+            return True
+        return False
+
+    # 1) paired CALL/PUT legs (same matching as the USD SDR analytics)
+    for _pair in _pair_swaption_legs(sdf):
+        try:
+            E = label_to_years(str(_pair["exp"])); ten = label_to_years(str(_pair["ten"]))
+            if not E or not ten or E <= 0 or ten <= 0:
+                continue
+            tenor = int(round(ten))
+            _not = float(_pair["notional"] or 0)
+            if _not <= 0:
+                continue
+            F, A, _ = forward_and_annuity_from_curve(_curve, "USD", float(E), float(tenor))
+            if not F or A <= 0:
+                continue
+            _Kp = (_pair["p_strike"] / 100.0) if _pair["p_strike"] else F
+            _Kr = (_pair["r_strike"] / 100.0) if _pair["r_strike"] else F
+            if abs(_Kp - F) > 0.015: _Kp = F
+            if abs(_Kr - F) > 0.015: _Kr = F
+            _pp_bp = _pair["p_prem"] / _not * 1e4 if _pair["p_prem"] > 0 else 0.0
+            _rp_bp = _pair["r_prem"] / _not * 1e4 if _pair["r_prem"] > 0 else 0.0
+            _vp = _eu_solve_normal_vol(_pp_bp, F, _Kp, float(E), A, True) if _pp_bp > 0 else None
+            _vr = _eu_solve_normal_vol(_rp_bp, F, _Kr, float(E), A, False) if _rp_bp > 0 else None
+            _vs = [v for v in (_vp, _vr) if v and v > 0]
+            if not _vs:
+                continue
+            if _add(E, tenor, sum(_vs) / len(_vs), _not, _age_h(_pair.get("time"))):
+                _nused += 1
+        except Exception:
+            continue
+
+    # 2) pre-combined STR rows (single row = both legs, one premium)
+    try:
+        _strs = sdf[sdf["option_type_decoded"] == "STR"] if "option_type_decoded" in sdf.columns else sdf.iloc[0:0]
+    except Exception:
+        _strs = sdf.iloc[0:0]
+    for _, _sr in _strs.iterrows():
+        try:
+            E = label_to_years(str(_sr.get("opt_tenor") or "").strip())
+            ten = label_to_years(str(_sr.get("swp_tenor") or "").strip())
+            if not E or not ten or E <= 0 or ten <= 0:
+                continue
+            tenor = int(round(ten))
+            _not = float(_sr.get("notional_leg1") or 0)
+            _pa = float(_sr.get("premium_amount") or 0)
+            if _not <= 0 or _pa <= 0:
+                continue
+            F, A, _ = forward_and_annuity_from_curve(_curve, "USD", float(E), float(tenor))
+            if not F or A <= 0:
+                continue
+            _K = (float(_sr.get("strike_pct")) / 100.0) if _sr.get("strike_pct") else F
+            if abs(_K - F) > 0.015:
+                _K = F
+            _leg_bp = (_pa / _not * 1e4) / 2.0           # straddle premium -> per leg
+            iv = _eu_solve_normal_vol(_leg_bp, F, _K, float(E), A, True)
+            if not iv or iv <= 0:
+                continue
+            if _add(E, tenor, iv, _not, _age_h(_sr.get("execution_timestamp"))):
+                _nused += 1
+        except Exception:
+            continue
+
+    if _nused == 0:
+        st.info("No straddle prints mapped onto the surface grid in this window.")
+        return
+
+    # ── Per-bucket posterior across the surface ───────────────────────────────
+    post = {}
+    for key, (_e, _c) in _skeys.items():
+        try:
+            mu0 = float(_atm.iloc[[i for i in range(len(_atm))
+                                   if _atm.iloc[i]["Expiry"] == _e][0]][_c])
+        except Exception:
+            continue
+        post[(_e, _c)] = _bayes_bucket_posterior(
+            mu0, _prior_sig ** 2, obs_by_key.get(key, []),
+            sigma_obs=_sig_obs, half_life_h=float(_hl), nu=float(_nu))
+
+    n_data = sum(1 for k in _skeys if obs_by_key.get(k))
+    st.caption(f"{_nused} USD straddle print(s) → {n_data} bucket(s) updated "
+               f"(last {_win_h}h). Empty buckets stay at the prior (gain 0).")
+
+    # build mean / sigma / gain matrices over the surface
+    def _matrix(field, nd=1):
+        rows = []
+        for _i in range(len(_atm)):
+            _e = _atm.iloc[_i]["Expiry"]; row = {"Expiry": _e}
+            for _c in _cols:
+                p = post.get((_e, _c))
+                if field == "mean":
+                    row[_c] = round(p["mean"], 2) if p else None
+                elif field == "sigma":
+                    row[_c] = round(p["var"] ** 0.5, nd) if p else None
+                elif field == "gain":
+                    row[_c] = round(p["gain"], 2) if p else None
+            rows.append(row)
+        return pd.DataFrame(rows).set_index("Expiry")
+
+    _post_mean = _matrix("mean")
+    st.markdown("**Posterior ATM surface (bp):**")
+    try:
+        st.dataframe(_post_mean.style.background_gradient(cmap="RdYlGn_r", axis=None)
+                     .format("{:.1f}"), use_container_width=True)
+    except Exception:
+        st.dataframe(_post_mean, use_container_width=True)
+
+    st.markdown("**Confidence — posterior σ (bp, lower = tighter):**")
+    _sig = _matrix("sigma")
+    try:
+        st.dataframe(_sig.style.background_gradient(cmap="Greens_r", axis=None)
+                     .format("{:.1f}"), use_container_width=True)
+    except Exception:
+        st.dataframe(_sig, use_container_width=True)
+
+    with st.expander("Kalman gain per bucket (emergent blend weight, 0=prior · 1=data)"):
+        _g = _matrix("gain")
+        try:
+            st.dataframe(_g.style.background_gradient(cmap="Blues", axis=None)
+                         .format("{:.2f}"), use_container_width=True)
+        except Exception:
+            st.dataframe(_g, use_container_width=True)
+
+    if st.button("⬆️ Upload posterior ATM to Vol Editor", key="_bayes_upload"):
+        _imp = _atm.copy()
+        for _i in range(len(_imp)):
+            _e = _imp.iloc[_i]["Expiry"]
+            for _c in _cols:
+                p = post.get((_e, _c))
+                if p:
+                    _imp.iloc[_i, _imp.columns.get_loc(_c)] = round(p["mean"], 2)
+        st.session_state["_sod_usd_pending_surface"] = _imp
+        st.success("✅ Sent to Vol Editor. Open the **Vol Editor** tab, click "
+                   "**📋 Load SOD Implied Open → Editor**, review the highlighted "
+                   "changes, then **Publish**.")
+
+
 _EU_BROKER_NAMES = {
     # BGC family
     "BGCD": "BGC", "BGCO": "BGC", "BGCI": "BGC", "AURO": "Aurel BGC",
@@ -8721,17 +8998,29 @@ def sdr_live_tab():
     except Exception:
         pass
 
-    # ── Reporting-source sub-menu: DTCC (existing) vs EU MiFIR ────────────────
-    # EU MiFIR is EUR-only flow, so the toggle only appears on the EUR page.
+    # ── Reporting-source sub-menu: DTCC (existing) · EU MiFIR (EUR) · Bayesian ──
+    # EU MiFIR is EUR-only flow (EUR page only). Bayesian is an optional USD tool.
     _cur_ccy = st.session_state.get("sidebar_ccy", "AUD").split(" ")[0]
+    _src_opts = ["SDR DTCC"]
     if _cur_ccy == "EUR":
+        _src_opts.append("EU MiFIR")
+    _src_opts.append("Bayesian")
+    if len(_src_opts) > 1:
         _sdr_source = st.radio(
             "Reporting source",
-            ["SDR DTCC", "EU MiFIR"],
+            _src_opts,
             horizontal=True, key="_sdr_source_sel", label_visibility="collapsed",
         )
         if _sdr_source == "EU MiFIR":
             eu_mifir_tab()
+            return
+        if _sdr_source == "Bayesian":
+            try:
+                _bayesian_atm_view()
+            except Exception as _be:
+                st.warning("⚠️ Bayesian fitter hit an error (optional tool — the rest of "
+                           "SDR Live is unaffected). Details:")
+                st.exception(_be)
             return
 
 
