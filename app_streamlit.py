@@ -7021,6 +7021,56 @@ def _bayes_spatial_smooth(post, atm, cols, lam):
     return out
 
 
+def _usd_bucket_df(curve, E):
+    """Expiry discount factor on the SOFR curve — exact copy of the SDR analytics'
+    `_bucket_df`, so inverted vols reprice through the pricer's forward premium."""
+    try:
+        if curve is None:
+            return 1.0
+        ox = curve[curve.columns[0]].to_numpy().astype(float)
+        oy = curve[curve.columns[1]].to_numpy().astype(float) / 100.0
+        rz = float(np.interp(float(E), ox, oy))
+        return math.exp(-rz * float(E))
+    except Exception:
+        return 1.0
+
+
+def _bch_invert_usd(prem_bp, F, K, T, is_payer, annuity=1.0, df=1.0):
+    """Bachelier inversion — exact copy of the SDR analytics' `_bch_invert_sabr`.
+    SDR premiums are FORWARD premiums: option_value = prem_bp/1e4 / annuity * df
+    (the df multiply is essential; omitting it backs out vols ~1/df too high)."""
+    if prem_bp <= 0 or T <= 0 or F <= 0 or K <= 0:
+        return None
+    _ann = annuity if annuity and annuity > 0 else 1.0
+    _df = df if df and df > 0 else 1.0
+    prem_r = prem_bp / 10000.0 / _ann * _df
+    def _err(sig):
+        if sig <= 1e-9:
+            return -prem_r
+        d = (F - K) / (sig * math.sqrt(T))
+        nd = 0.5 * (1 + math.erf(d / math.sqrt(2)))
+        npd = math.exp(-0.5 * d * d) / math.sqrt(2 * math.pi)
+        val = ((F - K) * nd + sig * math.sqrt(T) * npd) if is_payer \
+            else ((K - F) * (1 - nd) + sig * math.sqrt(T) * npd)
+        return val - prem_r
+    lo, hi = 1e-7, 0.15
+    try:
+        if _err(hi) < 0:
+            return None
+        mid = hi
+        for _ in range(100):
+            mid = (lo + hi) / 2.0
+            if _err(mid) < 0:
+                lo = mid
+            else:
+                hi = mid
+            if hi - lo < 1e-9:
+                break
+        return mid * 10000.0
+    except Exception:
+        return None
+
+
 def _bayesian_atm_view():
     """Optional Bayesian per-bucket ATM-vol fitter on USD SDR straddles. Additive —
     the deterministic ATM fitter is untouched. USD-only for now; MiFIR / other
@@ -7187,14 +7237,14 @@ def _bayesian_atm_view():
                     if _not <= 0 or _strd_prem <= 0 or not E or not ten or E <= 0 or ten <= 0:
                         break
                     tenor = int(round(ten))
-                    F, A, _ = forward_and_annuity_from_curve(_curve, "USD", float(E), float(tenor))
+                    F, A, _ = forward_and_annuity_from_curve(_curve, "USD", float(E), float(tenor), None)
                     if not F or A <= 0:
                         break
                     _K = (_s_p / 100.0) if _s_p else F
                     if abs(_K - F) > 0.015: _K = F
                     _strd_bp = _strd_prem / _not * 1e4         # FULL straddle premium bp
                     _leg_bp = _strd_bp / 2.0                   # -> per leg
-                    iv = _eu_solve_normal_vol(_leg_bp, F, _K, float(E), A, True)
+                    iv = _bch_invert_usd(_leg_bp, F, _K, float(E), True, A, _usd_bucket_df(_curve, float(E)))
                     if not iv or iv <= 0:
                         break
                     if _add(E, tenor, iv, _not, _age_h(_p.get("execution_timestamp"))):
@@ -7224,7 +7274,7 @@ def _bayesian_atm_view():
             _pa = float(_sr.get("premium_amount") or 0)
             if _not <= 0 or _pa <= 0:
                 continue
-            F, A, _ = forward_and_annuity_from_curve(_curve, "USD", float(E), float(tenor))
+            F, A, _ = forward_and_annuity_from_curve(_curve, "USD", float(E), float(tenor), None)
             if not F or A <= 0:
                 continue
             _K = (float(_sr.get("strike_pct")) / 100.0) if _sr.get("strike_pct") else F
@@ -7232,7 +7282,7 @@ def _bayesian_atm_view():
                 _K = F
             _strd_bp = _pa / _not * 1e4
             _leg_bp = _strd_bp / 2.0                      # straddle premium -> per leg
-            iv = _eu_solve_normal_vol(_leg_bp, F, _K, float(E), A, True)
+            iv = _bch_invert_usd(_leg_bp, F, _K, float(E), True, A, _usd_bucket_df(_curve, float(E)))
             if not iv or iv <= 0:
                 continue
             if _add(E, tenor, iv, _not, _age_h(_sr.get("execution_timestamp"))):
