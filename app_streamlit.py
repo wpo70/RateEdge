@@ -6989,14 +6989,12 @@ def _bayes_bucket_posterior(prior_mean, prior_var, obs,
 
 
 def _bayes_spatial_smooth(post, atm, cols, lam):
-    """Precision-weighted spatial pass — SPREADS the high-confidence SDR signal.
-    Each bucket is pulled toward a PRECISION-weighted average of its 4 grid
-    neighbours, scaled by its OWN uncertainty (1-gain): a confident/moved bucket
-    barely budges, while an empty/uncertain neighbour is pulled toward it. Because
-    the neighbour average is precision-weighted, a confident moved bucket dominates
-    the pull on its sparse neighbours — i.e. the real ATM straddle print is spread
-    outward, not blurred away. lam in [0,1] = strength (0 = off).
-    Returns {(exp_label, tenor_col): smoothed_mean}."""
+    """Mild local smoothing AMONG OBSERVED BUCKETS ONLY. A bucket that actually has
+    SDR data is nudged toward the precision-weighted mean of its immediately
+    adjacent OBSERVED neighbours; buckets with no data stay exactly at the prior
+    (surface) and are NEVER invented. This stops a single print smearing across an
+    empty row/column — the artefact the old 'spread' pass produced. lam in [0,1] =
+    strength (0 = off). Returns {(exp_label, tenor_col): smoothed_mean}."""
     exps = [atm.iloc[i]["Expiry"] for i in range(len(atm))]
     ci = {c: i for i, c in enumerate(cols)}
     out = {}
@@ -7005,19 +7003,21 @@ def _bayes_spatial_smooth(post, atm, cols, lam):
             p = post.get((e, _c))
             if not p:
                 continue
+            # only touch buckets that actually moved (have data); priors stay put
+            if p.get("gain", 0.0) <= 1e-6:
+                out[(e, _c)] = p["mean"]; continue
             neigh = []
             for de, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
                 ne, nc = _i + de, ci[_c] + dc
                 if 0 <= ne < len(exps) and 0 <= nc < len(cols):
                     q = post.get((exps[ne], cols[nc]))
-                    if q:
+                    if q and q.get("gain", 0.0) > 1e-6:      # observed neighbours only
                         neigh.append((q["mean"], 1.0 / max(q["var"], 1e-9)))
             if not neigh:
                 out[(e, _c)] = p["mean"]; continue
             wsum = sum(w for _, w in neigh)
             nbar = sum(m * w for m, w in neigh) / wsum
-            pull = lam * (1.0 - p["gain"])      # uncertain buckets pulled more
-            out[(e, _c)] = (1 - pull) * p["mean"] + pull * nbar
+            out[(e, _c)] = (1 - lam) * p["mean"] + lam * nbar
     return out
 
 
@@ -7110,55 +7110,96 @@ def _sdr_agg_bucket_norm(_trs, _Ft, _Ty, _ann, _df, _hl_days, _max_age=0):
 
 
 def _sdr_bucket_atm_vols(sdf, curve, hl_days=21.0, max_age=0.0):
-    """Raw USD SDR rows -> {(expiry,tenor): {vol, n}} ATM market vols, using the
-    SAME pairing (Straddle Detection + per-venue premium dedup) and the SAME
-    aggregation/inversion as the analytics fitter. Self-contained: no tab needs to
-    have been visited. `vol` is the bucket's ATM normal vol in bp."""
+    """Raw USD SDR rows -> {(expiry,tenor): {vol, n}} ATM vols, replicating the SDR
+    analytics fitter's straddle pairing EXACTLY (same-strike swaption pairs only,
+    notional-matched within 1%, same-strike→nearest→closest-time ranking, 600s
+    window, full venue dedup set, caps/floors & strangles excluded), then the
+    fitter's aggregation/inversion. Self-contained — no tab needs to be visited."""
     out = {}
     if sdf is None or getattr(sdf, "empty", True) or "strike_pct" not in sdf.columns:
         return out
-    _DED = {"BGCD", "TPSE", "TSEF", "TWSF", "IGDL", "ISWE", "ISWV", "GSEF", "BILT", "XXXX"}
+    _DED = {"BGCD","BGCO","BGCI","TPSE","TPIR","TPEU","TSEF","TSIR","TSAF","TWSF",
+            "TWEM","IGDL","ISWE","ISWV","IOIR","IMRD","GSEF","GFSO","BILT","XXXX"}
     _newt = sdf[sdf["action_type"] == "NEWT"].copy() if "action_type" in sdf.columns else sdf.copy()
     _pay = _newt[_newt["option_type_decoded"] == "CALL"].copy()
     _rcv = _newt[_newt["option_type_decoded"] == "PUT"].copy()
     if _pay.empty or _rcv.empty:
         return out
+
+    # Order payers: those with a same-strike receiver (straddle legs) FIRST, so they
+    # consume the straddle partner before an R/R payer can steal it (fitter rule).
+    try:
+        _rcv_strk = set(round(float(x), 2) for x in _rcv["strike_pct"].dropna())
+        _pay = _pay.assign(_has_same=_pay["strike_pct"].apply(
+            lambda v: 1 if (pd.notna(v) and round(float(v), 2) in _rcv_strk) else 0)
+        ).sort_values("_has_same", ascending=False)
+    except Exception:
+        pass
+
     _matched = set(); _bmap = {}
-    for _, _p in _pay.iterrows():
+    for _pi, _p in _pay.iterrows():
         try:
             _s_p = round(float(_p.get("strike_pct") or 0), 2)
-            _e_p = str(_p.get("opt_tenor", "")); _t_p = str(_p.get("swp_tenor", ""))
+            _e_p = str(_p.get("opt_tenor", "") or "").strip()
+            _t_p = str(_p.get("swp_tenor", "") or "").strip()
+            _ccy_p = str(_p.get("notional_ccy", ""))
+            # swaptions only (no caps/floors) for ATM — fitter's _has_swp
+            if not (_t_p and _t_p not in ("—", "NA", "None", "")):
+                continue
             _tp = pd.to_datetime(_p.get("execution_timestamp") or _p.get("event_timestamp"), errors="coerce")
             if _tp is pd.NaT:
                 continue
+            _np_p = float(_p.get("notional_leg1") or 0)
+            # candidates: same expiry, ccy, swp tenor, unconsumed
             _cand = _rcv[(~_rcv.index.isin(_matched)) &
-                         (_rcv["opt_tenor"] == _e_p) & (_rcv["swp_tenor"] == _t_p) &
-                         (_rcv["strike_pct"].apply(lambda x: abs(float(x or 0) - _s_p) < 0.01))]
+                         (_rcv["opt_tenor"] == _e_p) &
+                         (_rcv["notional_ccy"] == _ccy_p) &
+                         (_rcv["swp_tenor"] == _t_p)]
+            if _np_p > 0 and not _cand.empty:
+                _rn = _cand["notional_leg1"].astype(float)
+                _cand = _cand[(_rn - _np_p).abs() <= 0.01 * _np_p]   # same-size legs only
+            if _cand.empty:
+                continue
+            # rank: exact same-strike, then nearest strike, then closest in time
+            _sp = _cand["strike_pct"].astype(float)
+            _gap = (_sp - _s_p).abs()
+            _same = (_gap < 0.01).astype(int)
+            _tsec = _cand.apply(lambda _row: abs((_tp - pd.to_datetime(
+                _row.get("execution_timestamp") or _row.get("event_timestamp"), errors="coerce")
+                ).total_seconds()) if pd.notna(pd.to_datetime(
+                _row.get("execution_timestamp") or _row.get("event_timestamp"), errors="coerce")) else 9e9, axis=1)
+            _cand = _cand.assign(_is_same=_same, _gap=_gap, _tsec=_tsec).sort_values(
+                ["_is_same", "_gap", "_tsec"], ascending=[False, True, True])
             for _ri, _r in _cand.iterrows():
                 _tr = pd.to_datetime(_r.get("execution_timestamp") or _r.get("event_timestamp"), errors="coerce")
-                if _tr is pd.NaT or abs((_tp - _tr).total_seconds()) > 120:
+                if _tr is pd.NaT or abs((_tp - _tr).total_seconds()) > 600:
                     continue
+                _s_r = round(float(_r.get("strike_pct") or 0), 2)
+                if abs(_s_p - _s_r) >= 0.01:
+                    break   # best partner is a strangle, not a straddle -> not ATM, skip
                 _matched.add(_ri)
                 _pp = float(_p.get("premium_amount") or 0); _rp = float(_r.get("premium_amount") or 0)
                 _not = float(_p.get("notional_leg1") or 0)
                 if _not <= 0:
                     break
                 _mic = str(_p.get("platform_identifier", ""))
-                # per-venue premium convention -> PER-LEG premium bp (what _agg expects)
+                # same-strike venue dedup: both legs report full straddle -> max, split 50/50
                 if _mic in _DED and _pp > 0 and _rp > 0:
-                    _leg = (max(_pp, _rp) / 2.0) / _not * 1e4   # double-report: full straddle/2
-                    _pbp = _rbp = _leg
+                    _comb = max(_pp, _rp); _pp2 = _rp2 = _comb / 2.0
                 else:
-                    _pbp = _pp / _not * 1e4                      # genuine per-leg
-                    _rbp = _rp / _not * 1e4
+                    _pp2 = _pp; _rp2 = _rp
+                _pbp = _pp2 / _not * 1e4; _rbp = _rp2 / _not * 1e4
+                if _pbp <= 0 or _rbp <= 0:
+                    break
                 _bmap.setdefault((_e_p, _t_p), []).append({
-                    "_p_strike": _s_p, "_r_strike": round(float(_r.get("strike_pct") or 0), 2),
+                    "_p_strike": _s_p, "_r_strike": _s_r,
                     "P Prem BP": _pbp, "R Prem BP": _rbp,
                     "_time_dt": _tp.to_pydatetime().replace(tzinfo=None) if _tp is not pd.NaT else None,
                     "_notional_num": _not})
                 break
         except Exception:
             continue
+
     for (_e, _t), _trs in _bmap.items():
         try:
             _T = label_to_years(_e); _ten = label_to_years(_t)
