@@ -7071,6 +7071,111 @@ def _bch_invert_usd(prem_bp, F, K, T, is_payer, annuity=1.0, df=1.0):
         return None
 
 
+def _sdr_agg_bucket_norm(_trs, _Ft, _Ty, _ann, _df, _hl_days, _max_age=0):
+    """Verbatim copy of the SDR analytics fitter's `_agg_bucket_norm`, calling the
+    module-level `_bch_invert_usd`. Collapses a bucket's prints into recency- &
+    notional-weighted (Kp,Kr,vp_mkt,vr_mkt). Single source of the fitter's vol math."""
+    import datetime as _dtm
+    _now = _dtm.datetime.now()
+    _ln2 = math.log(2.0)
+    _ws = 0.0; _op = 0.0; _orr = 0.0; _vp = 0.0; _vr = 0.0
+    for _t in _trs:
+        try:
+            _kp = float(_t.get("_p_strike") or 0) / 100.0
+            _kr = float(_t.get("_r_strike") or 0) / 100.0
+            if _kp <= 0 or _kr <= 0: continue
+            _pp = float(_t.get("P Prem BP") or 0)
+            _rp = float(_t.get("R Prem BP") or 0)
+            if _pp <= 0 or _rp <= 0: continue
+            _mid = 0.5 * (_kp + _kr)
+            _sp = _bch_invert_usd(_pp, _mid, _kp, _Ty, True,  _ann, _df)
+            _sr = _bch_invert_usd(_rp, _mid, _kr, _Ty, False, _ann, _df)
+            if not _sp or not _sr: continue
+            _tdt = _t.get("_time_dt")
+            _age = max((_now - _tdt).total_seconds() / 86400.0, 0.0) if _tdt is not None else 0.0
+            if _max_age and _max_age > 0 and _tdt is not None and _age > _max_age:
+                continue
+            _wr = math.exp(-_ln2 * _age / _hl_days) if (_tdt is not None and _hl_days and _hl_days > 0) else 1.0
+            _nm = float(_t.get("_notional_num") or 0)
+            _wn = math.sqrt(_nm / 1e6) if _nm > 0 else 1.0
+            _w = _wr * _wn
+            if _w <= 0: continue
+            _op += _w * (_kp - _mid); _orr += _w * (_kr - _mid)
+            _vp += _w * _sp; _vr += _w * _sr; _ws += _w
+        except Exception:
+            continue
+    if _ws <= 0:
+        return None, None, None, None
+    return (_Ft + _op / _ws, _Ft + _orr / _ws, _vp / _ws, _vr / _ws)
+
+
+def _sdr_bucket_atm_vols(sdf, curve, hl_days=21.0, max_age=0.0):
+    """Raw USD SDR rows -> {(expiry,tenor): {vol, n}} ATM market vols, using the
+    SAME pairing (Straddle Detection + per-venue premium dedup) and the SAME
+    aggregation/inversion as the analytics fitter. Self-contained: no tab needs to
+    have been visited. `vol` is the bucket's ATM normal vol in bp."""
+    out = {}
+    if sdf is None or getattr(sdf, "empty", True) or "strike_pct" not in sdf.columns:
+        return out
+    _DED = {"BGCD", "TPSE", "TSEF", "TWSF", "IGDL", "ISWE", "ISWV", "GSEF", "BILT", "XXXX"}
+    _newt = sdf[sdf["action_type"] == "NEWT"].copy() if "action_type" in sdf.columns else sdf.copy()
+    _pay = _newt[_newt["option_type_decoded"] == "CALL"].copy()
+    _rcv = _newt[_newt["option_type_decoded"] == "PUT"].copy()
+    if _pay.empty or _rcv.empty:
+        return out
+    _matched = set(); _bmap = {}
+    for _, _p in _pay.iterrows():
+        try:
+            _s_p = round(float(_p.get("strike_pct") or 0), 2)
+            _e_p = str(_p.get("opt_tenor", "")); _t_p = str(_p.get("swp_tenor", ""))
+            _tp = pd.to_datetime(_p.get("execution_timestamp") or _p.get("event_timestamp"), errors="coerce")
+            if _tp is pd.NaT:
+                continue
+            _cand = _rcv[(~_rcv.index.isin(_matched)) &
+                         (_rcv["opt_tenor"] == _e_p) & (_rcv["swp_tenor"] == _t_p) &
+                         (_rcv["strike_pct"].apply(lambda x: abs(float(x or 0) - _s_p) < 0.01))]
+            for _ri, _r in _cand.iterrows():
+                _tr = pd.to_datetime(_r.get("execution_timestamp") or _r.get("event_timestamp"), errors="coerce")
+                if _tr is pd.NaT or abs((_tp - _tr).total_seconds()) > 120:
+                    continue
+                _matched.add(_ri)
+                _pp = float(_p.get("premium_amount") or 0); _rp = float(_r.get("premium_amount") or 0)
+                _not = float(_p.get("notional_leg1") or 0)
+                if _not <= 0:
+                    break
+                _mic = str(_p.get("platform_identifier", ""))
+                # per-venue premium convention -> PER-LEG premium bp (what _agg expects)
+                if _mic in _DED and _pp > 0 and _rp > 0:
+                    _leg = (max(_pp, _rp) / 2.0) / _not * 1e4   # double-report: full straddle/2
+                    _pbp = _rbp = _leg
+                else:
+                    _pbp = _pp / _not * 1e4                      # genuine per-leg
+                    _rbp = _rp / _not * 1e4
+                _bmap.setdefault((_e_p, _t_p), []).append({
+                    "_p_strike": _s_p, "_r_strike": round(float(_r.get("strike_pct") or 0), 2),
+                    "P Prem BP": _pbp, "R Prem BP": _rbp,
+                    "_time_dt": _tp.to_pydatetime().replace(tzinfo=None) if _tp is not pd.NaT else None,
+                    "_notional_num": _not})
+                break
+        except Exception:
+            continue
+    for (_e, _t), _trs in _bmap.items():
+        try:
+            _T = label_to_years(_e); _ten = label_to_years(_t)
+            if not _T or not _ten or _T <= 0 or _ten <= 0:
+                continue
+            _F, _A, _ = forward_and_annuity_from_curve(curve, "USD", _T, _ten, None)
+            if not _F or not _A or _A <= 0:
+                continue
+            _dfx = _usd_bucket_df(curve, _T)
+            _, _, _mvp, _mvr = _sdr_agg_bucket_norm(_trs, _F, _T, _A, _dfx, hl_days, max_age)
+            if _mvp and _mvr:
+                out[(_e, _t)] = {"vol": 0.5 * (_mvp + _mvr), "n": len(_trs)}
+        except Exception:
+            continue
+    return out
+
+
 def _bayesian_atm_view():
     """Optional Bayesian per-bucket ATM-vol fitter on USD SDR straddles. Additive —
     the deterministic ATM fitter is untouched. USD-only for now; MiFIR / other
@@ -7146,12 +7251,10 @@ def _bayesian_atm_view():
         st.warning("No USD curve available.")
         return
 
-    # ── Collect prints via the SDR full-analytics straddle logic ──────────────
-    # Pair CALL/PUT into straddles the SAME way the "Straddle Detection" analytics
-    # does, INCLUDING its per-venue premium-convention handling: MICs that report
-    # the full straddle on each leg are deduped with max(p,r); everyone else (genuine
-    # per-leg, e.g. Dealerweb) is summed p+r. This is the handling already built and
-    # verified in the analytics — no bespoke heuristic, no surface anchor.
+    # ── Compute the fitter's per-bucket ATM vols here, via the shared function ──
+    # _sdr_bucket_atm_vols is the analytics fitter's exact pairing + aggregation +
+    # inversion, lifted to module level — so the Bayesian gets identical numbers
+    # with NO dependency on having opened the SDR analytics tab first.
     q = ("SELECT action_type, option_type_decoded, opt_tenor, swp_tenor, strike_pct, "
          "premium_amount, notional_leg1, platform_identifier, notional_ccy, "
          "execution_timestamp, event_timestamp "
@@ -7167,6 +7270,13 @@ def _bayesian_atm_view():
         st.info("No USD SDR swaption prints in this window.")
         return
 
+    _hl_d = float(st.session_state.get("sdr_half_life", 21))
+    _mxa_d = float(st.session_state.get("sdr_max_age", 0))
+    _fitter = _sdr_bucket_atm_vols(sdf, _curve, hl_days=_hl_d, max_age=_mxa_d)
+    if not _fitter:
+        st.info("No USD straddles in this window mapped to a bucket vol.")
+        return
+
     def _yk(e, t):
         try: return (round(label_to_years(e), 4), round(label_to_years(t), 4))
         except Exception: return None
@@ -7179,125 +7289,30 @@ def _bayesian_atm_view():
             k = _yk(_e, _c)
             if k: _skeys[k] = (_e, _c)
 
-    _now = _dt.datetime.now(_dt.timezone.utc)
     obs_by_key = {}
     _audit = []
     _nused = 0
-
-    def _age_h(_t):
+    for (_exp, _ten), _rec in _fitter.items():
         try:
-            _t = pd.to_datetime(_t, errors="coerce", utc=True)
-            return max((_now - _t.to_pydatetime()).total_seconds() / 3600.0, 0.0) \
-                if _t is not pd.NaT else 0.0
-        except Exception:
-            return 0.0
-
-    def _add(E, tenor, iv, notional, age):
-        key = (round(float(E), 4), round(float(tenor), 4))
-        if key in _skeys and iv and iv > 0:
-            obs_by_key.setdefault(key, []).append((iv, notional, age))
-            return True
-        return False
-
-    # 1) Payer/Receiver pairs -> straddles (Straddle Detection logic + MIC dedup)
-    _PREM_DEDUP_MICS_SD = {"BGCD", "TPSE", "TSEF", "TWSF", "IGDL", "ISWE", "ISWV",
-                           "GSEF", "BILT", "XXXX"}
-    _newt = sdf[sdf["action_type"] == "NEWT"].copy() if "action_type" in sdf.columns else sdf.copy()
-    _pay = _newt[_newt["option_type_decoded"] == "CALL"].copy()
-    _rcv = _newt[_newt["option_type_decoded"] == "PUT"].copy()
-    _matched_r = set()
-    if not _pay.empty and not _rcv.empty and "strike_pct" in sdf.columns:
-        for _, _p in _pay.iterrows():
-            try:
-                _s_p = round(float(_p.get("strike_pct") or 0), 2)
-                _e_p = str(_p.get("opt_tenor", "")); _t_p = str(_p.get("swp_tenor", ""))
-                _time_p = pd.to_datetime(_p.get("execution_timestamp") or _p.get("event_timestamp"),
-                                         errors="coerce")
-                if _time_p is pd.NaT:
-                    continue
-                _cand = _rcv[(~_rcv.index.isin(_matched_r)) &
-                             (_rcv["opt_tenor"] == _e_p) & (_rcv["swp_tenor"] == _t_p) &
-                             (_rcv["strike_pct"].apply(lambda x: abs(float(x or 0) - _s_p) < 0.01))]
-                for _ri, _r in _cand.iterrows():
-                    _time_r = pd.to_datetime(_r.get("execution_timestamp") or _r.get("event_timestamp"),
-                                             errors="coerce")
-                    if _time_r is pd.NaT or abs((_time_p - _time_r).total_seconds()) > 120:
-                        continue
-                    _matched_r.add(_ri)
-                    _p_prem = float(_p.get("premium_amount") or 0)
-                    _r_prem = float(_r.get("premium_amount") or 0)
-                    _mic = str(_p.get("platform_identifier", ""))
-                    # per-venue convention: double-reporters -> max(p,r); per-leg -> p+r
-                    if _mic in _PREM_DEDUP_MICS_SD and _p_prem > 0 and _r_prem > 0:
-                        _strd_prem = max(_p_prem, _r_prem)
-                    else:
-                        _strd_prem = _p_prem + _r_prem
-                    _not = float(_p.get("notional_leg1") or 0)
-                    E = label_to_years(_e_p); ten = label_to_years(_t_p)
-                    if _not <= 0 or _strd_prem <= 0 or not E or not ten or E <= 0 or ten <= 0:
-                        break
-                    tenor = int(round(ten))
-                    F, A, _ = forward_and_annuity_from_curve(_curve, "USD", float(E), float(tenor), None)
-                    if not F or A <= 0:
-                        break
-                    _K = (_s_p / 100.0) if _s_p else F
-                    if abs(_K - F) > 0.015: _K = F
-                    _strd_bp = _strd_prem / _not * 1e4         # FULL straddle premium bp
-                    _leg_bp = _strd_bp / 2.0                   # -> per leg
-                    iv = _bch_invert_usd(_leg_bp, F, _K, float(E), True, A, _usd_bucket_df(_curve, float(E)))
-                    if not iv or iv <= 0:
-                        break
-                    if _add(E, tenor, iv, _not, _age_h(_p.get("execution_timestamp"))):
-                        _nused += 1
-                        _audit.append({"src": "pair", "Exp": _e_p, "Ten": f"{tenor}Y",
-                                       "Notl(M)": round(_not / 1e6, 0),
-                                       "Strd bp": round(_strd_bp, 1), "Leg bp": round(_leg_bp, 1),
-                                       "Vol bp": round(iv, 1), "MIC": _mic,
-                                       "dedup": "max(p,r)" if _mic in _PREM_DEDUP_MICS_SD else "p+r"})
-                    break  # one match per payer
-            except Exception:
+            _vol = float(_rec.get("vol") or 0); _n = int(_rec.get("n") or 1)
+            if _vol <= 0:
                 continue
-
-    # 2) pre-combined STR rows (single row = the full straddle premium)
-    try:
-        _strs = sdf[sdf["option_type_decoded"] == "STR"] if "option_type_decoded" in sdf.columns else sdf.iloc[0:0]
-    except Exception:
-        _strs = sdf.iloc[0:0]
-    for _, _sr in _strs.iterrows():
-        try:
-            E = label_to_years(str(_sr.get("opt_tenor") or "").strip())
-            ten = label_to_years(str(_sr.get("swp_tenor") or "").strip())
-            if not E or not ten or E <= 0 or ten <= 0:
+            key = _yk(_exp, _ten)
+            if key is None or key not in _skeys:
                 continue
-            tenor = int(round(ten))
-            _not = float(_sr.get("notional_leg1") or 0)
-            _pa = float(_sr.get("premium_amount") or 0)
-            if _not <= 0 or _pa <= 0:
-                continue
-            F, A, _ = forward_and_annuity_from_curve(_curve, "USD", float(E), float(tenor), None)
-            if not F or A <= 0:
-                continue
-            _K = (float(_sr.get("strike_pct")) / 100.0) if _sr.get("strike_pct") else F
-            if abs(_K - F) > 0.015:
-                _K = F
-            _strd_bp = _pa / _not * 1e4
-            _leg_bp = _strd_bp / 2.0                      # straddle premium -> per leg
-            iv = _bch_invert_usd(_leg_bp, F, _K, float(E), True, A, _usd_bucket_df(_curve, float(E)))
-            if not iv or iv <= 0:
-                continue
-            if _add(E, tenor, iv, _not, _age_h(_sr.get("execution_timestamp"))):
-                _nused += 1
-                _audit.append({"src": "STR", "Exp": str(_sr.get("opt_tenor")), "Ten": f"{tenor}Y",
-                               "Notl(M)": round(_not / 1e6, 0),
-                               "Strd bp": round(_strd_bp, 1), "Leg bp": round(_leg_bp, 1),
-                               "Vol bp": round(iv, 1), "MIC": str(_sr.get("platform_identifier", "")),
-                               "dedup": "STR/2"})
+            # one observation per bucket = the fitter's ATM vol; precision scales
+            # with trade count (notional slot carries n, ref_notional=1 below, age 0
+            # since the fitter already recency-weighted inside the bucket).
+            obs_by_key.setdefault(key, []).append((_vol, float(_n), 0.0))
+            _nused += 1
+            _audit.append({"Exp": _exp, "Ten": _ten, "Trades": _n, "Fitter vol bp": round(_vol, 1)})
         except Exception:
             continue
 
     if _nused == 0:
-        st.info("No straddle prints mapped onto the surface grid in this window.")
+        st.info("No SDR fitter buckets map onto the current surface grid.")
         return
+
 
     # ── Per-bucket posterior across the surface ───────────────────────────────
     post = {}
@@ -7309,21 +7324,19 @@ def _bayesian_atm_view():
             continue
         post[(_e, _c)] = _bayes_bucket_posterior(
             mu0, _prior_sig ** 2, obs_by_key.get(key, []),
-            sigma_obs=_sig_obs, half_life_h=float(_hl), nu=float(_nu))
+            sigma_obs=_sig_obs, half_life_h=float(_hl), nu=float(_nu), ref_notional=1.0)
 
     n_data = sum(1 for k in _skeys if obs_by_key.get(k))
-    st.caption(f"{_nused} USD straddle print(s) → {n_data} bucket(s) updated "
-               f"(last {_win_h}h). Empty buckets stay at the prior (gain 0).")
+    st.caption(f"{_nused} SDR fitter bucket(s) read → {n_data} bucket(s) updated. "
+               f"Empty buckets stay at the prior (gain 0).")
 
     if _audit:
-        with st.expander(f"🔍 Print audit — every straddle feeding the fit "
-                         f"({len(_audit)} prints: per-leg premium bp & implied vol)"):
+        with st.expander(f"🔍 Bucket audit — SDR fitter vols feeding the fit ({len(_audit)})"):
             _adf = pd.DataFrame(_audit).sort_values(["Exp", "Ten"]).reset_index(drop=True)
             st.dataframe(_adf, use_container_width=True, height=320)
-            st.caption("Each straddle's full-straddle premium, per-leg premium, implied vol, "
-                       "venue MIC, and which premium convention was applied — **max(p,r)** for "
-                       "double-reporting venues, **p+r** for genuine per-leg venues (same handling "
-                       "as the Straddle Detection analytics).")
+            st.caption("ATM vol per bucket read straight from the SDR analytics fitter "
+                       "(its own pairing, venue dedup, inversion and recency/notional weighting). "
+                       "Trades = prints the fitter aggregated for that bucket.")
 
     # build mean / sigma / gain matrices over the surface
     # Final surface = smoothed (if smoothing enabled) else raw posterior. Computed
@@ -11256,6 +11269,9 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _bucket_map.setdefault(_bk, []).append(_sg)
 
                                 _sabr_ana_rows = []
+                                # Expose the fitter's finished per-bucket ATM market vols so the
+                                # Bayesian view can read them directly (no re-derivation there).
+                                st.session_state["_sdr_fitter_atm"] = {}
                                 for (_exp, _ten), _trades in sorted(_bucket_map.items()):
                                     try:
                                         _T = label_to_years(_exp)
@@ -11283,6 +11299,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                 _s_skew = _sv_p - _sv_r
                                             except Exception: pass
                                         _m_skew = (_mv_p - _mv_r) if (_mv_p and _mv_r) else None
+                                        # ATM market vol = avg of payer/receiver legs (the fitter's
+                                        # finished number). Store for the Bayesian view to consume.
+                                        if _mv_p and _mv_r:
+                                            try:
+                                                st.session_state["_sdr_fitter_atm"][(str(_exp), str(_ten))] = {
+                                                    "vol": 0.5 * (_mv_p + _mv_r), "n": len(_trades)}
+                                            except Exception:
+                                                pass
                                         _skew_diff = round(_m_skew-_s_skew,1) if (_m_skew is not None and _s_skew is not None) else None
                                         _flag = ("⚠️" if _skew_diff and abs(_skew_diff)>2 else "✅" if _skew_diff is not None else "ℹ️" if not _F else "—")
                                         _sabr_ana_rows.append({
