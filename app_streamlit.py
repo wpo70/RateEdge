@@ -6988,6 +6988,39 @@ def _bayes_bucket_posterior(prior_mean, prior_var, obs,
             "eff_n": float(rw.sum()), "n": len(obs)}
 
 
+def _bayes_spatial_smooth(post, atm, cols, lam):
+    """Precision-weighted spatial pass — SPREADS the high-confidence SDR signal.
+    Each bucket is pulled toward a PRECISION-weighted average of its 4 grid
+    neighbours, scaled by its OWN uncertainty (1-gain): a confident/moved bucket
+    barely budges, while an empty/uncertain neighbour is pulled toward it. Because
+    the neighbour average is precision-weighted, a confident moved bucket dominates
+    the pull on its sparse neighbours — i.e. the real ATM straddle print is spread
+    outward, not blurred away. lam in [0,1] = strength (0 = off).
+    Returns {(exp_label, tenor_col): smoothed_mean}."""
+    exps = [atm.iloc[i]["Expiry"] for i in range(len(atm))]
+    ci = {c: i for i, c in enumerate(cols)}
+    out = {}
+    for _i, e in enumerate(exps):
+        for _c in cols:
+            p = post.get((e, _c))
+            if not p:
+                continue
+            neigh = []
+            for de, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                ne, nc = _i + de, ci[_c] + dc
+                if 0 <= ne < len(exps) and 0 <= nc < len(cols):
+                    q = post.get((exps[ne], cols[nc]))
+                    if q:
+                        neigh.append((q["mean"], 1.0 / max(q["var"], 1e-9)))
+            if not neigh:
+                out[(e, _c)] = p["mean"]; continue
+            wsum = sum(w for _, w in neigh)
+            nbar = sum(m * w for m, w in neigh) / wsum
+            pull = lam * (1.0 - p["gain"])      # uncertain buckets pulled more
+            out[(e, _c)] = (1 - pull) * p["mean"] + pull * nbar
+    return out
+
+
 def _bayesian_atm_view():
     """Optional Bayesian per-bucket ATM-vol fitter on USD SDR straddles. Additive —
     the deterministic ATM fitter is untouched. USD-only for now; MiFIR / other
@@ -7036,6 +7069,18 @@ def _bayesian_atm_view():
         _nu = st.slider("Robustness ν", 1.0, 30.0, 4.0, 1.0, key="_bayes_nu")
         st.caption("Outlier control (Student-t dof). **Low** = reject fat-tail "
                    "outliers hard. **High** → plain Gaussian, no rejection.")
+
+    _sc1, _sc2 = st.columns([1, 3])
+    with _sc1:
+        _smooth_on = st.checkbox("Spatial smoothing", value=False, key="_bayes_smooth")
+    with _sc2:
+        _smooth_lam = st.slider("Smoothing strength", 0.0, 1.0, 0.4, 0.05,
+                                key="_bayes_lam",
+                                help="Pull empty/uncertain buckets toward confident moved "
+                                     "neighbours, weighted by posterior σ. 0 = off.")
+    st.caption("Smoothing **spreads** each high-confidence SDR straddle move into its "
+               "emptier neighbours (confident buckets stay put, sparse ones fall in line). "
+               "Shown as a separate surface below; only feeds the upload when ticked.")
 
 
     _atm = get_working_atm_surface("USD")
@@ -7105,6 +7150,11 @@ def _bayesian_atm_view():
     # 1) paired CALL/PUT legs (same matching as the USD SDR analytics)
     for _pair in _pair_swaption_legs(sdf):
         try:
+            # ATM straddles only. Strangles are skew trades — they don't inform ATM
+            # vol, so they're excluded from the ATM estimate (per desk: SDR ATM
+            # straddles are the real ATM signal; skew / CSF won't move ATM vol).
+            if not _pair.get("same_strike"):
+                continue
             E = label_to_years(str(_pair["exp"])); ten = label_to_years(str(_pair["ten"]))
             if not E or not ten or E <= 0 or ten <= 0:
                 continue
@@ -7203,35 +7253,34 @@ def _bayesian_atm_view():
         return pd.DataFrame(rows).set_index("Expiry")
 
     _post_mean = _matrix("mean")
-    st.markdown("**Posterior ATM surface (bp):**")
-    try:
-        st.dataframe(_post_mean.style.background_gradient(cmap="RdYlGn_r", axis=None)
-                     .format("{:.1f}"), use_container_width=True)
-    except Exception:
-        st.dataframe(_post_mean, use_container_width=True)
+    with st.expander("📊 Posterior ATM surface (bp)", expanded=True):
+        try:
+            st.dataframe(_post_mean.style.background_gradient(cmap="RdYlGn_r", axis=None)
+                         .format("{:.1f}"), use_container_width=True)
+        except Exception:
+            st.dataframe(_post_mean, use_container_width=True)
 
-    st.markdown("**Change vs current surface (bp)** — posterior − loaded "
-                "(🔴 up · ⚪ unchanged · 🔵 down):")
-    _delta = _matrix("delta")
-    try:
-        _dv = _delta.to_numpy(dtype=float)
-        _m = float(np.nanmax(np.abs(_dv))) if np.isfinite(_dv).any() else 1.0
-        _m = _m if _m > 0 else 1.0
-        st.dataframe(_delta.style.background_gradient(cmap="RdBu_r", axis=None,
-                                                      vmin=-_m, vmax=_m)
-                     .format("{:+.1f}", na_rep="·"), use_container_width=True)
-    except Exception:
-        st.dataframe(_delta, use_container_width=True)
+    with st.expander("🔺 Change vs current surface (bp) — 🔴 up · ⚪ unchanged · 🔵 down"):
+        _delta = _matrix("delta")
+        try:
+            _dv = _delta.to_numpy(dtype=float)
+            _m = float(np.nanmax(np.abs(_dv))) if np.isfinite(_dv).any() else 1.0
+            _m = _m if _m > 0 else 1.0
+            st.dataframe(_delta.style.background_gradient(cmap="RdBu_r", axis=None,
+                                                          vmin=-_m, vmax=_m)
+                         .format("{:+.1f}", na_rep="·"), use_container_width=True)
+        except Exception:
+            st.dataframe(_delta, use_container_width=True)
 
-    st.markdown("**Confidence — posterior σ (bp, lower = tighter):**")
-    _sig = _matrix("sigma")
-    try:
-        st.dataframe(_sig.style.background_gradient(cmap="Greens_r", axis=None)
-                     .format("{:.1f}"), use_container_width=True)
-    except Exception:
-        st.dataframe(_sig, use_container_width=True)
+    with st.expander("🎯 Confidence — posterior σ (bp, lower = tighter)"):
+        _sig = _matrix("sigma")
+        try:
+            st.dataframe(_sig.style.background_gradient(cmap="Greens_r", axis=None)
+                         .format("{:.1f}"), use_container_width=True)
+        except Exception:
+            st.dataframe(_sig, use_container_width=True)
 
-    with st.expander("Kalman gain per bucket (emergent blend weight, 0=prior · 1=data)"):
+    with st.expander("🧮 Kalman gain per bucket (emergent blend weight, 0=prior · 1=data)"):
         _g = _matrix("gain")
         try:
             st.dataframe(_g.style.background_gradient(cmap="Blues", axis=None)
@@ -7239,18 +7288,47 @@ def _bayesian_atm_view():
         except Exception:
             st.dataframe(_g, use_container_width=True)
 
-    if st.button("⬆️ Upload posterior ATM to Vol Editor", key="_bayes_upload"):
+    # Final surface = smoothed (if enabled) else raw posterior. The smoothed pass
+    # is shown as a separate surface so it's visible before it feeds the upload.
+    _smoothed = None
+    if _smooth_on and _smooth_lam > 0:
+        _smoothed = _bayes_spatial_smooth(post, _atm, _cols, float(_smooth_lam))
+        _sm_rows = []
+        for _i in range(len(_atm)):
+            _e = _atm.iloc[_i]["Expiry"]; row = {"Expiry": _e}
+            for _c in _cols:
+                v = _smoothed.get((_e, _c))
+                row[_c] = round(v, 2) if v is not None else None
+            _sm_rows.append(row)
+        _sm_df = pd.DataFrame(_sm_rows).set_index("Expiry")
+        with st.expander("🌊 Smoothed surface (bp) — confident SDR moves spread into "
+                         "emptier neighbours", expanded=True):
+            try:
+                st.dataframe(_sm_df.style.background_gradient(cmap="RdYlGn_r", axis=None)
+                             .format("{:.1f}"), use_container_width=True)
+            except Exception:
+                st.dataframe(_sm_df, use_container_width=True)
+
+    _upload_label = ("⬆️ Upload smoothed ATM to Vol Editor" if _smoothed is not None
+                     else "⬆️ Upload posterior ATM to Vol Editor")
+    if st.button(_upload_label, key="_bayes_upload"):
         _imp = _atm.copy()
         for _i in range(len(_imp)):
             _e = _imp.iloc[_i]["Expiry"]
             for _c in _cols:
-                p = post.get((_e, _c))
-                if p:
-                    _imp.iloc[_i, _imp.columns.get_loc(_c)] = round(p["mean"], 2)
+                if _smoothed is not None:
+                    v = _smoothed.get((_e, _c))
+                    if v is not None:
+                        _imp.iloc[_i, _imp.columns.get_loc(_c)] = round(v, 2)
+                else:
+                    p = post.get((_e, _c))
+                    if p:
+                        _imp.iloc[_i, _imp.columns.get_loc(_c)] = round(p["mean"], 2)
         st.session_state["_sod_usd_pending_surface"] = _imp
-        st.success("✅ Sent to Vol Editor. Open the **Vol Editor** tab, click "
-                   "**📋 Load SOD Implied Open → Editor**, review the highlighted "
-                   "changes, then **Publish**.")
+        st.success("✅ Sent to Vol Editor"
+                   + (" (smoothed)" if _smoothed is not None else "")
+                   + ". Open the **Vol Editor** tab, click **📋 Load SOD Implied Open → "
+                     "Editor**, review the highlighted changes, then **Publish**.")
 
 
 _EU_BROKER_NAMES = {
