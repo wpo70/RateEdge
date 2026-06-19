@@ -22104,11 +22104,13 @@ def caps_floors_tab(vol_mode: str):
                 if ccy == "USD" and st.session_state.get("cfs_active_vol_src", "Listed bootstrap") == "Listed bootstrap":
                     _lf_pack = st.session_state.get("_cfs_listed_pack", "whites")
                     _skip_wedge_keys.add("3m1y")
-                    if _lf_pack == "both":
+                    if _lf_pack in ("both", "greens"):
                         _skip_wedge_keys.add("1y1y")
-                        # 2y1y NOT struck under whites+reds — that's only 2yr of
-                        # futures, and the 2y1y wedge builds the 3Y CFS point.
-                        # It gets struck once the green (3rd-year) pack is added.
+                    if _lf_pack == "greens":
+                        # whites+reds+greens = 3yr of futures → the 2y1y wedge
+                        # (3Y CFS point) is now built by the listed green strip,
+                        # so it's superseded and struck through.
+                        _skip_wedge_keys.add("2y1y")
 
                 for spr_key, wedge_lbl, tbl_lbl, tbl_wedge, cfs_lbl, spread in ROW_DATA:
                     _row_skipped = tbl_lbl in _skip_wedge_keys
@@ -22713,11 +22715,12 @@ def caps_floors_tab(vol_mode: str):
         _listed_term_curve = None
         _listed_1y_stradd = None
         _listed_2y_stradd = None
+        _listed_3y_stradd = None
         _lf_pack_now = st.session_state.get("_cfs_listed_pack", "whites")
         _lf_cache_sig = None
         if ccy == "USD":
             try:
-                _lf_cutoff = 1.0 if _lf_pack_now == "whites" else 2.0
+                _lf_cutoff = 1.0 if _lf_pack_now == "whites" else 3.0 if _lf_pack_now == "greens" else 2.0
                 # v2204k: use COMMITTED edits as source of truth for pricing.
                 # Working edits (_cfs_listed_session_edits) are display-only and
                 # DO NOT trigger recompute — user must click "✓ Commit Listed
@@ -22755,12 +22758,16 @@ def caps_floors_tab(vol_mode: str):
                     # must click "✓ Commit Listed Vols" to push edits through.
                     _sr3_rows = _load_sr3_latest_usd_with_committed_edits() or {}
                     _whites_sel = set(st.session_state.get("_cfs_white_selected", []) or [])
-                    if _lf_pack_now == "both":
+                    if _lf_pack_now in ("both", "greens"):
                         # For pack=both, also include the 4 reds (SFRM7/U7/Z7/H8)
                         # so the 2Y strip's later caplets can map to them.
-                        # Get all reds from sr3_rows that are quarterlies in the
-                        # reds range (~1.25→2.25y from today) — use contract_type.
+                        # For pack=greens, additionally include the 4 greens
+                        # (SFRM8/U8/Z8/H9) for the 3Y strip's later caplets.
+                        # Reds band 1.0→<2.0, greens band 2.0→3.2 (mutually
+                        # exclusive so a 2.0y green isn't mis-tagged as a red and
+                        # leaked into the 2Y strip).
                         _reds_available = set()
+                        _greens_available = set()
                         from datetime import date as _d3
                         _today_dt = _d3.today()
                         for _code, _row in _sr3_rows.items():
@@ -22775,11 +22782,16 @@ def caps_floors_tab(vol_mode: str):
                                 _t_exp = (_ed_d - _today_dt).days / 365.25
                             except Exception:
                                 continue
-                            if 1.0 <= _t_exp <= 2.2:  # reds band
+                            if 1.0 <= _t_exp < 2.0:        # reds band
                                 _reds_available.add(_code)
+                            elif 2.0 <= _t_exp <= 3.2:     # greens band
+                                _greens_available.add(_code)
                         _contracts_for_2y = _whites_sel | _reds_available
+                        _contracts_for_3y = (_whites_sel | _reds_available | _greens_available
+                                             if _lf_pack_now == "greens" else _contracts_for_2y)
                     else:
                         _contracts_for_2y = _whites_sel
+                        _contracts_for_3y = _whites_sel
                     # Build per-caplet vols for 1Y strip (expiry_y=0 matches
                     # price_caplets_with_vol_curve default: cap_start ~ 0)
                     _listed_caplet_1y = _build_listed_caplet_curve_by_date(
@@ -22787,12 +22799,21 @@ def caps_floors_tab(vol_mode: str):
                         strip_expiry_y=0.0, strip_tenor_y=1.0,
                         apply_adjustment=True,
                     )
-                    # Build per-caplet vols for 2Y strip (uses whites + reds if pack=both, else whites only)
+                    # Build per-caplet vols for 2Y strip (whites+reds; needed for
+                    # both AND greens, since greens still anchors 1y1y off the 2Y)
                     _listed_caplet_2y = None
-                    if _lf_pack_now == "both":
+                    if _lf_pack_now in ("both", "greens"):
                         _listed_caplet_2y = _build_listed_caplet_curve_by_date(
                             _sr3_rows, _contracts_for_2y,
                             strip_expiry_y=0.0, strip_tenor_y=2.0,
+                            apply_adjustment=True,
+                        )
+                    # Build per-caplet vols for 3Y strip (whites+reds+greens) — greens only
+                    _listed_caplet_3y = None
+                    if _lf_pack_now == "greens":
+                        _listed_caplet_3y = _build_listed_caplet_curve_by_date(
+                            _sr3_rows, _contracts_for_3y,
+                            strip_expiry_y=0.0, strip_tenor_y=3.0,
                             apply_adjustment=True,
                         )
                     # Compose _listed_term_curve: extend caplet vols onto the
@@ -22800,7 +22821,12 @@ def caps_floors_tab(vol_mode: str):
                     # interpolate linearly between nearest fixings. Beyond the
                     # covered range, fall back to OTC.
                     _listed_term_curve = {}
-                    _base_caplet = _listed_caplet_2y if (_lf_pack_now == "both" and _listed_caplet_2y) else _listed_caplet_1y
+                    if _lf_pack_now == "greens" and _listed_caplet_3y:
+                        _base_caplet = _listed_caplet_3y
+                    elif _lf_pack_now == "both" and _listed_caplet_2y:
+                        _base_caplet = _listed_caplet_2y
+                    else:
+                        _base_caplet = _listed_caplet_1y
                     if _base_caplet:
                         _bTs = sorted(_base_caplet.keys())
                         _bvs = [_base_caplet[_T] for _T in _bTs]
@@ -22831,16 +22857,22 @@ def caps_floors_tab(vol_mode: str):
                         st.caption(f"📡 Listed 1Y prem: {_prem_1y_leg} | stradd: {_listed_1y_stradd} | "
                                    f"SOFR curve: {'✅ ' + str(len(_dbg_curve)) + ' pts' if _dbg_curve is not None and hasattr(_dbg_curve, '__len__') else '❌ None'} | "
                                    f"term_curve pts: {len(_listed_term_curve)}")
-                        if _lf_pack_now == "both":
+                        if _lf_pack_now in ("both", "greens"):
                             _prem_2y_leg = price_caplets_with_vol_curve(
                                 "USD", 2.0, _listed_term_curve, notional_mm=1.0
                             )
                             _listed_2y_stradd = float(_prem_2y_leg) * 2.0 if (_prem_2y_leg and _prem_2y_leg > 0) else None
+                        if _lf_pack_now == "greens":
+                            _prem_3y_leg = price_caplets_with_vol_curve(
+                                "USD", 3.0, _listed_term_curve, notional_mm=1.0
+                            )
+                            _listed_3y_stradd = float(_prem_3y_leg) * 2.0 if (_prem_3y_leg and _prem_3y_leg > 0) else None
                     st.session_state["_cfs_listed_curve_cache"] = {
                         "sig": _lf_cache_sig,
                         "curve": _listed_term_curve,
                         "stradd_1y": _listed_1y_stradd,
                         "stradd_2y": _listed_2y_stradd,
+                        "stradd_3y": _listed_3y_stradd,
                     }
             except Exception as _lb_err:
                 st.caption(f"WARN Listed term pre-calc failed: {_lb_err}")
@@ -22902,15 +22934,20 @@ def caps_floors_tab(vol_mode: str):
                 _save_1y1y = dict(_cfs_td.get("1y1y", {}))
                 try:
                     _cfs_td.setdefault("3m1y", {})["cfs_straddle"] = _listed_1y_stradd
-                    if (_lf_pack_now == "both" and _listed_2y_stradd
+                    if (_lf_pack_now in ("both", "greens") and _listed_2y_stradd
                             and _listed_2y_stradd > _listed_1y_stradd):
                         _cfs_td.setdefault("1y1y", {})["cfs_straddle"] = _listed_2y_stradd - _listed_1y_stradd
+                    if (_lf_pack_now == "greens" and _listed_3y_stradd and _listed_2y_stradd
+                            and _listed_3y_stradd > _listed_2y_stradd):
+                        _cfs_td.setdefault("2y1y", {})["cfs_straddle"] = _listed_3y_stradd - _listed_2y_stradd
                     # v2804k: pass SR3 front vols INTO the solver so it
                     # calibrates with the correct listed front from the start.
                     # No post-build overlay needed — solver sees the real vols.
-                    _cutoff = 2.0 if (_lf_pack_now == "both"
-                                      and _listed_2y_stradd
-                                      and _listed_2y_stradd > 0) else 1.0
+                    _cutoff = (3.0 if (_lf_pack_now == "greens"
+                                       and _listed_3y_stradd and _listed_3y_stradd > 0)
+                               else 2.0 if (_lf_pack_now == "both"
+                                            and _listed_2y_stradd and _listed_2y_stradd > 0)
+                               else 1.0)
                     # Only pass front vols up to cutoff
                     _front = {k: v for k, v in _listed_term_curve.items()
                               if k <= _cutoff + 1e-6} if _listed_term_curve else None
@@ -23215,7 +23252,7 @@ def caps_floors_tab(vol_mode: str):
             )
 
             if _active_src == "Listed bootstrap":
-                _anchor_lbl = "1Y" if _lf_pack_now == "whites" else "2Y"
+                _anchor_lbl = "1Y" if _lf_pack_now == "whites" else "3Y" if _lf_pack_now == "greens" else "2Y"
                 st.caption(f"Active: Listed bootstrap "
                            f"(listed SR3 term-structure front + wedge chain from {_anchor_lbl})")
             elif _active_src == "SR3 hybrid":
@@ -23236,7 +23273,7 @@ def caps_floors_tab(vol_mode: str):
                     if _active_src == "OTC only":
                         st.success("CFS Curve calculated — OTC wedge chain.")
                     elif _active_src == "Listed bootstrap":
-                        _anchor_lbl2 = "1Y" if _lf_pack_now == "whites" else "1Y+2Y"
+                        _anchor_lbl2 = "1Y" if _lf_pack_now == "whites" else "1Y+2Y+3Y" if _lf_pack_now == "greens" else "1Y+2Y"
                         st.success(f"CFS Curve calculated — Listed front (≤{_anchor_lbl2}) + wedge chain tail.")
                     elif _active_src in ("SR3 hybrid", "SR3 full"):
                         st.success(f"CFS Curve calculated — {_active_src}.")
@@ -23380,17 +23417,27 @@ def caps_floors_tab(vol_mode: str):
                 if _use_listed:
                     _prev_pack = st.session_state.get("_cfs_listed_pack", "whites")
                     # Seed once, then rely on key= (avoids index=/key= race)
+                    _pack_labels = ["Whites only (4 rows)", "Whites + Reds (8 rows)",
+                                    "Whites + Reds + Greens (12 rows)"]
+                    _pack_lbl_for = {
+                        "whites": _pack_labels[0],
+                        "both":   _pack_labels[1],
+                        "greens": _pack_labels[2],
+                    }
                     if "_cfs_pack_radio" not in st.session_state:
-                        st.session_state["_cfs_pack_radio"] = (
-                            "Whites only (4 rows)" if _prev_pack == "whites"
-                            else "Whites + Reds (8 rows)")
+                        st.session_state["_cfs_pack_radio"] = _pack_lbl_for.get(_prev_pack, _pack_labels[0])
                     _pack_sel = st.radio(
                         "Pack selection",
-                        ["Whites only (4 rows)", "Whites + Reds (8 rows)"],
+                        _pack_labels,
                         horizontal=True,
                         key="_cfs_pack_radio",
                     )
-                    _pack_mode = "whites" if _pack_sel.startswith("Whites only") else "both"
+                    if _pack_sel.startswith("Whites only"):
+                        _pack_mode = "whites"
+                    elif _pack_sel.startswith("Whites + Reds + Greens"):
+                        _pack_mode = "greens"
+                    else:
+                        _pack_mode = "both"
                     if _pack_mode != _prev_pack:
                         st.session_state["_cfs_listed_pack"] = _pack_mode
                         st.rerun()
@@ -23479,6 +23526,7 @@ def caps_floors_tab(vol_mode: str):
                       # Split by pack via pack index on underlying (W=0..3, R=4..7)
                       _white_rows = []
                       _red_rows = []
+                      _green_rows = []
                       for c, r in _all_rows:
                           und = r.get("underlying")
                           if not und:
@@ -23488,6 +23536,8 @@ def caps_floors_tab(vol_mode: str):
                               _white_rows.append((c, r))
                           elif 4 <= pidx <= 7:
                               _red_rows.append((c, r))
+                          elif 8 <= pidx <= 11:
+                              _green_rows.append((c, r))
 
                       # ── Roll the saved white selection forward ──
                       # If any previously-ticked contract has rolled off (expired /
@@ -23565,6 +23615,9 @@ def caps_floors_tab(vol_mode: str):
                       if _pack_mode == "whites":
                           _editor_rows = _white_selected_rows
                           _otc_first_wedge = "1y1y"
+                      elif _pack_mode == "greens":
+                          _editor_rows = _white_selected_rows + _red_rows[:4] + _green_rows[:4]
+                          _otc_first_wedge = "3y1y"
                       else:
                           _editor_rows = _white_selected_rows + _red_rows[:4]
                           _otc_first_wedge = "2y1y"
@@ -23615,6 +23668,7 @@ def caps_floors_tab(vol_mode: str):
                           # and which are selected-but-unused.
                           _sampled_codes_1y = set()
                           _sampled_codes_2y = set()
+                          _sampled_codes_3y = set()
                           try:
                               from datetime import date as _d_s, timedelta as _td_s
                               _today_s = _d_s.today()
@@ -23668,9 +23722,11 @@ def caps_floors_tab(vol_mode: str):
                               if _whites_sel_s:
                                   _sampled_codes_1y = _sample_for_strip(_whites_sel_s, 1.0)
 
-                              if _pack_mode == "both":
-                                  # Collect reds in the ~1-2.2Y expiry band (same logic as pre-calc)
+                              if _pack_mode in ("both", "greens"):
+                                  # Collect reds (~1.0-2.0Y) and greens (~2.0-3.2Y)
+                                  # expiry bands — same banding as the pre-calc.
                                   _reds_avail_s = set()
+                                  _greens_avail_s = set()
                                   for _rc, _rr in _all_rows_for_match.items():
                                       if "MC" in (_rr.get("contract_type") or ""):
                                           continue
@@ -23681,23 +23737,28 @@ def caps_floors_tab(vol_mode: str):
                                           _red_d = (_red if hasattr(_red, "toordinal")
                                                     else _d_s.fromisoformat(str(_red)[:10]))
                                           _t_exp = (_red_d - _today_s).days / 365.25
-                                          if 1.0 <= _t_exp <= 2.2:
+                                          if 1.0 <= _t_exp < 2.0:
                                               _reds_avail_s.add(_rc)
+                                          elif 2.0 <= _t_exp <= 3.2:
+                                              _greens_avail_s.add(_rc)
                                       except Exception:
                                           continue
                                   _contracts_for_2y_s = _whites_sel_s | _reds_avail_s
                                   _sampled_codes_2y = _sample_for_strip(_contracts_for_2y_s, 2.0)
+                                  if _pack_mode == "greens":
+                                      _contracts_for_3y_s = _whites_sel_s | _reds_avail_s | _greens_avail_s
+                                      _sampled_codes_3y = _sample_for_strip(_contracts_for_3y_s, 3.0)
                           except Exception:
                               _sampled_codes_1y = set()
                               _sampled_codes_2y = set()
 
-                          _all_sampled = _sampled_codes_1y | _sampled_codes_2y
+                          _all_sampled = _sampled_codes_1y | _sampled_codes_2y | _sampled_codes_3y
 
                           for code, row in _editor_rows:
                               pidx = _sr3_pack_index(row.get("underlying", ""))
                               _pack_col = _sr3_pack_color(row.get("underlying", ""))
                               _pack_bg  = _sr3_pack_bg(row.get("underlying", ""))
-                              _pack_lbl = "W" if 0 <= pidx <= 3 else "R" if 4 <= pidx <= 7 else "?"
+                              _pack_lbl = "W" if 0 <= pidx <= 3 else "R" if 4 <= pidx <= 7 else "G" if 8 <= pidx <= 11 else "?"
 
                               atm_val = row.get("atm_vol")
                               _cur_mode = (row.get("listed_adj_mode") or "ratio").lower()
