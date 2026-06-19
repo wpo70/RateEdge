@@ -23523,7 +23523,7 @@ def caps_floors_tab(vol_mode: str):
             _listed_editor_box = st.container()
             # v2504c: Always render expander (widget tree stability).
             # Content inside is gated on _use_listed.
-            _le_exp = _listed_editor_box.expander("Listed Front editor - ratio/bp overrides", expanded=False)
+            _le_exp = _listed_editor_box.expander("Listed Front editor - ratio/bp overrides", expanded=True)
             with _le_exp:
               _le_use = st.session_state.get("_cfs_use_listed", False)
               if not _le_use:
@@ -23820,11 +23820,28 @@ def caps_floors_tab(vol_mode: str):
 
                           _all_sampled = _sampled_codes_1y | _sampled_codes_2y | _sampled_codes_3y
 
+                          # Mode grouping → pack label/color (serial/quarterly use the
+                          # whole-pack grouping, not the global month-based pack index).
+                          _mode_pack_of = {}
+                          for _mc, _ in _white_rows: _mode_pack_of[_mc] = "W"
+                          for _mc, _ in _red_rows:   _mode_pack_of[_mc] = "R"
+                          for _mc, _ in _green_rows: _mode_pack_of[_mc] = "G"
+
                           for code, row in _editor_rows:
-                              pidx = _sr3_pack_index(row.get("underlying", ""))
-                              _pack_col = _sr3_pack_color(row.get("underlying", ""))
-                              _pack_bg  = _sr3_pack_bg(row.get("underlying", ""))
-                              _pack_lbl = "W" if 0 <= pidx <= 3 else "R" if 4 <= pidx <= 7 else "G" if 8 <= pidx <= 11 else "?"
+                              if _type_mode_now in ("serials", "quarterlies"):
+                                  _grp = _mode_pack_of.get(code, "?")
+                                  _grp_idx = {"W": 0, "R": 4, "G": 8}.get(_grp, -1)
+                                  pidx = _grp_idx
+                                  _pack_lbl = _grp
+                                  _pack_col = (SR3_PACK_COLORS_BY_IDX[_grp_idx]
+                                               if 0 <= _grp_idx < len(SR3_PACK_COLORS_BY_IDX) else "#64748b")
+                                  _pack_bg = (SR3_PACK_BG_BY_IDX[_grp_idx]
+                                              if 0 <= _grp_idx < len(SR3_PACK_BG_BY_IDX) else "rgba(100,116,139,0.05)")
+                              else:
+                                  pidx = _sr3_pack_index(row.get("underlying", ""))
+                                  _pack_col = _sr3_pack_color(row.get("underlying", ""))
+                                  _pack_bg  = _sr3_pack_bg(row.get("underlying", ""))
+                                  _pack_lbl = "W" if 0 <= pidx <= 3 else "R" if 4 <= pidx <= 7 else "G" if 8 <= pidx <= 11 else "?"
 
                               atm_val = row.get("atm_vol")
                               _cur_mode = (row.get("listed_adj_mode") or "ratio").lower()
@@ -23843,7 +23860,13 @@ def caps_floors_tab(vol_mode: str):
                               _bkey = f"_cfs_le_{code}_bp"
                               if _mkey not in st.session_state:
                                   st.session_state[_mkey] = _cur_mode
-                              if _rkey not in st.session_state:
+                              if _rkey not in st.session_state or st.session_state.get(_rkey) is None:
+                                  st.session_state[_rkey] = _cur_ratio
+                              elif float(st.session_state[_rkey]) <= 0.5001 < float(_cur_ratio):
+                                  # Widget fell to its 0.50 min_value floor (key was
+                                  # unseeded/GC'd on a mode switch or empty-selection
+                                  # render) while a real committed ratio exists for
+                                  # this contract — restore it instead of the floor.
                                   st.session_state[_rkey] = _cur_ratio
                               if _bkey not in st.session_state:
                                   st.session_state[_bkey] = _cur_bp
