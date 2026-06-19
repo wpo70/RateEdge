@@ -23437,6 +23437,29 @@ def caps_floors_tab(vol_mode: str):
             with _le_col2:
                 if _use_listed:
                     _prev_pack = st.session_state.get("_cfs_listed_pack", "whites")
+                    # ── Contract-type selector: Serials / Quarterlies / Combined ──
+                    _prev_type = st.session_state.get("_cfs_listed_type", "combined")
+                    _type_labels = ["Serials (1m)", "Quarterlies (3m)", "Combined"]
+                    _type_for = {"serials": _type_labels[0], "quarterlies": _type_labels[1],
+                                 "combined": _type_labels[2]}
+                    if "_cfs_type_radio" not in st.session_state:
+                        st.session_state["_cfs_type_radio"] = _type_for.get(_prev_type, _type_labels[2])
+                    _type_sel = st.radio(
+                        "Contract type",
+                        _type_labels,
+                        horizontal=True,
+                        key="_cfs_type_radio",
+                    )
+                    if _type_sel.startswith("Serials"):
+                        _type_mode = "serials"
+                    elif _type_sel.startswith("Quarterlies"):
+                        _type_mode = "quarterlies"
+                    else:
+                        _type_mode = "combined"
+                    if _type_mode != _prev_type:
+                        st.session_state["_cfs_listed_type"] = _type_mode
+                        st.rerun()
+                    st.session_state["_cfs_listed_type"] = _type_mode
                     # Seed once, then rely on key= (avoids index=/key= race)
                     _pack_labels = ["Whites only (4 rows)", "Whites + Reds (8 rows)",
                                     "Whites + Reds + Greens (12 rows)"]
@@ -23463,6 +23486,12 @@ def caps_floors_tab(vol_mode: str):
                         st.session_state["_cfs_listed_pack"] = _pack_mode
                         st.rerun()
                     st.session_state["_cfs_listed_pack"] = _pack_mode
+                    if _type_mode == "serials" and _pack_mode != "whites":
+                        # Serials only exist in the front year → 1Y/whites depth only.
+                        _pack_mode = "whites"
+                        st.session_state["_cfs_listed_pack"] = "whites"
+                        st.session_state["_cfs_pack_radio"] = _pack_labels[0]
+                        st.rerun()
                 else:
                     _pack_mode = "whites"
             with _le_col3:
@@ -23544,21 +23573,37 @@ def caps_floors_tab(vol_mode: str):
                                    and _le_not_expired(r)]
                       _all_rows.sort(key=lambda x: _t_mid(x[1]))
 
-                      # Split by pack via pack index on underlying (W=0..3, R=4..7)
+                      # Split by pack. Combined = existing pack-index banding
+                      # (unchanged). Quarterly / Serial = whole-pack model: take the
+                      # live contracts of that type, sort by expiry, group in 4s so
+                      # the packs roll together (white U6/Z6/H7/M7 → red U7/Z7/H8/M8
+                      # → green U8/Z8/H9/M9). Serials are front-only → whites only.
                       _white_rows = []
                       _red_rows = []
                       _green_rows = []
-                      for c, r in _all_rows:
-                          und = r.get("underlying")
-                          if not und:
-                              continue
-                          pidx = _sr3_pack_index(und)
-                          if 0 <= pidx <= 3:
-                              _white_rows.append((c, r))
-                          elif 4 <= pidx <= 7:
-                              _red_rows.append((c, r))
-                          elif 8 <= pidx <= 11:
-                              _green_rows.append((c, r))
+                      _type_mode_now = st.session_state.get("_cfs_listed_type", "combined")
+                      if _type_mode_now in ("serials", "quarterlies"):
+                          _want_type = "Serial" if _type_mode_now == "serials" else "Quarterly"
+                          _typed_live = [(c, r) for c, r in _all_rows
+                                         if _want_type in (r.get("contract_type") or "")]
+                          _typed_live.sort(key=lambda x: _t_mid(x[1]))
+                          _white_rows = _typed_live[0:4]
+                          if _type_mode_now == "quarterlies":
+                              _red_rows = _typed_live[4:8]
+                              _green_rows = _typed_live[8:12]
+                          # serials: reds/greens stay empty (front-only)
+                      else:
+                          for c, r in _all_rows:
+                              und = r.get("underlying")
+                              if not und:
+                                  continue
+                              pidx = _sr3_pack_index(und)
+                              if 0 <= pidx <= 3:
+                                  _white_rows.append((c, r))
+                              elif 4 <= pidx <= 7:
+                                  _red_rows.append((c, r))
+                              elif 8 <= pidx <= 11:
+                                  _green_rows.append((c, r))
 
                       # ── Roll the saved white selection forward ──
                       # If any previously-ticked contract has rolled off (expired /
@@ -35835,6 +35880,7 @@ SR3_CONTRACTS_CANONICAL = [
     ("SFRV6",  "Serial",     "2026-10-16", "SFRV6 Comdty", "2027-03-16"),
     ("SFRX6",  "Serial",     "2026-11-13", "SFRX6 Comdty", "2027-03-16"),
     ("SFRZ6",  "Quarterly",  "2026-12-11", "SFRZ6 Comdty", "2027-03-16"),
+    ("SFRF7",  "Serial",     "2027-01-15", "SFRF7 Comdty", "2027-04-21"),
     ("SFRH7",  "Quarterly",  "2027-03-12", "SFRH7 Comdty", "2027-06-15"),
     ("SFRM7",  "Quarterly",  "2027-06-11", "SFRM7 Comdty", "2027-09-14"),
     ("SFRU7",  "Quarterly",  "2027-09-10", "SFRU7 Comdty", "2027-12-14"),
@@ -35873,7 +35919,7 @@ SR3_CONTRACTS_CANONICAL = [
     ("5QZ26",  "5Y MC",      "2026-12-11", "5QZ26 Comdty", "2032-03-17"),
     ("5QH27",  "5Y MC",      "2027-03-12", "5QH27 Comdty", "2032-06-16"),
 ]
-SR3_SPLIT_INDEX = 24  # rows 0..23 = standards/serials, 24..39 = mid-curves
+SR3_SPLIT_INDEX = 25  # rows 0..24 = standards/serials, 25..40 = mid-curves
 
 
 def _sr3_parse_underlying(underlying: str, ref_year: int = 2026):
