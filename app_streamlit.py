@@ -6989,52 +6989,72 @@ def _bayes_bucket_posterior(prior_mean, prior_var, obs,
 
 
 def _bayes_spatial_smooth(post, atm, cols, lam):
-    """Smooth like the SDR tab's blended surface: diffuse the posterior across the
-    WHOLE grid (2 gentle passes of self + neighbour-mean) so a moved bucket's change
-    flows smoothly into its unchanged neighbours, THEN re-anchor the buckets that
-    actually have an SDR point back to their posterior value. lam in [0,1] scales the
-    neighbour pull (1.0 = the SDR tab's 0.6 self / 0.4 neighbours). Returns
-    {(exp,col): value} for ALL cells, so the change tapers from each moved point out
-    into the surrounding surface instead of being a hard step next to a flat +0.0."""
+    """VERBATIM port of the SDR fitter's blend+smooth, run on the SDR-derived ATM
+    points: blend the points onto the current surface at the fitter's blend weight w
+    (same outlier guard), run the fitter's 2-pass 0.6·self + 0.4·mean(neighbours)
+    diffusion, then re-anchor the printed cells to their blended value. At lam=1 with
+    the same points and w this is byte-for-byte the SDR fitter's blended/smoothed
+    surface. lam scales the neighbour pull (1.0 = fitter). Returns {(exp,col): value}."""
+    try:
+        _pts_y = st.session_state.get("_sdr_atm_pts_y", {}) or {}
+        _meta = st.session_state.get("_sdr_atm_pts_meta", {}) or {}
+        _w = float(_meta.get("w", 0.5))
+        _devcap = float(_meta.get("devcap", 100.0))
+    except Exception:
+        _pts_y, _w, _devcap = {}, 0.5, 100.0
+
     exps = [atm.iloc[i]["Expiry"] for i in range(len(atm))]
     nr, nc = len(exps), len(cols)
+
+    def _yk(e, t):
+        try: return (round(label_to_years(e), 4), round(label_to_years(t), 4))
+        except Exception: return None
+
     grid = [[None] * nc for _ in range(nr)]
+    for ri in range(nr):
+        for ci, c in enumerate(cols):
+            try: grid[ri][ci] = float(atm.iloc[ri][c])
+            except Exception: grid[ri][ci] = None
+
+    # blend SDR points onto the surface at weight w (fitter's outlier guard)
     anchor = {}
     for ri, e in enumerate(exps):
         for ci, c in enumerate(cols):
-            p = post.get((e, c))
-            if p is None:
-                try: grid[ri][ci] = float(atm.iloc[ri][c])     # fall back to surface
-                except Exception: grid[ri][ci] = None
+            pt = _pts_y.get(_yk(e, c))
+            cur = grid[ri][ci]
+            if pt is None or cur is None:
                 continue
-            grid[ri][ci] = p["mean"]
-            if p.get("gain", 0.0) > 1e-6:
-                anchor[(ri, ci)] = p["mean"]                    # this bucket has an SDR point
-    if not anchor:
-        return {(e, c): post[(e, c)]["mean"] for e in exps for c in cols if post.get((e, c))}
-    f = 0.4 * max(0.0, min(1.0, float(lam)))                    # neighbour weight per pass
-    for _pass in range(2):
-        sm = [row[:] for row in grid]
-        for ri in range(nr):
-            for ci in range(nc):
-                v = grid[ri][ci]
-                if v is None:
-                    continue
-                ns = []
-                if ri > 0 and grid[ri-1][ci] is not None: ns.append(grid[ri-1][ci])
-                if ri < nr-1 and grid[ri+1][ci] is not None: ns.append(grid[ri+1][ci])
-                if ci > 0 and grid[ri][ci-1] is not None: ns.append(grid[ri][ci-1])
-                if ci < nc-1 and grid[ri][ci+1] is not None: ns.append(grid[ri][ci+1])
-                if ns:
-                    sm[ri][ci] = (1 - f) * v + f * (sum(ns) / len(ns))
-        grid = sm
-    for (ri, ci), av in anchor.items():                        # re-anchor printed cells
-        grid[ri][ci] = av
+            if cur > 0 and abs(pt - cur) / cur * 100.0 > _devcap:
+                continue                                   # outlier: leave surface
+            nv = round((1 - _w) * cur + _w * pt, 2)
+            grid[ri][ci] = nv
+            anchor[(ri, ci)] = nv
+
+    if anchor:
+        nw = 0.4 * max(0.0, min(1.0, float(lam)))          # 0.4 at lam=1 -> 0.6/0.4
+        for _pass in range(2):
+            sm = [row[:] for row in grid]
+            for ri in range(nr):
+                for ci in range(nc):
+                    v = grid[ri][ci]
+                    if v is None:
+                        continue
+                    ns = []
+                    if ri > 0 and grid[ri-1][ci] is not None: ns.append(grid[ri-1][ci])
+                    if ri < nr-1 and grid[ri+1][ci] is not None: ns.append(grid[ri+1][ci])
+                    if ci > 0 and grid[ri][ci-1] is not None: ns.append(grid[ri][ci-1])
+                    if ci < nc-1 and grid[ri][ci+1] is not None: ns.append(grid[ri][ci+1])
+                    if ns:
+                        sm[ri][ci] = (1 - nw) * v + nw * (sum(ns) / len(ns))
+            grid = sm
+        for (ri, ci), av in anchor.items():                # re-anchor printed cells
+            grid[ri][ci] = av
+
     out = {}
     for ri, e in enumerate(exps):
         for ci, c in enumerate(cols):
             if grid[ri][ci] is not None:
-                out[(e, c)] = grid[ri][ci]
+                out[(e, c)] = round(grid[ri][ci], 2)
     return out
 
 
@@ -12137,7 +12157,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         _yk(_pe, _pt2): _av_acc[(_pe, _pt2)][2]
                                         for (_pe, _pt2) in _av_pts.keys() if _yk(_pe, _pt2)}
                                     st.session_state["_sdr_atm_pts_meta"] = {
-                                        "hours": _av_hours, "devcap": _av_devcap, "ccy": _fit_ccy}
+                                        "hours": _av_hours, "devcap": _av_devcap, "ccy": _fit_ccy,
+                                        "w": _av_w, "smooth": bool(_av_smooth)}
                                 except Exception:
                                     pass
 
