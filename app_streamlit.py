@@ -22780,35 +22780,15 @@ def caps_floors_tab(vol_mode: str):
                     _sr3_rows = _load_sr3_latest_usd_with_committed_edits() or {}
                     _whites_sel = set(st.session_state.get("_cfs_white_selected", []) or [])
                     if _lf_pack_now in ("both", "greens"):
-                        # For pack=both, also include the 4 reds (SFRM7/U7/Z7/H8)
-                        # so the 2Y strip's later caplets can map to them.
-                        # For pack=greens, additionally include the 4 greens
-                        # (SFRM8/U8/Z8/H9) for the 3Y strip's later caplets.
-                        # Reds band 1.0→<2.0, greens band 2.0→3.2 (mutually
-                        # exclusive so a 2.0y green isn't mis-tagged as a red and
-                        # leaked into the 2Y strip).
-                        _reds_available = set()
-                        _greens_available = set()
-                        from datetime import date as _d3
-                        _today_dt = _d3.today()
-                        for _code, _row in _sr3_rows.items():
-                            _ct = _row.get("contract_type", "")
-                            if "MC" in _ct:
-                                continue
-                            _ed = _row.get("expiry_date")
-                            if _ed is None:
-                                continue
-                            try:
-                                _ed_d = _ed if hasattr(_ed, "toordinal") else _d3.fromisoformat(str(_ed)[:10])
-                                _t_exp = (_ed_d - _today_dt).days / 365.25
-                            except Exception:
-                                continue
-                            if 1.0 <= _t_exp < 2.0:        # reds band
-                                _reds_available.add(_code)
-                            elif 2.0 <= _t_exp <= 3.2:     # greens band
-                                _greens_available.add(_code)
-                        _contracts_for_2y = _whites_sel | _reds_available
-                        _contracts_for_3y = (_whites_sel | _reds_available | _greens_available
+                        # Strip now uses ONLY the contracts ticked in each pack's
+                        # selector (White/Red/Green selection blocks). The
+                        # nearest-contract logic in the caplet builder therefore
+                        # acts purely as a same-fixing tie-breaker among the
+                        # ticked set — it no longer pulls in un-ticked contracts.
+                        _reds_sel = set(st.session_state.get("_cfs_red_selected", []) or [])
+                        _greens_sel = set(st.session_state.get("_cfs_green_selected", []) or [])
+                        _contracts_for_2y = _whites_sel | _reds_sel
+                        _contracts_for_3y = (_whites_sel | _reds_sel | _greens_sel
                                              if _lf_pack_now == "greens" else _contracts_for_2y)
                     else:
                         _contracts_for_2y = _whites_sel
@@ -23678,14 +23658,66 @@ def caps_floors_tab(vol_mode: str):
                           _white_selected_rows = []
                           st.session_state["_cfs_white_selected"] = set()
 
+                      # ── Red selection (tick-to-include) — shown when reds are in play ──
+                      _red_selected_rows = []
+                      if _pack_mode in ("both", "greens") and _red_rows:
+                          _prev_red_sel = st.session_state.get("_cfs_red_selected")
+                          if _prev_red_sel is None:
+                              _prev_red_sel = {c for c, _ in _red_rows[:4]}
+                              st.session_state["_cfs_red_selected"] = _prev_red_sel
+                          st.markdown(
+                              f"<div style='font-size:11px;color:#64748b;margin-top:6px;'>"
+                              f"<b>Red selection</b> — tick to include ({len(_red_rows)} available):</div>",
+                              unsafe_allow_html=True,
+                          )
+                          _rs_cols = st.columns(min(len(_red_rows), 8))
+                          _new_red_sel = set()
+                          for _i, (c, r) in enumerate(_red_rows):
+                              with _rs_cols[_i % len(_rs_cols)]:
+                                  _cbk = f"_cfs_red_cb_{c}"
+                                  if _cbk not in st.session_state:
+                                      st.session_state[_cbk] = (c in _prev_red_sel)
+                                  if st.checkbox(c, key=_cbk):
+                                      _new_red_sel.add(c)
+                          st.session_state["_cfs_red_selected"] = _new_red_sel
+                          _red_selected_rows = [(c, r) for c, r in _red_rows if c in _new_red_sel]
+                      else:
+                          st.session_state["_cfs_red_selected"] = set()
+
+                      # ── Green selection (tick-to-include) — shown for greens depth ──
+                      _green_selected_rows = []
+                      if _pack_mode == "greens" and _green_rows:
+                          _prev_green_sel = st.session_state.get("_cfs_green_selected")
+                          if _prev_green_sel is None:
+                              _prev_green_sel = {c for c, _ in _green_rows[:4]}
+                              st.session_state["_cfs_green_selected"] = _prev_green_sel
+                          st.markdown(
+                              f"<div style='font-size:11px;color:#64748b;margin-top:6px;'>"
+                              f"<b>Green selection</b> — tick to include ({len(_green_rows)} available):</div>",
+                              unsafe_allow_html=True,
+                          )
+                          _gs_cols = st.columns(min(len(_green_rows), 8))
+                          _new_green_sel = set()
+                          for _i, (c, r) in enumerate(_green_rows):
+                              with _gs_cols[_i % len(_gs_cols)]:
+                                  _cbk = f"_cfs_green_cb_{c}"
+                                  if _cbk not in st.session_state:
+                                      st.session_state[_cbk] = (c in _prev_green_sel)
+                                  if st.checkbox(c, key=_cbk):
+                                      _new_green_sel.add(c)
+                          st.session_state["_cfs_green_selected"] = _new_green_sel
+                          _green_selected_rows = [(c, r) for c, r in _green_rows if c in _new_green_sel]
+                      else:
+                          st.session_state["_cfs_green_selected"] = set()
+
                       if _pack_mode == "whites":
                           _editor_rows = _white_selected_rows
                           _otc_first_wedge = "1y1y"
                       elif _pack_mode == "greens":
-                          _editor_rows = _white_selected_rows + _red_rows[:4] + _green_rows[:4]
+                          _editor_rows = _white_selected_rows + _red_selected_rows + _green_selected_rows
                           _otc_first_wedge = "3y1y"
                       else:
-                          _editor_rows = _white_selected_rows + _red_rows[:4]
+                          _editor_rows = _white_selected_rows + _red_selected_rows
                           _otc_first_wedge = "2y1y"
 
                       if not _editor_rows:
@@ -23789,30 +23821,14 @@ def caps_floors_tab(vol_mode: str):
                                   _sampled_codes_1y = _sample_for_strip(_whites_sel_s, 1.0)
 
                               if _pack_mode in ("both", "greens"):
-                                  # Collect reds (~1.0-2.0Y) and greens (~2.0-3.2Y)
-                                  # expiry bands — same banding as the pre-calc.
-                                  _reds_avail_s = set()
-                                  _greens_avail_s = set()
-                                  for _rc, _rr in _all_rows_for_match.items():
-                                      if "MC" in (_rr.get("contract_type") or ""):
-                                          continue
-                                      _red = _rr.get("expiry_date")
-                                      if _red is None:
-                                          continue
-                                      try:
-                                          _red_d = (_red if hasattr(_red, "toordinal")
-                                                    else _d_s.fromisoformat(str(_red)[:10]))
-                                          _t_exp = (_red_d - _today_s).days / 365.25
-                                          if 1.0 <= _t_exp < 2.0:
-                                              _reds_avail_s.add(_rc)
-                                          elif 2.0 <= _t_exp <= 3.2:
-                                              _greens_avail_s.add(_rc)
-                                      except Exception:
-                                          continue
-                                  _contracts_for_2y_s = _whites_sel_s | _reds_avail_s
+                                  # Strip uses ONLY ticked contracts (mirror of the
+                                  # pre-calc); nearest acts as same-fixing tie-break.
+                                  _reds_sel_s = set(st.session_state.get("_cfs_red_selected", []) or [])
+                                  _greens_sel_s = set(st.session_state.get("_cfs_green_selected", []) or [])
+                                  _contracts_for_2y_s = _whites_sel_s | _reds_sel_s
                                   _sampled_codes_2y = _sample_for_strip(_contracts_for_2y_s, 2.0)
                                   if _pack_mode == "greens":
-                                      _contracts_for_3y_s = _whites_sel_s | _reds_avail_s | _greens_avail_s
+                                      _contracts_for_3y_s = _whites_sel_s | _reds_sel_s | _greens_sel_s
                                       _sampled_codes_3y = _sample_for_strip(_contracts_for_3y_s, 3.0)
                           except Exception:
                               _sampled_codes_1y = set()
