@@ -21212,11 +21212,11 @@ def caps_floors_tab(vol_mode: str):
                 "cf_spr_3y1y":17.5, "cf_spr_4y1y":20.0, "cf_spr_5y2y":45.0,
                 "cf_spr_7y3y":50.0, "cf_spr_10y2y":35.0, "cf_spr_12y3y":100.0,
                 "cf_spr_15v20":-5.0, "cf_spr_20v30":-5.0},
-        # USD baseline — typical USD wedge spreads (will be replaced once user saves)
-        "USD": {"cf_spr_3m1y":5.0,  "cf_spr_1y1y":11.5, "cf_spr_2y1y":12.5,
-                "cf_spr_3y1y":13.5, "cf_spr_4y1y":15.0, "cf_spr_5y2y":40.0,
-                "cf_spr_7y3y":70.5, "cf_spr_10y2y":39.0, "cf_spr_12y3y":39.0,
-                "cf_spr_15v20":-5.0, "cf_spr_20v30":-5.0},
+        # USD baseline — user's production wedge spreads
+        "USD": {"cf_spr_3m1y":2.0,  "cf_spr_1y1y":18.0, "cf_spr_2y1y":14.2,
+                "cf_spr_3y1y":13.0, "cf_spr_4y1y":13.0, "cf_spr_5y2y":30.0,
+                "cf_spr_7y3y":60.0, "cf_spr_10y2y":50.0, "cf_spr_12y3y":80.0,
+                "cf_spr_15v20":-2.0, "cf_spr_20v30":-1.5},
         # NZD baseline
         "NZD": {"cf_spr_3m1y":8.0,  "cf_spr_1y1y":10.0, "cf_spr_2y1y":12.0,
                 "cf_spr_3y1y":15.0, "cf_spr_4y1y":18.0, "cf_spr_5y2y":30.0,
@@ -22233,12 +22233,21 @@ def caps_floors_tab(vol_mode: str):
                                 _df_3m = df_from_curve(_sofr_usd, 0.25) if _sofr_usd is not None else math.exp(-0.04 * 0.25)
                             except Exception:
                                 _df_3m = math.exp(-0.04 * 0.25)
-                            fwd_swpt_str = f"{_fv_use:.4f}"    # Swptn col = live pricer fwd prem (76.75)
-                            cfs_fwd  = _fv_use + new_val       # FORWARD CFS (76.75 + 18 = 94.75)
-                            cfs_spot = cfs_fwd * _df_3m        # SPOT CFS (3m fwd-start)
+                            fwd_swpt_str = f"{_fv_use:.4f}"    # Swptn col = live pricer fwd prem
+                            cfs_fwd  = _fv_use + new_val       # FORWARD CFS = fwd swaption + wedge
+                            # bootstrap target = FWD CFS discounted at THIS wedge's own expiry
+                            # (not a flat 3m), on the same ois curve the pricer un-discounts
+                            # with, so the standalone recovers fwd_swaption + wedge exactly.
+                            try:
+                                _ois_st = st.session_state.get("config_basis", {}).get("USD", {}).get("ois")
+                                if _ois_st is None: _ois_st = get_basis_curve("USD", "ois")
+                                _df_exp_st = df_from_curve(_ois_st, label_to_years(_exp_w)) if (_ois_st is not None and _exp_w) else _df_3m
+                            except Exception:
+                                _df_exp_st = _df_3m
+                            cfs_spot = cfs_fwd * _df_exp_st     # SPOT CFS at wedge expiry (= bootstrap target)
                             cfs = cfs_spot
                             st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs_spot
-                            spot_str = f"{_fv_use * _df_3m:.4f}"  # swaption SPOT (3m fwd-start)
+                            spot_str = f"{_fv_use * _df_3m:.4f}"  # swaption SPOT display (3m fwd-start)
                             cfs_str  = f"{cfs_fwd:.4f}"        # column shows the FORWARD CFS curve
                         else:
                             cfs = swpt + new_val
@@ -22717,12 +22726,31 @@ def caps_floors_tab(vol_mode: str):
                 "3y1y": spread_3y1y, "4y1y": spread_4y1y, "5y2y": spread_5y2y,
                 "7y3y": spread_7y3y, "10y2y": spread_10y2y, "12y3y": spread_12y3y
             }
+            # USD: discount the wedge at the swaption's OWN expiry. swpt is the SPOT
+            # swaption (= fwd × df(expiry)); adding the raw wedge then dividing by df
+            # to get the forward over-states it by wedge×(1/df−1). Discounting the
+            # wedge too makes the target (fwd+wedge)×df, so the standalone recovers
+            # fwd_swaption + wedge exactly (= the FWD CFS column). AUD/NZD/EUR unchanged.
+            _exp_map_c = {"3m1y":"3m","1y1y":"1y","2y1y":"2y","3y1y":"3y","4y1y":"4y",
+                          "5y2y":"5y","7y3y":"7y","10y2y":"10y","12y3y":"12y"}
+            _ois_c = st.session_state.get("config_basis", {}).get("USD", {}).get("ois")
+            if _ois_c is None:
+                try: _ois_c = get_basis_curve("USD", "ois")
+                except Exception: _ois_c = None
             for label in ["3m1y", "1y1y", "2y1y", "3y1y", "4y1y", "5y2y", "7y3y", "10y2y", "12y3y"]:
                 if label in st.session_state["cfs_table_data"]:
                     swpt = st.session_state["cfs_table_data"][label].get("swaption", "")
                     spread = spreads_map.get(label, 0)
                     if swpt != "":
-                        st.session_state["cfs_table_data"][label]["cfs_straddle"] = swpt + spread
+                        if ccy == "USD":
+                            try:
+                                _exp_y_c = label_to_years(_exp_map_c.get(label, "3m"))
+                                _df_c = df_from_curve(_ois_c, _exp_y_c) if _ois_c is not None else math.exp(-0.04 * _exp_y_c)
+                            except Exception:
+                                _df_c = 1.0
+                            st.session_state["cfs_table_data"][label]["cfs_straddle"] = swpt + spread * _df_c
+                        else:
+                            st.session_state["cfs_table_data"][label]["cfs_straddle"] = swpt + spread
 
         # Build caplet curve — before ATM CFS table so flat vols are fresh
         atm = get_working_atm_surface(ccy)
