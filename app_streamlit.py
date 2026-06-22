@@ -22567,6 +22567,7 @@ def caps_floors_tab(vol_mode: str):
                             v_spot = round(float(v) * _df_rs, 4)
                             st.session_state["cfs_table_data"][lbl] = {
                                 "swaption": v_spot,
+                                "swaption_fwd": round(float(v), 6),
                                 "cfs_label": cfs_lbl,
                                 "cfs_straddle": v_spot
                             }
@@ -22750,9 +22751,14 @@ def caps_floors_tab(vol_mode: str):
                     if swpt != "":
                         if ccy in ("USD", "EUR"):
                             try:
-                                _exp_y_c = label_to_years(_exp_map_c.get(label, "3m"))
-                                _df_exp_c = df_from_curve(_ois_c, _exp_y_c) if _ois_c is not None else math.exp(-0.04 * _exp_y_c)
-                                _fwd_c = (swpt / _df_exp_c) if _df_exp_c > 0 else swpt   # spot swaption → forward
+                                # use the forward swaption stored at refresh (exact —
+                                # no un-discount mismatch), add the wedge on the forward,
+                                # then × df(3m) for the 3m-fwd-start spot CFS.
+                                _fwd_c = st.session_state["cfs_table_data"][label].get("swaption_fwd")
+                                if _fwd_c is None:
+                                    _exp_y_c = label_to_years(_exp_map_c.get(label, "3m"))
+                                    _df_exp_c = df_from_curve(_ois_c, _exp_y_c) if _ois_c is not None else math.exp(-0.04 * _exp_y_c)
+                                    _fwd_c = (swpt / _df_exp_c) if _df_exp_c > 0 else swpt
                                 _cfs_spot_c = (_fwd_c + spread) * _df_3m_c              # FWD CFS × df(3m)
                             except Exception:
                                 _cfs_spot_c = swpt + spread
