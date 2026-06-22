@@ -4261,13 +4261,16 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         from scipy.optimize import least_squares
         try:
             result = least_squares(price_with_interp_curve, initial_guess,
-                                   ftol=1e-6, xtol=1e-6, gtol=1e-6,
-                                   max_nfev=500)
-            
-            if result.success:
-                for i, mat in enumerate(anchor_mats_to_solve):
-                    caplet_vols[mat] = max(result.x[i], 1.0)
-        except:
+                                   ftol=1e-12, xtol=1e-12, gtol=1e-12,
+                                   max_nfev=8000)
+            # Apply best-fit anchors regardless of result.success — result.x is
+            # always the lowest-residual point found; success=False on max_nfev /
+            # tiny-step termination was discarding a near-exact fit and leaving the
+            # seed, so the cumulative targets weren't hit and the gaps drifted off
+            # the wedge. This drives the cumulative-fwd solve onto the outrights.
+            for i, mat in enumerate(anchor_mats_to_solve):
+                caplet_vols[mat] = max(result.x[i], 1.0)
+        except Exception:
             pass
     
     # Final cubic spline interpolation with solved anchors
