@@ -3763,12 +3763,10 @@ def build_caplet_vol_curve_eur(ccy: str, atm_surface, sabr_params=None,
         cumulative_leg_prem = cumulative_leg_prems[prior_mat] + wedge_leg
         cumulative_leg_prems[result_mat] = cumulative_leg_prem
         
-        # v1906p: solve THIS gap's flat caplet vol to its forward CFS leg via
-        # brentq (same as USD/AUD/NZD); rough guess only as last-resort fallback.
-        try:
-            caplet_vols[result_mat] = max(opt.brentq(objective, 1.0, 300.0, xtol=0.001), 1.0)
-        except Exception:
-            caplet_vols[result_mat] = max(wedge_leg * 1.5, 50.0)
+        # Store initial guess for anchor vol (will be refined later)
+        gap_premium = wedge_leg
+        initial_vol_guess = max(gap_premium * 1.5, 50.0)
+        caplet_vols[result_mat] = initial_vol_guess
     
     # === STEP 3: SOLVE FOR ALL ANCHOR VOLS SIMULTANEOUSLY ===
     # Must solve all at once because cubic spline shape depends on ALL anchors
@@ -3827,12 +3825,13 @@ def build_caplet_vol_curve_eur(ccy: str, atm_surface, sabr_params=None,
         from scipy.optimize import least_squares
         try:
             result = least_squares(price_with_interp_curve, initial_guess,
-                                   ftol=1e-10, xtol=1e-10, gtol=1e-10,
-                                   max_nfev=5000)
-            # v1906l: apply best-fit anchors regardless of result.success.
-            for i, mat in enumerate(anchor_mats_to_solve):
-                caplet_vols[mat] = max(result.x[i], 1.0)
-        except Exception:
+                                   ftol=1e-6, xtol=1e-6, gtol=1e-6,
+                                   max_nfev=500)
+            
+            if result.success:
+                for i, mat in enumerate(anchor_mats_to_solve):
+                    caplet_vols[mat] = max(result.x[i], 1.0)
+        except:
             pass
     
     # Final cubic spline interpolation with solved anchors
@@ -4200,15 +4199,10 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         cumulative_leg_prem = cumulative_leg_prems[prior_mat] + wedge_leg
         cumulative_leg_prems[result_mat] = cumulative_leg_prem
         
-        # v1906p: solve THIS gap's flat caplet vol to its forward CFS leg
-        # (2x3, 3x4, 4x5 …), anchoring the straight tenor — the method that
-        # has always governed OTC CFS. brentq on the objective defined above;
-        # rough guess only as last-resort fallback. The global least_squares
-        # below then refines all anchors jointly.
-        try:
-            caplet_vols[result_mat] = max(opt.brentq(objective, 1.0, 300.0, xtol=0.001), 1.0)
-        except Exception:
-            caplet_vols[result_mat] = max(wedge_leg * 1.5, 50.0)
+        # Store initial guess for anchor vol (will be refined later)
+        gap_premium = wedge_leg
+        initial_vol_guess = max(gap_premium * 1.5, 50.0)
+        caplet_vols[result_mat] = initial_vol_guess
     
     # === STEP 3: SOLVE FOR ALL ANCHOR VOLS SIMULTANEOUSLY ===
     # Must solve all at once because cubic spline shape depends on ALL anchors
@@ -4267,17 +4261,13 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         from scipy.optimize import least_squares
         try:
             result = least_squares(price_with_interp_curve, initial_guess,
-                                   ftol=1e-10, xtol=1e-10, gtol=1e-10,
-                                   max_nfev=5000)
-            # v1906p: apply the best-fit anchors REGARDLESS of result.success.
-            # result.x is always the lowest-residual point found; least_squares
-            # flags success=False on max_nfev / tiny-step termination even when
-            # the fit is essentially exact. Discarding it left the curve on the
-            # raw seed, which over/under-shot the wedges. This reverse-engineers
-            # the splined caplet vols onto the LOCKED cumulative CFS premiums.
-            for i, mat in enumerate(anchor_mats_to_solve):
-                caplet_vols[mat] = max(result.x[i], 1.0)
-        except Exception:
+                                   ftol=1e-6, xtol=1e-6, gtol=1e-6,
+                                   max_nfev=500)
+            
+            if result.success:
+                for i, mat in enumerate(anchor_mats_to_solve):
+                    caplet_vols[mat] = max(result.x[i], 1.0)
+        except:
             pass
     
     # Final cubic spline interpolation with solved anchors
@@ -22238,15 +22228,18 @@ def caps_floors_tab(vol_mode: str):
                             _fv_use = None
 
                         if ccy == "USD" and _fv_use is not None:
-                            # AUD math: anchor point = FORWARD swaption premium + wedge,
-                            # NO discount conversion. The caplet bootstrap reproduces this
-                            # as the CFS straddle exactly like AUD/NZD/EUR — the only USD
-                            # difference is the fwd swaption is priced live (_fv_use).
-                            fwd_swpt_str = f"{_fv_use:.4f}"    # Swptn col = live fwd swaption prem
-                            cfs      = _fv_use + new_val       # FWD CFS = fwd swaption + wedge
-                            st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs
-                            spot_str = f"{_fv_use:.4f}"
-                            cfs_str  = f"{cfs:.4f}"            # FWD CFS column
+                            try:
+                                _sofr_usd = st.session_state.get("config_curves", {}).get("USD")
+                                _df_3m = df_from_curve(_sofr_usd, 0.25) if _sofr_usd is not None else math.exp(-0.04 * 0.25)
+                            except Exception:
+                                _df_3m = math.exp(-0.04 * 0.25)
+                            fwd_swpt_str = f"{_fv_use:.4f}"    # Swptn col = live pricer fwd prem (76.75)
+                            cfs_fwd  = _fv_use + new_val       # FORWARD CFS (76.75 + 18 = 94.75)
+                            cfs_spot = cfs_fwd * _df_3m        # SPOT CFS (3m fwd-start)
+                            cfs = cfs_spot
+                            st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs_spot
+                            spot_str = f"{_fv_use * _df_3m:.4f}"  # swaption SPOT (3m fwd-start)
+                            cfs_str  = f"{cfs_fwd:.4f}"        # column shows the FORWARD CFS curve
                         else:
                             cfs = swpt + new_val
                             st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs
