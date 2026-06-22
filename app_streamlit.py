@@ -3825,13 +3825,12 @@ def build_caplet_vol_curve_eur(ccy: str, atm_surface, sabr_params=None,
         from scipy.optimize import least_squares
         try:
             result = least_squares(price_with_interp_curve, initial_guess,
-                                   ftol=1e-6, xtol=1e-6, gtol=1e-6,
-                                   max_nfev=500)
-            
-            if result.success:
-                for i, mat in enumerate(anchor_mats_to_solve):
-                    caplet_vols[mat] = max(result.x[i], 1.0)
-        except:
+                                   ftol=1e-12, xtol=1e-12, gtol=1e-12,
+                                   max_nfev=8000)
+            # Apply best-fit anchors regardless of result.success (same as USD path).
+            for i, mat in enumerate(anchor_mats_to_solve):
+                caplet_vols[mat] = max(result.x[i], 1.0)
+        except Exception:
             pass
     
     # Final cubic spline interpolation with solved anchors
@@ -4260,16 +4259,22 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         
         from scipy.optimize import least_squares
         try:
-            result = least_squares(price_with_interp_curve, initial_guess,
-                                   ftol=1e-12, xtol=1e-12, gtol=1e-12,
-                                   max_nfev=8000)
-            # Apply best-fit anchors regardless of result.success — result.x is
-            # always the lowest-residual point found; success=False on max_nfev /
-            # tiny-step termination was discarding a near-exact fit and leaving the
-            # seed, so the cumulative targets weren't hit and the gaps drifted off
-            # the wedge. This drives the cumulative-fwd solve onto the outrights.
-            for i, mat in enumerate(anchor_mats_to_solve):
-                caplet_vols[mat] = max(result.x[i], 1.0)
+            if ccy == "USD":
+                result = least_squares(price_with_interp_curve, initial_guess,
+                                       ftol=1e-12, xtol=1e-12, gtol=1e-12,
+                                       max_nfev=8000)
+                # USD only: apply best-fit anchors regardless of result.success so
+                # the cumulative-fwd targets are hit and the gaps land on the wedge.
+                for i, mat in enumerate(anchor_mats_to_solve):
+                    caplet_vols[mat] = max(result.x[i], 1.0)
+            else:
+                # AUD / NZD — exact baseline solve, unchanged (perfect as-is)
+                result = least_squares(price_with_interp_curve, initial_guess,
+                                       ftol=1e-6, xtol=1e-6, gtol=1e-6,
+                                       max_nfev=500)
+                if result.success:
+                    for i, mat in enumerate(anchor_mats_to_solve):
+                        caplet_vols[mat] = max(result.x[i], 1.0)
         except Exception:
             pass
     
@@ -21707,10 +21712,13 @@ def caps_floors_tab(vol_mode: str):
                 # Calculate premium in bp: (PV / Notional) * 10000
                 pv_bp = (pv_total / (notional * 1e6)) * 10000.0 if notional > 0 else 0.0
     
-                # Forward premium = spot / df(first_fixing) — for wedge/fwd trading convention
+                # Forward premium = spot / df(expiry). USD/EUR CFS are 3m-forward-start,
+                # so un-discount at df(3m) — the gap then prints fwd_swaption + wedge.
+                # AUD/NZD keep df(first_fixing).
                 try:
-                    _r_ff = interpolate_zero(ois_curve, first_fixing_y)
-                    _df_ff = math.exp(-_r_ff * first_fixing_y)
+                    _ff_y_use = 0.25 if ccy in ("USD", "EUR") else first_fixing_y
+                    _r_ff = interpolate_zero(ois_curve, _ff_y_use)
+                    _df_ff = math.exp(-_r_ff * _ff_y_use)
                     pv_bp_fwd = pv_bp / _df_ff if _df_ff > 0 else pv_bp
                 except Exception:
                     _df_ff = 1.0
@@ -22236,21 +22244,12 @@ def caps_floors_tab(vol_mode: str):
                                 _df_3m = df_from_curve(_sofr_usd, 0.25) if _sofr_usd is not None else math.exp(-0.04 * 0.25)
                             except Exception:
                                 _df_3m = math.exp(-0.04 * 0.25)
-                            fwd_swpt_str = f"{_fv_use:.4f}"    # Swptn col = live pricer fwd prem
-                            cfs_fwd  = _fv_use + new_val       # FORWARD CFS = fwd swaption + wedge
-                            # bootstrap target = FWD CFS discounted at THIS wedge's own expiry
-                            # (not a flat 3m), on the same ois curve the pricer un-discounts
-                            # with, so the standalone recovers fwd_swaption + wedge exactly.
-                            try:
-                                _ois_st = st.session_state.get("config_basis", {}).get("USD", {}).get("ois")
-                                if _ois_st is None: _ois_st = get_basis_curve("USD", "ois")
-                                _df_exp_st = df_from_curve(_ois_st, label_to_years(_exp_w)) if (_ois_st is not None and _exp_w) else _df_3m
-                            except Exception:
-                                _df_exp_st = _df_3m
-                            cfs_spot = cfs_fwd * _df_exp_st     # SPOT CFS at wedge expiry (= bootstrap target)
+                            fwd_swpt_str = f"{_fv_use:.4f}"    # Swptn col = live pricer fwd prem (76.75)
+                            cfs_fwd  = _fv_use + new_val       # FORWARD CFS (76.75 + 18 = 94.75)
+                            cfs_spot = cfs_fwd * _df_3m        # SPOT CFS (3m fwd-start)
                             cfs = cfs_spot
                             st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs_spot
-                            spot_str = f"{_fv_use * _df_3m:.4f}"  # swaption SPOT display (3m fwd-start)
+                            spot_str = f"{_fv_use * _df_3m:.4f}"  # swaption SPOT (3m fwd-start)
                             cfs_str  = f"{cfs_fwd:.4f}"        # column shows the FORWARD CFS curve
                         else:
                             cfs = swpt + new_val
@@ -22729,30 +22728,37 @@ def caps_floors_tab(vol_mode: str):
                 "3y1y": spread_3y1y, "4y1y": spread_4y1y, "5y2y": spread_5y2y,
                 "7y3y": spread_7y3y, "10y2y": spread_10y2y, "12y3y": spread_12y3y
             }
-            # USD: discount the wedge at the swaption's OWN expiry. swpt is the SPOT
-            # swaption (= fwd × df(expiry)); adding the raw wedge then dividing by df
-            # to get the forward over-states it by wedge×(1/df−1). Discounting the
-            # wedge too makes the target (fwd+wedge)×df, so the standalone recovers
-            # fwd_swaption + wedge exactly (= the FWD CFS column). AUD/NZD/EUR unchanged.
+            # USD/EUR: FWD CFS = fwd swaption + wedge, then × df(3m fwd-start) to get
+            # the SPOT CFS (3m-forward-start, 1Y = 3 caplets from the 3m fixing). swpt
+            # is the spot swaption at its expiry (= fwd × df(expiry)); un-discount it to
+            # the forward, add the wedge on the forward, then discount the whole CFS at
+            # the 3m fwd-start df. AUD/NZD stay raw (swpt + spread).
             _exp_map_c = {"3m1y":"3m","1y1y":"1y","2y1y":"2y","3y1y":"3y","4y1y":"4y",
                           "5y2y":"5y","7y3y":"7y","10y2y":"10y","12y3y":"12y"}
-            _ois_c = st.session_state.get("config_basis", {}).get("USD", {}).get("ois")
+            _ois_c = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
             if _ois_c is None:
-                try: _ois_c = get_basis_curve("USD", "ois")
+                try: _ois_c = get_basis_curve(ccy, "ois")
                 except Exception: _ois_c = None
+            try:
+                _df_3m_c = df_from_curve(_ois_c, 0.25) if _ois_c is not None else math.exp(-0.04 * 0.25)
+            except Exception:
+                _df_3m_c = math.exp(-0.04 * 0.25)
             for label in ["3m1y", "1y1y", "2y1y", "3y1y", "4y1y", "5y2y", "7y3y", "10y2y", "12y3y"]:
                 if label in st.session_state["cfs_table_data"]:
                     swpt = st.session_state["cfs_table_data"][label].get("swaption", "")
                     spread = spreads_map.get(label, 0)
                     if swpt != "":
-                        if ccy == "USD":
+                        if ccy in ("USD", "EUR"):
                             try:
                                 _exp_y_c = label_to_years(_exp_map_c.get(label, "3m"))
-                                _df_c = df_from_curve(_ois_c, _exp_y_c) if _ois_c is not None else math.exp(-0.04 * _exp_y_c)
+                                _df_exp_c = df_from_curve(_ois_c, _exp_y_c) if _ois_c is not None else math.exp(-0.04 * _exp_y_c)
+                                _fwd_c = (swpt / _df_exp_c) if _df_exp_c > 0 else swpt   # spot swaption → forward
+                                _cfs_spot_c = (_fwd_c + spread) * _df_3m_c              # FWD CFS × df(3m)
                             except Exception:
-                                _df_c = 1.0
-                            st.session_state["cfs_table_data"][label]["cfs_straddle"] = swpt + spread * _df_c
+                                _cfs_spot_c = swpt + spread
+                            st.session_state["cfs_table_data"][label]["cfs_straddle"] = _cfs_spot_c
                         else:
+                            # AUD / NZD — raw, unchanged
                             st.session_state["cfs_table_data"][label]["cfs_straddle"] = swpt + spread
 
         # Build caplet curve — before ATM CFS table so flat vols are fresh
