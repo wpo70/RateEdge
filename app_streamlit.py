@@ -3763,7 +3763,7 @@ def build_caplet_vol_curve_eur(ccy: str, atm_surface, sabr_params=None,
         cumulative_leg_prem = cumulative_leg_prems[prior_mat] + wedge_leg
         cumulative_leg_prems[result_mat] = cumulative_leg_prem
         
-        # v1906n: solve THIS gap's flat caplet vol to its forward CFS leg via
+        # v1906p: solve THIS gap's flat caplet vol to its forward CFS leg via
         # brentq (same as USD/AUD/NZD); rough guess only as last-resort fallback.
         try:
             caplet_vols[result_mat] = max(opt.brentq(objective, 1.0, 300.0, xtol=0.001), 1.0)
@@ -4200,7 +4200,7 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
         cumulative_leg_prem = cumulative_leg_prems[prior_mat] + wedge_leg
         cumulative_leg_prems[result_mat] = cumulative_leg_prem
         
-        # v1906n: solve THIS gap's flat caplet vol to its forward CFS leg
+        # v1906p: solve THIS gap's flat caplet vol to its forward CFS leg
         # (2x3, 3x4, 4x5 …), anchoring the straight tenor — the method that
         # has always governed OTC CFS. brentq on the objective defined above;
         # rough guess only as last-resort fallback. The global least_squares
@@ -4269,7 +4269,7 @@ def build_caplet_vol_curve(ccy: str, atm_surface, sabr_params=None,
             result = least_squares(price_with_interp_curve, initial_guess,
                                    ftol=1e-10, xtol=1e-10, gtol=1e-10,
                                    max_nfev=5000)
-            # v1906n: apply the best-fit anchors REGARDLESS of result.success.
+            # v1906p: apply the best-fit anchors REGARDLESS of result.success.
             # result.x is always the lowest-residual point found; least_squares
             # flags success=False on max_nfev / tiny-step termination even when
             # the fit is essentially exact. Discarding it left the curve on the
@@ -21722,27 +21722,6 @@ def caps_floors_tab(vol_mode: str):
                 except Exception:
                     _df_ff = 1.0
                     pv_bp_fwd = pv_bp
-
-                # v1906n: In WEDGES/OTC mode a CFS straddle at a recognised wedge gap
-                # IS the forward swaption premium + wedge BY DEFINITION (the wedge is
-                # CFS − swaption). Anchor the standalone to that figure verbatim so it
-                # equals the FWD CFS column to the decimal, instead of the caplet-strip
-                # re-integration which carries a tiny model basis vs the swaption.
-                if cf_type == "Straddle" and st.session_state.get("cfs_active_vol_src") == "OTC only":
-                    try:
-                        _tn_end_y = label_to_years(tenor)
-                    except Exception:
-                        _tn_end_y = None
-                    _wlbl = {(0.25,1.0):"3m1y",(1.0,2.0):"1y1y",(2.0,3.0):"2y1y",
-                             (3.0,4.0):"3y1y",(4.0,5.0):"4y1y",(5.0,7.0):"5y2y",
-                             (7.0,10.0):"7y3y",(10.0,12.0):"10y2y",(12.0,15.0):"12y3y"
-                            }.get((round(first_fixing_y,2), round(_tn_end_y,2)) if _tn_end_y is not None else None)
-                    if _wlbl:
-                        _cfs_fwd_tbl = st.session_state.get("cfs_table_data", {}).get(_wlbl, {}).get("cfs_fwd")
-                        if _cfs_fwd_tbl is not None and _cfs_fwd_tbl > 0:
-                            pv_bp_fwd = float(_cfs_fwd_tbl)
-                            pv_bp = pv_bp_fwd * _df_ff
-                            pv_total = (pv_bp / 10000.0) * (notional * 1e6)
     
                 # one_bp = sum of caplet annuities
                 one_bp_annuity = 0.0
@@ -22259,25 +22238,15 @@ def caps_floors_tab(vol_mode: str):
                             _fv_use = None
 
                         if ccy == "USD" and _fv_use is not None:
-                            # Discount the FORWARD CFS to spot at THIS wedge's own
-                            # option expiry (1y1y→1y, 2y1y→2y, …), NOT a flat 3m.
-                            # The caplet bootstrap reproduces this spot, and the
-                            # standalone CFS straddle (spot ÷ df(expiry)) then returns
-                            # the FORWARD CFS exactly — pricer == this FWD CFS column.
-                            try:
-                                _sofr_usd = st.session_state.get("config_curves", {}).get("USD")
-                                _exp_y_w = label_to_years(_exp_w) if _exp_w else 0.25
-                                _df_exp = df_from_curve(_sofr_usd, _exp_y_w) if _sofr_usd is not None else math.exp(-0.04 * _exp_y_w)
-                            except Exception:
-                                _df_exp = math.exp(-0.04 * 0.25)
-                            fwd_swpt_str = f"{_fv_use:.4f}"    # Swptn col = live pricer fwd prem
-                            cfs_fwd  = _fv_use + new_val       # FORWARD CFS (swpt fwd + wedge)
-                            cfs_spot = cfs_fwd * _df_exp       # SPOT CFS at this wedge's expiry
-                            cfs = cfs_spot
-                            st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs_spot
-                            st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_fwd"] = cfs_fwd
-                            spot_str = f"{_fv_use * _df_exp:.4f}"  # swaption SPOT at its expiry
-                            cfs_str  = f"{cfs_fwd:.4f}"        # column shows the FORWARD CFS curve
+                            # AUD math: anchor point = FORWARD swaption premium + wedge,
+                            # NO discount conversion. The caplet bootstrap reproduces this
+                            # as the CFS straddle exactly like AUD/NZD/EUR — the only USD
+                            # difference is the fwd swaption is priced live (_fv_use).
+                            fwd_swpt_str = f"{_fv_use:.4f}"    # Swptn col = live fwd swaption prem
+                            cfs      = _fv_use + new_val       # FWD CFS = fwd swaption + wedge
+                            st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs
+                            spot_str = f"{_fv_use:.4f}"
+                            cfs_str  = f"{cfs:.4f}"            # FWD CFS column
                         else:
                             cfs = swpt + new_val
                             st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs
