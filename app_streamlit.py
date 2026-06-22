@@ -8634,6 +8634,37 @@ def _fen_parse_csv(raw, fname):
     return out
 
 
+def _fenics_fetch(ck, path, timeout=45):
+    """GET a Fenics path the SAME way the working standalone puller (urllib) does:
+    FOLLOW redirects, no XHR header. Fenics issues a benign 302 (session re-bind /
+    trailing-slash) even for VALID sessions; urllib follows it and gets the page,
+    so the app must too — treating that 302 as 'expired' was the false-expired bug.
+    Returns the requests.Response (redirects already followed)."""
+    hdr = {"Cookie": ck, "User-Agent": "Mozilla/5.0",
+           "Referer": f"{_FEN_BASE}/dashboard",
+           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
+    return requests.get(f"{_FEN_BASE}{path}", headers=hdr, timeout=timeout,
+                        verify=False, allow_redirects=True)
+
+
+def _fenics_is_login(r):
+    """True only if the (redirect-followed) response is actually a login/SSO page —
+    i.e. the cookie really is expired. A 200 logged-in page with no reports is NOT
+    a login page (that's just an empty/quiet listing)."""
+    if r.status_code in (401, 403):
+        return True
+    fu = (getattr(r, "url", "") or "").lower()
+    if any(k in fu for k in ("login", "signin", "sign-in", "sso", "auth", "saml", "openid")):
+        return True
+    low = (r.text or "").lower()
+    if any(k in low for k in ("logout", "sign out", "signed in")):
+        return False
+    if any(k in low for k in ("j_username", "j_password", 'type="password"',
+                              "login-form", "please log in", "sign in to", "log in to continue")):
+        return True
+    return False
+
+
 def _fenics_check_cookie(cookie):
     """Read-only Fenics cookie probe: lists /reports, no download, no DB write.
     Returns dict(status: VALID | EMPTY | EXPIRED | NO_COOKIE | NET_ERR | ERR, listed)."""
@@ -8651,20 +8682,16 @@ def _fenics_check_cookie(cookie):
         except Exception:
             pass
         try:
-            r = requests.get(f"{_FEN_BASE}/reports", headers=hdr, timeout=45,
-                             verify=False, allow_redirects=False)
+            r = _fenics_fetch(ck, "/reports", timeout=45)
         except Exception as e:
             return {"status": "NET_ERR", "detail": str(e)}
-        if r.status_code in (301, 302, 303, 307, 401, 403):
+        if _fenics_is_login(r):
             return {"status": "EXPIRED", "http": r.status_code}
         html = r.text
         items = {m for m, _n in _FEN_ROW_RE.findall(html)}
         if items:
             return {"status": "VALID", "listed": len(items)}
-        low = html.lower()
-        if any(k in low for k in ("logout", "sign out", "signed in")):
-            return {"status": "EMPTY", "listed": 0}
-        return {"status": "EXPIRED", "http": r.status_code}
+        return {"status": "EMPTY", "listed": 0}
     except Exception as e:
         return {"status": "ERR", "detail": str(e)}
 
@@ -8754,11 +8781,10 @@ def _fenics_pull_load(cookie, date_str=""):
         except Exception:
             pass
         try:
-            r = requests.get(f"{_FEN_BASE}/reports", headers=hdr, timeout=60,
-                             verify=False, allow_redirects=False)
+            r = _fenics_fetch(ck, "/reports", timeout=60)
         except Exception as e:
             return {"status": "NET_ERR", "detail": str(e)}
-        if r.status_code in (301, 302, 303, 307, 401, 403):
+        if _fenics_is_login(r):
             return {"status": "EXPIRED"}
         html = r.text
         low = html.lower()
@@ -8780,7 +8806,7 @@ def _fenics_pull_load(cookie, date_str=""):
         for _id, name in want:
             try:
                 d = requests.get(f"{_FEN_BASE}/reports/download/intraday/{_id}",
-                                 headers=hdr, timeout=120, verify=False)
+                                 headers=hdr, timeout=120, verify=False, allow_redirects=True)
             except Exception:
                 continue
             data = d.content
@@ -8863,8 +8889,14 @@ def eu_mifir_tab():
             except Exception:
                 pass
             if _hb_top.get("login_ok"):
-                st.success(f"🟢 Fenics auto-pull cookie OK — last login {_age_top}, "
-                           f"{_hb_top.get('reports_listed') or 0} reports listed.")
+                _rl = _hb_top.get("reports_listed") or 0
+                if _rl > 0:
+                    st.success(f"🟢 Fenics auto-pull cookie OK — last login {_age_top}, "
+                               f"{_rl} reports listed.")
+                else:
+                    st.warning(f"🟡 Fenics login returned OK but **0 reports listed** "
+                               f"({_age_top}). If prints exist on the portal, the session is "
+                               f"likely stale — paste a fresh JSESSIONID below and pull.")
             else:
                 st.error(f"🔴 Fenics auto-pull login FAILED ({_age_top}) — the scheduled "
                          f"task on your machine couldn't log in. Check FENICS_USER/PASS.")
