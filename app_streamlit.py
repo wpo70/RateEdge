@@ -21723,6 +21723,25 @@ def caps_floors_tab(vol_mode: str):
                 except Exception:
                     _df_ff = 1.0
                     pv_bp_fwd = pv_bp
+
+                # USD/EUR: for a recognised wedge gap, print the solved FWD CFS directly
+                # (= fwd swaption + wedge). This is the exact cumulative-forward the table
+                # produced; reading it here makes the standalone immune to OTC-curve
+                # staleness / interpolation drift. spot = FWD CFS × df(3m); PV from spot.
+                if ccy in ("USD", "EUR"):
+                    _gap_map = {("3m", 1.0): "3m1y", ("1y", 2.0): "1y1y", ("2y", 3.0): "2y1y",
+                                ("3y", 4.0): "3y1y", ("4y", 5.0): "4y1y", ("5y", 7.0): "5y2y",
+                                ("7y", 10.0): "7y3y", ("10y", 12.0): "10y2y"}
+                    try:
+                        _gap_lbl = _gap_map.get((str(first_fixing), float(tenor_y)))
+                    except Exception:
+                        _gap_lbl = None
+                    if _gap_lbl:
+                        _fc = st.session_state.get("cfs_table_data", {}).get(_gap_lbl, {}).get("cfs_fwd")
+                        if _fc is not None and float(_fc) > 0:
+                            pv_bp_fwd = float(_fc)
+                            pv_bp     = float(_fc) * _df_ff           # _df_ff = df(3m) here
+                            pv_total  = (pv_bp / 10000.0) * notional * 1e6
     
                 # one_bp = sum of caplet annuities
                 one_bp_annuity = 0.0
@@ -22760,6 +22779,7 @@ def caps_floors_tab(vol_mode: str):
                                     _df_exp_c = df_from_curve(_ois_c, _exp_y_c) if _ois_c is not None else math.exp(-0.04 * _exp_y_c)
                                     _fwd_c = (swpt / _df_exp_c) if _df_exp_c > 0 else swpt
                                 _cfs_spot_c = (_fwd_c + spread) * _df_3m_c              # FWD CFS × df(3m)
+                                st.session_state["cfs_table_data"][label]["cfs_fwd"] = round(float(_fwd_c) + float(spread), 6)
                             except Exception:
                                 _cfs_spot_c = swpt + spread
                             st.session_state["cfs_table_data"][label]["cfs_straddle"] = _cfs_spot_c
