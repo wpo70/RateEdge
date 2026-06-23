@@ -8075,48 +8075,87 @@ def eu_combined_analysis():
             },
         )
         _ts = _dt.now(_tz.utc).strftime("%Y%m%d_%H%M")
-        # Excel-safe CSV: strip emoji from Type (Excel renders them as boxes),
-        # rename the Δ column to ASCII, and write a UTF-8 BOM so Excel reads it as
-        # UTF-8 instead of the local ANSI codepage (which garbles any non-ASCII).
-        import re as _re_csv
-        _EMOJI_RE = _re_csv.compile(
-            "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF\U00002B00-\U00002BFF\uFE0F]")
-        _csv_df = _tr_df.copy()
-        for _cc in _csv_df.columns:
-            if not pd.api.types.is_numeric_dtype(_csv_df[_cc]):
-                _csv_df[_cc] = _csv_df[_cc].astype(str).map(
-                    lambda s: _EMOJI_RE.sub("", s).strip())
-        _csv_df = _csv_df.rename(columns={"Δ surf(bp)": "Chg surf(bp)"})
+        # Ship as XLSX (like the SDR report) so the emoji symbols render and the
+        # broker breakdown sits on the same sheet. Trades keep their 🔵/🔴/🟢 Type.
+        _xl_df = _tr_df.copy().rename(columns={"Δ surf(bp)": "Chg surf(bp)"})
 
-        # Broker % breakdown (trades only — MiFIR notional is masked, so no notional
-        # column here). Mirrors the SDR report's "Broker Breakdown" block.
-        _bcol = "Broker" if "Broker" in _csv_df.columns else None
-        _br_lines = []
-        if _bcol:
-            _bagg = (_csv_df.groupby(_bcol).size().reset_index(name="Trade Count")
-                     .sort_values("Trade Count", ascending=False))
+        # Broker % breakdown (trades only — MiFIR notional is masked). All ICAP/TP ICAP
+        # venues (ICAP, ICAP (V), ICAP (E), ICAP UK OTF, TP ICAP UK MTF, …) collapse to
+        # a single "ICAP" bucket.
+        def _broker_group(b):
+            _b = str(b).strip()
+            _u = _b.upper()
+            if _u.startswith("ICAP") or _u.startswith("TP ICAP") or _u.startswith("TP_ICAP"):
+                return "ICAP"
+            return _b
+        _br_rows = []
+        _btot = 0
+        if "Broker" in _xl_df.columns:
+            _bg = _xl_df["Broker"].map(_broker_group)
+            _bagg = (_bg.value_counts().rename_axis("Broker").reset_index(name="Trade Count"))
             _btot = int(_bagg["Trade Count"].sum())
             if _btot > 0:
                 _bagg["Pct of Trades"] = (_bagg["Trade Count"] / _btot * 100).round(2).map(lambda v: f"{v:.2f}%")
-                _br_lines.append("")
-                _br_lines.append("Broker Breakdown")
-                _br_lines.append("Broker,Trade Count,Pct of Trades")
-                for _, _r in _bagg.iterrows():
-                    _bn = str(_r[_bcol]).replace(",", " ")
-                    _br_lines.append(f"{_bn},{int(_r['Trade Count'])},{_r['Pct of Trades']}")
-                _br_lines.append("")
-                _br_lines.append(f"Total Trades,{_btot}")
+                _bagg = _bagg.sort_values("Trade Count", ascending=False)
+                _br_rows = _bagg[["Broker", "Trade Count", "Pct of Trades"]].values.tolist()
 
-        _csv_text = _csv_df.to_csv(index=False)
-        if _br_lines:
-            _csv_text = _csv_text.rstrip("\r\n") + "\r\n" + "\r\n".join(_br_lines) + "\r\n"
-        _csv_bytes = _csv_text.encode("utf-8-sig")
-        st.download_button(
-            "⬇ Download combined trade report",
-            data=_csv_bytes,
-            file_name=f"EUR_combined_SDR_MiFIR_{_ts}.csv",
-            mime="text/csv", key="_euc_combined_dl",
-        )
+        try:
+            import io as _io_xl
+            import openpyxl as _oxl
+            from openpyxl.styles import Font as _Font_xl
+            from openpyxl.utils import get_column_letter as _gcl_xl
+
+            _wb = _oxl.Workbook()
+            _ws = _wb.active
+            _ws.title = "EUR Combined"
+            _hdr = list(_xl_df.columns)
+            _ws.append(_hdr)
+            for _c in _ws[1]:
+                _c.font = _Font_xl(bold=True)
+            for _, _r in _xl_df.iterrows():
+                _ws.append([_r[c] for c in _hdr])
+
+            if _br_rows:
+                _ws.append([])
+                _trow = _ws.max_row + 1
+                _ws.cell(row=_trow, column=1, value="Broker Breakdown (ICAP venues combined)").font = _Font_xl(bold=True)
+                _ws.append(["Broker", "Trade Count", "Pct of Trades"])
+                for _c in _ws[_ws.max_row]:
+                    _c.font = _Font_xl(bold=True)
+                for _row in _br_rows:
+                    _ws.append([_row[0], int(_row[1]), _row[2]])
+                _ws.append([])
+                _ws.append(["Total Trades", int(_btot)])
+
+            # auto-fit column widths from max content length
+            for _ci, _col in enumerate(_ws.columns, start=1):
+                _w = max((len(str(_cell.value)) for _cell in _col if _cell.value is not None), default=10)
+                _ws.column_dimensions[_gcl_xl(_ci)].width = min(max(_w + 2, 8), 50)
+
+            _buf = _io_xl.BytesIO()
+            _wb.save(_buf)
+            _buf.seek(0)
+            st.download_button(
+                "⬇ Download combined trade report (Excel)",
+                data=_buf.getvalue(),
+                file_name=f"EUR_combined_SDR_MiFIR_{_ts}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="_euc_combined_dl",
+            )
+        except Exception as _xl_e:
+            # fallback: BOM CSV (no emoji guarantee) if openpyxl unavailable
+            _csv_text = _xl_df.to_csv(index=False)
+            if _br_rows:
+                _csv_text = _csv_text.rstrip("\r\n") + "\r\n\r\nBroker Breakdown (ICAP venues combined)\r\n"
+                _csv_text += "Broker,Trade Count,Pct of Trades\r\n"
+                _csv_text += "\r\n".join(f"{r[0]},{int(r[1])},{r[2]}" for r in _br_rows)
+                _csv_text += f"\r\n\r\nTotal Trades,{_btot}\r\n"
+            st.download_button(
+                "⬇ Download combined trade report",
+                data=_csv_text.encode("utf-8-sig"),
+                file_name=f"EUR_combined_SDR_MiFIR_{_ts}.csv",
+                mime="text/csv", key="_euc_combined_dl",
+            )
     else:
         st.info("No per-trade rows to show in this window.")
 
