@@ -22225,7 +22225,7 @@ def caps_floors_tab(vol_mode: str):
                     if _wkey not in st.session_state:
                         st.session_state[_wkey] = float(cur_val)
                     new_val = rc[2].number_input("", key=_wkey,
-                                                  format="%.1f", step=0.5,
+                                                  format="%.4f", step=0.0001,
                                                   label_visibility="collapsed",
                                                   disabled=_row_skipped)
                     delta = new_val - last_val
@@ -22342,7 +22342,7 @@ def caps_floors_tab(vol_mode: str):
                 if "cf_spr_15v20_new" not in st.session_state:
                     st.session_state["cf_spr_15v20_new"] = _spread_15v20_cur
                 _spread_15v20_new = _vs_cols[2].number_input("", value=_spread_15v20_cur, key="cf_spr_15v20_new",
-                                                              format="%.1f", step=0.5, label_visibility="collapsed")
+                                                              format="%.4f", step=0.0001, label_visibility="collapsed")
                 _delta_15v20 = _spread_15v20_new - _spread_15v20_last
                 _dc = "#22c55e" if _delta_15v20 > 0 else "#ef4444" if _delta_15v20 < 0 else "#94a3b8"
                 _vs_cols[3].markdown(f"<div style='{_fs};text-align:right;color:{_dc}'>{_delta_15v20:+.1f}</div>", unsafe_allow_html=True)
@@ -22367,7 +22367,7 @@ def caps_floors_tab(vol_mode: str):
                     if "cf_spr_20v30_new" not in st.session_state:
                         st.session_state["cf_spr_20v30_new"] = _spread_20v30_cur
                     _spread_20v30_new = _vs_cols30[2].number_input("", value=_spread_20v30_cur, key="cf_spr_20v30_new",
-                                                                   format="%.1f", step=0.5, label_visibility="collapsed")
+                                                                   format="%.4f", step=0.0001, label_visibility="collapsed")
                     _delta_20v30 = _spread_20v30_new - _spread_20v30_last
                     _dc30 = "#22c55e" if _delta_20v30 > 0 else "#ef4444" if _delta_20v30 < 0 else "#94a3b8"
                     _vs_cols30[3].markdown(f"<div style='{_fs};text-align:right;color:{_dc30}'>{_delta_20v30:+.1f}</div>", unsafe_allow_html=True)
