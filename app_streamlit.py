@@ -22341,13 +22341,21 @@ def caps_floors_tab(vol_mode: str):
                             _fv_use = _usd_wedge_fwd_prem(_exp_w, _ten_w) if (_exp_w and _ten_w) else None
                             if _fv_use is None:
                                 _fv_use = _fv
+                        elif ccy == "EUR":
+                            # EUR: FORWARD swaption premium straight from atm_prem_matrix (_fv),
+                            # same fwd + wedge construction as USD. AUD/NZD stay spot-based.
+                            _fv_use = _fv
                         else:
                             _fv_use = None
 
-                        if ccy == "USD" and _fv_use is not None:
+                        if ccy in ("USD", "EUR") and _fv_use is not None:
                             try:
-                                _sofr_usd = st.session_state.get("config_curves", {}).get("USD")
-                                _df_3m = df_from_curve(_sofr_usd, 0.25) if _sofr_usd is not None else math.exp(-0.04 * 0.25)
+                                if ccy == "USD":
+                                    _crv_3m = st.session_state.get("config_curves", {}).get("USD")
+                                else:
+                                    _crv_3m = st.session_state.get("config_basis", {}).get("EUR", {}).get("ois")
+                                    if _crv_3m is None: _crv_3m = get_basis_curve("EUR", "ois")
+                                _df_3m = df_from_curve(_crv_3m, 0.25) if _crv_3m is not None else math.exp(-0.04 * 0.25)
                             except Exception:
                                 _df_3m = math.exp(-0.04 * 0.25)
                             fwd_swpt_str = f"{_fv_use:.4f}"    # Swptn col = live pricer fwd prem (76.75)
