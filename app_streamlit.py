@@ -12415,6 +12415,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                                     # 2) blend into current ATM at point cells, optional smooth, anchor points
                                     _bl = _av_atm.copy()
+                                    _bl_orig = _av_atm.copy()   # pre-blend surface for change-field diffusion
                                     _anchor = {}   # (row_idx, col) -> blended value, to re-impose after smoothing
                                     _rejected = []
                                     for _i in range(len(_bl)):
@@ -12437,37 +12438,35 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         st.warning("⚠️ Rejected as outliers (excluded from blend, deviate >"
                                                    f"{_av_devcap}% from surface): " + ", ".join(_rejected))
                                     if _av_smooth and _anchor:
-                                        # Smooth THROUGH the blended points (no hard re-anchor): 2 gentle
-                                        # passes of 0.6 self + 0.4 mean(up,down,left,right). Hard-anchoring
-                                        # re-imposed the exact blend at point cells, which re-created spikes
-                                        # (e.g. 1y1Y bulging to 102.6 between ~97.5 neighbours). The blend
-                                        # weight already sets SDR fidelity; smoothing now irons the term
-                                        # structure so 9m/1y/18m flow smoothly.
-                                        _grid = _bl[_av_cols].apply(pd.to_numeric, errors="coerce").values.astype(float)
-                                        _nr, _nc = _grid.shape
+                                        # Smooth the CHANGE field only — diffuse (blended − surface), which is
+                                        # 0 at every untraded bucket, so a point's move bleeds into neighbours
+                                        # WITHOUT the diffusion smoothing the surface's own term-structure
+                                        # curvature into phantom moves in buckets that never traded. 2 passes
+                                        # of 0.6 self + 0.4 mean(neighbours), then re-anchor printed cells.
+                                        _orig = _bl_orig[_av_cols].apply(pd.to_numeric, errors="coerce").values.astype(float)
+                                        _blv  = _bl[_av_cols].apply(pd.to_numeric, errors="coerce").values.astype(float)
+                                        _nr, _nc = _blv.shape
+                                        _dlt = _blv - _orig                       # change field (0 off-point)
+                                        _dlt[_dlt != _dlt] = 0.0                   # NaN deltas -> 0
                                         for _pass in range(2):
-                                            _sm = _grid.copy()
+                                            _sm = _dlt.copy()
                                             for _ri in range(_nr):
                                                 for _ci in range(_nc):
-                                                    if _grid[_ri, _ci] != _grid[_ri, _ci]: continue
+                                                    if _orig[_ri, _ci] != _orig[_ri, _ci]: continue
                                                     _ns = []
-                                                    if _ri > 0: _ns.append(_grid[_ri-1, _ci])
-                                                    if _ri < _nr-1: _ns.append(_grid[_ri+1, _ci])
-                                                    if _ci > 0: _ns.append(_grid[_ri, _ci-1])
-                                                    if _ci < _nc-1: _ns.append(_grid[_ri, _ci+1])
-                                                    _ns = [x for x in _ns if not (x != x)]
+                                                    if _ri > 0 and _orig[_ri-1, _ci] == _orig[_ri-1, _ci]: _ns.append(_dlt[_ri-1, _ci])
+                                                    if _ri < _nr-1 and _orig[_ri+1, _ci] == _orig[_ri+1, _ci]: _ns.append(_dlt[_ri+1, _ci])
+                                                    if _ci > 0 and _orig[_ri, _ci-1] == _orig[_ri, _ci-1]: _ns.append(_dlt[_ri, _ci-1])
+                                                    if _ci < _nc-1 and _orig[_ri, _ci+1] == _orig[_ri, _ci+1]: _ns.append(_dlt[_ri, _ci+1])
                                                     if _ns:
-                                                        _sm[_ri, _ci] = 0.6*_grid[_ri, _ci] + 0.4*(sum(_ns)/len(_ns))
-                                            _grid = _sm
+                                                        _sm[_ri, _ci] = 0.6*_dlt[_ri, _ci] + 0.4*(sum(_ns)/len(_ns))
+                                            _dlt = _sm
+                                        _final = _orig + _dlt
                                         for _ci, _c in enumerate(_av_cols):
                                             for _ri in range(_nr):
-                                                if not (_grid[_ri, _ci] != _grid[_ri, _ci]):
-                                                    _bl.iloc[_ri, _bl.columns.get_loc(_c)] = round(float(_grid[_ri, _ci]), 2)
-                                        # Re-anchor PRINTED cells to their blended value. The smoother
-                                        # otherwise drags a printed corner toward steep neighbours (e.g.
-                                        # 1m1Y blend 74.8 lifted to ~80 by 2m1Y/1m2Y), pushing it above
-                                        # both the close and the SDR print. The outlier guard above already
-                                        # rejects bad prints, so pinning the good ones back is safe.
+                                                if not (_final[_ri, _ci] != _final[_ri, _ci]):
+                                                    _bl.iloc[_ri, _bl.columns.get_loc(_c)] = round(float(_final[_ri, _ci]), 2)
+                                        # Re-anchor PRINTED cells to their blended value (smoother nudges them).
                                         for (_ri, _c), _av in _anchor.items():
                                             _bl.iloc[_ri, _bl.columns.get_loc(_c)] = _av
 
