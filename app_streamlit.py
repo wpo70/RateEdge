@@ -22297,6 +22297,11 @@ def caps_floors_tab(vol_mode: str):
                                 _df_3m = math.exp(-0.04 * 0.25)
                             fwd_swpt_str = f"{_fv_use:.4f}"    # Swptn col = live pricer fwd prem (76.75)
                             cfs_fwd  = _fv_use + new_val       # FORWARD CFS (76.75 + 18 = 94.75)
+                            # store the LIVE forward + FWD CFS (full precision) so CALCULATE and
+                            # the standalone use the same number as the Swptn/FWD CFS columns,
+                            # not the 2dp atm_prem_matrix value.
+                            st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["swaption_fwd"] = round(float(_fv_use), 6)
+                            st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_fwd"] = round(float(cfs_fwd), 6)
                             cfs_spot = cfs_fwd * _df_3m        # SPOT CFS (3m fwd-start)
                             cfs = cfs_spot
                             st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_straddle"] = cfs_spot
