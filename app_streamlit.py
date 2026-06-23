@@ -7066,6 +7066,47 @@ def _bayes_spatial_smooth(post, atm, cols, lam):
     return out
 
 
+def _diffuse_grid_df(bl, acols, anchor_rc, lam):
+    """SDR-tab spatial smoothing applied to a surface DataFrame: 2 passes of
+    0.6·self + 0.4·mean(grid-neighbours) over the tenor columns (scaled by lam, so
+    lam=1 == the SDR fitter's 0.6/0.4), then re-anchor the fitted cells in anchor_rc
+    {(row_idx, col_name): value} back to their value. So a fitted point's move bleeds
+    smoothly into its neighbours instead of sitting as an isolated spike, while the
+    point itself stays put. Mutates and returns bl."""
+    cols = list(acols)
+    nr = len(bl); nc = len(cols)
+    grid = [[None] * nc for _ in range(nr)]
+    for ri in range(nr):
+        for ci, c in enumerate(cols):
+            try: grid[ri][ci] = float(bl.iloc[ri][c])
+            except Exception: grid[ri][ci] = None
+    nw = 0.4 * max(0.0, min(1.0, float(lam)))
+    for _pass in range(2):
+        sm = [row[:] for row in grid]
+        for ri in range(nr):
+            for ci in range(nc):
+                v = grid[ri][ci]
+                if v is None:
+                    continue
+                ns = []
+                if ri > 0 and grid[ri-1][ci] is not None: ns.append(grid[ri-1][ci])
+                if ri < nr-1 and grid[ri+1][ci] is not None: ns.append(grid[ri+1][ci])
+                if ci > 0 and grid[ri][ci-1] is not None: ns.append(grid[ri][ci-1])
+                if ci < nc-1 and grid[ri][ci+1] is not None: ns.append(grid[ri][ci+1])
+                if ns:
+                    sm[ri][ci] = (1 - nw) * v + nw * (sum(ns) / len(ns))
+        grid = sm
+    colpos = {c: bl.columns.get_loc(c) for c in cols}
+    for ri in range(nr):
+        for ci, c in enumerate(cols):
+            if grid[ri][ci] is not None:
+                bl.iat[ri, colpos[c]] = round(grid[ri][ci], 2)
+    for (ri, c), av in anchor_rc.items():                 # re-anchor fitted cells
+        if c in colpos:
+            bl.iat[ri, colpos[c]] = round(av, 2)
+    return bl
+
+
 def _usd_bucket_df(curve, E):
     """Expiry discount factor on the SOFR curve — exact copy of the SDR analytics'
     `_bucket_df`, so inverted vols reprice through the pricer's forward premium."""
@@ -8067,6 +8108,14 @@ def eu_combined_analysis():
                                 key="_euc_fit_blendw",
                                 help="100% = fitted vol replaces the surface at that bucket; "
                                      "lower = pull the surface part-way toward the fit.") / 100.0
+        _euc_smooth = st.checkbox("Spatial smoothing (bleed fitted points into neighbours)",
+                                  value=False, key="_euc_smooth",
+                                  help="Same 2-pass 0.6/0.4 diffusion as the SDR fitter: a fitted "
+                                       "point's move tapers into adjacent buckets, then the point "
+                                       "is re-anchored.")
+        _euc_smooth_lam = st.slider("Smoothing strength", 0.0, 1.0, 1.0, 0.05,
+                                    key="_euc_smooth_lam",
+                                    help="1.0 = SDR fitter's 0.6/0.4.") if _euc_smooth else 0.0
         _SDR_BIAS, _MIF_BIAS = 0.70, 0.30   # real strike vs inferred-ATM split
 
         # Per-bucket fit with source split + outlier guard
@@ -8117,6 +8166,7 @@ def eu_combined_analysis():
                     if _ey:
                         _fit_y[(round(_ey, 4), float(t))] = v
                 _applied = 0
+                _euc_anchor = {}     # (row_idx, col_name) -> blended fitted value
                 for _ri in range(len(_bl)):
                     _erow = label_to_years(str(_bl.iloc[_ri]["Expiry"]))
                     if not _erow:
@@ -8132,10 +8182,15 @@ def eu_combined_analysis():
                             _cur = float(_bl.iloc[_ri][_c])
                         except Exception:
                             _cur = None
-                        _bl.iat[_ri, _bl.columns.get_loc(_c)] = (
-                            round(_fv, 2) if _cur is None
-                            else round(_cur + _fit_blendw * (_fv - _cur), 2))
+                        _newv = (round(_fv, 2) if _cur is None
+                                 else round(_cur + _fit_blendw * (_fv - _cur), 2))
+                        _bl.iat[_ri, _bl.columns.get_loc(_c)] = _newv
+                        _euc_anchor[(_ri, _c)] = _newv
                         _applied += 1
+
+                # spatial smoothing — bleed the fitted moves into neighbours (SDR-tab logic)
+                if _euc_smooth and _euc_smooth_lam > 0 and _euc_anchor:
+                    _bl = _diffuse_grid_df(_bl, _acols, _euc_anchor, float(_euc_smooth_lam))
 
                 _bl_ndf = _bl.set_index("Expiry")[_acols].apply(pd.to_numeric, errors="coerce")
                 st.markdown("**Blended surface (fitted points merged in):**")
