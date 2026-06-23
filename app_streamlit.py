@@ -9733,6 +9733,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             # changes, reset the filter so it defaults to the newly-selected currency
             # (a manual override still sticks until the next sidebar change).
             _side_ccy = st.session_state.get("sidebar_ccy", "AUD").split(" ")[0]
+            if _side_ccy and _side_ccy not in ccy_opts:
+                ccy_opts = [_side_ccy] + ccy_opts          # always offer the sidebar ccy
             if st.session_state.get("_sdr_ccy_track") != _side_ccy:
                 st.session_state["_sdr_ccy_track"] = _side_ccy
                 st.session_state.pop("sdr_ccy", None)
@@ -9743,6 +9745,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             sel_ccy = st.multiselect("CCY", ccy_opts,
                 default=_sv_ccy,
                 key="sdr_ccy", label_visibility="collapsed", on_change=_save_sdr_filters)
+            # Empty selection must NOT fall through to "all currencies" (the data is
+            # EUR-heavy, so that floods the feed with EUR while the sidebar says USD).
+            # Fall back to the sidebar currency instead.
+            if not sel_ccy and _side_ccy:
+                sel_ccy = [_side_ccy]
 
         with col3:
             st.markdown("**Tenor filters**")
