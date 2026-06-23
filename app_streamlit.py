@@ -6997,12 +6997,13 @@ def _bayes_bucket_posterior(prior_mean, prior_var, obs,
 
 
 def _bayes_spatial_smooth(post, atm, cols, lam):
-    """VERBATIM port of the SDR fitter's blend+smooth, run on the SDR-derived ATM
-    points: blend the points onto the current surface at the fitter's blend weight w
-    (same outlier guard), run the fitter's 2-pass 0.6·self + 0.4·mean(neighbours)
-    diffusion, then re-anchor the printed cells to their blended value. At lam=1 with
-    the same points and w this is byte-for-byte the SDR fitter's blended/smoothed
-    surface. lam scales the neighbour pull (1.0 = fitter). Returns {(exp,col): value}."""
+    """SDR-fitter-style smoothing that ONLY spreads the SDR change, never the
+    surface's own shape. Builds a change field (= w·(point − surface) at buckets
+    that actually have an SDR point, 0 everywhere else), runs the fitter's 2-pass
+    0.6·self + 0.4·mean(neighbours) diffusion ON THE CHANGE FIELD, re-anchors the
+    printed cells, then adds the change back onto the surface. Untraded buckets with
+    no nearby print stay exactly at the surface (no spurious moves from term-structure
+    curvature). lam scales the neighbour pull (1.0 = fitter's 0.6/0.4)."""
     try:
         _pts_y = st.session_state.get("_sdr_atm_pts_y", {}) or {}
         _meta = st.session_state.get("_sdr_atm_pts_meta", {}) or {}
@@ -7018,92 +7019,103 @@ def _bayes_spatial_smooth(post, atm, cols, lam):
         try: return (round(label_to_years(e), 4), round(label_to_years(t), 4))
         except Exception: return None
 
-    grid = [[None] * nc for _ in range(nr)]
-    for ri in range(nr):
-        for ci, c in enumerate(cols):
-            try: grid[ri][ci] = float(atm.iloc[ri][c])
-            except Exception: grid[ri][ci] = None
-
-    # blend SDR points onto the surface at weight w (fitter's outlier guard)
+    surf = [[None] * nc for _ in range(nr)]
+    delta = [[0.0] * nc for _ in range(nr)]      # CHANGE field — 0 where no point
     anchor = {}
     for ri, e in enumerate(exps):
         for ci, c in enumerate(cols):
+            try: surf[ri][ci] = float(atm.iloc[ri][c])
+            except Exception: surf[ri][ci] = None
             pt = _pts_y.get(_yk(e, c))
-            cur = grid[ri][ci]
+            cur = surf[ri][ci]
             if pt is None or cur is None:
                 continue
             if cur > 0 and abs(pt - cur) / cur * 100.0 > _devcap:
-                continue                                   # outlier: leave surface
-            nv = round((1 - _w) * cur + _w * pt, 2)
-            grid[ri][ci] = nv
-            anchor[(ri, ci)] = nv
+                continue                                 # outlier: no change
+            d = _w * (pt - cur)
+            delta[ri][ci] = d
+            anchor[(ri, ci)] = d
 
     if anchor:
-        nw = 0.4 * max(0.0, min(1.0, float(lam)))          # 0.4 at lam=1 -> 0.6/0.4
+        nw = 0.4 * max(0.0, min(1.0, float(lam)))
         for _pass in range(2):
-            sm = [row[:] for row in grid]
+            sm = [row[:] for row in delta]
             for ri in range(nr):
                 for ci in range(nc):
-                    v = grid[ri][ci]
-                    if v is None:
+                    if surf[ri][ci] is None:
                         continue
                     ns = []
-                    if ri > 0 and grid[ri-1][ci] is not None: ns.append(grid[ri-1][ci])
-                    if ri < nr-1 and grid[ri+1][ci] is not None: ns.append(grid[ri+1][ci])
-                    if ci > 0 and grid[ri][ci-1] is not None: ns.append(grid[ri][ci-1])
-                    if ci < nc-1 and grid[ri][ci+1] is not None: ns.append(grid[ri][ci+1])
+                    if ri > 0 and surf[ri-1][ci] is not None: ns.append(delta[ri-1][ci])
+                    if ri < nr-1 and surf[ri+1][ci] is not None: ns.append(delta[ri+1][ci])
+                    if ci > 0 and surf[ri][ci-1] is not None: ns.append(delta[ri][ci-1])
+                    if ci < nc-1 and surf[ri][ci+1] is not None: ns.append(delta[ri][ci+1])
                     if ns:
-                        sm[ri][ci] = (1 - nw) * v + nw * (sum(ns) / len(ns))
-            grid = sm
-        for (ri, ci), av in anchor.items():                # re-anchor printed cells
-            grid[ri][ci] = av
+                        sm[ri][ci] = (1 - nw) * delta[ri][ci] + nw * (sum(ns) / len(ns))
+            delta = sm
+        for (ri, ci), d in anchor.items():               # re-anchor printed cells
+            delta[ri][ci] = d
 
     out = {}
     for ri, e in enumerate(exps):
         for ci, c in enumerate(cols):
-            if grid[ri][ci] is not None:
-                out[(e, c)] = round(grid[ri][ci], 2)
+            if surf[ri][ci] is not None:
+                out[(e, c)] = round(surf[ri][ci] + delta[ri][ci], 2)
     return out
 
 
-def _diffuse_grid_df(bl, acols, anchor_rc, lam):
-    """SDR-tab spatial smoothing applied to a surface DataFrame: 2 passes of
-    0.6·self + 0.4·mean(grid-neighbours) over the tenor columns (scaled by lam, so
-    lam=1 == the SDR fitter's 0.6/0.4), then re-anchor the fitted cells in anchor_rc
-    {(row_idx, col_name): value} back to their value. So a fitted point's move bleeds
-    smoothly into its neighbours instead of sitting as an isolated spike, while the
-    point itself stays put. Mutates and returns bl."""
+def _diffuse_grid_df(bl, acols, anchor_rc, lam, orig=None):
+    """SDR-tab spatial smoothing on a surface DataFrame — spreads ONLY the fitted
+    CHANGE, never the surface's own curvature. delta = bl − orig (nonzero only at
+    fitted cells, from anchor_rc); 2 passes of 0.6·self + 0.4·mean(grid-neighbours)
+    on the DELTA (scaled by lam), re-anchor fitted cells, then bl = orig + delta. If
+    orig is None it falls back to bl as the base (fitted cells still re-anchored).
+    Mutates and returns bl."""
     cols = list(acols)
     nr = len(bl); nc = len(cols)
-    grid = [[None] * nc for _ in range(nr)]
+    base = [[None] * nc for _ in range(nr)]
+    delta = [[0.0] * nc for _ in range(nr)]
     for ri in range(nr):
         for ci, c in enumerate(cols):
-            try: grid[ri][ci] = float(bl.iloc[ri][c])
-            except Exception: grid[ri][ci] = None
+            try: _b = float(bl.iloc[ri][c])
+            except Exception: _b = None
+            if orig is not None:
+                try: _o = float(orig.iloc[ri][c])
+                except Exception: _o = _b
+            else:
+                _o = _b
+            base[ri][ci] = _o
+            if _b is not None and _o is not None:
+                delta[ri][ci] = _b - _o
+    # fitted-cell change (overrides, in case bl==orig at those cells)
+    _anc = {}
+    colpos = {c: bl.columns.get_loc(c) for c in cols}
+    for (ri, c), av in anchor_rc.items():
+        if c in cols:
+            _ci = cols.index(c)                  # index within `cols` (no Expiry offset)
+            if base[ri][_ci] is not None:
+                delta[ri][_ci] = float(av) - base[ri][_ci]
+                _anc[(ri, _ci)] = delta[ri][_ci]
     nw = 0.4 * max(0.0, min(1.0, float(lam)))
     for _pass in range(2):
-        sm = [row[:] for row in grid]
+        sm = [row[:] for row in delta]
         for ri in range(nr):
             for ci in range(nc):
-                v = grid[ri][ci]
-                if v is None:
+                if base[ri][ci] is None:
                     continue
                 ns = []
-                if ri > 0 and grid[ri-1][ci] is not None: ns.append(grid[ri-1][ci])
-                if ri < nr-1 and grid[ri+1][ci] is not None: ns.append(grid[ri+1][ci])
-                if ci > 0 and grid[ri][ci-1] is not None: ns.append(grid[ri][ci-1])
-                if ci < nc-1 and grid[ri][ci+1] is not None: ns.append(grid[ri][ci+1])
+                if ri > 0 and base[ri-1][ci] is not None: ns.append(delta[ri-1][ci])
+                if ri < nr-1 and base[ri+1][ci] is not None: ns.append(delta[ri+1][ci])
+                if ci > 0 and base[ri][ci-1] is not None: ns.append(delta[ri][ci-1])
+                if ci < nc-1 and base[ri][ci+1] is not None: ns.append(delta[ri][ci+1])
                 if ns:
-                    sm[ri][ci] = (1 - nw) * v + nw * (sum(ns) / len(ns))
-        grid = sm
-    colpos = {c: bl.columns.get_loc(c) for c in cols}
+                    sm[ri][ci] = (1 - nw) * delta[ri][ci] + nw * (sum(ns) / len(ns))
+        delta = sm
+    for (ri, ci), d in _anc.items():
+        delta[ri][ci] = d
     for ri in range(nr):
         for ci, c in enumerate(cols):
-            if grid[ri][ci] is not None:
-                bl.iat[ri, colpos[c]] = round(grid[ri][ci], 2)
-    for (ri, c), av in anchor_rc.items():                 # re-anchor fitted cells
-        if c in colpos:
-            bl.iat[ri, colpos[c]] = round(av, 2)
+            if base[ri][ci] is not None:
+                bl.iat[ri, colpos[c]] = round(base[ri][ci] + delta[ri][ci], 2)
     return bl
 
 
@@ -8233,6 +8245,7 @@ def eu_combined_analysis():
                            "Editor tab first to blend/upload.")
             else:
                 _bl = _eur_atm.copy()
+                _bl_orig = _eur_atm.copy()   # pre-blend surface for delta diffusion
                 _acols = [c for c in _bl.columns if c != "Expiry"]
                 # year-keyed lookup of fitted points (labels differ in case/format)
                 _fit_y = {}
@@ -8265,7 +8278,7 @@ def eu_combined_analysis():
 
                 # spatial smoothing — bleed the fitted moves into neighbours (SDR-tab logic)
                 if _euc_smooth and _euc_smooth_lam > 0 and _euc_anchor:
-                    _bl = _diffuse_grid_df(_bl, _acols, _euc_anchor, float(_euc_smooth_lam))
+                    _bl = _diffuse_grid_df(_bl, _acols, _euc_anchor, float(_euc_smooth_lam), orig=_bl_orig)
 
                 _bl_ndf = _bl.set_index("Expiry")[_acols].apply(pd.to_numeric, errors="coerce")
                 st.markdown("**Blended surface (fitted points merged in):**")
