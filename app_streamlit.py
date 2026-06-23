@@ -9767,8 +9767,21 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
         with al1:
             st.markdown("**Timezone**")
             _tz_options = ["Sydney (AEST/AEDT)", "Auckland (NZST/NZDT)", "New York (ET)", "London (GMT/BST)", "Tokyo (JST)"]
-            _sv_tz = _sv.get("sdr_timezone", "Sydney (AEST/AEDT)")
-            _sv_tz = _sv_tz if _sv_tz in _tz_options else "Sydney (AEST/AEDT)"
+            # Default the timezone to the sidebar currency's home zone, and follow it
+            # whenever the currency changes (USD→New York, EUR/GBP→London, AUD→Sydney…).
+            _ccy_tz_label = {
+                "USD": "New York (ET)", "CAD": "New York (ET)",
+                "EUR": "London (GMT/BST)", "GBP": "London (GMT/BST)",
+                "AUD": "Sydney (AEST/AEDT)", "NZD": "Auckland (NZST/NZDT)",
+                "JPY": "Tokyo (JST)",
+            }
+            _sdr_ccy_now = st.session_state.get("sidebar_ccy", "USD").split(" ")[0]
+            _ccy_tz_default = _ccy_tz_label.get(_sdr_ccy_now, "New York (ET)")
+            if st.session_state.get("_sdr_tz_lastccy") != _sdr_ccy_now:
+                st.session_state["sdr_timezone"] = _ccy_tz_default   # snap on currency change
+                st.session_state["_sdr_tz_lastccy"] = _sdr_ccy_now
+            _sv_tz = st.session_state.get("sdr_timezone", _ccy_tz_default)
+            _sv_tz = _sv_tz if _sv_tz in _tz_options else _ccy_tz_default
             st.selectbox("Timezone", _tz_options, index=_tz_options.index(_sv_tz), key="sdr_timezone",
                         label_visibility="collapsed", on_change=_save_sdr_filters)
         with al2:
