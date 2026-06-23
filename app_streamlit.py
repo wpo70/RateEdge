@@ -8075,9 +8075,45 @@ def eu_combined_analysis():
             },
         )
         _ts = _dt.now(_tz.utc).strftime("%Y%m%d_%H%M")
+        # Excel-safe CSV: strip emoji from Type (Excel renders them as boxes),
+        # rename the Δ column to ASCII, and write a UTF-8 BOM so Excel reads it as
+        # UTF-8 instead of the local ANSI codepage (which garbles any non-ASCII).
+        import re as _re_csv
+        _EMOJI_RE = _re_csv.compile(
+            "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF\U00002B00-\U00002BFF\uFE0F]")
+        _csv_df = _tr_df.copy()
+        for _cc in _csv_df.columns:
+            if not pd.api.types.is_numeric_dtype(_csv_df[_cc]):
+                _csv_df[_cc] = _csv_df[_cc].astype(str).map(
+                    lambda s: _EMOJI_RE.sub("", s).strip())
+        _csv_df = _csv_df.rename(columns={"Δ surf(bp)": "Chg surf(bp)"})
+
+        # Broker % breakdown (trades only — MiFIR notional is masked, so no notional
+        # column here). Mirrors the SDR report's "Broker Breakdown" block.
+        _bcol = "Broker" if "Broker" in _csv_df.columns else None
+        _br_lines = []
+        if _bcol:
+            _bagg = (_csv_df.groupby(_bcol).size().reset_index(name="Trade Count")
+                     .sort_values("Trade Count", ascending=False))
+            _btot = int(_bagg["Trade Count"].sum())
+            if _btot > 0:
+                _bagg["Pct of Trades"] = (_bagg["Trade Count"] / _btot * 100).round(2).map(lambda v: f"{v:.2f}%")
+                _br_lines.append("")
+                _br_lines.append("Broker Breakdown")
+                _br_lines.append("Broker,Trade Count,Pct of Trades")
+                for _, _r in _bagg.iterrows():
+                    _bn = str(_r[_bcol]).replace(",", " ")
+                    _br_lines.append(f"{_bn},{int(_r['Trade Count'])},{_r['Pct of Trades']}")
+                _br_lines.append("")
+                _br_lines.append(f"Total Trades,{_btot}")
+
+        _csv_text = _csv_df.to_csv(index=False)
+        if _br_lines:
+            _csv_text = _csv_text.rstrip("\r\n") + "\r\n" + "\r\n".join(_br_lines) + "\r\n"
+        _csv_bytes = _csv_text.encode("utf-8-sig")
         st.download_button(
             "⬇ Download combined trade report",
-            data=_tr_df.to_csv(index=False),
+            data=_csv_bytes,
             file_name=f"EUR_combined_SDR_MiFIR_{_ts}.csv",
             mime="text/csv", key="_euc_combined_dl",
         )
