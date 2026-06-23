@@ -9747,12 +9747,16 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             _BROKER_MICS = ["BGCD", "BGCO", "BGCI", "AURO", "BILT", "DWSF", "GSEF", "GFSO",
                            "IGDL", "ISWE", "ISWV", "IOIR", "IMRD",
                            "TPSE", "TPIR", "TPEU", "TSEF", "TSIR", "TSAF", "TWSF", "TWEM",
-                           "BBSF", "BMTF", "BTFE", "HSBC", "XOFF", "XXXX"]
+                           "BBSF", "BMTF", "BTFE", "XOFF", "XXXX"]
             _all_platforms = sorted(_BROKER_MICS, key=lambda p: PLATFORM_NAMES.get(p, p))
             _platform_display = [f"{PLATFORM_NAMES.get(p, p)} ({p})" for p in _all_platforms]
             _platform_map = {f"{PLATFORM_NAMES.get(p, p)} ({p})": p for p in _all_platforms}
-            _sv_plat = _sv.get("sdr_platform", _platform_display)
-            _sv_plat = [p for p in _sv_plat if p in _platform_display] if _sv_plat else _platform_display
+            # Venues are AVAILABLE in the selector but NOT pre-selected. Empty selection
+            # = no platform filter = all trades show (see query). Clear any stale
+            # "everything selected" saved state from the old all-default.
+            _sv_plat = [p for p in _sv.get("sdr_platform", []) if p in _platform_display]
+            if len(_sv_plat) >= len(_platform_display):
+                _sv_plat = []
             sel_platform_labels = st.multiselect("Platform", _platform_display,
                 default=_sv_plat, key="sdr_platform",
                 label_visibility="collapsed", on_change=_save_sdr_filters)
@@ -12611,7 +12615,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             cur = conn.cursor()
 
                             _union_parts = []
-                            _em_plat_ph = ",".join(["%s"] * len(sel_platform)) if sel_platform else "'__NONE__'"
+                            _em_has_plat = bool(sel_platform)
+                            _em_plat_clause = (
+                                f"AND platform_identifier IN ({','.join(['%s'] * len(sel_platform))}) "
+                                if _em_has_plat else "")
                             _params = []
                             for tn, (ws, we) in _tenor_windows.items():
                                 _union_parts.append(
@@ -12624,10 +12631,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     f"AND notional_ccy = %s "
                                     f"AND opt_tenor = %s "
                                     f"AND execution_timestamp::date BETWEEN %s AND %s "
-                                    f"AND platform_identifier IN ({_em_plat_ph}) "
+                                    f"{_em_plat_clause}"
                                     f"AND swp_tenor IS NOT NULL AND swp_tenor != ''"
                                 )
-                                _params.extend([_em_ccy, tn, ws, we] + (sel_platform if sel_platform else []))
+                                _params.extend([_em_ccy, tn, ws, we] + (sel_platform if _em_has_plat else []))
 
                             _full_q = " UNION ALL ".join(_union_parts) + " ORDER BY opt_tenor, exec_date"
                             cur.execute(_full_q, _params)
