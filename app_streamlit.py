@@ -15194,8 +15194,15 @@ def vol_config_tab():
             _atm_rows = atm.shape[0] if hasattr(atm, 'shape') else "?"
             _atm_cols = atm.shape[1] if hasattr(atm, 'shape') else "?"
             atm_status = f"✅ {_atm_rows}×{_atm_cols}"
-            _snap = _latest_snaps.get(ccy, {})
-            atm_saved  = _snap.get('label', '—') if _snap else '—'
+            # Show the vol actually LOADED (same label the top banner uses), not the
+            # newest saved snapshot in the DB — otherwise the card and banner disagree
+            # (card showed "EOD NYC 23:59" while loaded was "EOD 16:30").
+            _loaded_lbl = st.session_state.get(f"_loaded_vol_label_{ccy}")
+            if _loaded_lbl:
+                atm_saved = _loaded_lbl
+            else:
+                _snap = _latest_snaps.get(ccy, {})
+                atm_saved = _snap.get('label', '—') if _snap else '—'
             _ts = get_timestamp_str("atm", ccy)
             # Fallback: if timestamp not set but vol IS in session (loaded on login)
             if _ts == "Not loaded" and st.session_state.get(f"_vol_loaded_{ccy}"):
@@ -16731,6 +16738,16 @@ def curves_tab():
                     with st.spinner("Calculating..."):
                         pm, vm = calculate_atm_premium_matrix(ccy, _mc, atm_vols, _mb)
                         st.session_state["atm_prem_matrix"][ccy] = {"vol": atm_vols, "prem": pm, "vega": vm}
+                        _pd = st.session_state.get("_atm_prem_diag", {})
+                        _pm_blank = (pm is None or getattr(pm, "empty", True)
+                                     or (hasattr(pm, "to_numpy") and pd.isna(pm.to_numpy()).all()))
+                        if _pm_blank and _pd:
+                            st.error(
+                                f"⚠️ Premium came back blank — diagnostic for **{ccy}**: "
+                                f"{_pd.get('exp_parsed',0)}/{_pd.get('expiries',0)} expiries parsed, "
+                                f"{_pd.get('cells_priced',0)} cells priced, {_pd.get('cells_failed',0)} failed. "
+                                + (f"Skipped expiries: {_pd.get('exp_skip_samples')}. " if _pd.get('exp_skip_samples') else "")
+                                + (f"Cell errors: {_pd.get('cell_err_samples')}." if _pd.get('cell_err_samples') else ""))
 
             if has_atm:
                 _ad = st.session_state["atm_prem_matrix"][ccy]
@@ -35109,14 +35126,21 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
 
     prem_rows = []
     vega_rows = []
+    _diag = {"expiries": len(expiries), "tenors": len(tenors),
+             "exp_parsed": 0, "exp_skipped": 0, "cells_priced": 0, "cells_failed": 0,
+             "exp_skip_samples": [], "cell_err_samples": []}
 
     for i, exp in enumerate(expiries):
         try:
             exp_y = label_to_years(exp)
         except Exception:
-            continue
+            exp_y = None
         if exp_y is None or exp_y <= 0:
+            _diag["exp_skipped"] += 1
+            if len(_diag["exp_skip_samples"]) < 5:
+                _diag["exp_skip_samples"].append(repr(exp))
             continue
+        _diag["exp_parsed"] += 1
         prow = {"Expiry": exp}
         vrow = {"Expiry": exp}
 
@@ -35175,6 +35199,7 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
                     prow[tenor] = round(_res.get("pv_bp_fwd", _res.get("pv_bp", 0.0)), 2)
                     d_fwd_prem_per_bp = 2 * (1.0 / math.sqrt(2 * math.pi)) * sqrt_t * ann / df_exp if df_exp > 0 else 0.0
                     vrow[tenor] = round((d_fwd_prem_per_bp / 10000.0) * 1e6, 2)
+                    _diag["cells_priced"] += 1
                     continue
 
                 # ATM straddle FORWARD premium (bp of notional) — matches BBG Prem=Fwd, OIS
@@ -35186,13 +35211,22 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
                 d_fwd_prem_per_bp = 2 * 0.3989 * sqrt_t * ann / df_exp
                 vega_dollars = (d_fwd_prem_per_bp / 10000.0) * 1e6  # $/1bp per 1mm notional
                 vrow[tenor] = round(vega_dollars, 2)
+                _diag["cells_priced"] += 1
 
-            except:
+            except Exception as _ce:
                 prow[tenor] = None
                 vrow[tenor] = None
+                _diag["cells_failed"] += 1
+                if len(_diag["cell_err_samples"]) < 5:
+                    _diag["cell_err_samples"].append(f"{exp}×{tenor}: {type(_ce).__name__}: {_ce}")
 
         prem_rows.append(prow)
         vega_rows.append(vrow)
+
+    try:
+        st.session_state["_atm_prem_diag"] = dict(_diag)
+    except Exception:
+        pass
 
     prem_df = pd.DataFrame(prem_rows)
     vega_df = pd.DataFrame(vega_rows)
