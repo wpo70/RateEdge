@@ -1850,6 +1850,15 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
                 _atm_save = _atm_save.reset_index()
                 _src = _nm if (_nm and _nm in _atm_save.columns) else _atm_save.columns[0]
                 _atm_save = _atm_save.rename(columns={_src: "Expiry"})
+        # Last-resort recovery: the surface arrived with a NUMERIC index (0/1/2…) and the
+        # expiry labels were already lost upstream (e.g. loaded from a snapshot whose
+        # values had no Expiry). When the row count matches the canonical 22-row ladder,
+        # reassign the labels by position so the save is correct and the round-trip holds.
+        _CANON_EXP = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y",
+                      "5y","6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
+        if "Expiry" not in _atm_save.columns and len(_atm_save) == len(_CANON_EXP):
+            _atm_save = _atm_save.reset_index(drop=True)
+            _atm_save.insert(0, "Expiry", _CANON_EXP)
         atm_json = _atm_save.to_dict(orient="records")
         
         sabr_alpha_json = sabr_alpha.to_dict(orient="records") if sabr_alpha is not None else None
@@ -1982,6 +1991,16 @@ def load_vol_snapshot(snapshot_id: int):
         
         # Convert JSON to DataFrames
         atm_df = pd.DataFrame(atm_vols["values"]) if atm_vols else None
+        # If this snapshot was saved before the Expiry-label fix, its values have no
+        # Expiry key → atm_df comes back with a 0/1/2… index and no Expiry column. When
+        # the row count matches the canonical 22-row ladder, restore the labels by
+        # position so the loaded surface (and any re-save) is correct.
+        if atm_df is not None and "Expiry" not in atm_df.columns:
+            _CANON_EXP = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y",
+                          "5y","6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
+            if len(atm_df) == len(_CANON_EXP):
+                atm_df = atm_df.reset_index(drop=True)
+                atm_df.insert(0, "Expiry", _CANON_EXP)
         sabr_alpha_df = pd.DataFrame(sabr_alpha["values"]) if sabr_alpha else None
         sabr_beta_df = pd.DataFrame(sabr_beta["values"]) if sabr_beta else None
         sabr_rho_df = pd.DataFrame(sabr_rho["values"]) if sabr_rho else None
@@ -9791,14 +9810,17 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             _all_platforms = sorted(_BROKER_MICS, key=lambda p: PLATFORM_NAMES.get(p, p))
             _platform_display = [f"{PLATFORM_NAMES.get(p, p)} ({p})" for p in _all_platforms]
             _platform_map = {f"{PLATFORM_NAMES.get(p, p)} ({p})": p for p in _all_platforms}
-            # SEF rule: saved subset is kept; empty/missing saved → all SEFs. The widget
-            # value can be a stale empty list (left from the earlier empty default), which
-            # a keyed multiselect would show over the default — so drop it ONLY when it is
-            # empty. A real subset is non-empty and is never touched.
-            _sv_plat = _sv.get("sdr_platform", _platform_display)
-            _sv_plat = [p for p in _sv_plat if p in _platform_display] if _sv_plat else _platform_display
-            if st.session_state.get("sdr_platform") == []:
-                st.session_state.pop("sdr_platform", None)
+            # Default-loaded venues = all brokered SEFs EXCEPT these six, which remain in
+            # the selector (available to add) but are NOT pre-selected. A saved selection
+            # overrides this default once you set one.
+            _NOT_DEFAULT = {"BILT", "XXXX", "BBSF", "BMTF", "BTFE", "XOFF"}
+            _default_mics = [p for p in _all_platforms if p not in _NOT_DEFAULT]
+            _default_display = [f"{PLATFORM_NAMES.get(p, p)} ({p})" for p in _default_mics]
+            _saved_plat = _sv.get("sdr_platform")
+            if _saved_plat is not None:
+                _sv_plat = [p for p in _saved_plat if p in _platform_display]
+            else:
+                _sv_plat = _default_display
             sel_platform_labels = st.multiselect("Platform", _platform_display,
                 default=_sv_plat, key="sdr_platform",
                 label_visibility="collapsed", on_change=_save_sdr_filters)
