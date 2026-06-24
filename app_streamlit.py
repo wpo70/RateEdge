@@ -35366,7 +35366,21 @@ def _sdr_global_alert_poll():
                 _prem_str = f"{float(_prem):,.0f}" if _prem is not None else "—"
             except Exception:
                 _prem_str = str(_prem) if _prem is not None else "—"
-            _tstr = _ts.strftime("%H:%M:%S") if hasattr(_ts, "strftime") else str(_ts or "")
+            # Localize the trade time to the print's market timezone (matches the SDR tab:
+            # USD→New York, EUR→London, AUD→Sydney). execution_timestamp is stored UTC.
+            _tz_by_ccy = {"USD": ("America/New_York", "ET"),
+                          "EUR": ("Europe/London", "LDN"),
+                          "AUD": ("Australia/Sydney", "SYD")}
+            _tz_name, _tz_lbl = _tz_by_ccy.get(_ccy, ("UTC", "UTC"))
+            try:
+                _ts_local = _ts
+                if hasattr(_ts, "tzinfo"):
+                    if _ts.tzinfo is None:
+                        _ts_local = _ts.replace(tzinfo=ZoneInfo("UTC"))
+                    _ts_local = _ts_local.astimezone(ZoneInfo(_tz_name))
+                _tstr = _ts_local.strftime("%H:%M:%S") + f" {_tz_lbl}"
+            except Exception:
+                _tstr = (_ts.strftime("%H:%M:%S") if hasattr(_ts, "strftime") else str(_ts or ""))
             _tenor = f"{_ot or '?'}x{_swp or '?'}"
             _side = (_pc or "").title()
             st.toast(f"🔔 {_side} {_ccy} {_tenor}  Prem {_prem_str}  [{_plat or '—'}]  {_tstr}", icon="📡")
