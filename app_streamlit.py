@@ -9791,10 +9791,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             _all_platforms = sorted(_BROKER_MICS, key=lambda p: PLATFORM_NAMES.get(p, p))
             _platform_display = [f"{PLATFORM_NAMES.get(p, p)} ({p})" for p in _all_platforms]
             _platform_map = {f"{PLATFORM_NAMES.get(p, p)} ({p})": p for p in _all_platforms}
-            # Restore the saved SEF selection; default to ALL venues when nothing is
-            # saved. (An empty default was wiping the saved selection every session.)
+            # SEF rule: saved subset is kept; empty/missing saved → all SEFs. The widget
+            # value can be a stale empty list (left from the earlier empty default), which
+            # a keyed multiselect would show over the default — so drop it ONLY when it is
+            # empty. A real subset is non-empty and is never touched.
             _sv_plat = _sv.get("sdr_platform", _platform_display)
             _sv_plat = [p for p in _sv_plat if p in _platform_display] if _sv_plat else _platform_display
+            if st.session_state.get("sdr_platform") == []:
+                st.session_state.pop("sdr_platform", None)
             sel_platform_labels = st.multiselect("Platform", _platform_display,
                 default=_sv_plat, key="sdr_platform",
                 label_visibility="collapsed", on_change=_save_sdr_filters)
