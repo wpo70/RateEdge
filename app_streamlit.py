@@ -9791,12 +9791,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             _all_platforms = sorted(_BROKER_MICS, key=lambda p: PLATFORM_NAMES.get(p, p))
             _platform_display = [f"{PLATFORM_NAMES.get(p, p)} ({p})" for p in _all_platforms]
             _platform_map = {f"{PLATFORM_NAMES.get(p, p)} ({p})": p for p in _all_platforms}
-            # Venues are AVAILABLE in the selector but NOT pre-selected. Empty selection
-            # = no platform filter = all trades show (see query). Clear any stale
-            # "everything selected" saved state from the old all-default.
-            _sv_plat = [p for p in _sv.get("sdr_platform", []) if p in _platform_display]
-            if len(_sv_plat) >= len(_platform_display):
-                _sv_plat = []
+            # Restore the saved SEF selection; default to ALL venues when nothing is
+            # saved. (An empty default was wiping the saved selection every session.)
+            _sv_plat = _sv.get("sdr_platform", _platform_display)
+            _sv_plat = [p for p in _sv_plat if p in _platform_display] if _sv_plat else _platform_display
             sel_platform_labels = st.multiselect("Platform", _platform_display,
                 default=_sv_plat, key="sdr_platform",
                 label_visibility="collapsed", on_change=_save_sdr_filters)
