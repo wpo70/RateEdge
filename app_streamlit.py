@@ -35318,9 +35318,12 @@ def _sdr_global_alert_poll():
     if not (HAS_POSTGRES and get_db_url()):
         return
     try:
-        # Saved SEF/platform filter (same shadow key the SDR tab uses); empty/None = no filter
+        # Use the platforms CURRENTLY selected in the SDR Live tab (the live multiselect
+        # value), falling back to the saved shadow when the widget isn't in scope (e.g.
+        # the SDR tab hasn't been opened this session so Streamlit GC'd the widget key).
+        # An empty/None selection = no platform filter (all venues).
         _sv = st.session_state.get("_sdr_filter_shadow", {}) or {}
-        _saved_plat = _sv.get("sdr_platform")
+        _saved_plat = st.session_state.get("sdr_platform") or _sv.get("sdr_platform")
         _plat_mics = []
         if _saved_plat:
             # labels look like "BGC (BGCD)" — pull the MIC in the trailing parens
