@@ -35288,6 +35288,23 @@ def clear_matrix_cache():
 # Main
 # ============================
 
+# MIC → broker display name for SDR alert toasts (mirror of PLATFORM_NAMES in sdr_live_tab)
+_SDR_BROKER_NAMES = {
+    "BGCD": "BGC", "BGCO": "BGC", "BGCI": "BGC", "AURO": "Aurel BGC",
+    "TWSF": "Tradition", "TWEM": "Tradition", "TSEF": "Tradition", "TSIR": "Tradition",
+    "TSAF": "Tradition", "TCDS": "Tradition", "TREU": "Tradition", "TEUR": "Tradition",
+    "TEIR": "Tradition",
+    "TPSE": "Tullett Prebon", "TPIR": "Tullett Prebon", "TPEU": "Tullett Prebon",
+    "IGDL": "ICAP", "ISWE": "ICAP (E)", "ISWV": "ICAP (V)",
+    "IOIR": "ICAP UK OTF", "IMRD": "TP ICAP UK MTF",
+    "GSEF": "GFI", "GFSO": "GFI",
+    "BBSF": "Bloomberg", "BMTF": "Bloomberg", "BTFE": "Bloomberg", "BLOM": "Bloomberg",
+    "RTSX": "RTX", "RTXS": "RTX", "TRWB": "Tradeweb", "DWSF": "Dealerweb",
+    "ICSE": "ICE", "HSBC": "HSBC",
+    "BILT": "Bilateral", "XXXX": "Bilateral", "XOFF": "Off-venue",
+}
+
+
 def _sdr_global_alert_poll():
     """Poll dtcc_sdr for NEW swaption prints (AUD/USD/EUR) and toast them on ANY tab.
 
@@ -35383,7 +35400,8 @@ def _sdr_global_alert_poll():
                 _tstr = (_ts.strftime("%H:%M:%S") if hasattr(_ts, "strftime") else str(_ts or ""))
             _tenor = f"{_ot or '?'}x{_swp or '?'}"
             _side = (_pc or "").title()
-            st.toast(f"🔔 {_side} {_ccy} {_tenor}  Prem {_prem_str}  [{_plat or '—'}]  {_tstr}", icon="📡")
+            _broker = _SDR_BROKER_NAMES.get(_plat, _plat or "—")
+            st.toast(f"🔔 {_side} {_ccy} {_tenor}  Prem {_prem_str}  [{_broker}]  {_tstr}", icon="📡")
         if _newest_ts is not None:
             st.session_state["_sdr_global_since"] = _newest_ts
         # keep the seen-set from growing unbounded
