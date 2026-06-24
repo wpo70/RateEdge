@@ -35288,6 +35288,98 @@ def clear_matrix_cache():
 # Main
 # ============================
 
+def _sdr_global_alert_poll():
+    """Poll dtcc_sdr for NEW swaption prints (AUD/USD/EUR) and toast them on ANY tab.
+
+    Runs from the top of main() every rerun, so it fires regardless of which tab is
+    active (the SDR-tab toast only fired on the SDR page). A global st_autorefresh
+    drives the unattended 30s cadence. Cheap query: newest NEWT swaptions in the three
+    pricer currencies since the last seen execution_timestamp, capped small.
+    Swaption prints are identified by a non-null option_type_decoded (dtcc_sdr is
+    already a swaption table). Respects the saved SEF/platform filter when one is set.
+    """
+    if not (HAS_POSTGRES and get_db_url()):
+        return
+    try:
+        # Saved SEF/platform filter (same shadow key the SDR tab uses); empty/None = no filter
+        _sv = st.session_state.get("_sdr_filter_shadow", {}) or {}
+        _saved_plat = _sv.get("sdr_platform")
+        _plat_mics = []
+        if _saved_plat:
+            # labels look like "BGC (BGCD)" — pull the MIC in the trailing parens
+            for _l in _saved_plat:
+                if "(" in _l and _l.endswith(")"):
+                    _plat_mics.append(_l[_l.rfind("(") + 1:-1])
+
+        conn = get_db_connection()
+        if not conn:
+            return
+        cur = conn.cursor()
+        # Cursor: only consider prints newer than the last one we toasted.
+        # dtcc_sdr is already a swaption-print table — a non-null option_type_decoded
+        # (PAYER/RECEIVER/STRADDLE) marks a real classified swaption print.
+        _since = st.session_state.get("_sdr_global_since")
+        _where = ["action_type = 'NEWT'",
+                  "notional_ccy IN ('AUD','USD','EUR')",
+                  "option_type_decoded IS NOT NULL"]
+        _params = []
+        if _since is not None:
+            _where.append("execution_timestamp > %s")
+            _params.append(_since)
+        if _plat_mics:
+            _where.append("platform_identifier = ANY(%s)")
+            _params.append(_plat_mics)
+        _q = (
+            "SELECT dissemination_id, notional_ccy, opt_tenor, swp_tenor, premium_amount, "
+            "       platform_identifier, execution_timestamp, option_type_decoded "
+            "FROM dtcc_sdr WHERE " + " AND ".join(_where) +
+            " ORDER BY execution_timestamp DESC LIMIT 25"
+        )
+        cur.execute(_q, tuple(_params))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        if not rows:
+            return
+
+        _seen = st.session_state.setdefault("_sdr_global_seen", set())
+        _first_run = st.session_state.get("_sdr_global_since") is None and not _seen
+        _newest_ts = st.session_state.get("_sdr_global_since")
+        # First poll after load: seed the cursor + seen-set from current rows and toast
+        # NOTHING, so alerts only fire for trades that arrive AFTER the app is open.
+        if _first_run:
+            for r in rows:
+                _seen.add(r[0])
+                if _newest_ts is None or (r[6] is not None and r[6] > _newest_ts):
+                    _newest_ts = r[6]
+            if _newest_ts is not None:
+                st.session_state["_sdr_global_since"] = _newest_ts
+            return
+        # rows are newest-first; toast oldest-first so order reads naturally
+        _fresh = [r for r in rows if r[0] not in _seen]
+        for r in reversed(_fresh[:8]):   # cap toasts per tick
+            _did, _ccy, _ot, _swp, _prem, _plat, _ts, _pc = r
+            _seen.add(_did)
+            if _newest_ts is None or (_ts is not None and _ts > _newest_ts):
+                _newest_ts = _ts
+            try:
+                _prem_str = f"{float(_prem):,.0f}" if _prem is not None else "—"
+            except Exception:
+                _prem_str = str(_prem) if _prem is not None else "—"
+            _tstr = _ts.strftime("%H:%M:%S") if hasattr(_ts, "strftime") else str(_ts or "")
+            _tenor = f"{_ot or '?'}x{_swp or '?'}"
+            _side = (_pc or "").title()
+            st.toast(f"🔔 {_side} {_ccy} {_tenor}  Prem {_prem_str}  [{_plat or '—'}]  {_tstr}", icon="📡")
+        if _newest_ts is not None:
+            st.session_state["_sdr_global_since"] = _newest_ts
+        # keep the seen-set from growing unbounded
+        if len(_seen) > 2000:
+            st.session_state["_sdr_global_seen"] = set(list(_seen)[-1000:])
+    except Exception:
+        # never let the alert poller break the app
+        pass
+
+
 def main():
     st.set_page_config(
         page_title="RateEdge Options",
@@ -35296,6 +35388,18 @@ def main():
         initial_sidebar_state="expanded"
     )
     init_session()
+
+    # ── Real-time SDR trade alerts (any tab) ──────────────────────────────────
+    # Drive an unattended 30s rerun so the global poller below fires even when the
+    # user is on another tab. st_autorefresh is a no-op counter (cheap); the poll
+    # query is tiny. Requires 'streamlit-autorefresh' in requirements.txt.
+    if st.session_state.get("sdr_alerts_global_on", True):
+        try:
+            from streamlit_autorefresh import st_autorefresh
+            st_autorefresh(interval=30000, key="_sdr_global_autorefresh")
+        except Exception:
+            pass
+        _sdr_global_alert_poll()
     
     # Ensure all DB tables/columns exist on startup (not just on save)
     if HAS_POSTGRES and get_db_url() and not st.session_state.get("_db_init_done", False):
