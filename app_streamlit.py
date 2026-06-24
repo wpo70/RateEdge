@@ -1859,6 +1859,13 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
         if "Expiry" not in _atm_save.columns and len(_atm_save) == len(_CANON_EXP):
             _atm_save = _atm_save.reset_index(drop=True)
             _atm_save.insert(0, "Expiry", _CANON_EXP)
+        # Also catch an Expiry column that EXISTS but holds NUMERIC values (0,1,2 from a
+        # stray reset_index upstream) — those aren't real labels. Replace with the
+        # canonical ladder when the row count matches. Real string labels are untouched.
+        elif "Expiry" in _atm_save.columns and len(_atm_save) == len(_CANON_EXP) \
+                and pd.api.types.is_numeric_dtype(_atm_save["Expiry"]):
+            _atm_save = _atm_save.reset_index(drop=True)
+            _atm_save["Expiry"] = _CANON_EXP
         atm_json = _atm_save.to_dict(orient="records")
         
         sabr_alpha_json = sabr_alpha.to_dict(orient="records") if sabr_alpha is not None else None
@@ -1995,12 +2002,15 @@ def load_vol_snapshot(snapshot_id: int):
         # Expiry key → atm_df comes back with a 0/1/2… index and no Expiry column. When
         # the row count matches the canonical 22-row ladder, restore the labels by
         # position so the loaded surface (and any re-save) is correct.
-        if atm_df is not None and "Expiry" not in atm_df.columns:
+        if atm_df is not None and len(atm_df) == 22:
             _CANON_EXP = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y",
                           "5y","6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
-            if len(atm_df) == len(_CANON_EXP):
+            if "Expiry" not in atm_df.columns:
                 atm_df = atm_df.reset_index(drop=True)
                 atm_df.insert(0, "Expiry", _CANON_EXP)
+            elif pd.api.types.is_numeric_dtype(atm_df["Expiry"]):
+                atm_df = atm_df.reset_index(drop=True)
+                atm_df["Expiry"] = _CANON_EXP
         sabr_alpha_df = pd.DataFrame(sabr_alpha["values"]) if sabr_alpha else None
         sabr_beta_df = pd.DataFrame(sabr_beta["values"]) if sabr_beta else None
         sabr_rho_df = pd.DataFrame(sabr_rho["values"]) if sabr_rho else None
