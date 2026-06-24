@@ -10346,7 +10346,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             _straddles = []
             if not _payers.empty and not _rcvrs.empty and "strike_pct" in df.columns:
                 for _, _p in _payers.iterrows():
-                    _s_p = round(float(_p.get("strike_pct") or 0), 2)
+                    _s_p = float(_p.get("strike_pct") or 0)   # full precision
                     _t_p = str(_p.get("swp_tenor",""))
                     _e_p = str(_p.get("opt_tenor",""))
                     _ccy_p = str(_p.get("notional_ccy",""))
@@ -10508,7 +10508,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     for _pi, _p in _payers_a.iterrows():
                         if _pi in _matched_p_ids:
                             continue
-                        _s_p = round(float(_p.get("strike_pct") or 0), 2)
+                        _s_p = float(_p.get("strike_pct") or 0)   # full precision
                         _t_p = str(_p.get("swp_tenor","") or "").strip()
                         _e_p = str(_p.get("opt_tenor","") or "").strip()
                         _ccy_p = str(_p.get("notional_ccy",""))
