@@ -7256,7 +7256,7 @@ def _sdr_bucket_atm_vols(sdf, curve, hl_days=21.0, max_age=0.0):
     _matched = set(); _bmap = {}
     for _, _p in _pay.iterrows():
         try:
-            _s_p = round(float(_p.get("strike_pct") or 0), 2)
+            _s_p = float(_p.get("strike_pct") or 0)   # full precision — do NOT round (width needs it)
             _e_p = str(_p.get("opt_tenor", "")); _t_p = str(_p.get("swp_tenor", ""))
             _tp = pd.to_datetime(_p.get("execution_timestamp") or _p.get("event_timestamp"), errors="coerce")
             if _tp is pd.NaT:
@@ -7282,7 +7282,7 @@ def _sdr_bucket_atm_vols(sdf, curve, hl_days=21.0, max_age=0.0):
                     _pbp = _pp / _not * 1e4                      # genuine per-leg
                     _rbp = _rp / _not * 1e4
                 _bmap.setdefault((_e_p, _t_p), []).append({
-                    "_p_strike": _s_p, "_r_strike": round(float(_r.get("strike_pct") or 0), 2),
+                    "_p_strike": _s_p, "_r_strike": float(_r.get("strike_pct") or 0),
                     "P Prem BP": _pbp, "R Prem BP": _rbp,
                     "_time_dt": _tp.to_pydatetime().replace(tzinfo=None) if _tp is not pd.NaT else None,
                     "_notional_num": _not})
@@ -7684,7 +7684,7 @@ def _pair_swaption_legs(df):
     for _pi, _p in pay.iterrows():
         if _pi in matched_p:
             continue
-        _s_p = round(float(_p.get("strike_pct") or 0), 2)
+        _s_p = float(_p.get("strike_pct") or 0)   # full precision — do NOT round (width needs it)
         _e_p = str(_p.get("opt_tenor", "") or "").strip()
         _t_p = str(_p.get("swp_tenor", "") or "").strip()
         _time_p = _tt(_p)
@@ -7717,7 +7717,7 @@ def _pair_swaption_legs(df):
             if _time_r is _pd.NaT or abs((_time_p - _time_r).total_seconds()) > 600:
                 continue
             matched_p.add(_pi); matched_r.add(_ri)
-            _s_r = round(float(_r.get("strike_pct") or 0), 2)
+            _s_r = float(_r.get("strike_pct") or 0)   # full precision
             _p_prem = float(_p.get("premium_amount") or 0)
             _r_prem = float(_r.get("premium_amount") or 0)
             _same_strike = abs(_s_p - _s_r) < 0.01
@@ -10570,7 +10570,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 if _time_r is not pd.NaT and abs((_time_p - _time_r).total_seconds()) <= _window:
                                     _matched_p_ids.add(_pi)
                                     _matched_r_ids.add(_ri)
-                                    _s_r = round(float(_r.get("strike_pct") or 0), 2)
+                                    _s_r = float(_r.get("strike_pct") or 0)   # full precision
                                     _p_prem = float(_p.get("premium_amount") or 0)
                                     _r_prem = float(_r.get("premium_amount") or 0)
 
@@ -11044,7 +11044,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _wstr = ""
                                 try:
                                     if _psk is not None and _rsk is not None:
-                                        _w = abs(round((float(_psk) - float(_rsk)) * 100))
+                                        # Full-precision width in bp, capped to a maximum
+                                        # of 5 decimals. Show int when whole, else up to
+                                        # 5dp with trailing zeros trimmed.
+                                        _w_raw = abs(round((float(_psk) - float(_rsk)) * 100.0, 5))
+                                        if _w_raw == int(_w_raw):
+                                            _w = int(_w_raw)
+                                        else:
+                                            _w = f"{_w_raw:.5f}".rstrip("0").rstrip(".")
                                         _wstr = f" {_w}w"
                                 except Exception:
                                     pass
