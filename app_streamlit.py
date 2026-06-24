@@ -6997,54 +6997,36 @@ def _bayes_bucket_posterior(prior_mean, prior_var, obs,
 
 
 def _radius_bleed(prints, nr, nc, valid, radius, lam=1.0):
-    """Spread each printed bucket's CHANGE outward up to `radius` buckets (Chebyshev
-    distance), shaped by the 2-pass 0.6·self + 0.4·mean(neighbours) diffusion and
-    tapered smoothly to ~0 at the radius edge. Each print is bled INDEPENDENTLY and
-    the contributions are combined per cell by MAX-ABS — so where two prints' reaches
-    overlap, the larger move dominates (it is not summed or averaged). Printed cells
-    are pinned to their own full change. Returns an nr×nc list-of-lists of deltas.
+    """Spread each printed bucket's CHANGE outward up to `radius` buckets, as a LINEAR
+    ramp in Chebyshev distance — same strength laterally (tenor) and vertically
+    (expiry). At distance d the move carries factor (1 − d/(radius+1)), so a +0.9 print
+    at radius=5 reads +0.72, +0.54, +0.36, +0.18 across the four buckets out and ~0 at
+    the edge. Each print bleeds INDEPENDENTLY; overlapping reaches combine by MAX-ABS
+    (the bigger move dominates — never summed/averaged). Printed cells keep their full
+    change. Returns an nr×nc list-of-lists of deltas.
 
       prints : list of (row_idx, col_idx, delta_bp)
       valid  : nr×nc bool grid (False where the surface cell is missing/NaN)
-      radius : 1..5 (buckets)
-      lam    : scales the neighbour pull (1.0 = 0.6/0.4)
+      radius : 1..5 (buckets); lam scales the overall bleed amplitude (1.0 = full)
     """
-    import math
     radius = max(1, int(radius))
-    nw = 0.4 * max(0.0, min(1.0, float(lam)))
+    amp = max(0.0, min(1.0, float(lam)))
     combined = [[0.0] * nc for _ in range(nr)]
     for (pr, pc, pd) in prints:
         if pr < 0 or pr >= nr or pc < 0 or pc >= nc or not valid[pr][pc]:
             continue
-        g = [[0.0] * nc for _ in range(nr)]
-        g[pr][pc] = pd
-        for _pass in range(2):                       # 0.6/0.4 shape (this print only)
-            sm = [row[:] for row in g]
-            for ri in range(nr):
-                for ci in range(nc):
-                    if not valid[ri][ci]:
-                        continue
-                    ns = []
-                    if ri > 0 and valid[ri-1][ci]: ns.append(g[ri-1][ci])
-                    if ri < nr-1 and valid[ri+1][ci]: ns.append(g[ri+1][ci])
-                    if ci > 0 and valid[ri][ci-1]: ns.append(g[ri][ci-1])
-                    if ci < nc-1 and valid[ri][ci+1]: ns.append(g[ri][ci+1])
-                    if ns:
-                        sm[ri][ci] = (1 - nw) * g[ri][ci] + nw * (sum(ns) / len(ns))
-            g = sm
-        for ri in range(nr):                         # radius cap + edge taper + max-abs
+        for ri in range(nr):
             for ci in range(nc):
                 if not valid[ri][ci]:
                     continue
-                dist = max(abs(ri - pr), abs(ci - pc))
+                dist = max(abs(ri - pr), abs(ci - pc))   # Chebyshev: lateral & vertical equal
                 if dist > radius:
                     continue
                 if dist == 0:
-                    val = pd                          # centre = full print change
+                    val = pd                              # centre = full print change
                 else:
-                    taper = 0.5 * (1.0 + math.cos(math.pi * dist / (radius + 1)))  # ~0 by the edge
-                    val = g[ri][ci] * taper
-                if abs(val) > abs(combined[ri][ci]):  # bigger move dominates
+                    val = pd * amp * (1.0 - dist / (radius + 1.0))   # linear falloff
+                if abs(val) > abs(combined[ri][ci]):      # bigger move dominates
                     combined[ri][ci] = val
     return combined
 
