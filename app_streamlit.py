@@ -15097,7 +15097,13 @@ def vol_config_tab():
     _sidebar_ccy_st = st.session_state.get("sidebar_ccy", "USD").split(" ")[0]
     _status_avail = [c for c in SUPPORTED_CURRENCIES
                      if c not in ({_c.split(" ")[0] for _c in ALL_CURRENCIES if "(PENDING)" in str(_c)} | _HIDDEN_SIDEBAR_CCYS)]
-    if st.session_state.get("_status_filter_sidebar_ccy") != _sidebar_ccy_st:
+    # Re-snap to the sidebar ccy when (a) the sidebar ccy changed, or (b) the selectbox
+    # key is absent. Leaving this tab unmounts the selectbox, so Streamlit garbage-
+    # collects "upload_status_ccy_filter"; on return the tracker still matches the
+    # sidebar ccy, so without the (b) guard the selectbox would silently default back
+    # to "All". The (b) guard re-links it to the sidebar currency every re-entry.
+    if (st.session_state.get("_status_filter_sidebar_ccy") != _sidebar_ccy_st
+            or "upload_status_ccy_filter" not in st.session_state):
         st.session_state["upload_status_ccy_filter"] = _sidebar_ccy_st if _sidebar_ccy_st in _status_avail else "All"
         st.session_state["_status_filter_sidebar_ccy"] = _sidebar_ccy_st
 
