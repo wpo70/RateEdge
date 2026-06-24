@@ -15194,8 +15194,18 @@ def vol_config_tab():
             _atm_rows = atm.shape[0] if hasattr(atm, 'shape') else "?"
             _atm_cols = atm.shape[1] if hasattr(atm, 'shape') else "?"
             atm_status = f"✅ {_atm_rows}×{_atm_cols}"
-            _snap = _latest_snaps.get(ccy, {})
-            atm_saved  = _snap.get('label', '—') if _snap else '—'
+            # Show the vol that is actually LOADED, not the newest snapshot in the DB.
+            # _loaded_vol_label_{ccy} is the snapshot you loaded (same value the top
+            # banner uses); when you load EOD over the Tokyo SOD this flips correctly,
+            # whereas _latest_snaps is the most-recent DB save (SOD Tokyo) and made the
+            # card disagree with the banner. Fall back to the DB-newest only if nothing
+            # is tracked as loaded.
+            _loaded_lbl = st.session_state.get(f"_loaded_vol_label_{ccy}")
+            if _loaded_lbl:
+                atm_saved = _loaded_lbl
+            else:
+                _snap = _latest_snaps.get(ccy, {})
+                atm_saved = _snap.get('label', '—') if _snap else '—'
             _ts = get_timestamp_str("atm", ccy)
             # Fallback: if timestamp not set but vol IS in session (loaded on login)
             if _ts == "Not loaded" and st.session_state.get(f"_vol_loaded_{ccy}"):
@@ -16694,6 +16704,22 @@ def curves_tab():
             st.info("No ATM vols — upload config first")
         else:
             has_atm = ccy in st.session_state.get("atm_prem_matrix", {})
+            # Auto-rebuild after a vol/snapshot load (e.g. SOD Tokyo): the load pops
+            # atm_prem_matrix[ccy] because the old premiums are stale, but it never got
+            # recomputed without clicking Generate — leaving the Premium/Vega matrix AND
+            # the Curves-sheet premium blank. If vols + curve are present, rebuild once
+            # automatically so the premium reappears without a manual Generate.
+            if not has_atm:
+                _ac = st.session_state.get("config_curves", {}).get(ccy)
+                if atm_vols is not None and _ac is not None:
+                    _ab = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
+                    try:
+                        _pm0, _vm0 = calculate_atm_premium_matrix(ccy, _ac, atm_vols, _ab)
+                        if _pm0 is not None and not getattr(_pm0, "empty", True):
+                            st.session_state["atm_prem_matrix"][ccy] = {"vol": atm_vols, "prem": _pm0, "vega": _vm0}
+                            has_atm = True
+                    except Exception:
+                        pass
             _av = "ATM Vol (bp)"
 
             # View radio | Heatmap | Generate | Download  (same layout as FWD matrix)
