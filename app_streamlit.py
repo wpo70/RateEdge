@@ -6996,7 +6996,60 @@ def _bayes_bucket_posterior(prior_mean, prior_var, obs,
             "eff_n": float(rw.sum()), "n": len(obs)}
 
 
-def _bayes_spatial_smooth(post, atm, cols, lam):
+def _radius_bleed(prints, nr, nc, valid, radius, lam=1.0):
+    """Spread each printed bucket's CHANGE outward up to `radius` buckets (Chebyshev
+    distance), shaped by the 2-pass 0.6·self + 0.4·mean(neighbours) diffusion and
+    tapered smoothly to ~0 at the radius edge. Each print is bled INDEPENDENTLY and
+    the contributions are combined per cell by MAX-ABS — so where two prints' reaches
+    overlap, the larger move dominates (it is not summed or averaged). Printed cells
+    are pinned to their own full change. Returns an nr×nc list-of-lists of deltas.
+
+      prints : list of (row_idx, col_idx, delta_bp)
+      valid  : nr×nc bool grid (False where the surface cell is missing/NaN)
+      radius : 1..5 (buckets)
+      lam    : scales the neighbour pull (1.0 = 0.6/0.4)
+    """
+    import math
+    radius = max(1, int(radius))
+    nw = 0.4 * max(0.0, min(1.0, float(lam)))
+    combined = [[0.0] * nc for _ in range(nr)]
+    for (pr, pc, pd) in prints:
+        if pr < 0 or pr >= nr or pc < 0 or pc >= nc or not valid[pr][pc]:
+            continue
+        g = [[0.0] * nc for _ in range(nr)]
+        g[pr][pc] = pd
+        for _pass in range(2):                       # 0.6/0.4 shape (this print only)
+            sm = [row[:] for row in g]
+            for ri in range(nr):
+                for ci in range(nc):
+                    if not valid[ri][ci]:
+                        continue
+                    ns = []
+                    if ri > 0 and valid[ri-1][ci]: ns.append(g[ri-1][ci])
+                    if ri < nr-1 and valid[ri+1][ci]: ns.append(g[ri+1][ci])
+                    if ci > 0 and valid[ri][ci-1]: ns.append(g[ri][ci-1])
+                    if ci < nc-1 and valid[ri][ci+1]: ns.append(g[ri][ci+1])
+                    if ns:
+                        sm[ri][ci] = (1 - nw) * g[ri][ci] + nw * (sum(ns) / len(ns))
+            g = sm
+        for ri in range(nr):                         # radius cap + edge taper + max-abs
+            for ci in range(nc):
+                if not valid[ri][ci]:
+                    continue
+                dist = max(abs(ri - pr), abs(ci - pc))
+                if dist > radius:
+                    continue
+                if dist == 0:
+                    val = pd                          # centre = full print change
+                else:
+                    taper = 0.5 * (1.0 + math.cos(math.pi * dist / (radius + 1)))  # ~0 by the edge
+                    val = g[ri][ci] * taper
+                if abs(val) > abs(combined[ri][ci]):  # bigger move dominates
+                    combined[ri][ci] = val
+    return combined
+
+
+def _bayes_spatial_smooth(post, atm, cols, lam, radius=2):
     """SDR-fitter-style smoothing that ONLY spreads the SDR change, never the
     surface's own shape. Builds a change field (= w·(point − surface) at buckets
     that actually have an SDR point, 0 everywhere else), runs the fitter's 2-pass
@@ -7020,40 +7073,22 @@ def _bayes_spatial_smooth(post, atm, cols, lam):
         except Exception: return None
 
     surf = [[None] * nc for _ in range(nr)]
-    delta = [[0.0] * nc for _ in range(nr)]      # CHANGE field — 0 where no point
-    anchor = {}
+    valid = [[False] * nc for _ in range(nr)]
+    prints = []
     for ri, e in enumerate(exps):
         for ci, c in enumerate(cols):
             try: surf[ri][ci] = float(atm.iloc[ri][c])
             except Exception: surf[ri][ci] = None
+            valid[ri][ci] = surf[ri][ci] is not None
             pt = _pts_y.get(_yk(e, c))
             cur = surf[ri][ci]
             if pt is None or cur is None:
                 continue
             if cur > 0 and abs(pt - cur) / cur * 100.0 > _devcap:
                 continue                                 # outlier: no change
-            d = _w * (pt - cur)
-            delta[ri][ci] = d
-            anchor[(ri, ci)] = d
+            prints.append((ri, ci, _w * (pt - cur)))
 
-    if anchor:
-        nw = 0.4 * max(0.0, min(1.0, float(lam)))
-        for _pass in range(2):
-            sm = [row[:] for row in delta]
-            for ri in range(nr):
-                for ci in range(nc):
-                    if surf[ri][ci] is None:
-                        continue
-                    ns = []
-                    if ri > 0 and surf[ri-1][ci] is not None: ns.append(delta[ri-1][ci])
-                    if ri < nr-1 and surf[ri+1][ci] is not None: ns.append(delta[ri+1][ci])
-                    if ci > 0 and surf[ri][ci-1] is not None: ns.append(delta[ri][ci-1])
-                    if ci < nc-1 and surf[ri][ci+1] is not None: ns.append(delta[ri][ci+1])
-                    if ns:
-                        sm[ri][ci] = (1 - nw) * delta[ri][ci] + nw * (sum(ns) / len(ns))
-            delta = sm
-        for (ri, ci), d in anchor.items():               # re-anchor printed cells
-            delta[ri][ci] = d
+    delta = _radius_bleed(prints, nr, nc, valid, radius, lam) if prints else [[0.0]*nc for _ in range(nr)]
 
     out = {}
     for ri, e in enumerate(exps):
@@ -7063,55 +7098,33 @@ def _bayes_spatial_smooth(post, atm, cols, lam):
     return out
 
 
-def _diffuse_grid_df(bl, acols, anchor_rc, lam, orig=None):
+def _diffuse_grid_df(bl, acols, anchor_rc, lam, orig=None, radius=2):
     """SDR-tab spatial smoothing on a surface DataFrame — spreads ONLY the fitted
-    CHANGE, never the surface's own curvature. delta = bl − orig (nonzero only at
-    fitted cells, from anchor_rc); 2 passes of 0.6·self + 0.4·mean(grid-neighbours)
-    on the DELTA (scaled by lam), re-anchor fitted cells, then bl = orig + delta. If
-    orig is None it falls back to bl as the base (fitted cells still re-anchored).
-    Mutates and returns bl."""
+    CHANGE, never the surface's own curvature. Each fitted bucket's move bleeds out to
+    `radius` buckets (Chebyshev), shaped by 0.6/0.4 and tapered to ~0 at the edge;
+    overlapping reaches resolve by max-abs (bigger move dominates). Mutates/returns bl."""
     cols = list(acols)
     nr = len(bl); nc = len(cols)
     base = [[None] * nc for _ in range(nr)]
-    delta = [[0.0] * nc for _ in range(nr)]
+    valid = [[False] * nc for _ in range(nr)]
     for ri in range(nr):
         for ci, c in enumerate(cols):
-            try: _b = float(bl.iloc[ri][c])
-            except Exception: _b = None
             if orig is not None:
                 try: _o = float(orig.iloc[ri][c])
-                except Exception: _o = _b
+                except Exception: _o = None
             else:
-                _o = _b
+                try: _o = float(bl.iloc[ri][c])
+                except Exception: _o = None
             base[ri][ci] = _o
-            if _b is not None and _o is not None:
-                delta[ri][ci] = _b - _o
-    # fitted-cell change (overrides, in case bl==orig at those cells)
-    _anc = {}
+            valid[ri][ci] = _o is not None
     colpos = {c: bl.columns.get_loc(c) for c in cols}
+    prints = []
     for (ri, c), av in anchor_rc.items():
         if c in cols:
-            _ci = cols.index(c)                  # index within `cols` (no Expiry offset)
+            _ci = cols.index(c)
             if base[ri][_ci] is not None:
-                delta[ri][_ci] = float(av) - base[ri][_ci]
-                _anc[(ri, _ci)] = delta[ri][_ci]
-    nw = 0.4 * max(0.0, min(1.0, float(lam)))
-    for _pass in range(2):
-        sm = [row[:] for row in delta]
-        for ri in range(nr):
-            for ci in range(nc):
-                if base[ri][ci] is None:
-                    continue
-                ns = []
-                if ri > 0 and base[ri-1][ci] is not None: ns.append(delta[ri-1][ci])
-                if ri < nr-1 and base[ri+1][ci] is not None: ns.append(delta[ri+1][ci])
-                if ci > 0 and base[ri][ci-1] is not None: ns.append(delta[ri][ci-1])
-                if ci < nc-1 and base[ri][ci+1] is not None: ns.append(delta[ri][ci+1])
-                if ns:
-                    sm[ri][ci] = (1 - nw) * delta[ri][ci] + nw * (sum(ns) / len(ns))
-        delta = sm
-    for (ri, ci), d in _anc.items():
-        delta[ri][ci] = d
+                prints.append((ri, _ci, float(av) - base[ri][_ci]))
+    delta = _radius_bleed(prints, nr, nc, valid, radius, lam) if prints else [[0.0]*nc for _ in range(nr)]
     for ri in range(nr):
         for ci, c in enumerate(cols):
             if base[ri][ci] is not None:
@@ -7323,7 +7336,7 @@ def _bayesian_atm_view():
         st.caption("Outlier control (Student-t dof). **Low** = reject fat-tail "
                    "outliers hard. **High** → plain Gaussian, no rejection.")
 
-    _sc1, _sc2 = st.columns([1, 3])
+    _sc1, _sc2, _sc3 = st.columns([1, 2, 2])
     with _sc1:
         _smooth_on = st.checkbox("Spatial smoothing", value=False, key="_bayes_smooth")
     with _sc2:
@@ -7331,6 +7344,12 @@ def _bayesian_atm_view():
                                 key="_bayes_lam",
                                 help="Pull empty/uncertain buckets toward confident moved "
                                      "neighbours, weighted by posterior σ. 0 = off.")
+    with _sc3:
+        _smooth_radius = st.slider("Reach (buckets from a trade)", 1, 5, 2, 1,
+                                   key="_bayes_radius",
+                                   help="How many buckets out from each printed bucket the move "
+                                        "bleeds (Chebyshev distance), tapering to ~0 at the edge. "
+                                        "Where two trades' reaches overlap, the bigger move wins.")
     st.caption("Smoothing **spreads** each high-confidence SDR straddle move into its "
                "emptier neighbours (confident buckets stay put, sparse ones fall in line). "
                "Shown as a separate surface below; only feeds the upload when ticked.")
@@ -7434,7 +7453,7 @@ def _bayesian_atm_view():
     # up-front so the Change-vs-current delta reflects what actually gets uploaded.
     _smoothed = None
     if _smooth_on and _smooth_lam > 0:
-        _smoothed = _bayes_spatial_smooth(post, _atm, _cols, float(_smooth_lam))
+        _smoothed = _bayes_spatial_smooth(post, _atm, _cols, float(_smooth_lam), int(_smooth_radius))
 
     def _final_mean(e, c):
         if _smoothed is not None and (e, c) in _smoothed:
@@ -8203,6 +8222,11 @@ def eu_combined_analysis():
         _euc_smooth_lam = st.slider("Smoothing strength", 0.0, 1.0, 1.0, 0.05,
                                     key="_euc_smooth_lam",
                                     help="1.0 = SDR fitter's 0.6/0.4.") if _euc_smooth else 0.0
+        _euc_smooth_radius = st.slider("Reach (buckets from a trade)", 1, 5, 2, 1,
+                                       key="_euc_smooth_radius",
+                                       help="How far each fitted bucket's move bleeds (Chebyshev "
+                                            "distance), tapering to ~0 at the edge. On overlap the "
+                                            "bigger move wins.") if _euc_smooth else 2
         _SDR_BIAS, _MIF_BIAS = 0.70, 0.30   # real strike vs inferred-ATM split
 
         # Per-bucket fit with source split + outlier guard
@@ -8278,7 +8302,7 @@ def eu_combined_analysis():
 
                 # spatial smoothing — bleed the fitted moves into neighbours (SDR-tab logic)
                 if _euc_smooth and _euc_smooth_lam > 0 and _euc_anchor:
-                    _bl = _diffuse_grid_df(_bl, _acols, _euc_anchor, float(_euc_smooth_lam), orig=_bl_orig)
+                    _bl = _diffuse_grid_df(_bl, _acols, _euc_anchor, float(_euc_smooth_lam), orig=_bl_orig, radius=int(_euc_smooth_radius))
 
                 _bl_ndf = _bl.set_index("Expiry")[_acols].apply(pd.to_numeric, errors="coerce")
                 st.markdown("**Blended surface (fitted points merged in):**")
@@ -12212,6 +12236,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     _av_smooth = st.checkbox("Smooth through points", value=True, key="sdr_atm_smooth",
                                                              help="One gentle pass that smooths the surface between printed points; "
                                                                   "the printed points themselves stay anchored.")
+                                    _av_radius = st.slider("Reach (buckets from a trade)", 1, 5, 2, 1,
+                                                           key="sdr_atm_radius",
+                                                           help="How far each printed bucket's move bleeds (Chebyshev distance), "
+                                                                "tapering to ~0 at the edge. Where two trades' reaches overlap, the "
+                                                                "bigger move wins.") if _av_smooth else 2
                                 _av_devcap = st.slider("Reject points deviating from surface by more than (%)", 5, 100, 20, 5,
                                                        key="sdr_atm_devcap",
                                                        help="A derived ATM vol this far from the current surface is treated as a "
@@ -12445,37 +12474,23 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         st.warning("⚠️ Rejected as outliers (excluded from blend, deviate >"
                                                    f"{_av_devcap}% from surface): " + ", ".join(_rejected))
                                     if _av_smooth and _anchor:
-                                        # Smooth the CHANGE field only — diffuse (blended − surface), which is
-                                        # 0 at every untraded bucket, so a point's move bleeds into neighbours
-                                        # WITHOUT the diffusion smoothing the surface's own term-structure
-                                        # curvature into phantom moves in buckets that never traded. 2 passes
-                                        # of 0.6 self + 0.4 mean(neighbours), then re-anchor printed cells.
+                                        # Spread each printed bucket's CHANGE out to `_av_radius`
+                                        # buckets (Chebyshev), shaped by 0.6/0.4, tapering to ~0 at
+                                        # the edge; bigger move wins on overlap. Surface curvature is
+                                        # never touched (untraded far buckets stay at surface).
                                         _orig = _bl_orig[_av_cols].apply(pd.to_numeric, errors="coerce").values.astype(float)
-                                        _blv  = _bl[_av_cols].apply(pd.to_numeric, errors="coerce").values.astype(float)
-                                        _nr, _nc = _blv.shape
-                                        _dlt = _blv - _orig                       # change field (0 off-point)
-                                        _dlt[_dlt != _dlt] = 0.0                   # NaN deltas -> 0
-                                        for _pass in range(2):
-                                            _sm = _dlt.copy()
-                                            for _ri in range(_nr):
-                                                for _ci in range(_nc):
-                                                    if _orig[_ri, _ci] != _orig[_ri, _ci]: continue
-                                                    _ns = []
-                                                    if _ri > 0 and _orig[_ri-1, _ci] == _orig[_ri-1, _ci]: _ns.append(_dlt[_ri-1, _ci])
-                                                    if _ri < _nr-1 and _orig[_ri+1, _ci] == _orig[_ri+1, _ci]: _ns.append(_dlt[_ri+1, _ci])
-                                                    if _ci > 0 and _orig[_ri, _ci-1] == _orig[_ri, _ci-1]: _ns.append(_dlt[_ri, _ci-1])
-                                                    if _ci < _nc-1 and _orig[_ri, _ci+1] == _orig[_ri, _ci+1]: _ns.append(_dlt[_ri, _ci+1])
-                                                    if _ns:
-                                                        _sm[_ri, _ci] = 0.6*_dlt[_ri, _ci] + 0.4*(sum(_ns)/len(_ns))
-                                            _dlt = _sm
-                                        _final = _orig + _dlt
+                                        _nr, _nc = _orig.shape
+                                        _valid = [[not (_orig[_ri, _ci] != _orig[_ri, _ci]) for _ci in range(_nc)] for _ri in range(_nr)]
+                                        _prints = []
+                                        for (_ri, _c), _av in _anchor.items():
+                                            _ci = _av_cols.index(_c) if _c in _av_cols else None
+                                            if _ci is not None and _valid[_ri][_ci]:
+                                                _prints.append((_ri, _ci, float(_av) - float(_orig[_ri, _ci])))
+                                        _dlt = _radius_bleed(_prints, _nr, _nc, _valid, int(_av_radius), 1.0)
                                         for _ci, _c in enumerate(_av_cols):
                                             for _ri in range(_nr):
-                                                if not (_final[_ri, _ci] != _final[_ri, _ci]):
-                                                    _bl.iloc[_ri, _bl.columns.get_loc(_c)] = round(float(_final[_ri, _ci]), 2)
-                                        # Re-anchor PRINTED cells to their blended value (smoother nudges them).
-                                        for (_ri, _c), _av in _anchor.items():
-                                            _bl.iloc[_ri, _bl.columns.get_loc(_c)] = _av
+                                                if _valid[_ri][_ci]:
+                                                    _bl.iloc[_ri, _bl.columns.get_loc(_c)] = round(float(_orig[_ri, _ci]) + _dlt[_ri][_ci], 2)
 
                                     st.markdown(f"**Blended ATM surface** (current × {1-_av_w:.0%} + SDR × {_av_w:.0%}"
                                                 + (", smoothed" if _av_smooth else "") + "):")
