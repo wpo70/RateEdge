@@ -36287,14 +36287,15 @@ def main():
         var poll = setInterval(function(){
             try {
                 var root = window.parent.document;
-                // Kill outer scroll
+                // Let the content area SCROLL (under the fixed header) and scale to the
+                // viewport, instead of clipping the bottom on smaller windows.
                 var els = root.querySelectorAll('section.main, [data-testid="stMain"], [data-testid="stAppViewContainer"]');
-                els.forEach(function(el){ el.style.overflow = 'hidden'; });
-                // Cap container to viewport
+                els.forEach(function(el){ el.style.overflow = 'auto'; });
+                // Cap the main frame to the viewport height but allow internal scrolling
                 var wrappers = root.querySelectorAll('[data-testid="stVerticalBlockBorderWrapper"]');
                 if (wrappers.length > 0) {
-                    wrappers[0].style.height = 'calc(100vh - 50px)';
                     wrappers[0].style.maxHeight = 'calc(100vh - 50px)';
+                    wrappers[0].style.overflowY = 'auto';
                     wrappers[0].style.border = 'none';
                 }
                 // Hide nav radio circles
