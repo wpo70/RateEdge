@@ -1835,37 +1835,31 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
             st.error(f"No ATM vol data loaded for {currency}")
             return False
 
-        # Convert DataFrame to JSON. to_dict(orient="records") keeps COLUMNS only and
-        # drops the index — so if the surface arrives with the expiry labels as the
-        # INDEX (not a column), the labels are lost and the snapshot reloads with a
-        # 0/1/2… RangeIndex (showing as 1,2,3 instead of 1w,1m,2m). Recover Expiry into
-        # a column first so the labels always survive the round-trip.
-        _atm_save = atm.copy()
-        if "Expiry" not in _atm_save.columns:
-            _lc = [c for c in _atm_save.columns if str(c).strip().lower() == "expiry"]
-            if _lc:
-                _atm_save = _atm_save.rename(columns={_lc[0]: "Expiry"})
-            elif not pd.api.types.is_numeric_dtype(_atm_save.index):   # index holds the expiry LABELS
-                _nm = _atm_save.index.name
-                _atm_save = _atm_save.reset_index()
-                _src = _nm if (_nm and _nm in _atm_save.columns) else _atm_save.columns[0]
-                _atm_save = _atm_save.rename(columns={_src: "Expiry"})
-        # Last-resort recovery: the surface arrived with a NUMERIC index (0/1/2…) and the
-        # expiry labels were already lost upstream (e.g. loaded from a snapshot whose
-        # values had no Expiry). When the row count matches the canonical 22-row ladder,
-        # reassign the labels by position so the save is correct and the round-trip holds.
+        # The vol surface is ALWAYS the canonical 22-row expiry ladder in this exact
+        # order. So stamp the labels by position rather than trying to detect whether the
+        # live surface carries Expiry as a column, an index, or numeric junk — that
+        # detection kept missing cases and saving integer/blank expiries. Tenor columns
+        # and their data are untouched (row order IS the expiry order). For any non-22-row
+        # surface, fall back to the gentle label-preserving recovery.
         _CANON_EXP = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y",
                       "5y","6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
-        if "Expiry" not in _atm_save.columns and len(_atm_save) == len(_CANON_EXP):
+        _atm_save = atm.copy()
+        if len(_atm_save) == len(_CANON_EXP):
             _atm_save = _atm_save.reset_index(drop=True)
+            # drop any existing expiry column (real or numeric) so we re-stamp cleanly
+            _atm_save = _atm_save[[c for c in _atm_save.columns
+                                   if str(c).strip().lower() != "expiry"]]
             _atm_save.insert(0, "Expiry", _CANON_EXP)
-        # Also catch an Expiry column that EXISTS but holds NUMERIC values (0,1,2 from a
-        # stray reset_index upstream) — those aren't real labels. Replace with the
-        # canonical ladder when the row count matches. Real string labels are untouched.
-        elif "Expiry" in _atm_save.columns and len(_atm_save) == len(_CANON_EXP) \
-                and pd.api.types.is_numeric_dtype(_atm_save["Expiry"]):
-            _atm_save = _atm_save.reset_index(drop=True)
-            _atm_save["Expiry"] = _CANON_EXP
+        else:
+            if "Expiry" not in _atm_save.columns:
+                _lc = [c for c in _atm_save.columns if str(c).strip().lower() == "expiry"]
+                if _lc:
+                    _atm_save = _atm_save.rename(columns={_lc[0]: "Expiry"})
+                elif not pd.api.types.is_numeric_dtype(_atm_save.index):
+                    _nm = _atm_save.index.name
+                    _atm_save = _atm_save.reset_index()
+                    _src = _nm if (_nm and _nm in _atm_save.columns) else _atm_save.columns[0]
+                    _atm_save = _atm_save.rename(columns={_src: "Expiry"})
         atm_json = _atm_save.to_dict(orient="records")
         
         sabr_alpha_json = sabr_alpha.to_dict(orient="records") if sabr_alpha is not None else None
