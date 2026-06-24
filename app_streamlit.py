@@ -1835,8 +1835,22 @@ def save_vol_snapshot(user_id: str, currency: str, label: str, notes: str = ""):
             st.error(f"No ATM vol data loaded for {currency}")
             return False
 
-        # Convert DataFrame to JSON
-        atm_json = atm.to_dict(orient="records")
+        # Convert DataFrame to JSON. to_dict(orient="records") keeps COLUMNS only and
+        # drops the index — so if the surface arrives with the expiry labels as the
+        # INDEX (not a column), the labels are lost and the snapshot reloads with a
+        # 0/1/2… RangeIndex (showing as 1,2,3 instead of 1w,1m,2m). Recover Expiry into
+        # a column first so the labels always survive the round-trip.
+        _atm_save = atm.copy()
+        if "Expiry" not in _atm_save.columns:
+            _lc = [c for c in _atm_save.columns if str(c).strip().lower() == "expiry"]
+            if _lc:
+                _atm_save = _atm_save.rename(columns={_lc[0]: "Expiry"})
+            elif not pd.api.types.is_numeric_dtype(_atm_save.index):   # index holds the expiry LABELS
+                _nm = _atm_save.index.name
+                _atm_save = _atm_save.reset_index()
+                _src = _nm if (_nm and _nm in _atm_save.columns) else _atm_save.columns[0]
+                _atm_save = _atm_save.rename(columns={_src: "Expiry"})
+        atm_json = _atm_save.to_dict(orient="records")
         
         sabr_alpha_json = sabr_alpha.to_dict(orient="records") if sabr_alpha is not None else None
         sabr_beta_json = sabr_beta.to_dict(orient="records") if sabr_beta is not None else None
@@ -16738,22 +16752,6 @@ def curves_tab():
                     with st.spinner("Calculating..."):
                         pm, vm = calculate_atm_premium_matrix(ccy, _mc, atm_vols, _mb)
                         st.session_state["atm_prem_matrix"][ccy] = {"vol": atm_vols, "prem": pm, "vega": vm}
-                        _pd = st.session_state.get("_atm_prem_diag", {})
-                        _pm_blank = (pm is None or getattr(pm, "empty", True)
-                                     or (hasattr(pm, "to_numpy") and pd.isna(pm.to_numpy()).all()))
-                        if _pm_blank and _pd:
-                            if _pd.get("early_return"):
-                                st.error(
-                                    f"⚠️ Premium blank — **{ccy}** surface had no usable 'Expiry'. "
-                                    f"atm_is_none={_pd.get('atm_is_none')}, "
-                                    f"columns={_pd.get('columns')}, index_name={_pd.get('index_name')!r}")
-                            else:
-                                st.error(
-                                    f"⚠️ Premium came back blank — diagnostic for **{ccy}**: "
-                                    f"{_pd.get('exp_parsed',0)}/{_pd.get('expiries',0)} expiries parsed, "
-                                    f"{_pd.get('cells_priced',0)} cells priced, {_pd.get('cells_failed',0)} failed. "
-                                    + (f"Skipped expiries: {_pd.get('exp_skip_samples')}. " if _pd.get('exp_skip_samples') else "")
-                                    + (f"Cell errors: {_pd.get('cell_err_samples')}." if _pd.get('cell_err_samples') else ""))
 
             if has_atm:
                 _ad = st.session_state["atm_prem_matrix"][ccy]
@@ -35094,36 +35092,17 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
       prem_df    —   ATM straddle forward premium in bp
       vega_df    —   Vega in $ per 1bp vol move, scaled to 100mm notional
     """
-    # Normalise: ensure Expiry is a column. The saved-snapshot / fresh-reload surface
-    # can come back with the expiry labels as the INDEX (named or unnamed) rather than a
-    # column, which the old narrow checks missed → silent empty return → blank premium.
-    # Recover it from any of: a differently-cased column, a named index, an unnamed
-    # index, or the first column as a last resort.
+    # Normalise: ensure Expiry is a column (handle lowercase "expiry" from DB records)
     if atm_vols is not None:
         atm_vols = atm_vols.copy()
         if "Expiry" not in atm_vols.columns:
-            _lc_exp = [c for c in atm_vols.columns if str(c).strip().lower() == "expiry"]
-            if _lc_exp:
-                atm_vols = atm_vols.rename(columns={_lc_exp[0]: "Expiry"})
-            else:
-                _idx_name = atm_vols.index.name
-                atm_vols = atm_vols.reset_index()
-                _newcol = _idx_name if _idx_name is not None else "index"
-                if _newcol in atm_vols.columns and "Expiry" not in atm_vols.columns:
-                    atm_vols = atm_vols.rename(columns={_newcol: "Expiry"})
-                elif "Expiry" not in atm_vols.columns and len(atm_vols.columns) > 0:
-                    atm_vols = atm_vols.rename(columns={atm_vols.columns[0]: "Expiry"})
+            if "expiry" in atm_vols.columns:
+                atm_vols = atm_vols.rename(columns={"expiry": "Expiry"})
+            elif atm_vols.index.name and atm_vols.index.name.lower() == "expiry":
+                atm_vols = atm_vols.reset_index().rename(columns={atm_vols.index.name: "Expiry"})
+            elif atm_vols.index.dtype == object:
+                atm_vols = atm_vols.reset_index().rename(columns={"index": "Expiry"})
     if atm_vols is None or "Expiry" not in atm_vols.columns:
-        try:
-            st.session_state["_atm_prem_diag"] = {
-                "early_return": True,
-                "atm_is_none": atm_vols is None,
-                "columns": list(atm_vols.columns)[:15] if atm_vols is not None else [],
-                "index_name": (atm_vols.index.name if atm_vols is not None else None),
-                "expiries": 0, "exp_parsed": 0, "cells_priced": 0, "cells_failed": 0,
-            }
-        except Exception:
-            pass
         empty = pd.DataFrame()
         return empty, empty
 
@@ -35151,21 +35130,14 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
 
     prem_rows = []
     vega_rows = []
-    _diag = {"expiries": len(expiries), "tenors": len(tenors),
-             "exp_parsed": 0, "exp_skipped": 0, "cells_priced": 0, "cells_failed": 0,
-             "exp_skip_samples": [], "cell_err_samples": []}
 
     for i, exp in enumerate(expiries):
         try:
             exp_y = label_to_years(exp)
         except Exception:
-            exp_y = None
-        if exp_y is None or exp_y <= 0:
-            _diag["exp_skipped"] += 1
-            if len(_diag["exp_skip_samples"]) < 5:
-                _diag["exp_skip_samples"].append(repr(exp))
             continue
-        _diag["exp_parsed"] += 1
+        if exp_y is None or exp_y <= 0:
+            continue
         prow = {"Expiry": exp}
         vrow = {"Expiry": exp}
 
@@ -35224,7 +35196,6 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
                     prow[tenor] = round(_res.get("pv_bp_fwd", _res.get("pv_bp", 0.0)), 2)
                     d_fwd_prem_per_bp = 2 * (1.0 / math.sqrt(2 * math.pi)) * sqrt_t * ann / df_exp if df_exp > 0 else 0.0
                     vrow[tenor] = round((d_fwd_prem_per_bp / 10000.0) * 1e6, 2)
-                    _diag["cells_priced"] += 1
                     continue
 
                 # ATM straddle FORWARD premium (bp of notional) — matches BBG Prem=Fwd, OIS
@@ -35236,29 +35207,16 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
                 d_fwd_prem_per_bp = 2 * 0.3989 * sqrt_t * ann / df_exp
                 vega_dollars = (d_fwd_prem_per_bp / 10000.0) * 1e6  # $/1bp per 1mm notional
                 vrow[tenor] = round(vega_dollars, 2)
-                _diag["cells_priced"] += 1
 
-            except Exception as _ce:
+            except:
                 prow[tenor] = None
                 vrow[tenor] = None
-                _diag["cells_failed"] += 1
-                if len(_diag["cell_err_samples"]) < 5:
-                    _diag["cell_err_samples"].append(f"{exp}×{tenor}: {type(_ce).__name__}: {_ce}")
 
         prem_rows.append(prow)
         vega_rows.append(vrow)
 
-    try:
-        st.session_state["_atm_prem_diag"] = dict(_diag)
-    except Exception:
-        pass
-
-    prem_df = pd.DataFrame(prem_rows)
-    vega_df = pd.DataFrame(vega_rows)
-    if "Expiry" in prem_df.columns:
-        prem_df = prem_df.set_index("Expiry")
-    if "Expiry" in vega_df.columns:
-        vega_df = vega_df.set_index("Expiry")
+    prem_df = pd.DataFrame(prem_rows).set_index("Expiry")
+    vega_df = pd.DataFrame(vega_rows).set_index("Expiry")
     return prem_df, vega_df
 
 
