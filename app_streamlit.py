@@ -9624,7 +9624,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
     _sdr_shadow = st.session_state.get("_sdr_filter_shadow", {})
     _SDR_FILTER_KEYS = ["sdr_date_from", "sdr_date_to", "sdr_type", "sdr_ccy",
                         "sdr_opt_tenor", "sdr_swp_tenor", "sdr_platform", "sdr_action",
-                        "sdr_cleared", "sdr_alerts_on", "sdr_min_notional",
+                        "sdr_cleared", "sdr_alerts_on",
                         "sdr_alert_ccy", "sdr_refresh_interval", "sdr_timezone"]
     for _sk in _SDR_FILTER_KEYS:
         if _sk not in st.session_state and _sk in _sdr_shadow:
@@ -9645,7 +9645,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
         except Exception:
             pass
         st.session_state["sdr_action"]           = ["NEWT", "MODI"]
-        st.session_state["sdr_refresh_interval"] = "Off"  # was "30s" — caused rerun-storm hang
+        st.session_state.setdefault("sdr_refresh_interval", "30s")  # drives global alert poller
         st.session_state.pop("sdr_alert_ccy", None)
         st.session_state.pop("sdr_ccy", None)  # force AUD default on next render
         st.session_state["sdr_filters_loaded"] = True
@@ -9699,7 +9699,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
         _uid = st.session_state.get("username", "default")
         _keys = ["sdr_date_from", "sdr_date_to", "sdr_type", "sdr_ccy",
                  "sdr_opt_tenor", "sdr_swp_tenor", "sdr_platform", "sdr_action",
-                 "sdr_cleared", "sdr_alerts_on", "sdr_min_notional",
+                 "sdr_cleared", "sdr_alerts_on",
                  "sdr_alert_ccy", "sdr_refresh_interval", "sdr_timezone"]
         _data = {k: st.session_state.get(k) for k in _keys if k in st.session_state}
         # Write to shadow key — non-widget, survives tab navigation
@@ -9861,36 +9861,35 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             _sv_alerts = _sv.get("sdr_alerts_on", True)
             alerts_on = st.toggle("🔔 New NEWT trades", value=bool(_sv_alerts), key="sdr_alerts_on", on_change=_save_sdr_filters)
         with al3:
-            st.markdown("**Min notional (M)**")
-            _sv_not = int(_sv.get("sdr_min_notional", 0) or 0)
-            min_notional_m = st.number_input(
-                "Min notional (USD M)", min_value=0, value=_sv_not, step=25,
-                key="sdr_min_notional", help="Only alert on trades above this size",
-                label_visibility="collapsed", on_change=_save_sdr_filters
-            )
-        with al4:
             st.markdown("**Alert CCY**")
-            _alert_ccy_opts = ["All"] + ccy_opts
-            _sv_accy = _sv.get("sdr_alert_ccy", "AUD")
-            _alert_ccy_idx = _alert_ccy_opts.index(_sv_accy) if _sv_accy in _alert_ccy_opts else (_alert_ccy_opts.index("AUD") if "AUD" in _alert_ccy_opts else 0)
-            alert_ccy = st.selectbox("Alert CCY filter", _alert_ccy_opts, index=_alert_ccy_idx,
-                        key="sdr_alert_ccy", label_visibility="collapsed", on_change=_save_sdr_filters)
-        with al5:
+            # Currencies the alert poller covers — add/remove as needed. Default all three.
+            _accy_opts = [c for c in ["AUD", "USD", "EUR"] if c in ccy_opts] or ["AUD", "USD", "EUR"]
+            _sv_accy = _sv.get("sdr_alert_ccy")
+            if isinstance(_sv_accy, str):   # migrate old single-value setting
+                _sv_accy = [_sv_accy] if _sv_accy in _accy_opts else _accy_opts
+            _sv_accy = [c for c in (_sv_accy or _accy_opts) if c in _accy_opts] or _accy_opts
+            alert_ccy = st.multiselect("Alert CCY", _accy_opts, default=_sv_accy,
+                        key="sdr_alert_ccy", label_visibility="collapsed",
+                        on_change=_save_sdr_filters)
+            min_notional_m = 0   # min-notional filter removed; kept defined for downstream
+        with al4:
             st.markdown("**Auto-refresh**")
-            _refresh_opts = ["Off", "30s", "1 min", "2 min", "5 min"]
-            _sv_ref = _sv.get("sdr_refresh_interval", "Off")
-            _sv_ref_idx = _refresh_opts.index(_sv_ref) if _sv_ref in _refresh_opts else 0
+            _refresh_opts = ["Off", "15s", "30s", "60s"]
+            _sv_ref = _sv.get("sdr_refresh_interval", "30s")
+            _sv_ref_idx = _refresh_opts.index(_sv_ref) if _sv_ref in _refresh_opts else _refresh_opts.index("30s")
             auto_refresh = st.selectbox(
-                "Auto-refresh", _refresh_opts,
-                index=_sv_ref_idx,
-                label_visibility="collapsed",
-                key="sdr_refresh_interval"
+                "Auto-refresh", _refresh_opts, index=_sv_ref_idx,
+                label_visibility="collapsed", key="sdr_refresh_interval",
+                on_change=_save_sdr_filters,
+                help="Drives the global trade-alert toasts (any tab). Off = no toasts; the SDR fetcher still loads trades into the table."
             )
+        with al5:
+            st.empty()
 
     # Write shadow key after every SDR render so navigation away preserves state
     _sdr_shadow_keys = ["sdr_date_from", "sdr_date_to", "sdr_type", "sdr_ccy",
                         "sdr_opt_tenor", "sdr_swp_tenor", "sdr_platform", "sdr_action",
-                        "sdr_cleared", "sdr_alerts_on", "sdr_min_notional",
+                        "sdr_cleared", "sdr_alerts_on",
                         "sdr_alert_ccy", "sdr_refresh_interval", "sdr_timezone"]
     st.session_state["_sdr_filter_shadow"] = {k: st.session_state.get(k)
                                                for k in _sdr_shadow_keys
@@ -10024,8 +10023,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
     # ── Toast alerts for new NEWT trades ─────────────────────────────────────
     if alerts_on and not df.empty:
         new_trades = df[df["action_type"] == "NEWT"].copy()
-        if alert_ccy != "All":
-            new_trades = new_trades[new_trades["notional_ccy"] == alert_ccy]
+        if alert_ccy:
+            new_trades = new_trades[new_trades["notional_ccy"].isin(alert_ccy)]
         if min_notional_m > 0:
             new_trades = new_trades[new_trades["notional_leg1"] >= min_notional_m * 1_000_000]
 
@@ -35335,14 +35334,21 @@ def _sdr_global_alert_poll():
         if not conn:
             return
         cur = conn.cursor()
+        # Currencies to alert on — from the SDR Live "Alert CCY" multiselect (live value,
+        # saved fallback). Empty → all three pricer currencies.
+        _accy = (st.session_state.get("sdr_alert_ccy")
+                 or _sv.get("sdr_alert_ccy") or ["AUD", "USD", "EUR"])
+        if isinstance(_accy, str):
+            _accy = [_accy]
+        _accy = [c for c in _accy if c in ("AUD", "USD", "EUR")] or ["AUD", "USD", "EUR"]
         # Cursor: only consider prints newer than the last one we toasted.
         # dtcc_sdr is already a swaption-print table — a non-null option_type_decoded
         # (PAYER/RECEIVER/STRADDLE) marks a real classified swaption print.
         _since = st.session_state.get("_sdr_global_since")
         _where = ["action_type = 'NEWT'",
-                  "notional_ccy IN ('AUD','USD','EUR')",
+                  "notional_ccy = ANY(%s)",
                   "option_type_decoded IS NOT NULL"]
-        _params = []
+        _params = [_accy]
         if _since is not None:
             _where.append("execution_timestamp > %s")
             _params.append(_since)
@@ -35425,13 +35431,17 @@ def main():
     init_session()
 
     # ── Real-time SDR trade alerts (any tab) ──────────────────────────────────
-    # Drive an unattended 30s rerun so the global poller below fires even when the
-    # user is on another tab. st_autorefresh is a no-op counter (cheap); the poll
-    # query is tiny. Requires 'streamlit-autorefresh' in requirements.txt.
-    if st.session_state.get("sdr_alerts_global_on", True):
+    # Cadence is controlled by the SDR Live "Auto-refresh" setting (Off/15s/30s/60s).
+    # Off → no rerun tick and no toasts (the standalone SDR fetcher still loads trades
+    # into dtcc_sdr — it's a separate process). st_autorefresh is a cheap no-op counter.
+    _ref = (st.session_state.get("sdr_refresh_interval")
+            or (st.session_state.get("_sdr_filter_shadow", {}) or {}).get("sdr_refresh_interval")
+            or "30s")
+    _ref_ms = {"15s": 15000, "30s": 30000, "60s": 60000}.get(_ref)
+    if _ref_ms:
         try:
             from streamlit_autorefresh import st_autorefresh
-            st_autorefresh(interval=30000, key="_sdr_global_autorefresh")
+            st_autorefresh(interval=_ref_ms, key="_sdr_global_autorefresh")
         except Exception:
             pass
         _sdr_global_alert_poll()
