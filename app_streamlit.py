@@ -7778,7 +7778,7 @@ def _eu_load_sdr_eur(hours=720):
          "WHERE notional_ccy='EUR' AND opt_tenor IS NOT NULL AND opt_tenor <> '' "
          "AND action_type='NEWT' "
          "AND execution_timestamp >= NOW() - (%s || ' hours')::interval "
-         "ORDER BY execution_timestamp DESC LIMIT 5000")
+         "ORDER BY execution_timestamp DESC LIMIT 200000")
     try:
         return _load_sdr_data_cached(q, (str(int(hours)),))
     except Exception:
@@ -16668,57 +16668,11 @@ def curves_tab():
                             except: pass
                 if _all_mids:
                     _n = publish_blotter_mids(_pub_ccy, _all_mids)
-                    # Save snapshot fast — direct INSERT using already-built matrices
-                    try:
-                        from psycopg2.extras import Json as _Json
-                        _snap_conn = get_db_connection()
-                        if _snap_conn:
-                            _snap_uid = st.session_state.get("username", "wpo@rateedge.au")
-                            if _snap_uid in {"wpo70@icloud.com"}: _snap_uid = "wpo@rateedge.au"
-                            # Build atm_vols JSON from working surface
-                            _snap_atm = get_working_atm_surface(_pub_ccy)
-                            _snap_prem_df = st.session_state.get("atm_prem_matrix", {}).get(_pub_ccy, {}).get("prem")
-                            if _snap_atm is not None:
-                                _atm_j = _snap_atm.copy()
-                                if _atm_j.index.name == "Expiry": _atm_j = _atm_j.reset_index()
-                                _atm_json = _Json({"values": _atm_j.to_dict(orient="records")})
-                                _prem_json = None
-                                if _snap_prem_df is not None:
-                                    _pv2 = _snap_prem_df.copy()
-                                    if _pv2.index.name == "Expiry": _pv2 = _pv2.reset_index()
-                                    _prem_json = _Json({"values": _pv2.to_dict(orient="records")})
-                                from datetime import datetime as _dtnow2, timezone as _tz_pub
-                                _utc_now2 = _dtnow2.now(_tz_pub.utc)
-                                import calendar as _cal2
-                                def _syd_aedt2(_d):
-                                    def _fs2(_y,_m):
-                                        _c=_cal2.monthcalendar(_y,_m)
-                                        return _c[0][6] if _c[0][6]!=0 else _c[1][6]
-                                    _y,_m,_day=_d.year,_d.month,_d.day
-                                    if _m>=10: return True
-                                    if _m<=3: return True
-                                    if _m==4 and _day<_fs2(_y,4): return True
-                                    return False
-                                _syd_off2 = 11 if _syd_aedt2(_utc_now2) else 10
-                                _now_local = _utc_now2.astimezone(_tz_pub(timedelta(hours=_syd_off2)))
-                                _tz_lbl = "AEDT" if _syd_off2 == 11 else "AEST"
-                                _slbl = f"{_pub_ccy} {_now_local.strftime('%d-%b-%Y %H:%M')} {_tz_lbl}"
-                                _sc2 = _snap_conn.cursor()
-                                _sc2.execute("""
-                                    INSERT INTO vol_history
-                                    (user_id, currency, snapshot_date, label, atm_vols, atm_prems, notes)
-                                    VALUES (%s,%s,NOW(),%s,%s,%s,%s)
-                                """, ('shared', _pub_ccy, _slbl, _atm_json, _prem_json, "Published from Curves tab"))
-                                _snap_conn.commit()
-                                _sc2.close()
-                            _snap_conn.close()
-                    except Exception as _se:
-                        pass  # snapshot failure doesn't block publish
-                    st.success(f"✅ Published {_n} mids + snapshot saved for {_pub_ccy}")
+                    st.success(f"✅ Published {_n} mids to blotter for {_pub_ccy}")
                 else:
                     st.warning("No data — generate forward matrix and ATM matrix first.")
     with _pb2:
-        st.caption("Publishes ATM vols, bp premiums and FWD ATM rates to the blotter, and saves a vol snapshot. Generate ATM Matrix and Forward Matrix first.")
+        st.caption("Publishes ATM vols, bp premiums and FWD ATM rates to the blotter. Generate ATM Matrix and Forward Matrix first.")
 
     st.markdown("---")
 
