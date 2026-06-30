@@ -36076,7 +36076,13 @@ def main():
             except Exception:
                 pass
 
-    st.markdown('<style>[data-testid="stMainBlockContainer"]{padding-top:0 !important}[data-testid="stAppViewBlockContainer"]{padding-top:0 !important}</style>', unsafe_allow_html=True)
+    st.markdown('<style>'
+                '.block-container,'
+                '[data-testid="stMainBlockContainer"],'
+                '[data-testid="stAppViewBlockContainer"]'
+                '{padding-top:0.4rem !important;padding-bottom:0.6rem !important}'
+                '[data-testid="stHeader"]{height:1.5rem !important;min-height:1.5rem !important}'
+                '</style>', unsafe_allow_html=True)
 
     # ── Currency flag bar (above tab menu) — always shows the ccy being priced ──
     # Windows/Chrome do NOT render unicode flag emoji (they fall back to "US"/"AU"),
