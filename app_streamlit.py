@@ -36088,8 +36088,8 @@ def main():
                 '.block-container,'
                 '[data-testid="stMainBlockContainer"],'
                 '[data-testid="stAppViewBlockContainer"]'
-                '{padding-top:0.4rem !important;padding-bottom:0.6rem !important}'
-                '[data-testid="stHeader"]{height:1.5rem !important;min-height:1.5rem !important}'
+                '{padding-top:0 !important;padding-bottom:0.6rem !important}'
+                '[data-testid="stHeader"]{height:0 !important;min-height:0 !important}'
                 '</style>', unsafe_allow_html=True)
 
     # ── Currency flag bar (above tab menu) — always shows the ccy being priced ──
