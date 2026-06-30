@@ -8104,6 +8104,14 @@ def eu_combined_analysis():
                                    help="Filter the blotter by reporting broker / SEF.")
             if _bsel:
                 _tr_df = _tr_df[_tr_df["Broker"].isin(_bsel)]
+        # Trade count for the selected period (reflects the broker filter above)
+        _n_tot = len(_tr_df)
+        _n_sdr_v = int((_tr_df["Src"] == "SDR").sum()) if "Src" in _tr_df.columns else 0
+        _n_mif_v = int((_tr_df["Src"] == "MiFIR").sum()) if "Src" in _tr_df.columns else 0
+        _cnt_c1, _cnt_c2, _cnt_c3 = st.columns(3)
+        _cnt_c1.metric(f"Trades · {_from_d.strftime('%d-%b')} → {_to_d.strftime('%d-%b')}", _n_tot)
+        _cnt_c2.metric("SDR", _n_sdr_v)
+        _cnt_c3.metric("MiFIR", _n_mif_v)
         st.dataframe(
             _tr_df, use_container_width=True, hide_index=True,
             height=min(60 + len(_tr_df) * 35, 700),
