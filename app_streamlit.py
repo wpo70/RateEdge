@@ -16515,6 +16515,89 @@ def curves_tab():
                     st.info("Click **▶ Generate EUR Forward Matrix** to compute.")
 
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # GBP CURVES — SONIA OIS (single curve: projection AND discount, annual ACT/365)
+    # Self-contained; renders SONIA zero + par and the forward matrix, then RETURNS
+    # before the AUD/NZD block so GBP never inherits AUD's Q/Q-S/S leg-convention UI.
+    # ══════════════════════════════════════════════════════════════════════════
+    if ccy == "GBP":
+        _sonia_zero = curve_c
+        _sonia_par  = _clean(st.session_state.get("_gbp_sonia_par"))
+
+        _gbp_fig = go.Figure()
+        if _sonia_zero is not None and not _sonia_zero.empty:
+            _gbp_fig.add_trace(go.Scatter(
+                x=_sonia_zero["MaturityY"], y=_sonia_zero["ZeroRatePct"],
+                mode="lines+markers", name="SONIA Zero (bootstrapped)",
+                line=dict(color="#38bdf8", width=2), marker=dict(size=5)))
+        if _sonia_par is not None and not _sonia_par.empty:
+            _gbp_fig.add_trace(go.Scatter(
+                x=_sonia_par["MaturityY"], y=_sonia_par["ZeroRatePct"],
+                mode="lines+markers", name="Par SONIA OIS",
+                line=dict(color="#a78bfa", width=2, dash="dot"), marker=dict(size=4)))
+        _gbp_fig.update_layout(
+            title="GBP SONIA Curve (single-curve OIS \u00b7 annual ACT/365 \u00b7 T+0)",
+            xaxis_title="Maturity (Y)", yaxis_title="Rate (%)", height=420,
+            legend=dict(orientation="h", y=1.1), margin=dict(l=40, r=40, t=40, b=40))
+        st.plotly_chart(_gbp_fig, use_container_width=True)
+
+        st.session_state.setdefault("gbp_fwd_matrix", {})
+        if "gbp_fwd_section_open" not in st.session_state:
+            st.session_state["gbp_fwd_section_open"] = False
+        _gfl = "\u25bc Hide GBP Forward Matrix" if st.session_state["gbp_fwd_section_open"] else "\u25b6 Show GBP Forward Matrix"
+        if st.button(_gfl, key="gbp_fwd_toggle"):
+            st.session_state["gbp_fwd_section_open"] = not st.session_state["gbp_fwd_section_open"]
+
+        if st.session_state["gbp_fwd_section_open"]:
+            _gcols = st.columns([3, 1, 3, 3])
+            with _gcols[2]:
+                _gen_gbp_fwd = st.button("\u25b6 Generate GBP Forward Matrix", key="gen_gbp_fwd", type="primary", use_container_width=True)
+            with _gcols[3]:
+                _has_gbp = "SONIA" in st.session_state.get("gbp_fwd_matrix", {})
+                st.download_button("\u2b07 Download",
+                    data=st.session_state["gbp_fwd_matrix"].get("SONIA", pd.DataFrame()).to_csv() if _has_gbp else "",
+                    file_name="GBP_fwd_SONIA.csv", key="dl_gbp_fwd",
+                    use_container_width=True, type="primary", disabled=not _has_gbp)
+
+            if _gen_gbp_fwd:
+                _GBP_EXPIRIES = [1/52, 1/12, 2/12, 3/12, 6/12, 9/12, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30]
+                _GBP_TENORS   = [1, 2, 3, 4, 5, 7, 10, 12, 15, 20, 25, 30]
+                _EXP_LABELS   = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
+                _TEN_LABELS   = ["1Y","2Y","3Y","4Y","5Y","7Y","10Y","12Y","15Y","20Y","25Y","30Y"]
+
+                def _gbp_fwd_rate(df_curve, exp, ten):
+                    """GBP SONIA forward via the EXACT pricer function (T+0, annual
+                    ACT/365, single-curve SONIA) so the matrix == the swaption pricer."""
+                    if df_curve is None or df_curve.empty: return None
+                    try:
+                        _f, _, _ = forward_and_annuity_from_curve(
+                            df_curve[["MaturityY", "ZeroRatePct"]].copy(), "GBP", float(exp), float(ten), None)
+                        return round(_f * 100, 4)
+                    except Exception:
+                        return None
+
+                with st.spinner("Generating GBP forward matrix..."):
+                    _rows = {}
+                    for ei, exp in enumerate(_GBP_EXPIRIES):
+                        _row = {}
+                        for ti, ten in enumerate(_GBP_TENORS):
+                            _row[_TEN_LABELS[ti]] = _gbp_fwd_rate(_sonia_zero, exp, ten)
+                        _rows[_EXP_LABELS[ei]] = _row
+                    _gdf = pd.DataFrame(_rows).T
+                    _gdf.index.name = "Expiry"; _gdf = _gdf.reset_index()
+                    st.session_state["gbp_fwd_matrix"]["SONIA"] = _gdf
+
+            _gdisp = st.session_state.get("gbp_fwd_matrix", {}).get("SONIA")
+            if _gdisp is not None and not _gdisp.empty:
+                _gnum = [c for c in _gdisp.columns if c != "Expiry"]
+                st.dataframe(
+                    _gdisp.style.format({c: "{:.4f}" for c in _gnum}).background_gradient(cmap="RdYlGn", subset=_gnum),
+                    use_container_width=True, hide_index=True, height=820)
+            else:
+                st.info("Click **\u25b6 Generate GBP Forward Matrix** to compute.")
+        return
+
+
     # ── Chart toggles (AUD/NZD only) ─────────────────────────────────────────
     # AUD/NZD chart — defaults so USD/EUR path through try block is harmless
     # ⛔ LOCKED (v0705g): AUD/NZD branches DO NOT MODIFY.
@@ -19841,6 +19924,21 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
                                                          basis6v3_x=basis_x, basis6v3_y=basis_y)
                         fwd = mkt_rate
                         row[tenor] = fwd * 100
+                    elif ccy == "GBP":
+                        # GBP SONIA single-curve: use the EXACT pricer forward (T+0,
+                        # annual ACT/365, mod-fol) so the matrix == swaption pricer.
+                        _gbp_curve_df = pd.DataFrame({
+                            "MaturityY": list(curve_x),
+                            "ZeroRatePct": [z * 100.0 for z in curve_y],
+                        })
+                        try:
+                            mkt_rate, _, _ = forward_and_annuity_from_curve(
+                                _gbp_curve_df, "GBP", exp_y, tenor_y, None)
+                        except Exception:
+                            mkt_rate = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy,
+                                                         freq_override=1.0, ois_x=ois_x, ois_y=ois_y,
+                                                         basis6v3_x=basis_x, basis6v3_y=basis_y)
+                        row[tenor] = mkt_rate * 100
                     else:
                         mkt_rate = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy,
                                                      freq_override=None,
@@ -19884,6 +19982,8 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
         freq = 1.0  # SOFR OIS: annual Act/360 both legs
     elif ccy == "EUR":
         freq = 1.0  # ESTR OIS: annual 30/360 fixed
+    elif ccy == "GBP":
+        freq = 1.0  # SONIA OIS: annual ACT/365 fixed
     else:
         freq = 0.5
 
@@ -34699,7 +34799,7 @@ def home_tab():
                 Professional Interest Rate Derivatives Pricing
             </div>
             <div style="font-size:0.95rem;color:{muted_color};">
-                Swaptions  Caps/Floors  Exotics  CVA  RV Analysis
+                Swaptions  Caps/Floors  Exotics  RV Analysis
             </div>
         </div>
         """,
