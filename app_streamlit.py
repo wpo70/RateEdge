@@ -748,11 +748,11 @@ def render_ticket_tab(ss):
 
 HAS_TICKET_TAB = True
 
-SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR"]
+SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
 # any internal lookups (NZD references in scanner gates, etc.) still resolve.
 # v1405w: NZD removed from sidebar entirely (was "NZD (PENDING)").
-ALL_CURRENCIES = ["AUD", "USD", "EUR", "GBP (PENDING)", "JPY (PENDING)", "CAD (PENDING)"]
+ALL_CURRENCIES = ["AUD", "USD", "EUR", "GBP", "JPY (PENDING)", "CAD (PENDING)"]
 # v1405x: explicit set of ccys to hide from UI dropdowns/filters/status displays.
 # Anything in SUPPORTED_CURRENCIES but NOT in ALL_CURRENCIES (as a non-PENDING entry)
 # should be in here. Backend code that needs NZD data still uses SUPPORTED_CURRENCIES.
@@ -1608,6 +1608,8 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                         # Bootstrap par → zero for USD SOFR OIS
                         if ccy == "USD":
                             _zc_df = bootstrap_usd_sofr_ois(_zc_df)
+                        elif ccy == "GBP":
+                            _zc_df = bootstrap_gbp_sonia_ois(_zc_df)
                         st.session_state.setdefault("curves", {})[ccy] = _zc_df
                         st.session_state.setdefault("config_curves", {})[ccy] = _zc_df
                         set_timestamp("curves", ccy)
@@ -2748,6 +2750,30 @@ def build_eur_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]
     return schedule
 
 
+def build_gbp_sonia_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]:
+    """
+    GBP SONIA swaption: T+0 London BD spot, mod-fol, ACT/365 fixed, annual payments
+    both legs (single-curve SONIA OIS). Returns (time_in_years_from_today, act365_accrual).
+    Separate function -- USD/EUR paths untouched. Mirrors build_usd_sofr_schedule with
+    spot_lag_bd=0 (SONIA T+0 vs USD T+2) and ACT/365 accrual (vs USD ACT/360).
+    """
+    today = _pricing_date()
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=0)
+    months_per_period = 12  # annual
+    total_months = int(round(tenor * 12))
+    n = max(1, int(round(tenor * (12 / months_per_period))))
+    schedule = []
+    prev = fwd_start
+    for i in range(1, n + 1):
+        raw = _add_months(fwd_start, i * months_per_period if i < n else total_months)
+        pay = _mod_fol(raw)
+        accrual = _act365(prev, pay)   # ACT/365 for GBP SONIA
+        t_years = _act365(today, pay)
+        schedule.append((t_years, accrual))
+        prev = pay
+    return schedule
+
+
 def build_generic_schedule(expiry: float, tenor: float, freq: float = 0.5, spot_lag: float = 1.0) -> List[Tuple[float, float]]:
     """T+2BD spot (NZD/USD), mod-fol, Act/365. freq: 0.25=Q/Q, 0.5=S/S."""
     months_per = int(round(freq * 12))
@@ -2797,6 +2823,8 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         sched = build_usd_sofr_schedule(expiry, tenor)
     elif ccy == "EUR":
         sched = build_eur_schedule(expiry, tenor)
+    elif ccy == "GBP":
+        sched = build_gbp_sonia_schedule(expiry, tenor)
     else:
         sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=1.0)
 
@@ -2862,13 +2890,13 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
 
     # Build log-cubic splines once (USD/EUR only); AUD/NZD use linear-on-zero.
     disc_curve = ois_curve if ois_curve is not None else _proj_curve
-    _proj_sp = _mk_logcubic(_proj_curve) if ccy in ("USD", "EUR") else None
-    _disc_sp = _mk_logcubic(disc_curve) if ccy in ("USD", "EUR") else None
+    _proj_sp = _mk_logcubic(_proj_curve) if ccy in ("USD", "EUR", "GBP") else None
+    _disc_sp = _mk_logcubic(disc_curve) if ccy in ("USD", "EUR", "GBP") else None
 
     def _df_proj(crv: pd.DataFrame, t: float, freq: float) -> float:
         """Projection DF. USD/EUR: log-cubic on DFs (market practice, matches
         BlueGamma). AUD/NZD: linear-on-zero (unchanged)."""
-        if ccy in ("USD", "EUR") and _proj_sp is not None:
+        if ccy in ("USD", "EUR", "GBP") and _proj_sp is not None:
             _sp, _ux, _ld = _proj_sp
             if _sp is not None:
                 return math.exp(float(_sp(t)))
@@ -2879,7 +2907,7 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         return math.exp(-z * t)
 
     def _df_disc(crv: pd.DataFrame, t: float) -> float:
-        if ccy in ("USD", "EUR") and _disc_sp is not None:
+        if ccy in ("USD", "EUR", "GBP") and _disc_sp is not None:
             _sp, _ux, _ld = _disc_sp
             if _sp is not None:
                 return math.exp(float(_sp(t)))
@@ -6074,6 +6102,74 @@ def bootstrap_eur_estr_ois(par_df: pd.DataFrame) -> pd.DataFrame:
     import math
     SPOT = 1.0 / 252.0
     DCF_ANNUAL = 365.0 / 360.0  # Act/360 annual
+
+    par_dict = {}
+    for _, row in par_df.iterrows():
+        mat = float(row["MaturityY"]); rate = float(row["ZeroRatePct"])
+        if mat > 0 and rate != 0:
+            par_dict[mat] = rate
+    if len(par_dict) < 3:
+        return par_df
+
+    dfs = {0.0: 1.0, SPOT: 1.0}
+
+    def _dfi(t):
+        ts = sorted(dfs.keys()); dfv = [dfs[x] for x in ts]
+        if t <= ts[0]:
+            return 1.0
+        if t >= ts[-1]:
+            z = -math.log(max(dfv[-1], 1e-10)) / ts[-1]
+            return math.exp(-z * t)
+        return math.exp(float(np.interp(t, ts, np.log(np.maximum(dfv, 1e-10)))))
+
+    for T in sorted(par_dict):
+        c = par_dict[T] / 100.0
+        te = T + SPOT
+        if T <= 1.0:
+            dcf = T * DCF_ANNUAL
+            df_end = 1.0 / (1.0 + c * dcf)
+        else:
+            n_full = int(math.floor(T))
+            ann = 0.0
+            for yr in range(1, n_full):
+                ann += DCF_ANNUAL * _dfi(yr + SPOT)
+            if abs(T - n_full) < 1e-6:
+                dcf_last = DCF_ANNUAL
+            else:
+                ann += DCF_ANNUAL * _dfi(n_full + SPOT)
+                dcf_last = (T - n_full) * DCF_ANNUAL
+            df_end = (1.0 - c * ann) / (1.0 + c * dcf_last)
+        if df_end > 0:
+            dfs[te] = df_end
+
+    result_rows = []
+    for _, row in par_df.iterrows():
+        mat = float(row["MaturityY"])
+        if mat > 0:
+            d = _dfi(mat)
+            zero_pct = -math.log(d) / mat * 100.0 if d > 0 else float(row["ZeroRatePct"])
+        else:
+            zero_pct = float(row["ZeroRatePct"])
+        nr = row.copy(); nr["ZeroRatePct"] = zero_pct
+        result_rows.append(nr)
+    return pd.DataFrame(result_rows).reset_index(drop=True)
+
+
+def bootstrap_gbp_sonia_ois(par_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Bootstrap GBP SONIA OIS par swap rates -> continuous zero rates.
+
+    SONIA OIS conventions (single-curve OIS, annual fixed, ACT/365 fixed, T+0).
+    Mirrors bootstrap_usd_sofr_ois / bootstrap_eur_estr_ois EXACTLY except the
+    day-count fraction: SONIA fixed is ACT/365 (DCF_ANNUAL = 1.0) vs SOFR/ESTR
+    ACT/360 (365/360). SONIA is BOTH projection and discount (no basis leg).
+
+    Separate function (not a call into USD/EUR) so those paths are never touched.
+    Input/Output identical format: MaturityY + ZeroRatePct (in = par %, out = zero %).
+    """
+    import math
+    SPOT = 1.0 / 252.0
+    DCF_ANNUAL = 1.0  # ACT/365 fixed: a clean annual period accrues 365/365 = 1.0
 
     par_dict = {}
     for _, row in par_df.iterrows():
@@ -14705,6 +14801,7 @@ def vol_config_tab():
                 _single_curve_map = [
                     ("USD", "SOFR"),
                     ("NZD", "3M BKBM"),
+                    ("GBP", "SONIA"),
                 ]
                 for _db_ccy, _db_fr in _single_curve_map:
                     try:
@@ -14714,6 +14811,9 @@ def vol_config_tab():
                             if _db_ccy == "USD":
                                 st.session_state["_usd_sofr_par"] = _db_curve.copy()
                                 _db_curve = bootstrap_usd_sofr_ois(_db_curve)
+                            elif _db_ccy == "GBP":
+                                st.session_state["_gbp_sonia_par"] = _db_curve.copy()
+                                _db_curve = bootstrap_gbp_sonia_ois(_db_curve)
                             st.session_state.setdefault("curves", {})[_db_ccy] = _db_curve
                             st.session_state.setdefault("config_curves", {})[_db_ccy] = _db_curve
                             set_timestamp("curves", _db_ccy)
@@ -19988,6 +20088,11 @@ def swaptions_tab(vol_mode: str):
     if ccy == "EUR" and ois_curve is None and curve is not None:
         ois_curve = curve  # ESTR
 
+    # GBP SONIA OIS is single-curve -- SONIA is both projection and discount. No basis
+    # leg; config_basis["GBP"]["ois"] does not exist, so ois_curve is None here.
+    if ccy == "GBP" and ois_curve is None and curve is not None:
+        ois_curve = curve  # SONIA
+
     # USD-specific convention display
     if ccy == "USD":
         with st.expander("📐 USD SOFR Conventions", expanded=False):
@@ -25185,6 +25290,8 @@ def exotics_tab(vol_mode: str):
     if ccy == "USD":
         ois_curve = curve  # USD single-curve SOFR: SOFR is both projection AND discount
         _ensure_usd_alpha_sticky()  # v0506c: keep alpha sticky to ATM here too
+    if ccy == "GBP" and ois_curve is None:
+        ois_curve = curve  # GBP single-curve SONIA: SONIA is both projection AND discount
     basis_6v3 = get_basis_curve(ccy, "6v3")
     atm       = get_working_atm_surface(ccy)
     _, a_m, b_m, r_m, n_m = get_ccy_vol_data(ccy)
@@ -35023,6 +35130,10 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
     if ccy == "USD":
         ois_curve = curve  # SOFR IS the OIS curve
 
+    # GBP SONIA single-curve: SONIA discounts SONIA (matches pricer guard so matrix == pricer).
+    if ccy == "GBP" and ois_curve is None:
+        ois_curve = curve
+
     # v0406l: USD ATM vol must match the pricer EXACTLY. The pricer's straddle vol is
     # get_vol_for_strike(F) → smile_vol_pinned(F,F,T,α,β,ρ,ν) (SABR-reconstructed ATM
     # + pin bumps), NOT the raw grid. Fetch the SABR matrices so we can reproduce it.
@@ -35501,6 +35612,8 @@ def main():
                     # EURIBOR projection data lands). EURIBOR 6M is the projection curve per market
                     # convention for ≥2Y; EURIBOR 3M for ≤1Y. floating_rate strings match swap_rates DB.
                     "EUR": [("ESTR", "main"), ("EURIBOR 6M", "euribor_6m"), ("EURIBOR 3M", "euribor_3m")],
+                    # GBP SONIA: pure single curve (no basis leg) -- SONIA is both projection and discount.
+                    "GBP": [("SONIA", "main")],
                 }
                 _eur_estr_zeros = None  # bootstrapped ESTR zeros, consumed by EURIBOR projection
                 for _fr, _role in _curve_map.get(target_ccy, []):
@@ -35533,6 +35646,14 @@ def main():
                                     st.session_state["_eur_estr_par"] = _df.copy()
                                     _df = bootstrap_eur_estr_ois(_df)
                                     _eur_estr_zeros = _df.copy()
+                                except Exception:
+                                    pass
+                            elif target_ccy == "GBP":
+                                # GBP SONIA single-curve: bootstrap par -> zero, keep raw
+                                # par for display. SONIA discounts SONIA (no basis leg).
+                                try:
+                                    st.session_state["_gbp_sonia_par"] = _df.copy()
+                                    _df = bootstrap_gbp_sonia_ois(_df)
                                 except Exception:
                                     pass
                             st.session_state.setdefault("curves", {})[target_ccy] = _df
