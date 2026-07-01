@@ -17,22 +17,26 @@ try:
     SYDNEY_TZ = ZoneInfo("Australia/Sydney")
     WELLINGTON_TZ = ZoneInfo("Pacific/Auckland")
     NEW_YORK_TZ = ZoneInfo("America/New_York")
+    LONDON_TZ = ZoneInfo("Europe/London")
 except ImportError:
     from datetime import timezone, timedelta
     SYDNEY_TZ = timezone(timedelta(hours=10))      # AEST (Apr-Sep)
     WELLINGTON_TZ = timezone(timedelta(hours=13))  # NZDT approx
     NEW_YORK_TZ = timezone(timedelta(hours=-4))    # EDT approx
+    LONDON_TZ = timezone(timedelta(hours=1))       # BST approx
 
 # Canonical EOD close times per currency (local time)
 CCY_TZ = {
     "AUD": SYDNEY_TZ,
     "NZD": WELLINGTON_TZ,
     "USD": NEW_YORK_TZ,
+    "GBP": LONDON_TZ,
 }
 CCY_EOD = {
     "AUD": (16, 30),   # 4:30pm Sydney
     "NZD": (17, 0),    # 5:00pm Wellington
     "USD": (16, 30),   # 4:30pm New York
+    "GBP": (16, 0),    # 4:00pm London (SONIA swaption EOD)
 }
 from typing import Optional, List, Tuple, Dict
 
@@ -750,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v3006.GBP.e"
+APP_VERSION = "v0107.GBP.a"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -4985,6 +4989,7 @@ def ccy_eod_label(ccy: str, snap_utc) -> str:
                 "AUD": "AEDT" if offset_h == 11 else "AEST",
                 "NZD": "NZDT" if offset_h == 13 else "NZST",
                 "USD": "EDT"  if offset_h == -4 else "EST",
+                "GBP": "BST"  if offset_h == 1  else "GMT",
             }
             tz_lbl = tz_labels.get(ccy, "")
             return local_dt.strftime(f"%d-%b-%Y %H:%M {tz_lbl}")
