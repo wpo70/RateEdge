@@ -9031,6 +9031,40 @@ def _icap_feed_freshness():
         return None
 
 
+def _trax_feed_freshness():
+    """TRAX APA (MarketAxess) supplementary feed health by data freshness.
+    Populated by the standalone pull_trax.py on the local machine (venue_mic='TRAX',
+    source='marketaxess'). Low-volume, unattributed EUR swaptions (~1-2/day, often
+    zero). Returns dict(total, last_ingest, last_exec) or None."""
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return None
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT COUNT(*), MAX(ingested_utc), MAX(exec_utc) "
+                "FROM eu_iro_prints WHERE source = 'marketaxess'"
+            )
+            row = cur.fetchone()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            row = None
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass
+        if not row:
+            return None
+        return {"total": row[0] or 0, "last_ingest": row[1], "last_exec": row[2]}
+    except Exception:
+        return None
+
+
 def _fenics_heartbeat_read():
     """Read the auto-pull heartbeat the scheduled task writes. Returns dict or None.
     Tolerant of the table not existing yet."""
@@ -9232,6 +9266,35 @@ def eu_mifir_tab():
                          f"The IOTF token has likely expired — refresh it.")
         else:
             st.caption("⚪ ICAP (IOTF) feed: no prints recorded yet.")
+    except Exception:
+        pass
+
+    # ── TRAX APA (MarketAxess) supplementary feed status ──
+    try:
+        _trf = _trax_feed_freshness()
+        if _trf is not None and _trf.get("total"):
+            from datetime import datetime as _trtd, timezone as _trtz
+            _trage = "recently"
+            _trhrs = 999
+            try:
+                _tli = _trf["last_ingest"]
+                _tlid = _tli if hasattr(_tli, "tzinfo") else _trtd.fromisoformat(str(_tli))
+                if _tlid.tzinfo is None:
+                    _tlid = _tlid.replace(tzinfo=_trtz.utc)
+                _trhrs = (_trtd.now(_trtz.utc) - _tlid).total_seconds() / 3600.0
+                _trage = (f"{_trhrs/24:.1f}d ago" if _trhrs >= 24 else f"{_trhrs:.0f}h ago")
+            except Exception:
+                pass
+            _trexec = str(_trf.get("last_exec") or "")[:10]
+            if _trhrs <= 96:
+                st.caption(f"🟢 TRAX APA (MarketAxess) — {_trf['total']} swaption print(s) total, "
+                           f"last loaded {_trage} (latest trade {_trexec}). Supplementary, "
+                           f"unattributed EUR flow (~1–2/day, often zero).")
+            else:
+                st.caption(f"🟡 TRAX APA (MarketAxess) — {_trf['total']} total, last loaded "
+                           f"{_trage}. Run pull_trax.py daily (source retains only 3 days).")
+        else:
+            st.caption("⚪ TRAX APA (MarketAxess): no prints recorded yet — run pull_trax.py.")
     except Exception:
         pass
 
