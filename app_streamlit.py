@@ -2278,6 +2278,7 @@ def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
 
         # date range from the data itself (= the selected analysis window)
         _range = ""
+        _date_token = ""
         try:
             _dd = sorted(d.date() for d in _dates)
             if _dd:
@@ -2290,6 +2291,13 @@ def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
                     _range = f"{_ord(_a.day)} {_a.strftime('%B')} - {_ord(_b.day)} {_b.strftime('%B %Y')}"
                 else:
                     _range = f"{_ord(_a.day)} {_a.strftime('%B %Y')} - {_ord(_b.day)} {_b.strftime('%B %Y')}"
+                # filename date token, matching the title's date span
+                if _a == _b:
+                    _date_token = _a.strftime("%d%b%Y")
+                elif _a.year == _b.year:
+                    _date_token = f"{_a.strftime('%d%b')}-{_b.strftime('%d%b%Y')}"
+                else:
+                    _date_token = f"{_a.strftime('%d%b%Y')}-{_b.strftime('%d%b%Y')}"
         except Exception:
             _range = ""
 
@@ -2373,10 +2381,10 @@ def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
         except Exception:
             pdf_bytes = None
 
-        return xlsx_bytes, pdf_bytes, len(pdf_tbl)
+        return xlsx_bytes, pdf_bytes, len(pdf_tbl), _date_token
 
     except Exception:
-        return None, None, 0
+        return None, None, 0, ""
 
 
 def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Optional[bytes]:
@@ -11608,10 +11616,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                     # ── Clean print tape (Excel + PDF) — scannable "3m10y ATM 226" format ──
                     try:
-                        _tape_x, _tape_p, _tape_n = _sdr_clean_tape(
+                        _tape_x, _tape_p, _tape_n, _tape_date = _sdr_clean_tape(
                             _all_df_excel, _sdr_ccy, _tz_label)
                         if _tape_x or _tape_p:
-                            _tp_stub = f"SDR_Tape_{_sdr_ccy}_{_local_now.strftime('%d%b%y')}_{_local_now.strftime('%H%M')}{_tz_short}"
+                            _tp_datestr = _tape_date or _local_now.strftime("%d%b%Y")
+                            _tp_stub = f"SDR_Tape_{_sdr_ccy}_{_tp_datestr}"
                             _tp_c1, _tp_c2, _tp_c3 = st.columns([1, 1, 4])
                             with _tp_c1:
                                 if _tape_x:
