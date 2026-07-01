@@ -2189,67 +2189,113 @@ def publish_blotter_mids(ccy: str, mids: dict) -> int:
 
 
 def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
-    """Build a clean, scannable print tape from the SDR trades dataframe (_all_df_excel).
-    Returns (xlsx_bytes, pdf_bytes, line_list). One row per print:
-      Date/Time · CCY · Expiry · Tenor · Strike · Type · Prem(bp)
-    Straddles get '(ATM)' on the strike. R/R keeps its two strikes on its own line with
-    the paired Hedge line (which carries the bp) directly beneath — mirrors the Excel order.
-    Never raises; returns (None, None, []) on failure."""
+    """Client-facing SDR/DTCC print tape from the trades dataframe (_all_df_excel).
+    Returns (xlsx_bytes, pdf_bytes, n_prints).
+      - Excel: full columnar table (sortable/filterable) — unchanged shape.
+      - PDF: clean free-form one-line-per-trade tape for clients, e.g.
+          4:49:54 pm   1m 10y Straddle ATM (4.06750%)  @  125.00
+          4:08:57 pm   3m 10y 70w R/R  Pay:4.42375% / Rec:3.72375%  @  ---
+        Title: "{CCY} DTCC reported trades ({date range}) - {TZ} Time".
+    Never raises; returns (None, None, 0) on failure."""
     import re as _re_t
     from io import BytesIO as _BIO_t
+    # client-facing timezone word per currency (times are already in market tz)
+    _TZ_WORD = {"USD": "EST", "CAD": "EST", "EUR": "London", "GBP": "London",
+                "AUD": "Sydney", "NZD": "Auckland", "JPY": "Tokyo"}
+    _tzw = _TZ_WORD.get(ccy, tz_label or "")
+
+    def _clean(s):
+        s = "" if s is None else str(s)
+        s = _re_t.sub(r"[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F]", "", s)
+        s = _re_t.sub(r"\s*\[P\d+\]\s*", " ", s)
+        return s.strip()
+
+    def _ord(d):
+        return f"{d}{'th' if 11 <= d % 100 <= 13 else {1: 'st', 2: 'nd', 3: 'rd'}.get(d % 10, 'th')}"
+
     try:
         import pandas as _pd_t
         rows = df.copy()
-        # keep only real trade rows (drop any appended summary / hidden rows)
         if "Type" in rows.columns:
             rows = rows[rows["Type"].astype(str) != "__HIDE__"]
             rows = rows[rows["Type"].notna()]
-        def _clean(s):
-            s = "" if s is None else str(s)
-            # strip leading emoji / [P1]/[P2] tags / whitespace
-            s = _re_t.sub(r"[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F]", "", s)
-            s = _re_t.sub(r"\s*\[P\d+\]\s*", " ", s)
-            return s.strip()
-        def _tenor(exp, ten):
-            e = _clean(exp).lower().replace(" ", ""); t = _clean(ten).lower().replace(" ", "")
-            return f"{e}{t}" if (e and t) else (e or t)
-        def _short_type(tp):
-            c = _clean(tp)
-            if "straddle" in c.lower():
-                return "C/F Straddle" if "c/f" in c.lower() else "Straddle"
-            m = _re_t.search(r"R/R", c);  # noqa
-            if "r/r" in c.lower(): return c  # keep '3M 10Y 70w R/R'
-            if "strangle" in c.lower(): return c
-            return c or "—"
-        out_rows, lines = [], []
-        _dt_col = f"Date/Time ({tz_label})" if tz_label else "Date/Time"
+
+        out_rows = []      # columnar (Excel)
+        pdf_lines = []     # client lines (PDF)
+        _dates = []
         for _, r in rows.iterrows():
-            tp_raw = str(r.get("Type", ""))
-            tp = _short_type(tp_raw)
+            tp_raw = _clean(r.get("Type", ""))
             exp = _clean(r.get("Opt Expiry", "")); ten = _clean(r.get("Swp Tenor", ""))
-            tenor = _tenor(exp, ten)
             strike = _clean(r.get("Strike", ""))
-            is_straddle = "straddle" in tp_raw.lower()
-            strike_disp = (f"{strike} (ATM)" if (is_straddle and strike and strike != "—") else strike)
             prem = _clean(r.get("Nett Prem BP", ""))
-            if not prem or prem == "—":
-                # fall back to per-leg for single-sided payer/receiver
-                pl = _clean(r.get("P Prem BP", "")); rl = _clean(r.get("R Prem BP", ""))
-                prem = pl if (pl and pl != "—") else (rl if (rl and rl != "—") else "—")
+            if prem in ("", "-", "\u2014", "nan", "None"):
+                prem = "---"
+            tpl = tp_raw.lower()
+            is_straddle = "straddle" in tpl
+            is_hedge = "hedge" in tpl
+            is_rr = "r/r" in tpl
+            is_strangle = "strangle" in tpl
+
+            # type descriptor + strike block for the PDF line
+            if is_straddle:
+                _td = "C/F Straddle" if "c/f" in tpl else "Straddle"
+                _sb = f"ATM ({strike})" if strike and strike != "\u2014" else "ATM"
+            elif is_hedge:
+                _td = "Hedge"
+                _sb = f"ATM ({strike})" if strike and strike != "\u2014" else "ATM"
+            elif is_rr or is_strangle:
+                _kind = "R/R" if is_rr else "Strangle"
+                _m = _re_t.search(r"(\d+\.?\d*)\s*w", tp_raw)
+                _td = (f"{_m.group(1)}w {_kind}" if _m else _kind)
+                _sb = strike.replace("P:", "Pay:").replace("R:", "Rec:")
+            else:
+                _td = tp_raw or "\u2014"
+                _sb = f"({strike})" if strike and strike != "\u2014" else ""
+
+            # 12-hour time with seconds, e.g. "4:49:54 pm"
             tm = r.get("Time", "")
             try:
-                tm_s = _pd_t.to_datetime(tm).strftime("%d-%b %H:%M:%S")
+                _dtv = _pd_t.to_datetime(tm)
+                _dates.append(_dtv)
+                _tm12 = _dtv.strftime("%I:%M:%S %p")
+                if _tm12.startswith("0"):
+                    _tm12 = _tm12[1:]
+                _tm12 = _tm12.lower()
+                _tmexcel = _dtv.strftime("%d-%b %H:%M:%S")
             except Exception:
-                tm_s = str(tm)
-            out_rows.append({_dt_col: tm_s, "CCY": ccy, "Expiry": exp, "Tenor": ten,
-                             "Strike": strike_disp, "Type": tp, "Prem (bp)": prem})
-            # compact scannable line, e.g. "01-Jul 16:49  USD  1m10y  ATM  Straddle  125.0"
-            money = "ATM" if is_straddle else (strike or "")
-            lines.append(f"{tm_s}  {ccy}  {tenor or '—'}  {money}  {tp}  {prem}")
+                _tm12 = str(tm); _tmexcel = str(tm)
+
+            _tenpair = " ".join(x for x in (exp, ten) if x)
+            _line = f"{_tm12}   {_tenpair} {_td} {_sb}  @  {prem}".replace("  @", " @")
+            _line = _re_t.sub(r"\s{2,}", "  ", _line).strip()
+            pdf_lines.append(_line)
+
+            _strike_disp = (f"{strike} (ATM)" if ((is_straddle or is_hedge) and strike and strike != "\u2014") else strike)
+            out_rows.append({f"Date/Time ({tz_label})" if tz_label else "Date/Time": _tmexcel,
+                             "CCY": ccy, "Expiry": exp, "Tenor": ten,
+                             "Strike": _strike_disp, "Type": _td, "Prem (bp)": prem})
 
         tape_df = _pd_t.DataFrame(out_rows)
+        _dt_col = f"Date/Time ({tz_label})" if tz_label else "Date/Time"
 
-        # ---- Excel ----
+        # date range from the data itself (= the selected analysis window)
+        _range = ""
+        try:
+            _dd = sorted(d.date() for d in _dates)
+            if _dd:
+                _a, _b = _dd[0], _dd[-1]
+                if _a == _b:
+                    _range = f"{_ord(_a.day)} {_a.strftime('%B %Y')}"
+                elif _a.year == _b.year and _a.month == _b.month:
+                    _range = f"{_ord(_a.day)} - {_ord(_b.day)} {_a.strftime('%B %Y')}"
+                elif _a.year == _b.year:
+                    _range = f"{_ord(_a.day)} {_a.strftime('%B')} - {_ord(_b.day)} {_b.strftime('%B %Y')}"
+                else:
+                    _range = f"{_ord(_a.day)} {_a.strftime('%B %Y')} - {_ord(_b.day)} {_b.strftime('%B %Y')}"
+        except Exception:
+            _range = ""
+
+        # ---- Excel (columnar, sortable) ----
         xbuf = _BIO_t()
         try:
             with _pd_t.ExcelWriter(xbuf, engine="openpyxl") as _xw:
@@ -2262,7 +2308,7 @@ def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
                     _cell = _ws.cell(1, _j); _cell.fill = hf; _cell.font = hfont
                     _cell.alignment = _AL(horizontal="center")
                 widths = {_dt_col: 18, "CCY": 6, "Expiry": 9, "Tenor": 9,
-                          "Strike": 22, "Type": 22, "Prem (bp)": 11}
+                          "Strike": 22, "Type": 20, "Prem (bp)": 11}
                 for _j, _c in enumerate(tape_df.columns, start=1):
                     _ws.column_dimensions[_gcl(_j)].width = widths.get(_c, 12)
                 _ws.freeze_panes = "A2"
@@ -2270,47 +2316,43 @@ def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
         except Exception:
             xlsx_bytes = None
 
-        # ---- PDF (one-page scannable tape) ----
+        # ---- PDF (clean client tape, no columns) ----
         pdf_bytes = None
         try:
             from reportlab.lib.pagesizes import A4 as _A4
             from reportlab.lib import colors as _rc
             from reportlab.lib.units import mm as _mm
-            from reportlab.platypus import (SimpleDocTemplate as _SDT, Table as _T,
-                                            TableStyle as _TS, Paragraph as _P, Spacer as _SP)
-            from reportlab.lib.styles import getSampleStyleSheet as _gss
+            from reportlab.platypus import (SimpleDocTemplate as _SDT, Paragraph as _P,
+                                            Spacer as _SP)
+            from reportlab.lib.styles import getSampleStyleSheet as _gss, ParagraphStyle as _PS
             pbuf = _BIO_t()
-            doc = _SDT(pbuf, pagesize=_A4, topMargin=12 * _mm, bottomMargin=12 * _mm,
-                       leftMargin=10 * _mm, rightMargin=10 * _mm)
+            doc = _SDT(pbuf, pagesize=_A4, topMargin=14 * _mm, bottomMargin=14 * _mm,
+                       leftMargin=16 * _mm, rightMargin=16 * _mm)
             styles = _gss()
-            title = f"{ccy} SDR EOD print tape" + (f" — times {tz_label}" if tz_label else "")
-            data = [list(tape_df.columns)] + tape_df.astype(str).values.tolist()
-            tbl = _T(data, repeatRows=1)
-            tstyle = [
-                ("BACKGROUND", (0, 0), (-1, 0), _rc.HexColor("#1F3864")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), _rc.white),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, -1), 7.5),
-                ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [_rc.white, _rc.HexColor("#F2F4F8")]),
-                ("GRID", (0, 0), (-1, -1), 0.25, _rc.HexColor("#BFBFBF")),
-                ("ALIGN", (1, 0), (1, -1), "CENTER"),
-                ("ALIGN", (6, 0), (6, -1), "RIGHT"),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("TOPPADDING", (0, 0), (-1, -1), 2),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-            ]
-            tbl.setStyle(_TS(tstyle))
-            elems = [_P(title, styles["Heading2"]),
-                     _P(f"{len(tape_df)} prints", styles["Normal"]), _SP(1, 4 * _mm), tbl]
+            _title = f"{ccy} DTCC reported trades"
+            if _range:
+                _title += f" ({_range})"
+            if _tzw:
+                _title += f" &ndash; {_tzw} Time"
+            _hstyle = _PS("h", parent=styles["Heading2"], fontName="Helvetica-Bold",
+                          fontSize=13, spaceAfter=2)
+            _sub = _PS("s", parent=styles["Normal"], fontSize=8.5,
+                       textColor=_rc.HexColor("#666666"), spaceAfter=8)
+            _row = _PS("r", parent=styles["Normal"], fontName="Courier",
+                       fontSize=9.5, leading=15)
+            elems = [_P(_title, _hstyle),
+                     _P(f"{len(pdf_lines)} prints", _sub), _SP(1, 2 * _mm)]
+            for _ln in pdf_lines:
+                _safe = (_ln.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+                elems.append(_P(_safe, _row))
             doc.build(elems)
             pbuf.seek(0); pdf_bytes = pbuf.getvalue()
         except Exception:
             pdf_bytes = None
 
-        return xlsx_bytes, pdf_bytes, lines
+        return xlsx_bytes, pdf_bytes, len(pdf_lines)
     except Exception:
-        return None, None, []
+        return None, None, 0
 
 
 def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Optional[bytes]:
@@ -11542,7 +11584,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                     # ── Clean print tape (Excel + PDF) — scannable "3m10y ATM 226" format ──
                     try:
-                        _tape_x, _tape_p, _tape_lines = _sdr_clean_tape(
+                        _tape_x, _tape_p, _tape_n = _sdr_clean_tape(
                             _all_df_excel, _sdr_ccy, _tz_label)
                         if _tape_x or _tape_p:
                             _tp_stub = f"SDR_Tape_{_sdr_ccy}_{_local_now.strftime('%d%b%y')}_{_local_now.strftime('%H%M')}{_tz_short}"
@@ -11564,7 +11606,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 elif _tape_x:
                                     st.caption("PDF unavailable (reportlab not installed).")
                             with _tp_c3:
-                                st.caption(f"Clean {_sdr_ccy} tape — {len(_tape_lines)} prints, "
+                                st.caption(f"Clean {_sdr_ccy} tape — {_tape_n} prints, "
                                            f"one line each (straddles marked ATM).")
                     except Exception:
                         pass
