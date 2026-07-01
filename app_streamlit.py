@@ -2222,6 +2222,7 @@ def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
             if "strangle" in c.lower(): return c
             return c or "—"
         out_rows, lines = [], []
+        _dt_col = f"Date/Time ({tz_label})" if tz_label else "Date/Time"
         for _, r in rows.iterrows():
             tp_raw = str(r.get("Type", ""))
             tp = _short_type(tp_raw)
@@ -2240,7 +2241,7 @@ def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
                 tm_s = _pd_t.to_datetime(tm).strftime("%d-%b %H:%M:%S")
             except Exception:
                 tm_s = str(tm)
-            out_rows.append({"Date/Time": tm_s, "CCY": ccy, "Expiry": exp, "Tenor": ten,
+            out_rows.append({_dt_col: tm_s, "CCY": ccy, "Expiry": exp, "Tenor": ten,
                              "Strike": strike_disp, "Type": tp, "Prem (bp)": prem})
             # compact scannable line, e.g. "01-Jul 16:49  USD  1m10y  ATM  Straddle  125.0"
             money = "ATM" if is_straddle else (strike or "")
@@ -2260,7 +2261,7 @@ def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
                 for _j, _c in enumerate(tape_df.columns, start=1):
                     _cell = _ws.cell(1, _j); _cell.fill = hf; _cell.font = hfont
                     _cell.alignment = _AL(horizontal="center")
-                widths = {"Date/Time": 18, "CCY": 6, "Expiry": 9, "Tenor": 9,
+                widths = {_dt_col: 18, "CCY": 6, "Expiry": 9, "Tenor": 9,
                           "Strike": 22, "Type": 22, "Prem (bp)": 11}
                 for _j, _c in enumerate(tape_df.columns, start=1):
                     _ws.column_dimensions[_gcl(_j)].width = widths.get(_c, 12)
