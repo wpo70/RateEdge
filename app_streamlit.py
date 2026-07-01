@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0107.GBP.b"
+APP_VERSION = "v0107.GBP.c"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -16639,14 +16639,13 @@ def curves_tab():
                     use_container_width=True, hide_index=True, height=820)
             else:
                 st.info("Click **\u25b6 Generate GBP Forward Matrix** to compute.")
-        return
 
 
     # ── Chart toggles (AUD/NZD only) ─────────────────────────────────────────
     # AUD/NZD chart — defaults so USD/EUR path through try block is harmless
     # ⛔ LOCKED (v0705g): AUD/NZD branches DO NOT MODIFY.
     _show_par = _show_irs = _show_ois = _show_b6 = _show_b3 = False
-    if ccy not in ("USD", "EUR"):
+    if ccy not in ("USD", "EUR", "GBP"):
         _ck = st.columns(5)
         with _ck[0]: _show_par = st.checkbox("IRS Par", value=True, key="chart_par")
         with _ck[1]: _show_irs = st.checkbox("IRS Zero", value=True, key="chart_irs")
@@ -16654,7 +16653,7 @@ def curves_tab():
         with _ck[3]: _show_b6  = st.checkbox("6v3 Basis", value=True, key="chart_b6")
         with _ck[4]: _show_b3  = st.checkbox("3v1 Basis", value=True, key="chart_b3")
 
-    if ccy not in ("USD", "EUR"):
+    if ccy not in ("USD", "EUR", "GBP"):
      try:
         fig = go.Figure()
         if _show_par:
@@ -16717,7 +16716,7 @@ def curves_tab():
      except Exception as _e:
         st.warning(f"Chart: {_e}")
 
-    if ccy not in ("USD", "EUR"):
+    if ccy not in ("USD", "EUR", "GBP"):
      with st.expander("IRS Par Rates & Curve Data", expanded=False):
         _cols_to_show = []
         if ccy == "USD": pass  # no AUD data tables for USD
@@ -16764,7 +16763,7 @@ def curves_tab():
 
     # ── IRS Forward Matrix (AUD/NZD only) ────────────────────────────────────────
     # ⛔ LOCKED: USD has its own matrix (above), EUR has its own matrix (above).
-    if ccy not in ("USD", "EUR"):
+    if ccy not in ("USD", "EUR", "GBP"):
         if "fwd_matrix"   not in st.session_state: st.session_state["fwd_matrix"]   = {}
         if "basis_matrix" not in st.session_state: st.session_state["basis_matrix"] = {}
         if "fwd_section_open" not in st.session_state: st.session_state["fwd_section_open"] = True
