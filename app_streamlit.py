@@ -2221,7 +2221,7 @@ def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
             rows = rows[rows["Type"].notna()]
 
         out_rows = []      # columnar (Excel)
-        pdf_lines = []     # client lines (PDF)
+        pdf_tbl = []       # structured rows (PDF table)
         _dates = []
         for _, r in rows.iterrows():
             tp_raw = _clean(r.get("Type", ""))
@@ -2265,10 +2265,8 @@ def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
             except Exception:
                 _tm12 = str(tm); _tmexcel = str(tm)
 
-            _tenpair = " ".join(x for x in (exp, ten) if x)
-            _line = f"{_tm12}   {_tenpair} {_td} {_sb}  @  {prem}".replace("  @", " @")
-            _line = _re_t.sub(r"\s{2,}", "  ", _line).strip()
-            pdf_lines.append(_line)
+            pdf_tbl.append({"time": _tm12, "exp": exp or "\u2014", "ten": ten or "\u2014",
+                            "struct": _td, "strike": _sb or "\u2014", "prem": prem})
 
             _strike_disp = (f"{strike} (ATM)" if ((is_straddle or is_hedge) and strike and strike != "\u2014") else strike)
             out_rows.append({f"Date/Time ({tz_label})" if tz_label else "Date/Time": _tmexcel,
@@ -2316,18 +2314,18 @@ def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
         except Exception:
             xlsx_bytes = None
 
-        # ---- PDF (clean client tape, no columns) ----
+        # ---- PDF (clean client table) ----
         pdf_bytes = None
         try:
             from reportlab.lib.pagesizes import A4 as _A4
             from reportlab.lib import colors as _rc
             from reportlab.lib.units import mm as _mm
-            from reportlab.platypus import (SimpleDocTemplate as _SDT, Paragraph as _P,
-                                            Spacer as _SP)
+            from reportlab.platypus import (SimpleDocTemplate as _SDT, Table as _T,
+                                            TableStyle as _TS, Paragraph as _P, Spacer as _SP)
             from reportlab.lib.styles import getSampleStyleSheet as _gss, ParagraphStyle as _PS
             pbuf = _BIO_t()
             doc = _SDT(pbuf, pagesize=_A4, topMargin=14 * _mm, bottomMargin=14 * _mm,
-                       leftMargin=16 * _mm, rightMargin=16 * _mm)
+                       leftMargin=14 * _mm, rightMargin=14 * _mm)
             styles = _gss()
             _title = f"{ccy} DTCC reported trades"
             if _range:
@@ -2335,22 +2333,48 @@ def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
             if _tzw:
                 _title += f" &ndash; {_tzw} Time"
             _hstyle = _PS("h", parent=styles["Heading2"], fontName="Helvetica-Bold",
-                          fontSize=13, spaceAfter=2)
+                          fontSize=13, spaceAfter=1)
             _sub = _PS("s", parent=styles["Normal"], fontSize=8.5,
                        textColor=_rc.HexColor("#666666"), spaceAfter=8)
-            _row = _PS("r", parent=styles["Normal"], fontName="Courier",
-                       fontSize=9.5, leading=15)
-            elems = [_P(_title, _hstyle),
-                     _P(f"{len(pdf_lines)} prints", _sub), _SP(1, 2 * _mm)]
-            for _ln in pdf_lines:
-                _safe = (_ln.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
-                elems.append(_P(_safe, _row))
+            # table columns: Time | Expiry | Tenor | Structure | Strike | Prem (bp)
+            _head = ["Time", "Expiry", "Tenor", "Structure", "Strike", "Prem (bp)"]
+            _data = [_head]
+            for _pr in pdf_tbl:
+                _data.append([_pr["time"], _pr["exp"], _pr["ten"],
+                              _pr["struct"], _pr["strike"], _pr["prem"]])
+            _colw = [26*_mm, 18*_mm, 16*_mm, 30*_mm, 62*_mm, 20*_mm]
+            _tbl = _T(_data, colWidths=_colw, repeatRows=1)
+            _tstyle = [
+                ("BACKGROUND", (0, 0), (-1, 0), _rc.HexColor("#1F3864")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), _rc.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, 0), 8.5),
+                ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 1), (-1, -1), 8.5),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [_rc.white, _rc.HexColor("#EEF2F8")]),
+                ("LINEBELOW", (0, 0), (-1, 0), 0.6, _rc.HexColor("#1F3864")),
+                ("LINEBELOW", (0, 1), (-1, -2), 0.2, _rc.HexColor("#D9D9D9")),
+                ("ALIGN", (0, 0), (0, -1), "LEFT"),
+                ("ALIGN", (1, 0), (2, -1), "CENTER"),
+                ("ALIGN", (3, 0), (3, -1), "LEFT"),
+                ("ALIGN", (4, 0), (4, -1), "LEFT"),
+                ("ALIGN", (5, 0), (5, -1), "RIGHT"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ]
+            _tbl.setStyle(_TS(_tstyle))
+            elems = [_P(_title, _hstyle), _P(f"{len(pdf_tbl)} prints", _sub),
+                     _SP(1, 2 * _mm), _tbl]
             doc.build(elems)
             pbuf.seek(0); pdf_bytes = pbuf.getvalue()
         except Exception:
             pdf_bytes = None
 
-        return xlsx_bytes, pdf_bytes, len(pdf_lines)
+        return xlsx_bytes, pdf_bytes, len(pdf_tbl)
+
     except Exception:
         return None, None, 0
 
