@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0107.GBP.a"
+APP_VERSION = "v0107.GBP.b"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -16549,6 +16549,41 @@ def curves_tab():
             xaxis_title="Maturity (Y)", yaxis_title="Rate (%)", height=420,
             legend=dict(orientation="h", y=1.1), margin=dict(l=40, r=40, t=40, b=40))
         st.plotly_chart(_gbp_fig, use_container_width=True)
+
+        # ── GBP Curve Data tables (SONIA zero + par) — mirrors USD/EUR ──
+        def _gbp_mat_to_tenor(_y):
+            _map = [(1/52,"1w"),(1/12,"1m"),(2/12,"2m"),(3/12,"3m"),(4/12,"4m"),
+                    (5/12,"5m"),(6/12,"6m"),(9/12,"9m"),(1.0,"1y"),(1.5,"18m"),
+                    (2.0,"2y"),(3.0,"3y"),(4.0,"4y"),(5.0,"5y"),(6.0,"6y"),(7.0,"7y"),
+                    (8.0,"8y"),(9.0,"9y"),(10.0,"10y"),(12.0,"12y"),(15.0,"15y"),
+                    (20.0,"20y"),(25.0,"25y"),(30.0,"30y"),(35.0,"35y"),(40.0,"40y"),
+                    (50.0,"50y"),(60.0,"60y")]
+            for _v,_lbl in _map:
+                if abs(_y-_v) < 0.005: return _lbl
+            return f"{_y:.4g}Y"
+        def _gbp_relabel(_df):
+            if _df is None or _df.empty: return _df
+            _dc = _df.copy()
+            if "MaturityY" in _dc.columns:
+                _dc["MaturityY"] = _dc["MaturityY"].apply(_gbp_mat_to_tenor)
+            return _dc
+
+        with st.expander("GBP Curve Data", expanded=False):
+            _gbp_tcols = st.columns(2)
+            with _gbp_tcols[0]:
+                st.caption("\U0001F535 Bootstrapped SONIA Zero (%) \u2014 used for pricing")
+                if _sonia_zero is not None and not _sonia_zero.empty:
+                    st.dataframe(
+                        _gbp_relabel(_sonia_zero).rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Zero(%)"}).style.format({"Zero(%)":"{:.4f}"}),
+                        use_container_width=True, hide_index=True)
+            with _gbp_tcols[1]:
+                st.caption("\u26AA Par SONIA OIS (%) \u2014 market input")
+                if _sonia_par is not None and not _sonia_par.empty:
+                    st.dataframe(
+                        _gbp_relabel(_sonia_par).rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Par(%)"}).style.format({"Par(%)":"{:.4f}"}),
+                        use_container_width=True, hide_index=True)
+                else:
+                    st.caption("(reload GBP curve to populate)")
 
         st.session_state.setdefault("gbp_fwd_matrix", {})
         if "gbp_fwd_section_open" not in st.session_state:
