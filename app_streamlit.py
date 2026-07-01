@@ -2188,6 +2188,130 @@ def publish_blotter_mids(ccy: str, mids: dict) -> int:
         return 0
 
 
+def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
+    """Build a clean, scannable print tape from the SDR trades dataframe (_all_df_excel).
+    Returns (xlsx_bytes, pdf_bytes, line_list). One row per print:
+      Date/Time · CCY · Expiry · Tenor · Strike · Type · Prem(bp)
+    Straddles get '(ATM)' on the strike. R/R keeps its two strikes on its own line with
+    the paired Hedge line (which carries the bp) directly beneath — mirrors the Excel order.
+    Never raises; returns (None, None, []) on failure."""
+    import re as _re_t
+    from io import BytesIO as _BIO_t
+    try:
+        import pandas as _pd_t
+        rows = df.copy()
+        # keep only real trade rows (drop any appended summary / hidden rows)
+        if "Type" in rows.columns:
+            rows = rows[rows["Type"].astype(str) != "__HIDE__"]
+            rows = rows[rows["Type"].notna()]
+        def _clean(s):
+            s = "" if s is None else str(s)
+            # strip leading emoji / [P1]/[P2] tags / whitespace
+            s = _re_t.sub(r"[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F]", "", s)
+            s = _re_t.sub(r"\s*\[P\d+\]\s*", " ", s)
+            return s.strip()
+        def _tenor(exp, ten):
+            e = _clean(exp).lower().replace(" ", ""); t = _clean(ten).lower().replace(" ", "")
+            return f"{e}{t}" if (e and t) else (e or t)
+        def _short_type(tp):
+            c = _clean(tp)
+            if "straddle" in c.lower():
+                return "C/F Straddle" if "c/f" in c.lower() else "Straddle"
+            m = _re_t.search(r"R/R", c);  # noqa
+            if "r/r" in c.lower(): return c  # keep '3M 10Y 70w R/R'
+            if "strangle" in c.lower(): return c
+            return c or "—"
+        out_rows, lines = [], []
+        for _, r in rows.iterrows():
+            tp_raw = str(r.get("Type", ""))
+            tp = _short_type(tp_raw)
+            exp = _clean(r.get("Opt Expiry", "")); ten = _clean(r.get("Swp Tenor", ""))
+            tenor = _tenor(exp, ten)
+            strike = _clean(r.get("Strike", ""))
+            is_straddle = "straddle" in tp_raw.lower()
+            strike_disp = (f"{strike} (ATM)" if (is_straddle and strike and strike != "—") else strike)
+            prem = _clean(r.get("Nett Prem BP", ""))
+            if not prem or prem == "—":
+                # fall back to per-leg for single-sided payer/receiver
+                pl = _clean(r.get("P Prem BP", "")); rl = _clean(r.get("R Prem BP", ""))
+                prem = pl if (pl and pl != "—") else (rl if (rl and rl != "—") else "—")
+            tm = r.get("Time", "")
+            try:
+                tm_s = _pd_t.to_datetime(tm).strftime("%d-%b %H:%M:%S")
+            except Exception:
+                tm_s = str(tm)
+            out_rows.append({"Date/Time": tm_s, "CCY": ccy, "Expiry": exp, "Tenor": ten,
+                             "Strike": strike_disp, "Type": tp, "Prem (bp)": prem})
+            # compact scannable line, e.g. "01-Jul 16:49  USD  1m10y  ATM  Straddle  125.0"
+            money = "ATM" if is_straddle else (strike or "")
+            lines.append(f"{tm_s}  {ccy}  {tenor or '—'}  {money}  {tp}  {prem}")
+
+        tape_df = _pd_t.DataFrame(out_rows)
+
+        # ---- Excel ----
+        xbuf = _BIO_t()
+        try:
+            with _pd_t.ExcelWriter(xbuf, engine="openpyxl") as _xw:
+                tape_df.to_excel(_xw, index=False, sheet_name=f"{ccy} Tape")
+                _ws = _xw.sheets[f"{ccy} Tape"]
+                from openpyxl.styles import Font as _F, PatternFill as _PF, Alignment as _AL
+                from openpyxl.utils import get_column_letter as _gcl
+                hf = _PF("solid", fgColor="1F3864"); hfont = _F(bold=True, color="FFFFFF")
+                for _j, _c in enumerate(tape_df.columns, start=1):
+                    _cell = _ws.cell(1, _j); _cell.fill = hf; _cell.font = hfont
+                    _cell.alignment = _AL(horizontal="center")
+                widths = {"Date/Time": 18, "CCY": 6, "Expiry": 9, "Tenor": 9,
+                          "Strike": 22, "Type": 22, "Prem (bp)": 11}
+                for _j, _c in enumerate(tape_df.columns, start=1):
+                    _ws.column_dimensions[_gcl(_j)].width = widths.get(_c, 12)
+                _ws.freeze_panes = "A2"
+            xbuf.seek(0); xlsx_bytes = xbuf.getvalue()
+        except Exception:
+            xlsx_bytes = None
+
+        # ---- PDF (one-page scannable tape) ----
+        pdf_bytes = None
+        try:
+            from reportlab.lib.pagesizes import A4 as _A4
+            from reportlab.lib import colors as _rc
+            from reportlab.lib.units import mm as _mm
+            from reportlab.platypus import (SimpleDocTemplate as _SDT, Table as _T,
+                                            TableStyle as _TS, Paragraph as _P, Spacer as _SP)
+            from reportlab.lib.styles import getSampleStyleSheet as _gss
+            pbuf = _BIO_t()
+            doc = _SDT(pbuf, pagesize=_A4, topMargin=12 * _mm, bottomMargin=12 * _mm,
+                       leftMargin=10 * _mm, rightMargin=10 * _mm)
+            styles = _gss()
+            title = f"{ccy} SDR EOD print tape" + (f" — times {tz_label}" if tz_label else "")
+            data = [list(tape_df.columns)] + tape_df.astype(str).values.tolist()
+            tbl = _T(data, repeatRows=1)
+            tstyle = [
+                ("BACKGROUND", (0, 0), (-1, 0), _rc.HexColor("#1F3864")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), _rc.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+                ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [_rc.white, _rc.HexColor("#F2F4F8")]),
+                ("GRID", (0, 0), (-1, -1), 0.25, _rc.HexColor("#BFBFBF")),
+                ("ALIGN", (1, 0), (1, -1), "CENTER"),
+                ("ALIGN", (6, 0), (6, -1), "RIGHT"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ]
+            tbl.setStyle(_TS(tstyle))
+            elems = [_P(title, styles["Heading2"]),
+                     _P(f"{len(tape_df)} prints", styles["Normal"]), _SP(1, 4 * _mm), tbl]
+            doc.build(elems)
+            pbuf.seek(0); pdf_bytes = pbuf.getvalue()
+        except Exception:
+            pdf_bytes = None
+
+        return xlsx_bytes, pdf_bytes, lines
+    except Exception:
+        return None, None, []
+
+
 def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Optional[bytes]:
     """Export vol surface (ATM + optionally SABR) to Excel file"""
     from io import BytesIO
@@ -11414,6 +11538,35 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             st.caption(f"⚠️ Auto-save failed: {_autosave_err}")
                         elif _autosaved_path:
                             st.caption(f"💾 Last auto-saved to `{_autosaved_path}`")
+
+                    # ── Clean print tape (Excel + PDF) — scannable "3m10y ATM 226" format ──
+                    try:
+                        _tape_x, _tape_p, _tape_lines = _sdr_clean_tape(
+                            _all_df_excel, _sdr_ccy, _tz_label)
+                        if _tape_x or _tape_p:
+                            _tp_stub = f"SDR_Tape_{_sdr_ccy}_{_local_now.strftime('%d%b%y')}_{_local_now.strftime('%H%M')}{_tz_short}"
+                            _tp_c1, _tp_c2, _tp_c3 = st.columns([1, 1, 4])
+                            with _tp_c1:
+                                if _tape_x:
+                                    st.download_button(
+                                        "⬇ Clean tape (Excel)", data=_tape_x,
+                                        file_name=f"{_tp_stub}.xlsx",
+                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                        key="_sdr_tape_xlsx_dl")
+                            with _tp_c2:
+                                if _tape_p:
+                                    st.download_button(
+                                        "⬇ Clean tape (PDF)", data=_tape_p,
+                                        file_name=f"{_tp_stub}.pdf",
+                                        mime="application/pdf",
+                                        key="_sdr_tape_pdf_dl")
+                                elif _tape_x:
+                                    st.caption("PDF unavailable (reportlab not installed).")
+                            with _tp_c3:
+                                st.caption(f"Clean {_sdr_ccy} tape — {len(_tape_lines)} prints, "
+                                           f"one line each (straddles marked ATM).")
+                    except Exception:
+                        pass
 
                     st.caption(f"Times shown in **{_tz_label}**")
 
