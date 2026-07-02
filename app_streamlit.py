@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0207.GBP.h"
+APP_VERSION = "v0207.GBP.i"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -27737,6 +27737,21 @@ def vol_surface_editor_tab():
     st.markdown("---")
     if atm is not None:
         atm = atm.copy()
+        # Restore the canonical 22-row Expiry ladder by position if the surface
+        # arrived headless (e.g. via the SDR fitter / paste / direct-write paths).
+        # Mirrors the snapshot-load restore so the Edit Grid can NEVER render with a
+        # bare 0/1/2… index. Catches every upstream path at the render boundary.
+        if len(atm) == 22:
+            _CANON_EXP = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y",
+                          "5y","6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
+            if "Expiry" not in atm.columns and "expiry" not in [str(c).lower() for c in atm.columns]:
+                atm = atm.reset_index(drop=True)
+                atm.insert(0, "Expiry", _CANON_EXP)
+            else:
+                _ecol = next((c for c in atm.columns if str(c).lower() == "expiry"), None)
+                if _ecol is not None and pd.api.types.is_numeric_dtype(atm[_ecol]):
+                    atm = atm.reset_index(drop=True)
+                    atm[_ecol] = _CANON_EXP
         # Rename lowercase expiry to Expiry
         if "expiry" in atm.columns and "Expiry" not in atm.columns:
             atm = atm.rename(columns={"expiry": "Expiry"})
