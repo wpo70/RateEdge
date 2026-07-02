@@ -2227,14 +2227,26 @@ def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
             tp_raw = _clean(r.get("Type", ""))
             exp = _clean(r.get("Opt Expiry", "")); ten = _clean(r.get("Swp Tenor", ""))
             strike = _clean(r.get("Strike", ""))
-            prem = _clean(r.get("Nett Prem BP", ""))
-            if prem in ("", "-", "\u2014", "nan", "None"):
-                prem = "---"
             tpl = tp_raw.lower()
             is_straddle = "straddle" in tpl
             is_hedge = "hedge" in tpl
             is_rr = "r/r" in tpl
             is_strangle = "strangle" in tpl
+            # premium in bp. R/R uses the NET LEG premium ('Nett Leg BP (R/R)', e.g. 9.5bp);
+            # 'Nett Prem BP' there is the GROSS P+R sum (e.g. 90.5) which is the STRANGLE
+            # premium — correct for a strangle, wrong for an R/R.
+            _prem_raw = ""
+            if is_rr:
+                _prem_raw = _clean(r.get("Nett Leg BP (R/R)", ""))
+            if _prem_raw in ("", "-", "\u2014", "nan", "None"):
+                _prem_raw = _clean(r.get("Nett Prem BP", ""))
+            if _prem_raw in ("", "-", "\u2014", "nan", "None"):
+                prem = "---"
+            else:
+                try:
+                    prem = f"{float(_prem_raw):.2f}"
+                except Exception:
+                    prem = _prem_raw
 
             # type descriptor + strike block for the PDF line
             if is_straddle:
