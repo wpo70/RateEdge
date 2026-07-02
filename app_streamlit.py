@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0207.GBP.b"
+APP_VERSION = "v0207.GBP.c"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -2199,9 +2199,10 @@ def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
     Never raises; returns (None, None, 0) on failure."""
     import re as _re_t
     from io import BytesIO as _BIO_t
-    # tz word for the title is supplied by the caller (it reflects the tz the blotter
-    # actually converted times to — the sidebar CCY — which may differ from the naming CCY).
-    _tzw = tz_label or ""
+    # client-facing timezone word per currency (times are already in market tz)
+    _TZ_WORD = {"USD": "EST", "CAD": "EST", "EUR": "London", "GBP": "London",
+                "AUD": "Sydney", "NZD": "Auckland", "JPY": "Tokyo"}
+    _tzw = _TZ_WORD.get(ccy, tz_label or "")
 
     def _clean(s):
         s = "" if s is None else str(s)
@@ -5517,7 +5518,13 @@ def set_timestamp(category: str, ccy: str):
 
 def get_basis_curve(ccy: str, basis_type: str = "6v3") -> Optional[pd.DataFrame]:
     """Get basis curve for currency"""
-    return st.session_state.get("basis_curves", {}).get(ccy, {}).get(basis_type)
+    _bc = st.session_state.get("basis_curves", {}).get(ccy, {}).get(basis_type)
+    if _bc is None and ccy == "GBP" and basis_type == "ois":
+        # GBP SONIA is single-curve: SONIA discounts SONIA. There is no separate
+        # OIS basis leg, so the OIS discount curve IS the SONIA curve itself.
+        # Fixes discounting at every CFS/swaption ois-resolution site at once.
+        return st.session_state.get("config_curves", {}).get("GBP")
+    return _bc
 
 
 def set_basis_curve(ccy: str, basis_type: str, df: pd.DataFrame):
@@ -11615,30 +11622,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                     # ── Clean print tape (Excel + PDF) — scannable "3m10y ATM 226" format ──
                     try:
-                        # Currency for naming/title comes from the DATA (whatever the SDR
-                        # filter actually returned), not just the sidebar — so multi-CCY or
-                        # an overridden filter still names correctly. TZ word comes from the
-                        # sidebar CCY, since the blotter converts all times to that tz.
-                        try:
-                            _tape_ccys = [str(c) for c in _all_df_excel["CCY"].dropna().unique()
-                                          if str(c) and str(c) != "__HIDE__"]
-                        except Exception:
-                            _tape_ccys = []
-                        if len(_tape_ccys) == 1:
-                            _tape_ccy = _tape_ccys[0]
-                        elif len(_tape_ccys) > 1:
-                            _tape_ccy = "-".join(sorted(_tape_ccys))
-                        else:
-                            _tape_ccy = _sdr_ccy
-                        _TZ_WORD_SDR = {"USD": "EST", "CAD": "EST", "EUR": "London",
-                                        "GBP": "London", "AUD": "Sydney", "NZD": "Auckland",
-                                        "JPY": "Tokyo"}
-                        _tz_word = _TZ_WORD_SDR.get(_sdr_ccy, _tz_label or "")
                         _tape_x, _tape_p, _tape_n, _tape_date = _sdr_clean_tape(
-                            _all_df_excel, _tape_ccy, _tz_word)
+                            _all_df_excel, _sdr_ccy, _tz_label)
                         if _tape_x or _tape_p:
                             _tp_datestr = _tape_date or _local_now.strftime("%d%b%Y")
-                            _tp_stub = f"SDR_Tape_{_tape_ccy}_{_tp_datestr}"
+                            _tp_stub = f"SDR_Tape_{_sdr_ccy}_{_tp_datestr}"
                             _tp_c1, _tp_c2, _tp_c3 = st.columns([1, 1, 4])
                             with _tp_c1:
                                 if _tape_x:
@@ -11657,7 +11645,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 elif _tape_x:
                                     st.caption("PDF unavailable (reportlab not installed).")
                             with _tp_c3:
-                                st.caption(f"Clean {_tape_ccy} tape — {_tape_n} prints, "
+                                st.caption(f"Clean {_sdr_ccy} tape — {_tape_n} prints, "
                                            f"one line each (straddles marked ATM).")
                     except Exception:
                         pass
@@ -22014,6 +22002,11 @@ def caps_floors_tab(vol_mode: str):
                 "cf_spr_3y1y":11.0, "cf_spr_4y1y":12.5, "cf_spr_5y2y":38.5,
                 "cf_spr_7y3y":78.5, "cf_spr_10y2y":55.0, "cf_spr_12y3y":82.0,
                 "cf_spr_15v20":-3.0, "cf_spr_20v30":-3.0},
+        # GBP baseline — placeholder (EUR levels); tune in-tab once marked.
+        "GBP": {"cf_spr_3m1y":3.0,  "cf_spr_1y1y":9.5,  "cf_spr_2y1y":10.0,
+                "cf_spr_3y1y":11.0, "cf_spr_4y1y":12.5, "cf_spr_5y2y":38.5,
+                "cf_spr_7y3y":78.5, "cf_spr_10y2y":55.0, "cf_spr_12y3y":82.0,
+                "cf_spr_15v20":-3.0, "cf_spr_20v30":-3.0},
     }
     _prev_ccy = st.session_state.get("_cf_last_active_ccy")
     if _prev_ccy != ccy:
@@ -22041,8 +22034,8 @@ def caps_floors_tab(vol_mode: str):
             if _k in _cf_spread_keys:
                 _v_float = float(_v)
                 st.session_state[_k] = _v_float
-                if ccy == "EUR":
-                    # v1105j: EUR-only — seed _temp and _new widget keys to the new value
+                if ccy in ("EUR", "GBP"):
+                    # v1105j: EUR/GBP — seed _temp and _new widget keys to the new value
                     # instead of popping. Popping caused EUR's first wedge edit to be lost.
                     # AUD/USD/NZD keep the original pop behavior (locked path).
                     st.session_state[f"{_k}_temp"] = _v_float
@@ -22495,7 +22488,7 @@ def caps_floors_tab(vol_mode: str):
                 # so un-discount at df(3m) — the gap then prints fwd_swaption + wedge.
                 # AUD/NZD keep df(first_fixing).
                 try:
-                    _ff_y_use = 0.25 if ccy in ("USD", "EUR") else first_fixing_y
+                    _ff_y_use = 0.25 if ccy in ("USD", "EUR", "GBP") else first_fixing_y
                     _r_ff = interpolate_zero(ois_curve, _ff_y_use)
                     _df_ff = math.exp(-_r_ff * _ff_y_use)
                     pv_bp_fwd = pv_bp / _df_ff if _df_ff > 0 else pv_bp
@@ -22507,7 +22500,7 @@ def caps_floors_tab(vol_mode: str):
                 # (= fwd swaption + wedge). This is the exact cumulative-forward the table
                 # produced; reading it here makes the standalone immune to OTC-curve
                 # staleness / interpolation drift. spot = FWD CFS × df(3m); PV from spot.
-                if ccy in ("USD", "EUR"):
+                if ccy in ("USD", "EUR", "GBP"):
                     _gap_map = {("3m", 1.0): "3m1y", ("1y", 2.0): "1y1y", ("2y", 3.0): "2y1y",
                                 ("3y", 4.0): "3y1y", ("4y", 5.0): "4y1y", ("5y", 7.0): "5y2y",
                                 ("7y", 10.0): "7y3y", ("10y", 12.0): "10y2y"}
@@ -23033,20 +23026,21 @@ def caps_floors_tab(vol_mode: str):
                             _fv_use = _usd_wedge_fwd_prem(_exp_w, _ten_w) if (_exp_w and _ten_w) else None
                             if _fv_use is None:
                                 _fv_use = _fv
-                        elif ccy == "EUR":
-                            # EUR: FORWARD swaption premium straight from atm_prem_matrix (_fv),
-                            # same fwd + wedge construction as USD. AUD/NZD stay spot-based.
+                        elif ccy in ("EUR", "GBP"):
+                            # EUR/GBP: FORWARD swaption premium straight from atm_prem_matrix
+                            # (_fv), same fwd + wedge construction as USD. AUD/NZD stay spot-based.
+                            # GBP discounts the 3m fwd-start on SONIA (get_basis_curve GBP branch).
                             _fv_use = _fv
                         else:
                             _fv_use = None
 
-                        if ccy in ("USD", "EUR") and _fv_use is not None:
+                        if ccy in ("USD", "EUR", "GBP") and _fv_use is not None:
                             try:
                                 if ccy == "USD":
                                     _crv_3m = st.session_state.get("config_curves", {}).get("USD")
                                 else:
-                                    _crv_3m = st.session_state.get("config_basis", {}).get("EUR", {}).get("ois")
-                                    if _crv_3m is None: _crv_3m = get_basis_curve("EUR", "ois")
+                                    _crv_3m = st.session_state.get("config_basis", {}).get(ccy, {}).get("ois")
+                                    if _crv_3m is None: _crv_3m = get_basis_curve(ccy, "ois")
                                 _df_3m = df_from_curve(_crv_3m, 0.25) if _crv_3m is not None else math.exp(-0.04 * 0.25)
                             except Exception:
                                 _df_3m = math.exp(-0.04 * 0.25)
@@ -23111,7 +23105,7 @@ def caps_floors_tab(vol_mode: str):
 
                 # ── Vol spread row for 20y → 30y extension (not a wedge) ──
                 # Rendered for AUD, USD, EUR; NZD stops at 20Y.
-                if ccy in ("AUD", "USD", "EUR"):
+                if ccy in ("AUD", "USD", "EUR", "GBP"):
                     _vs_cols30 = st.columns(CW)
                     _vs_cols30[0].markdown(f"<div style='{_fs};color:#f59e0b'>20y vs 30y Vol Spd</div>", unsafe_allow_html=True)
                     _spread_20v30_last = st.session_state.get("cf_spr_20v30", -5.0)
@@ -24936,7 +24930,7 @@ def caps_floors_tab(vol_mode: str):
                 (7, "5y2y"), (10, "7y3y"), (12, "10y2y"), (15, "12y3y"),
                 (20, "ext_15v20"),
             ]
-            if ccy in ("AUD", "USD", "EUR"):
+            if ccy in ("AUD", "USD", "EUR", "GBP"):
                 _CFS_MAP.append((30, "ext_20v30"))
             _cfs_tdata = st.session_state.get("cfs_table_data", {})
             _caplet_vc = st.session_state.get(f"caplet_vol_curve_{ccy}")
