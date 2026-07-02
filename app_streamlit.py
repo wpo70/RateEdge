@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0207.GBP.j"
+APP_VERSION = "v0307.GBP.a"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -23058,6 +23058,28 @@ def caps_floors_tab(vol_mode: str):
                                 _df_3m = math.exp(-0.04 * 0.25)
                             fwd_swpt_str = f"{_fv_use:.4f}"    # Swptn col = live pricer fwd prem (76.75)
                             cfs_fwd  = _fv_use + new_val       # FORWARD CFS (76.75 + 18 = 94.75)
+                            # ── LISTED override (v0307.GBP.a) ────────────────────────────
+                            # When a wedge row is superseded by the Listed Front (SR3), its CFS
+                            # point must be driven by the LISTED straddle strip, not the OTC
+                            # fwd_swpt + wedge — otherwise the FWD CFS column never moves when
+                            # the listed vols move. Mirror the existing cfs_straddle override
+                            # (L~23710) — same pack gating + straddle-difference methodology —
+                            # but in FORWARD space (spot / df3m) so the displayed column tracks
+                            # the listed vols. Falls back to the OTC value above whenever a
+                            # listed straddle is missing. USD only; OTC rows untouched.
+                            if _row_skipped and ccy == "USD" and _df_3m > 0:
+                                _lfc_ovr = st.session_state.get("_cfs_listed_build_cache") or {}
+                                _s1o = _lfc_ovr.get("stradd_1y"); _s2o = _lfc_ovr.get("stradd_2y"); _s3o = _lfc_ovr.get("stradd_3y")
+                                _lf_pack_ovr = st.session_state.get("_cfs_listed_pack", "whites")
+                                _listed_spot_ovr = None
+                                if tbl_lbl == "3m1y" and _s1o and _s1o > 0:
+                                    _listed_spot_ovr = _s1o
+                                elif tbl_lbl == "1y1y" and _lf_pack_ovr in ("both", "greens") and _s1o and _s2o and _s2o > _s1o:
+                                    _listed_spot_ovr = _s2o - _s1o
+                                elif tbl_lbl == "2y1y" and _lf_pack_ovr == "greens" and _s2o and _s3o and _s3o > _s2o:
+                                    _listed_spot_ovr = _s3o - _s2o
+                                if _listed_spot_ovr is not None:
+                                    cfs_fwd = _listed_spot_ovr / _df_3m
                             # store the LIVE forward + FWD CFS (full precision) so CALCULATE and
                             # the standalone use the same number as the Swptn/FWD CFS columns,
                             # not the 2dp atm_prem_matrix value.
