@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0207.GBP.c"
+APP_VERSION = "v0207.GBP.e"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -20431,27 +20431,12 @@ def _recalibrate_usd_alpha_to_atm():
 
 
 def _ensure_usd_alpha_sticky():
-    """Run the USD sticky-ATM alpha recal once per surface change, gated by a
-    signature over the atm/rho/nu matrices (+ load hash). Alpha is excluded from
-    the signature (it's what we write) so there's no loop. Safe to call from any
-    USD pricing tab — the shared session signature means it executes once and the
-    other tabs inherit the recalibrated alpha. USD only."""
-    try:
-        _vdu = st.session_state.get("vol_data", {}).get("USD", {})
-        _sig_parts = [st.session_state.get("_atm_hash_USD", 0)]
-        for _kk in ("atm", "rho", "nu"):
-            _mm = _vdu.get(_kk)
-            if _mm is not None:
-                try:
-                    _sig_parts.append(int(pd.util.hash_pandas_object(_mm, index=False).sum()))
-                except Exception:
-                    _sig_parts.append(0)
-        _usd_sig = hash(tuple(_sig_parts))
-        if st.session_state.get("_usd_alpha_recal_sig") != _usd_sig:
-            _recalibrate_usd_alpha_to_atm()
-            st.session_state["_usd_alpha_recal_sig"] = _usd_sig
-    except Exception:
-        pass
+    """DISABLED (v0207.GBP.e): USD alpha recalibration is MANUAL only. Alpha is left
+    exactly as loaded from the snapshot and is re-solved ONLY when the user clicks
+    'Recalibrate Alpha (Sticky-ATM)'. This is a deliberate no-op kept so existing
+    call sites stay harmless — no auto-recal on surface or curve changes. To restore
+    automatic sticky-ATM behaviour, reinstate the signature/recal body here."""
+    return
 
 
 @st.fragment
