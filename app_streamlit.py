@@ -2199,10 +2199,9 @@ def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
     Never raises; returns (None, None, 0) on failure."""
     import re as _re_t
     from io import BytesIO as _BIO_t
-    # client-facing timezone word per currency (times are already in market tz)
-    _TZ_WORD = {"USD": "EST", "CAD": "EST", "EUR": "London", "GBP": "London",
-                "AUD": "Sydney", "NZD": "Auckland", "JPY": "Tokyo"}
-    _tzw = _TZ_WORD.get(ccy, tz_label or "")
+    # tz word for the title is supplied by the caller (it reflects the tz the blotter
+    # actually converted times to — the sidebar CCY — which may differ from the naming CCY).
+    _tzw = tz_label or ""
 
     def _clean(s):
         s = "" if s is None else str(s)
@@ -11616,11 +11615,30 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                     # ── Clean print tape (Excel + PDF) — scannable "3m10y ATM 226" format ──
                     try:
+                        # Currency for naming/title comes from the DATA (whatever the SDR
+                        # filter actually returned), not just the sidebar — so multi-CCY or
+                        # an overridden filter still names correctly. TZ word comes from the
+                        # sidebar CCY, since the blotter converts all times to that tz.
+                        try:
+                            _tape_ccys = [str(c) for c in _all_df_excel["CCY"].dropna().unique()
+                                          if str(c) and str(c) != "__HIDE__"]
+                        except Exception:
+                            _tape_ccys = []
+                        if len(_tape_ccys) == 1:
+                            _tape_ccy = _tape_ccys[0]
+                        elif len(_tape_ccys) > 1:
+                            _tape_ccy = "-".join(sorted(_tape_ccys))
+                        else:
+                            _tape_ccy = _sdr_ccy
+                        _TZ_WORD_SDR = {"USD": "EST", "CAD": "EST", "EUR": "London",
+                                        "GBP": "London", "AUD": "Sydney", "NZD": "Auckland",
+                                        "JPY": "Tokyo"}
+                        _tz_word = _TZ_WORD_SDR.get(_sdr_ccy, _tz_label or "")
                         _tape_x, _tape_p, _tape_n, _tape_date = _sdr_clean_tape(
-                            _all_df_excel, _sdr_ccy, _tz_label)
+                            _all_df_excel, _tape_ccy, _tz_word)
                         if _tape_x or _tape_p:
                             _tp_datestr = _tape_date or _local_now.strftime("%d%b%Y")
-                            _tp_stub = f"SDR_Tape_{_sdr_ccy}_{_tp_datestr}"
+                            _tp_stub = f"SDR_Tape_{_tape_ccy}_{_tp_datestr}"
                             _tp_c1, _tp_c2, _tp_c3 = st.columns([1, 1, 4])
                             with _tp_c1:
                                 if _tape_x:
@@ -11639,7 +11657,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 elif _tape_x:
                                     st.caption("PDF unavailable (reportlab not installed).")
                             with _tp_c3:
-                                st.caption(f"Clean {_sdr_ccy} tape — {_tape_n} prints, "
+                                st.caption(f"Clean {_tape_ccy} tape — {_tape_n} prints, "
                                            f"one line each (straddles marked ATM).")
                     except Exception:
                         pass
