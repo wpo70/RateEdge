@@ -35859,7 +35859,10 @@ def main():
             or (st.session_state.get("_sdr_filter_shadow", {}) or {}).get("sdr_refresh_interval")
             or "30s")
     _ref_ms = {"15s": 15000, "30s": 30000, "60s": 60000}.get(_ref)
-    if _ref_ms:
+    # Never auto-refresh while the Vol Editor tab is active — a timed rerun there
+    # discards the user's unsaved dragged points on the loaded/fitted surface.
+    _on_vol_editor = st.session_state.get("_main_nav") == "✅ Vol Editor"
+    if _ref_ms and not _on_vol_editor:
         try:
             from streamlit_autorefresh import st_autorefresh
             st_autorefresh(interval=_ref_ms, key="_sdr_global_autorefresh")
