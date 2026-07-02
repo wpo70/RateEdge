@@ -35848,10 +35848,11 @@ def _sdr_global_alert_poll():
         if _first_run:
             for r in rows:
                 _seen.add(r[0])
-                if _newest_ts is None or (r[6] is not None and r[6] > _newest_ts):
-                    _newest_ts = r[6]
-            if _newest_ts is not None:
-                st.session_state["_sdr_global_since"] = _newest_ts
+            from datetime import datetime as _dtw, timezone as _tzw2
+            # cursor = login wall (UTC now): only trades executed AFTER login can toast;
+            # anything already traded before login stays behind the cursor and never alerts,
+            # even if DTCC disseminates it into the table later.
+            st.session_state["_sdr_global_since"] = _dtw.now(_tzw2.utc).replace(tzinfo=None)
             return
         # rows are newest-first; toast oldest-first so order reads naturally
         _fresh = [r for r in rows if r[0] not in _seen]
