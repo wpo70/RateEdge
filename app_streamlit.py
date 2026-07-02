@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0207.GBP.i"
+APP_VERSION = "v0207.GBP.j"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -27735,23 +27735,35 @@ def vol_surface_editor_tab():
             st.caption("Loads EUR implied open from SOD Report. Run SOD Report first.")
 
     st.markdown("---")
+
+    def _stamp_canon_expiry(_s):
+        """Guarantee a 22-row surface has a real STRING Expiry column WITHOUT
+        consuming a tenor column. Headless (no Expiry col) -> INSERT the canonical
+        ladder as col-0, keeping every tenor incl. 1Y. Numeric Expiry (0/1/2 index)
+        -> relabel by position. EOD/snapshot surfaces already carry string labels ->
+        untouched. This is what makes fitted-surface loads render with BOTH an
+        Expiry column and a 1Y column, exactly like EOD loads."""
+        if _s is None:
+            return _s
+        try:
+            if len(_s) != 22:
+                return _s
+            _CANON = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y",
+                      "5y","6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
+            _ec = next((c for c in _s.columns if str(c).lower() == "expiry"), None)
+            if _ec is None:
+                _s = _s.reset_index(drop=True)
+                _s.insert(0, "Expiry", _CANON)
+            elif pd.api.types.is_numeric_dtype(_s[_ec]):
+                _s = _s.reset_index(drop=True)
+                _s[_ec] = _CANON
+        except Exception:
+            pass
+        return _s
+
     if atm is not None:
         atm = atm.copy()
-        # Restore the canonical 22-row Expiry ladder by position if the surface
-        # arrived headless (e.g. via the SDR fitter / paste / direct-write paths).
-        # Mirrors the snapshot-load restore so the Edit Grid can NEVER render with a
-        # bare 0/1/2… index. Catches every upstream path at the render boundary.
-        if len(atm) == 22:
-            _CANON_EXP = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y",
-                          "5y","6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
-            if "Expiry" not in atm.columns and "expiry" not in [str(c).lower() for c in atm.columns]:
-                atm = atm.reset_index(drop=True)
-                atm.insert(0, "Expiry", _CANON_EXP)
-            else:
-                _ecol = next((c for c in atm.columns if str(c).lower() == "expiry"), None)
-                if _ecol is not None and pd.api.types.is_numeric_dtype(atm[_ecol]):
-                    atm = atm.reset_index(drop=True)
-                    atm[_ecol] = _CANON_EXP
+        atm = _stamp_canon_expiry(atm)
         # Rename lowercase expiry to Expiry
         if "expiry" in atm.columns and "Expiry" not in atm.columns:
             atm = atm.rename(columns={"expiry": "Expiry"})
@@ -27778,6 +27790,15 @@ def vol_surface_editor_tab():
     if ccy not in _ve["working"] and atm is not None and not atm.empty:
         _ve["working"][ccy] = atm.copy()
         _ve["base"][ccy] = atm.copy()
+    # The editor renders ve["working"]/ve["base"], NOT the atm arg — so stamp the
+    # canonical Expiry ladder onto THOSE frames too. Fix for fitted / SDR / paste
+    # loads arriving as a headless [1Y..30Y] matrix: without this the Edit Values
+    # grid treats the 1Y column as Expiry and both are lost. EOD loads already carry
+    # string Expiry labels and pass through untouched.
+    if ccy in _ve["working"]:
+        _ve["working"][ccy] = _stamp_canon_expiry(_ve["working"][ccy])
+    if ccy in _ve["base"]:
+        _ve["base"][ccy] = _stamp_canon_expiry(_ve["base"][ccy])
     # Render the unified editor with mode toggle (Hybrid vs 3D Drag)
     updated_surface = render_vol_surface_editor_unified(ccy, atm, curve, ois_curve)
 
