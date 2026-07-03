@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0307.GBP.f"
+APP_VERSION = "v0307.GBP.g"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -23523,6 +23523,11 @@ def caps_floors_tab(vol_mode: str):
                     _lf_pack_now,
                     _lf_cutoff,
                     tuple(sorted(st.session_state.get("_cfs_white_selected", []) or [])),
+                    # v0307.GBP.g: reds/greens selections were missing from the
+                    # sig — ticking/unticking a red or green contract served a
+                    # stale listed term curve.
+                    tuple(sorted(st.session_state.get("_cfs_red_selected", []) or [])),
+                    tuple(sorted(st.session_state.get("_cfs_green_selected", []) or [])),
                     tuple(sorted(
                         (c, e.get("listed_adj_mode"),
                          round(float(e.get("listed_adj_ratio") or 1.0), 6),
@@ -23809,7 +23814,23 @@ def caps_floors_tab(vol_mode: str):
         # (d) EUR cache mismatch (built for different ccy)
         _listed_curve_stale = (_listed_cached is not None and _listed_cached.get("curve") is None
                                and ccy == "USD" and _listed_1y_stradd is not None and _listed_1y_stradd > 0)
-        _need_build = _calc_requested or (_otc_cached is None) or _listed_curve_stale or _ccy_mismatch
+        # v0307.GBP.g (USD only): the listed build cache sig previously was
+        # (_spreads_tuple, _atm_hash) ONLY — no listed state. Changing pack,
+        # ticking contracts, committing edits, or loading a new SR3 snapshot
+        # did NOT trigger a rebuild, so "Listed bootstrap" kept serving a
+        # stale curve (often the None built before anything was ticked) and
+        # the pricer silently fell back to OTC numbers. The sig now includes
+        # _lf_cache_sig (pack, cutoff, whites/reds/greens selections,
+        # committed edits, snapshot label). AUD/EUR/GBP unaffected
+        # (_lf_cache_sig is None and the term is gated on ccy=="USD").
+        _listed_sig_now = (_spreads_tuple, _atm_hash, _lf_cache_sig)
+        _listed_sig_mismatch = (
+            ccy == "USD"
+            and _listed_cached is not None
+            and _listed_cached.get("sig") != _listed_sig_now
+        )
+        _need_build = (_calc_requested or (_otc_cached is None) or _listed_curve_stale
+                       or _ccy_mismatch or _listed_sig_mismatch)
 
         if _need_build:
             _otc_curve_built = _call_build_otc(_spreads_dict)
@@ -23823,7 +23844,7 @@ def caps_floors_tab(vol_mode: str):
             else:
                 _listed_curve_built = None
             st.session_state["_cfs_listed_build_cache"] = {
-                "sig": (_spreads_tuple, _atm_hash),
+                "sig": _listed_sig_now,
                 "curve": _listed_curve_built,
                 "ccy":   ccy,
             }
@@ -23983,11 +24004,15 @@ def caps_floors_tab(vol_mode: str):
                 round(max(tenor_y + 0.5, 10.0), 2),
             )
             _sr3_cache = st.session_state.get("_cfs_sr3_curves_cache")
-            if _need_build or not _sr3_cache:
+            # v0307.GBP.g: _sr3_sig was computed above but NEVER compared —
+            # SR3 hybrid/full served stale curves after cutoff/edit/snapshot
+            # changes. Now stored and checked.
+            if _need_build or not _sr3_cache or _sr3_cache.get("sig") != _sr3_sig:
                 _final_y = max(tenor_y + 0.5, 10.0)
                 sr3_hybrid_curve = _call_build_sr3_hybrid(_sr3_cutoff_y, otc_caplet_curve, _final_y)
                 sr3_full_curve   = _call_build_sr3_full(otc_caplet_curve, _final_y)
                 st.session_state["_cfs_sr3_curves_cache"] = {
+                    "sig":    _sr3_sig,
                     "hybrid": sr3_hybrid_curve,
                     "full":   sr3_full_curve,
                 }
@@ -24003,6 +24028,22 @@ def caps_floors_tab(vol_mode: str):
                 "SR3 full":         sr3_full_curve or otc_caplet_curve,
             }
             caplet_vol_curve = dict(_curves_by_src.get(_active_src, otc_caplet_curve))
+            # v0307.GBP.g: NEVER fall back to OTC silently. If the active feed
+            # is Listed bootstrap but the listed curve didn't build, say so
+            # loudly with the reason chain — this was giving OTC numbers in
+            # the pricer with no indication.
+            if _active_src == "Listed bootstrap" and not _listed_curve_built:
+                if not (st.session_state.get("sr3_grid_data") or _load_sr3_latest_usd()):
+                    _lb_why = "no SR3 snapshot loaded"
+                elif not (st.session_state.get("_cfs_white_selected") or set()):
+                    _lb_why = "no white contracts ticked in the Listed Front editor"
+                elif _listed_term_curve is None or not _listed_term_curve:
+                    _lb_why = "listed term curve empty (check contract expiry dates / delivered vols)"
+                elif _listed_1y_stradd is None or _listed_1y_stradd <= 0:
+                    _lb_why = "listed 1Y straddle could not be priced (SOFR curve loaded?)"
+                else:
+                    _lb_why = "wedge-chain solve failed (see WARN caption above)"
+                st.warning(f"⚠️ **Listed bootstrap curve NOT built — pricing on OTC.** Reason: {_lb_why}.")
             st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
             # v2604c debug: show which curve is active and why
             _dbg_listed = _listed_curve_built is not None and len(_listed_curve_built or {}) > 0
