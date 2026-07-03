@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0207.GBP.m"
+APP_VERSION = "v0307.GBP.d"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -24211,15 +24211,24 @@ def caps_floors_tab(vol_mode: str):
                         st.rerun()
                     st.session_state["_cfs_listed_type"] = _type_mode
                     # Seed once, then rely on key= (avoids index=/key= race)
-                    _pack_labels = ["Whites only (4 rows)", "Whites + Reds (8 rows)",
-                                    "Whites + Reds + Greens (12 rows)"]
+                    _pack_labels_all = ["Whites only (4 rows)", "Whites + Reds (8 rows)",
+                                        "Whites + Reds + Greens (12 rows)"]
                     _pack_lbl_for = {
-                        "whites": _pack_labels[0],
-                        "both":   _pack_labels[1],
-                        "greens": _pack_labels[2],
+                        "whites": _pack_labels_all[0],
+                        "both":   _pack_labels_all[1],
+                        "greens": _pack_labels_all[2],
                     }
-                    if "_cfs_pack_radio" not in st.session_state:
-                        st.session_state["_cfs_pack_radio"] = _pack_lbl_for.get(_prev_pack, _pack_labels[0])
+                    # Serials only exist in the front year -> only the whites depth is valid.
+                    # Constrain the options up-front so the invalid (serials + wider pack)
+                    # state can never be selected. This removes the post-widget reset that
+                    # raised StreamlitAPIException and could spin in a rerun loop.
+                    _pack_labels = _pack_labels_all[:1] if _type_mode == "serials" else _pack_labels_all
+                    # Seed / repair the widget key BEFORE instantiation (legal). If the stored
+                    # value isn't a current option (e.g. serials just selected while a wider
+                    # pack was stored), reset to a valid option here — never after the widget.
+                    _seed_pack = _pack_labels[0] if _type_mode == "serials" else _pack_lbl_for.get(_prev_pack, _pack_labels[0])
+                    if st.session_state.get("_cfs_pack_radio") not in _pack_labels:
+                        st.session_state["_cfs_pack_radio"] = _seed_pack
                     _pack_sel = st.radio(
                         "Pack selection",
                         _pack_labels,
@@ -24236,12 +24245,6 @@ def caps_floors_tab(vol_mode: str):
                         st.session_state["_cfs_listed_pack"] = _pack_mode
                         st.rerun()
                     st.session_state["_cfs_listed_pack"] = _pack_mode
-                    if _type_mode == "serials" and _pack_mode != "whites":
-                        # Serials only exist in the front year → 1Y/whites depth only.
-                        _pack_mode = "whites"
-                        st.session_state["_cfs_listed_pack"] = "whites"
-                        st.session_state["_cfs_pack_radio"] = _pack_labels[0]
-                        st.rerun()
                 else:
                     _pack_mode = "whites"
             with _le_col3:
@@ -35864,28 +35867,13 @@ def _sdr_global_alert_poll():
             # cursor = login wall (UTC now): only trades executed AFTER login can toast;
             # anything already traded before login stays behind the cursor and never alerts,
             # even if DTCC disseminates it into the table later.
-            _wall = _dtw.now(_tzw2.utc).replace(tzinfo=None)
-            st.session_state["_sdr_global_since"] = _wall
-            st.session_state["_sdr_login_wall"] = _wall
+            st.session_state["_sdr_global_since"] = _dtw.now(_tzw2.utc).replace(tzinfo=None)
             return
         # rows are newest-first; toast oldest-first so order reads naturally
         _fresh = [r for r in rows if r[0] not in _seen]
         for r in reversed(_fresh[:8]):   # cap toasts per tick
             _did, _ccy, _ot, _swp, _prem, _plat, _ts, _pc = r
             _seen.add(_did)
-            # Fail-closed: never toast a trade executed at/before login. This catches any
-            # pre-login print the query let through (stale cursor, tz quirk, seen-set reset),
-            # so a closed market produces zero toasts regardless.
-            _wall = st.session_state.get("_sdr_login_wall")
-            if _wall is not None:
-                _tscmp = _ts
-                try:
-                    if _tscmp is not None and getattr(_tscmp, "tzinfo", None) is not None:
-                        _tscmp = _tscmp.replace(tzinfo=None)
-                except Exception:
-                    _tscmp = _ts
-                if _tscmp is None or _tscmp <= _wall:
-                    continue
             if _newest_ts is None or (_ts is not None and _ts > _newest_ts):
                 _newest_ts = _ts
             try:
