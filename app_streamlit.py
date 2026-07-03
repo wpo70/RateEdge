@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0307.GBP.c"
+APP_VERSION = "v0207.GBP.m"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -24240,10 +24240,7 @@ def caps_floors_tab(vol_mode: str):
                         # Serials only exist in the front year → 1Y/whites depth only.
                         _pack_mode = "whites"
                         st.session_state["_cfs_listed_pack"] = "whites"
-                        # Cannot ASSIGN a widget key after the radio is instantiated
-                        # (StreamlitAPIException). Delete it instead — the rerun re-seeds
-                        # it from _prev_pack (now "whites") via the init block above.
-                        st.session_state.pop("_cfs_pack_radio", None)
+                        st.session_state["_cfs_pack_radio"] = _pack_labels[0]
                         st.rerun()
                 else:
                     _pack_mode = "whites"
@@ -35867,13 +35864,28 @@ def _sdr_global_alert_poll():
             # cursor = login wall (UTC now): only trades executed AFTER login can toast;
             # anything already traded before login stays behind the cursor and never alerts,
             # even if DTCC disseminates it into the table later.
-            st.session_state["_sdr_global_since"] = _dtw.now(_tzw2.utc).replace(tzinfo=None)
+            _wall = _dtw.now(_tzw2.utc).replace(tzinfo=None)
+            st.session_state["_sdr_global_since"] = _wall
+            st.session_state["_sdr_login_wall"] = _wall
             return
         # rows are newest-first; toast oldest-first so order reads naturally
         _fresh = [r for r in rows if r[0] not in _seen]
         for r in reversed(_fresh[:8]):   # cap toasts per tick
             _did, _ccy, _ot, _swp, _prem, _plat, _ts, _pc = r
             _seen.add(_did)
+            # Fail-closed: never toast a trade executed at/before login. This catches any
+            # pre-login print the query let through (stale cursor, tz quirk, seen-set reset),
+            # so a closed market produces zero toasts regardless.
+            _wall = st.session_state.get("_sdr_login_wall")
+            if _wall is not None:
+                _tscmp = _ts
+                try:
+                    if _tscmp is not None and getattr(_tscmp, "tzinfo", None) is not None:
+                        _tscmp = _tscmp.replace(tzinfo=None)
+                except Exception:
+                    _tscmp = _ts
+                if _tscmp is None or _tscmp <= _wall:
+                    continue
             if _newest_ts is None or (_ts is not None and _ts > _newest_ts):
                 _newest_ts = _ts
             try:
