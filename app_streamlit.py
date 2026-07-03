@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0307.GBP.e"
+APP_VERSION = "v0307.GBP.f"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -24118,21 +24118,37 @@ def caps_floors_tab(vol_mode: str):
                 caplet_vol_curve     = _extend_usd_curve_to_30y(caplet_vol_curve)
                 st.session_state[f"caplet_vol_curve_{ccy}"] = caplet_vol_curve
 
-            st.session_state["_cfs_otc_curve"]        = otc_caplet_curve
-            st.session_state["_cfs_listed_bootstrap"] = _listed_curve_built
-            st.session_state["_cfs_sr3_hybrid"]       = sr3_hybrid_curve
-            st.session_state["_cfs_sr3_full"]         = sr3_full_curve
-            if ccy == "USD":
-                st.session_state["_cfs_overlay_sel"]   = _overlay_choices
+            # v0307.GBP.f: overlay selection updates every render (cheap; it
+            # feeds _chart_sig, so an overlay change redraws the chart via
+            # sig mismatch — no cache pops needed for that).
+            st.session_state["_cfs_overlay_sel"] = _overlay_choices
 
-            # Clear calc flag AFTER all builds complete — not before
-            st.session_state.pop("_cfs_calc_requested", None)
-            # Force ATM CFS table to recompute with fresh curve data
-            st.session_state.pop("_atm_cfs_cache_key", None)
-            st.session_state.pop("_atm_cfs_rows_cache", None)
-            # Force chart to recompute
-            st.session_state.pop("_cfs_chart_sig", None)
-            st.session_state.pop("_cfs_chart_fig", None)
+            # v0307.GBP.f FIX — USD calc loop: this store/pop block was
+            # UNCONDITIONAL, so on EVERY render it popped the ATM CFS table
+            # cache (_atm_cfs_cache_key/_atm_cfs_rows_cache) and the chart
+            # cache (_cfs_chart_sig/_cfs_chart_fig) → full caplet repricing +
+            # CubicSpline chart rebuild on every rerun (incl. the 30s SDR
+            # autorefresh) → CFS tab permanently "calculating". This is the
+            # exact bug the EUR twin below already fixes with its _need_build
+            # gate (see v1105n note there). Now gated the same way.
+            # Side fix: the unconditional _cfs_calc_requested pop was also
+            # swallowing the feed-change flag set earlier this render
+            # (v2804h auto-rebuild), so switching Active pricer feed never
+            # actually rebuilt. Gated, the flag survives to the next render.
+            if _need_build:
+                st.session_state["_cfs_otc_curve"]        = otc_caplet_curve
+                st.session_state["_cfs_listed_bootstrap"] = _listed_curve_built
+                st.session_state["_cfs_sr3_hybrid"]       = sr3_hybrid_curve
+                st.session_state["_cfs_sr3_full"]         = sr3_full_curve
+
+                # Clear calc flag AFTER all builds complete — not before
+                st.session_state.pop("_cfs_calc_requested", None)
+                # Force ATM CFS table to recompute with fresh curve data
+                st.session_state.pop("_atm_cfs_cache_key", None)
+                st.session_state.pop("_atm_cfs_rows_cache", None)
+                # Force chart to recompute
+                st.session_state.pop("_cfs_chart_sig", None)
+                st.session_state.pop("_cfs_chart_fig", None)
 
 
             # ═════════════════════════════════════════════════════════════
