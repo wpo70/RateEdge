@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0307.cfs.b"
+APP_VERSION = "v0307.cfs.d"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -23759,8 +23759,21 @@ def caps_floors_tab(vol_mode: str):
                                             and _listed_2y_stradd and _listed_2y_stradd > 0)
                                else 1.0)
                     # Only pass front vols up to cutoff
-                    _front = {k: v for k, v in _listed_term_curve.items()
-                              if k <= _cutoff + 1e-6} if _listed_term_curve else None
+                    # v0307.cfs.c: SANITIZE — drop None/NaN/<=0 quarters. One
+                    # bad SR3 quarter was reaching CubicSpline/least_squares
+                    # and killing the ENTIRE listed build ("wedge-chain solve
+                    # failed"). A bad quarter now drops out and the spline
+                    # interpolates through it.
+                    _front = None
+                    if _listed_term_curve:
+                        _front = {
+                            k: float(v) for k, v in _listed_term_curve.items()
+                            if k <= _cutoff + 1e-6
+                            and v is not None
+                            and isinstance(v, (int, float))
+                            and math.isfinite(float(v))
+                            and float(v) > 0
+                        } or None
                     _built = build_caplet_vol_curve(
                         ccy, atm, None,
                         spread_3m1y=spreads_dict["3m1y"],
@@ -23788,7 +23801,7 @@ def caps_floors_tab(vol_mode: str):
                     if _save_1y1y:
                         _cfs_td["1y1y"] = _save_1y1y
             except Exception as _e:
-                st.caption(f"WARN Listed bootstrap build failed: {_e}")
+                st.caption(f"WARN Listed bootstrap build failed: {type(_e).__name__}: {_e}")
                 return None
 
         def _call_build_sr3_hybrid(cutoff_y, otc_fallback, final_y):
@@ -36049,7 +36062,11 @@ def main():
     _ref_ms = {"15s": 15000, "30s": 30000, "60s": 60000}.get(_ref)
     # Never auto-refresh while the Vol Editor tab is active — a timed rerun there
     # discards the user's unsaved dragged points on the loaded/fitted surface.
-    _on_vol_editor = st.session_state.get("_main_nav") == "✅ Vol Editor"
+    # v0307.cfs.d: ALSO suspended on the Caps & Floors (CFS) tab — the timed
+    # rerun keeps re-driving the CFS render while the pricer is being fixed
+    # ("calculation loop"). Re-enable by removing the second condition once
+    # the CFS tab is stable. SDR toasts still fire on every other tab.
+    _on_vol_editor = st.session_state.get("_main_nav") in ("✅ Vol Editor", "🔔 Caps & Floors")
     if _ref_ms and not _on_vol_editor:
         try:
             from streamlit_autorefresh import st_autorefresh
