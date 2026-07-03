@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0307.GBP.d"
+APP_VERSION = "v0307.GBP.e"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -24211,24 +24211,20 @@ def caps_floors_tab(vol_mode: str):
                         st.rerun()
                     st.session_state["_cfs_listed_type"] = _type_mode
                     # Seed once, then rely on key= (avoids index=/key= race)
-                    _pack_labels_all = ["Whites only (4 rows)", "Whites + Reds (8 rows)",
-                                        "Whites + Reds + Greens (12 rows)"]
+                    _pack_labels = ["Whites only (4 rows)", "Whites + Reds (8 rows)",
+                                    "Whites + Reds + Greens (12 rows)"]
                     _pack_lbl_for = {
-                        "whites": _pack_labels_all[0],
-                        "both":   _pack_labels_all[1],
-                        "greens": _pack_labels_all[2],
+                        "whites": _pack_labels[0],
+                        "both":   _pack_labels[1],
+                        "greens": _pack_labels[2],
                     }
-                    # Serials only exist in the front year -> only the whites depth is valid.
-                    # Constrain the options up-front so the invalid (serials + wider pack)
-                    # state can never be selected. This removes the post-widget reset that
-                    # raised StreamlitAPIException and could spin in a rerun loop.
-                    _pack_labels = _pack_labels_all[:1] if _type_mode == "serials" else _pack_labels_all
-                    # Seed / repair the widget key BEFORE instantiation (legal). If the stored
-                    # value isn't a current option (e.g. serials just selected while a wider
-                    # pack was stored), reset to a valid option here — never after the widget.
-                    _seed_pack = _pack_labels[0] if _type_mode == "serials" else _pack_lbl_for.get(_prev_pack, _pack_labels[0])
-                    if st.session_state.get("_cfs_pack_radio") not in _pack_labels:
-                        st.session_state["_cfs_pack_radio"] = _seed_pack
+                    if "_cfs_pack_radio" not in st.session_state:
+                        st.session_state["_cfs_pack_radio"] = _pack_lbl_for.get(_prev_pack, _pack_labels[0])
+                    # Pre-widget whites reset (legal). The serials guard below raises this flag
+                    # and reruns; we apply the reset HERE, before the widget is created, so we
+                    # never assign the widget key AFTER instantiation (StreamlitAPIException).
+                    if st.session_state.pop("_force_pack_whites", False):
+                        st.session_state["_cfs_pack_radio"] = _pack_labels[0]
                     _pack_sel = st.radio(
                         "Pack selection",
                         _pack_labels,
@@ -24245,6 +24241,14 @@ def caps_floors_tab(vol_mode: str):
                         st.session_state["_cfs_listed_pack"] = _pack_mode
                         st.rerun()
                     st.session_state["_cfs_listed_pack"] = _pack_mode
+                    if _type_mode == "serials" and _pack_mode != "whites":
+                        # Serials only exist in the front year -> whites depth only.
+                        _pack_mode = "whites"
+                        st.session_state["_cfs_listed_pack"] = "whites"
+                        # Defer the radio reset to the PRE-widget seed (flag), never assign
+                        # the widget key after instantiation.
+                        st.session_state["_force_pack_whites"] = True
+                        st.rerun()
                 else:
                     _pack_mode = "whites"
             with _le_col3:
