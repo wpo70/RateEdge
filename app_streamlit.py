@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0307.cfs.a"
+APP_VERSION = "v0307.cfs.b"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -22947,6 +22947,28 @@ def caps_floors_tab(vol_mode: str):
                         # so it's superseded and struck through.
                         _skip_wedge_keys.add("2y1y")
 
+                # v0307.cfs.b: when Listed bootstrap is the ACTIVE feed, the
+                # superseded (struck) rows must DISPLAY the LISTED numbers,
+                # not the OTC swaption+wedge they no longer represent.
+                # Increments from the pre-calc cache (spot straddles):
+                #   3m1y row -> listed 1Y straddle
+                #   1y1y row -> listed 2Y - listed 1Y   (whites+reds / greens)
+                #   2y1y row -> listed 3Y - listed 2Y   (greens)
+                # Display-only: cfs_table_data is NOT rewritten (the OTC
+                # builder save/restores around it and needs the OTC base).
+                _listed_row_display = {}
+                if _skip_wedge_keys:
+                    _lfc_disp = st.session_state.get("_cfs_listed_curve_cache") or {}
+                    _ls1 = _lfc_disp.get("stradd_1y")
+                    _ls2 = _lfc_disp.get("stradd_2y")
+                    _ls3 = _lfc_disp.get("stradd_3y")
+                    if _ls1 and _ls1 > 0:
+                        _listed_row_display["3m1y"] = float(_ls1)
+                    if _ls1 and _ls2 and _ls2 > _ls1:
+                        _listed_row_display["1y1y"] = float(_ls2) - float(_ls1)
+                    if _ls2 and _ls3 and _ls3 > _ls2:
+                        _listed_row_display["2y1y"] = float(_ls3) - float(_ls2)
+
                 for spr_key, wedge_lbl, tbl_lbl, tbl_wedge, cfs_lbl, spread in ROW_DATA:
                     _row_skipped = tbl_lbl in _skip_wedge_keys
                     last_val = st.session_state[spr_key]
@@ -23078,6 +23100,18 @@ def caps_floors_tab(vol_mode: str):
                         fwd_swpt_str = "  —  "
                         spot_str = "  —  "
                         cfs_str  = "  —  "
+                    # v0307.cfs.b: struck (superseded) rows DISPLAY the listed
+                    # values when Listed bootstrap is active. Fwd = spot/df(3m).
+                    if _row_skipped and tbl_lbl in _listed_row_display:
+                        _lrd_spot = _listed_row_display[tbl_lbl]
+                        try:
+                            _crv_d3 = st.session_state.get("config_curves", {}).get("USD")
+                            _df3_d = df_from_curve(_crv_d3, 0.25) if _crv_d3 is not None else math.exp(-0.04 * 0.25)
+                        except Exception:
+                            _df3_d = math.exp(-0.04 * 0.25)
+                        fwd_swpt_str = "listed"
+                        spot_str = f"{_lrd_spot:.4f}"
+                        cfs_str  = f"{(_lrd_spot / _df3_d if _df3_d > 0 else _lrd_spot):.4f}"
                     st.session_state["cfs_table_data"].setdefault(tbl_lbl, {})["cfs_label"] = cfs_lbl
                     rc[5].markdown(f"<div style='{fs};text-align:right;color:#94a3b8'>{tbl_lbl}</div>", unsafe_allow_html=True)
                     rc[6].markdown(f"<div style='{fs};text-align:right;color:#cbd5e1'>{fwd_swpt_str}</div>", unsafe_allow_html=True)
@@ -23831,6 +23865,16 @@ def caps_floors_tab(vol_mode: str):
         )
         _need_build = (_calc_requested or (_otc_cached is None) or _listed_curve_stale
                        or _ccy_mismatch or _listed_sig_mismatch)
+        # v0307.cfs.b: name the rebuild trigger on screen. If the tab is stuck
+        # recalculating, this caption appears on EVERY render and identifies
+        # exactly which condition keeps firing.
+        if _need_build and ccy == "USD":
+            _nb_why = ("Calculate pressed" if _calc_requested
+                       else "first load (no cache)" if _otc_cached is None
+                       else "listed curve stale-retry" if _listed_curve_stale
+                       else "ccy switch" if _ccy_mismatch
+                       else "listed state changed")
+            st.caption(f"🔧 rebuilding curves — trigger: {_nb_why}")
 
         if _need_build:
             _otc_curve_built = _call_build_otc(_spreads_dict)
@@ -25123,6 +25167,15 @@ def caps_floors_tab(vol_mode: str):
                                     if _lst_1 and _lst_2:
                                         _cum_prem = float(_lst_2)
                                         _straddle_prem = round(_cum_prem, 4)
+                                # v0307.cfs.b: greens — 3Y anchor row was missing,
+                                # so with whites+reds+greens the 3Y CFS cascaded
+                                # from listed 2Y + OTC 2y1y instead of listed 3Y.
+                                elif _key == "2y1y":
+                                    _lst_2g = _lf_cache_now.get("stradd_2y")
+                                    _lst_3g = _lf_cache_now.get("stradd_3y")
+                                    if _lst_2g and _lst_3g:
+                                        _cum_prem = float(_lst_3g)
+                                        _straddle_prem = round(_cum_prem, 4)
 
                         # Flat vol: for OTC-only / AUD / NZD / flat curves,
                         # caplet_vol_curve[T] IS the strip flat vol (solver
@@ -25406,7 +25459,12 @@ def caps_floors_tab(vol_mode: str):
                                           lbl = f"▶ {_nm} (bp)"   # mark active
                                       row[lbl] = f"{c[t]:.2f}"
                               curve_data.append(row)
-                          st.dataframe(pd.DataFrame(curve_data),
+                          _tbl_df_chart = pd.DataFrame(curve_data)
+                          # v0307.cfs.b: STORE the table — it was displayed but
+                          # never cached; once the chart cache started working
+                          # (v0307.GBP.f) the table vanished on cached renders.
+                          st.session_state["_cfs_chart_tbl"] = _tbl_df_chart
+                          st.dataframe(_tbl_df_chart,
                                        use_container_width=True, hide_index=True)
                           st.caption(
                               "▶ marks the active pricer feed. Toggle above to change. "
@@ -25422,7 +25480,9 @@ def caps_floors_tab(vol_mode: str):
                           # No overlays selected — fall back to active curve
                           curve_data = [{"Maturity (Y)": f"{t:.2f}", "Vol (bp)": f"{caplet_vol_curve[t]:.2f}"}
                                         for t in sorted(caplet_vol_curve.keys())]
-                          st.dataframe(pd.DataFrame(curve_data),
+                          _tbl_df_chart = pd.DataFrame(curve_data)
+                          st.session_state["_cfs_chart_tbl"] = _tbl_df_chart  # v0307.cfs.b
+                          st.dataframe(_tbl_df_chart,
                                        use_container_width=True, hide_index=True)
                   else:
                       # AUD / NZD / EUR — unchanged single-curve table
