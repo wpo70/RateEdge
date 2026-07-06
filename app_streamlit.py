@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0307.cfs.d"
+APP_VERSION = "v0307.cfs.e"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -5017,17 +5017,25 @@ def apply_rateedge_theme(theme_name: str):
                 'border:none','border-radius:4px','width:28px','height:48px',
                 'font-size:18px','cursor:pointer','opacity:0.9','line-height:1'
             ].join(';');
-            btn.onclick = function() {
+            // v0307.cfs.e: toggle the sidebar DIRECTLY instead of clicking
+            // Streamlit's native collapse control. Streamlit Cloud renamed
+            // the internal test-ids (collapsedControl / stSidebarCollapseButton
+            // no longer match), so the old click-through hit nothing and the
+            // button went dead. Direct display toggle + interval enforcement
+            // survives reruns and Streamlit version changes.
+            const w = window.parent;
+            function reApplySb() {
                 const sb = p.querySelector('[data-testid="stSidebar"]');
-                const colBtn = p.querySelector('[data-testid="collapsedControl"] button') ||
-                               p.querySelector('[data-testid="stSidebarCollapseButton"] button') ||
-                               p.querySelector('[data-testid="baseButton-headerNoPadding"]');
-                if (colBtn) { colBtn.click(); }
-                else if (sb) {
-                    const b = sb.querySelector('button');
-                    if (b) b.click();
-                }
+                if (!sb) return;
+                sb.style.display = w.__reSbHidden ? 'none' : '';
+            }
+            btn.onclick = function() {
+                w.__reSbHidden = !w.__reSbHidden;
+                reApplySb();
             };
+            if (!w.__reSbEnforcer) {
+                w.__reSbEnforcer = setInterval(reApplySb, 400);
+            }
             p.body.appendChild(btn);
         }
         addSidebarBtn();
