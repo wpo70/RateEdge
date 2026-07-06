@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0307.cfs.e"
+APP_VERSION = "v0307.cfs.f"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -11099,14 +11099,82 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 # Single legs (unmatched)
                 if not _use_cached_pairing:
                     _single_rows = []
+                    # Tradition reports a straddle as TWO 'STR' leg prints (same timestamp,
+                    # strike, tenors, notional — each carrying HALF the premium), unlike
+                    # ICAP/Dealerweb which print one STR with the full premium. Pair those
+                    # legs so the tape shows ONE straddle at the summed premium.
+                    _TRAD_MICS = {"TWSF", "TWEM", "TSEF", "TSIR", "TSAF",
+                                  "TCDS", "TREU", "TEUR", "TEIR"}
+                    _trad_groups = {}
+                    _str_ref_bps = {}   # (opt,swp) -> [bp,...] from NON-Tradition STR prints
+                    for _si, _s_row in _newt_all.iterrows():
+                        if _si in _matched_p_ids or _si in _matched_r_ids:
+                            continue
+                        if str(_s_row.get("option_type_decoded", "")).upper() != "STR":
+                            continue
+                        _plat_id = str(_s_row.get("platform_identifier", ""))
+                        try:
+                            _n_ = float(_s_row.get("notional_leg1") or 0)
+                            _p_ = float(_s_row.get("premium_amount") or 0)
+                        except Exception:
+                            _n_, _p_ = 0.0, 0.0
+                        if _plat_id not in _TRAD_MICS:
+                            if _n_ > 0 and _p_ > 0:
+                                _rk = (str(_s_row.get("opt_tenor", "")), str(_s_row.get("swp_tenor", "")))
+                                _str_ref_bps.setdefault(_rk, []).append(_p_ / _n_ * 10000)
+                            continue
+                        try:
+                            _gk = (str(_s_row.get("execution_timestamp")),
+                                   round(float(_s_row.get("strike_pct") or 0), 5),
+                                   str(_s_row.get("opt_tenor", "")),
+                                   str(_s_row.get("swp_tenor", "")),
+                                   _n_, _plat_id)
+                        except Exception:
+                            continue
+                        _trad_groups.setdefault(_gk, []).append(_si)
+                    _trad_leg_skip, _trad_leg_pair = set(), {}
+                    for _gk, _gids in _trad_groups.items():
+                        _gids = sorted(_gids)
+                        for _ga, _gb in zip(_gids[0::2], _gids[1::2]):
+                            _trad_leg_skip.add(_gb)      # folded into _ga's row
+                            _trad_leg_pair[_ga] = _gb
                     for _si, _s_row in _newt_all.iterrows():
                         _ot = _s_row.get("option_type_decoded", "")
                         if _si in _matched_p_ids or _si in _matched_r_ids:
                             continue
                         if str(_ot).upper() in _exo_types:
                             continue
+                        if _si in _trad_leg_skip:
+                            continue
                         _s_prem = float(_s_row.get("premium_amount") or 0)
                         _s_not = float(_s_row.get("notional_leg1") or 0)
+                        _trad_leg_bp = None
+                        if _si in _trad_leg_pair:
+                            try:
+                                _leg1 = _s_prem
+                                _leg2 = float(_newt_all.loc[_trad_leg_pair[_si]].get("premium_amount") or 0)
+                                _summed = _leg1 + _leg2
+                                # Sanity cap: legs sum to ≈ the market straddle level. If the
+                                # SUM lands way above other venues' same-structure straddle
+                                # prints (>1.5×), the two rows were a DOUBLE-REPORT of one
+                                # full-premium print, not legs — dedup instead of summing.
+                                _rk = (str(_s_row.get("opt_tenor", "")), str(_s_row.get("swp_tenor", "")))
+                                _refs = _str_ref_bps.get(_rk) or []
+                                _is_dbl = False
+                                if _refs and _s_not > 0:
+                                    _refs_s = sorted(_refs)
+                                    _ref_med = _refs_s[len(_refs_s) // 2]
+                                    if _ref_med > 0 and (_summed / _s_not * 10000) > 1.5 * _ref_med:
+                                        _is_dbl = True
+                                if _is_dbl:
+                                    _s_prem = max(_leg1, _leg2)   # double-report → dedup
+                                else:
+                                    _s_prem = _summed             # legs → sum
+                                    if _s_not > 0:
+                                        _trad_leg_bp = (round(_leg1 / _s_not * 10000, 2),
+                                                        round(_leg2 / _s_not * 10000, 2))
+                            except Exception:
+                                pass
                         _s_bp = round(_s_prem / _s_not * 10000, 2) if _s_not > 0 else 0
                         _s_time = _to_local(_s_row.get("execution_timestamp") or _s_row.get("event_timestamp"))
                         _pc_label = "🟢 Payer" if _ot == "CALL" else "🔴 Receiver" if _ot == "PUT" else "🔵 Straddle" if str(_ot).upper() == "STR" else f"⚪ {_ot}"
@@ -11146,8 +11214,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             "Notional": _fmt_notional(_s_not),
                             "Premium": _fmt_premium(_s_prem) if _s_prem else "—",
                             "Nett Prem BP": f"{_s_bp:.2f}" if _s_bp else "—",
-                            "P Prem BP": "—",
-                            "R Prem BP": "—",
+                            "P Prem BP": f"{_trad_leg_bp[0]:.2f}" if _trad_leg_bp else "—",
+                            "R Prem BP": f"{_trad_leg_bp[1]:.2f}" if _trad_leg_bp else "—",
                             "Platform": PLATFORM_NAMES.get(str(_s_row.get("platform_identifier","")), str(_s_row.get("platform_identifier",""))),
                             "_notional_num": float(_s_not or 0),  # v1105o
                         })
@@ -36009,13 +36077,28 @@ def _sdr_global_alert_poll():
             # cursor = login wall (UTC now): only trades executed AFTER login can toast;
             # anything already traded before login stays behind the cursor and never alerts,
             # even if DTCC disseminates it into the table later.
-            st.session_state["_sdr_global_since"] = _dtw.now(_tzw2.utc).replace(tzinfo=None)
+            _wall = _dtw.now(_tzw2.utc).replace(tzinfo=None)
+            st.session_state["_sdr_global_since"] = _wall
+            st.session_state["_sdr_login_wall"] = _wall
             return
         # rows are newest-first; toast oldest-first so order reads naturally
         _fresh = [r for r in rows if r[0] not in _seen]
         for r in reversed(_fresh[:8]):   # cap toasts per tick
             _did, _ccy, _ot, _swp, _prem, _plat, _ts, _pc = r
             _seen.add(_did)
+            # Fail-closed: never toast a trade executed at/before login. Catches any
+            # pre-login print the query lets through (stale cursor, tz quirk, seen-set
+            # reset) — a closed market produces zero toasts regardless.
+            _wall = st.session_state.get("_sdr_login_wall")
+            if _wall is not None:
+                _tscmp = _ts
+                try:
+                    if _tscmp is not None and getattr(_tscmp, "tzinfo", None) is not None:
+                        _tscmp = _tscmp.replace(tzinfo=None)
+                except Exception:
+                    _tscmp = _ts
+                if _tscmp is None or _tscmp <= _wall:
+                    continue
             if _newest_ts is None or (_ts is not None and _ts > _newest_ts):
                 _newest_ts = _ts
             try:
