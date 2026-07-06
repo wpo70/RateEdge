@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0707a"
+APP_VERSION = "v0707b"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -11653,7 +11653,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         _local_now = _dt_csv.now().astimezone()  # fallback
                     _tz_abbr = _local_now.tzname() or ""
                     _tz_short = "".join(c for c in _tz_abbr if c.isupper())[:4] or _tz_abbr[:4]
-                    _fname_csv = f"SDR_Trades_{_sdr_ccy}_{_local_now.strftime('%d%b%y')}_{_local_now.strftime('%H%M')}{_tz_short}.xlsx"
+                    # Filename date = the data's trade date (previous day's EOD),
+                    # e.g. SDR_Trades_USD_06072026.xlsx — not the download time.
+                    try:
+                        _eod_dt = pd.to_datetime(_all_df_excel["Time"], errors="coerce").max()
+                        _eod_str = _eod_dt.strftime("%d%m%Y")
+                    except Exception:
+                        _eod_str = _local_now.strftime("%d%m%Y")
+                    _fname_csv = f"SDR_Trades_{_sdr_ccy}_{_eod_str}.xlsx"
 
                     # ─────────────────────────────────────────────────────────
                     # v1205j: Auto-save XLSX to local IRO folder on Download click.
