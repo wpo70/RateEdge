@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0807c"
+APP_VERSION = "v0807d"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -10872,7 +10872,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _fp_max = str(_newt_all[_ts_col].max()) if _ts_col else ""
                 except Exception:
                     _fp_max = ""
-                _PAIRING_LOGIC_VER = "v0406h"  # bump when pairing/grouping/override logic changes → invalidates stale cache
+                _PAIRING_LOGIC_VER = "v0807d"  # bump when pairing/grouping/override logic changes → invalidates stale cache
                 _newt_fp = f"{_PAIRING_LOGIC_VER}|{len(_newt_all)}|{_sdr_ccy_fp}|{_fp_max}"
                 _use_cached_pairing = (st.session_state.get("_sdr_pairing_fp") == _newt_fp
                                        and st.session_state.get("_sdr_pairing_trades") is not None)
@@ -10901,8 +10901,23 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     return ts_.astimezone(_local_tz)
 
                 # Classify options: CALL=Payer/Cap, PUT=Receiver/Floor
-                _payers_a = _newt_all[_newt_all["option_type_decoded"] == "CALL"].copy()
-                _rcvrs_a  = _newt_all[_newt_all["option_type_decoded"] == "PUT"].copy()
+                # Normalise option_type before splitting so ALL currencies pair like USD.
+                # USD decodes clean "CALL"/"PUT"; other ccys' product taxonomies can come
+                # through as case/whitespace variants or PAYER/RECEIVER/C/P — those rows
+                # previously failed the strict match and fell to the single-leg path
+                # (no straddle/R-R pairing outside USD). Exact CALL/PUT map identically,
+                # so USD behaviour is unchanged. CAP/FLOOR deliberately NOT mapped —
+                # cap/floor pairing and C/F classification stay as-is.
+                _OT_NORM_PAIR = {
+                    "CALL": "CALL", "C": "CALL", "PAYER": "CALL", "PAY": "CALL",
+                    "CALL_OPTION": "CALL", "CALLOPTION": "CALL",
+                    "PUT": "PUT", "P": "PUT", "RECEIVER": "PUT", "REC": "PUT",
+                    "RCV": "PUT", "PUT_OPTION": "PUT", "PUTOPTION": "PUT",
+                }
+                _ot_norm_ser = (_newt_all["option_type_decoded"].astype(str)
+                                .str.strip().str.upper().map(_OT_NORM_PAIR))
+                _payers_a = _newt_all[_ot_norm_ser == "CALL"].copy()
+                _rcvrs_a  = _newt_all[_ot_norm_ser == "PUT"].copy()
                 _matched_p_ids = set()
                 _matched_r_ids = set()
                 _paired_rows = []
