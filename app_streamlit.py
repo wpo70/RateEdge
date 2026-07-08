@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907a"
+APP_VERSION = "v0907b"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -9189,6 +9189,7 @@ def _fenics_fetch(ck, path, timeout=45):
     so the app must too — treating that 302 as 'expired' was the false-expired bug.
     Returns the requests.Response (redirects already followed)."""
     hdr = {"Cookie": ck, "User-Agent": "Mozilla/5.0",
+           "X-Requested-With": "XMLHttpRequest",
            "Referer": f"{_FEN_BASE}/dashboard",
            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
     return requests.get(f"{_FEN_BASE}{path}", headers=hdr, timeout=timeout,
