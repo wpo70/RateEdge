@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907b"
+APP_VERSION = "v0907d"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -9446,9 +9446,66 @@ def _fenics_pull_load(cookie, date_str=""):
         return {"status": "ERR", "detail": str(e)}
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def _eu_data_in_today():
+    """One-line verdict: did ANY EU capture land today (London date)? Returns
+    (total, per_source dict, last_ingest) or None on error."""
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return None
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT COALESCE(source,'?'), COUNT(*), MAX(ingested_utc) "
+                "FROM eu_iro_prints "
+                "WHERE ingested_utc >= date_trunc('day', now() AT TIME ZONE 'Europe/London') "
+                "                     AT TIME ZONE 'Europe/London' "
+                "GROUP BY 1")
+            rows = cur.fetchall()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            rows = None
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass
+        if rows is None:
+            return None
+        per = {r[0]: int(r[1]) for r in rows}
+        tot = sum(per.values())
+        last = max((r[2] for r in rows if r[2] is not None), default=None)
+        return (tot, per, last)
+    except Exception:
+        return None
+
+
 def eu_mifir_tab():
     """EU MiFIR swaption flow (TP ICAP IOTF) with surface-inferred tenor."""
     from datetime import datetime as _dt
+    # ── ONE-LINE VERDICT: is data coming in today, yes or no ──
+    try:
+        _din = _eu_data_in_today()
+        if _din is None:
+            st.warning("⚠️ CAPTURE STATUS UNKNOWN — could not read the database.")
+        else:
+            _tot, _per, _last = _din
+            if _tot > 0:
+                _bits = " · ".join(f"{k} {v}" for k, v in sorted(_per.items(), key=lambda x: -x[1]))
+                _lt = ""
+                try:
+                    _lt = f" (last {str(_last)[11:16]} UTC)"
+                except Exception:
+                    pass
+                st.success(f"✅ DATA IN TODAY — {_tot} prints: {_bits}{_lt}")
+            else:
+                st.error("🔴 NO DATA PULLED TODAY (London date) — check the local loop is running.")
+    except Exception:
+        pass
     st.markdown(
         '<div class="sdr-header">'
         '<span class="sdr-badge-blue">IDB OTF · APA · 15-min delayed</span>'
@@ -9637,7 +9694,12 @@ Keeps `HR*` swaptions only (drops `HF*` FX options), decodes payer/receiver, kee
                     st.info("Logged in OK, but Fenics is listing 0 reports right now (portal empty, "
                             "or the cookie is IP-bound to your browser so the cloud app can't use it).")
                 elif _fs == "EXPIRED":
-                    st.error("🔴 FENICS COOKIE EXPIRED — refresh the JSESSIONID and try again.")
+                    st.error("🔴 FENICS REJECTED THE SESSION. If you are on the deployed (cloud) app, "
+                             "this button cannot work — Fenics binds the session to your browser/IP, and "
+                             "the cloud pulls from a different IP, so it always gets the login page. "
+                             "Capture still runs via the local loop (fenics_auto.py); check the ICAP feed "
+                             "banner on the EU MiFIR tab for health. If you are running the app locally, "
+                             "then the cookie genuinely expired — refresh the JSESSIONID and retry.")
                 elif _fs == "NO_COOKIE":
                     st.warning("Paste the JSESSIONID first.")
                 elif _fs == "NET_ERR":
