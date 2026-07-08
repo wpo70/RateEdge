@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0807b"
+APP_VERSION = "v0807c"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -11677,7 +11677,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         _local_now = _dt_csv.now().astimezone()  # fallback
                     _tz_abbr = _local_now.tzname() or ""
                     _tz_short = "".join(c for c in _tz_abbr if c.isupper())[:4] or _tz_abbr[:4]
-                    _fname_csv = f"SDR_Trades_{_sdr_ccy}_{_local_now.strftime('%d%b%y')}_{_local_now.strftime('%H%M')}{_tz_short}.xlsx"
+                    # Filename date = the data's trade date (previous day's EOD),
+                    # e.g. SDR_Trades_USD_06072026.xlsx — not the download time.
+                    try:
+                        _eod_dt = pd.to_datetime(_all_df_excel["Time"], errors="coerce").max()
+                        _eod_str = _eod_dt.strftime("%d%m%Y")
+                    except Exception:
+                        _eod_str = _local_now.strftime("%d%m%Y")
+                    _fname_csv = f"SDR_Trades_{_sdr_ccy}_{_eod_str}.xlsx"
 
                     # ─────────────────────────────────────────────────────────
                     # v1205j: Auto-save XLSX to local IRO folder on Download click.
@@ -17298,8 +17305,23 @@ def curves_tab():
                                         "value": round(_v, 4),
                                         "label": f"Straddle prem {_el} {_tc} bp"}
                             except: pass
-                # FWD ATM IRS mids
-                _fwd_m = st.session_state.get("fwd_matrix", {}).get(_pub_ccy)
+                # FWD ATM IRS mids — REBUILT from the live curve at publish time, so the
+                # forwards pushed always match the Curves sheet on screen. (Previously this
+                # read fwd_matrix from session state: if "Generate Forward Matrix" hadn't
+                # been pressed this session, forwards were silently skipped while vols and
+                # prems went out fresh — blotter fwds then lagged or never updated.)
+                _fwd_m = None
+                try:
+                    _mc_pub = st.session_state.get("config_curves", {}).get(_pub_ccy)
+                    _mb_pub = st.session_state.get("config_basis", {}).get(_pub_ccy, {}).get("6v3")
+                    _conv_pub = st.session_state.get("fwd_convention", "market")
+                    if _mc_pub is not None:
+                        _fwd_m = generate_forward_matrix_convention(_pub_ccy, _mc_pub, _mb_pub, _conv_pub)
+                        st.session_state.setdefault("fwd_matrix", {})[_pub_ccy] = _fwd_m
+                except Exception:
+                    _fwd_m = None
+                if _fwd_m is None or (hasattr(_fwd_m, "empty") and _fwd_m.empty):
+                    _fwd_m = st.session_state.get("fwd_matrix", {}).get(_pub_ccy)
                 if _fwd_m is not None and not _fwd_m.empty:
                     for _fexp in _fwd_m.index:
                         for _ften in _fwd_m.columns:
