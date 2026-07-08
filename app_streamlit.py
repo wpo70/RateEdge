@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0807d"
+APP_VERSION = "v0907a"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -10205,8 +10205,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 ccy_opts = [_side_ccy] + ccy_opts          # always offer the sidebar ccy
             if st.session_state.get("_sdr_ccy_track") != _side_ccy:
                 st.session_state["_sdr_ccy_track"] = _side_ccy
-                st.session_state.pop("sdr_ccy", None)
-                _sv.pop("sdr_ccy", None)
+                # Force the SDR CCY filter to FOLLOW the sidebar on switch. Direct
+                # assignment (not pop): popping let the saved filter shadow resurrect
+                # the previous currency, so the tab kept showing the old ccy until
+                # the user manually removed it.
+                _follow = [c for c in [_side_ccy] if c in ccy_opts] or [_side_ccy]
+                st.session_state["sdr_ccy"] = _follow
+                _sv["sdr_ccy"] = _follow
             _ccy_default = [x for x in [_side_ccy] if x in ccy_opts] if ccy_opts else []
             _sv_ccy = _sv.get("sdr_ccy", _ccy_default)
             _sv_ccy = [c for c in _sv_ccy if c in ccy_opts] if _sv_ccy else _ccy_default
@@ -36144,9 +36149,27 @@ def _sdr_global_alert_poll():
             return
         # rows are newest-first; toast oldest-first so order reads naturally
         _fresh = [r for r in rows if r[0] not in _seen]
+        # HARD market-hours gate: never toast while the currency's market is closed,
+        # regardless of row timestamps (kills phantom/re-stamped rows). Fails CLOSED.
+        def _mkt_open(_c):
+            try:
+                from zoneinfo import ZoneInfo as _ZImk
+                from datetime import datetime as _dtmk
+                _tzm = {"USD": "America/New_York", "CAD": "America/New_York",
+                        "EUR": "Europe/London", "GBP": "Europe/London",
+                        "AUD": "Australia/Sydney", "NZD": "Pacific/Auckland",
+                        "JPY": "Asia/Tokyo"}.get(str(_c), "America/New_York")
+                _nowm = _dtmk.now(_ZImk(_tzm))
+                if _nowm.weekday() >= 5:
+                    return False
+                return 7 <= _nowm.hour < 18
+            except Exception:
+                return False
         for r in reversed(_fresh[:8]):   # cap toasts per tick
             _did, _ccy, _ot, _swp, _prem, _plat, _ts, _pc = r
             _seen.add(_did)
+            if not _mkt_open(_ccy):
+                continue
             # Fail-closed: never toast a trade executed at/before login. Catches any
             # pre-login print the query lets through (stale cursor, tz quirk, seen-set
             # reset) — a closed market produces zero toasts regardless.
