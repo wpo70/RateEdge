@@ -754,7 +754,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0707b"
+APP_VERSION = "v0807b"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -5004,38 +5004,62 @@ def apply_rateedge_theme(theme_name: str):
     _sc.html("""
     <script>
     (function() {
+        // v0807b: CSS-CLASS TOGGLE. The click handler was live (v0707b
+        // rebinding) but [data-testid="stSidebar"] no longer matches on the
+        // current Streamlit build — same test-id rename that killed the
+        // native collapse click-through. New approach:
+        //   1. Inject a persistent <style> into the PARENT head; hiding is
+        //      done by a body class, so it survives reruns with no enforcer.
+        //   2. Multi-selector coverage incl. structural fallbacks.
+        //   3. Diagnostic: button turns ORANGE if no sidebar element is
+        //      found by ANY selector — tells us on-screen if selectors are
+        //      still wrong.
+        function findSb(p) {
+            return p.querySelector('[data-testid="stSidebar"]')
+                || p.querySelector('section.stSidebar')
+                || p.querySelector('[data-testid="stSidebarContent"]')
+                || p.querySelector('[data-testid="stSidebarCollapsedControl"]')
+                || p.querySelector('section[aria-expanded]')
+                || null;
+        }
+        function ensureStyle(p) {
+            if (p.getElementById('re-sb-style')) return;
+            const st = p.createElement('style');
+            st.id = 're-sb-style';
+            st.textContent =
+                'body.re-sb-hidden [data-testid="stSidebar"],' +
+                'body.re-sb-hidden section.stSidebar,' +
+                'body.re-sb-hidden [data-testid="stSidebarContent"],' +
+                'body.re-sb-hidden section[aria-expanded]' +
+                '{ display:none !important; width:0 !important; min-width:0 !important; }';
+            p.head.appendChild(st);
+        }
         function addSidebarBtn() {
             const p = window.parent.document;
-            if (p.getElementById('re-sidebar-btn')) return;
+            ensureStyle(p);
+            const old = p.getElementById('re-sidebar-btn');
+            if (old) old.remove();
             const btn = p.createElement('button');
             btn.id = 're-sidebar-btn';
             btn.innerHTML = '&#9776;';
             btn.title = 'Toggle Sidebar';
+            const sbFound = !!findSb(p);
             btn.style.cssText = [
                 'position:fixed','top:50%','left:4px','transform:translateY(-50%)',
-                'z-index:9999999','background:#dc2626','color:white',
+                'z-index:9999999',
+                'background:' + (sbFound ? '#dc2626' : '#f59e0b'),
+                'color:white',
                 'border:none','border-radius:4px','width:28px','height:48px',
                 'font-size:18px','cursor:pointer','opacity:0.9','line-height:1'
             ].join(';');
-            // v0307.cfs.e: toggle the sidebar DIRECTLY instead of clicking
-            // Streamlit's native collapse control. Streamlit Cloud renamed
-            // the internal test-ids (collapsedControl / stSidebarCollapseButton
-            // no longer match), so the old click-through hit nothing and the
-            // button went dead. Direct display toggle + interval enforcement
-            // survives reruns and Streamlit version changes.
-            const w = window.parent;
-            function reApplySb() {
-                const sb = p.querySelector('[data-testid="stSidebar"]');
-                if (!sb) return;
-                sb.style.display = w.__reSbHidden ? 'none' : '';
-            }
             btn.onclick = function() {
-                w.__reSbHidden = !w.__reSbHidden;
-                reApplySb();
+                p.body.classList.toggle('re-sb-hidden');
+                // structural fallback: directly hide whatever we can find too
+                const sb = findSb(p);
+                if (sb) {
+                    sb.style.display = p.body.classList.contains('re-sb-hidden') ? 'none' : '';
+                }
             };
-            if (!w.__reSbEnforcer) {
-                w.__reSbEnforcer = setInterval(reApplySb, 400);
-            }
             p.body.appendChild(btn);
         }
         addSidebarBtn();
@@ -11653,14 +11677,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         _local_now = _dt_csv.now().astimezone()  # fallback
                     _tz_abbr = _local_now.tzname() or ""
                     _tz_short = "".join(c for c in _tz_abbr if c.isupper())[:4] or _tz_abbr[:4]
-                    # Filename date = the data's trade date (previous day's EOD),
-                    # e.g. SDR_Trades_USD_06072026.xlsx — not the download time.
-                    try:
-                        _eod_dt = pd.to_datetime(_all_df_excel["Time"], errors="coerce").max()
-                        _eod_str = _eod_dt.strftime("%d%m%Y")
-                    except Exception:
-                        _eod_str = _local_now.strftime("%d%m%Y")
-                    _fname_csv = f"SDR_Trades_{_sdr_ccy}_{_eod_str}.xlsx"
+                    _fname_csv = f"SDR_Trades_{_sdr_ccy}_{_local_now.strftime('%d%b%y')}_{_local_now.strftime('%H%M')}{_tz_short}.xlsx"
 
                     # ─────────────────────────────────────────────────────────
                     # v1205j: Auto-save XLSX to local IRO folder on Download click.
