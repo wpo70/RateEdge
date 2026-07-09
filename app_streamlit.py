@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907n"
+APP_VERSION = "v0907p"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -22722,6 +22722,11 @@ def swaptions_tab(vol_mode: str):
                 _save_portfolio()
                 st.rerun()
 
+        # v0907n: toggle the date columns (Exp Date / Swap Start / Swap End).
+        _show_dates = st.checkbox("📅 Show dates (expiry / swap start / swap end, mod-fol)",
+                                  value=st.session_state.get("_sw_show_dates", False),
+                                  key="_sw_show_dates")
+
         df = pd.DataFrame(st.session_state["swaption_portfolio"])
         df["_expiry_sort"] = df["expiry"].apply(lambda e: label_to_years(str(e)))
         df = df.sort_values("_expiry_sort").reset_index(drop=True)
@@ -22739,15 +22744,49 @@ def swaptions_tab(vol_mode: str):
         # survive app restarts.
         _STATUS_OPTS = ["Live", "Our Trade", "Away Trade", "Direct Trade"]
 
-        # Header row — light grey background
+        # Header row — light grey background. v0907n: date cols optional.
+        if _show_dates:
+            _hdr_cols = ("2.5% 11.0% 4.5% 5.0% 4.5% 5.5% 5.5% 5.5% 5.5% 5.5% "
+                         "6.5% 6.5% 6.5% 8.5% 4.5% 4.5% 4.5% 4.5%")
+            _hdr_dates = "<span>Exp Date</span><span>Swap Start</span><span>Swap End</span>"
+        else:
+            _hdr_cols = ("2.5% 13.0% 5.5% 6.5% 5.5% 6.8% 6.8% 6.8% 6.8% 6.8% "
+                         "11.0% 5.5% 5.5% 5.5% 5.5%")
+            _hdr_dates = ""
         st.markdown(
-            "<div style='display:grid;grid-template-columns:2.5% 13.0% 5.5% 6.5% 5.5% 6.8% 6.8% 6.8% 6.8% 6.8% 11.0% 5.5% 5.5% 5.5% 5.5%;"
+            f"<div style='display:grid;grid-template-columns:{_hdr_cols};"
             "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
             "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
             "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
             "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot Prem</span>"
-            "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Prnt</span><span>Dup</span><span>Del</span></div>",
+            f"<span>Fwd Prem</span><span>PV($k)</span>{_hdr_dates}<span>Status</span>"
+            "<span>Tix</span><span>Prnt</span><span>Dup</span><span>Del</span></div>",
             unsafe_allow_html=True)
+
+        def _row_dates(_r):
+            """v0907n: (expiry_date, swap_start, swap_end) as dd-Mon-YYYY, mod-fol.
+            Prefers stored dates; else derives from labels using the ccy spot lag
+            and semi/annual convention already used elsewhere in the app."""
+            _ed = str(_r.get("expiry_date", "") or "")
+            _ss = str(_r.get("swap_start", "") or "")
+            _se = str(_r.get("swap_end", "") or "")
+            if _ed and _ss and _se:
+                return _ed, _ss, _se
+            try:
+                _c = str(_r.get("currency", "AUD")) or "AUD"
+                _lag = 2 if _c in ("USD", "EUR", "JPY") else 0 if _c == "GBP" else 1
+                _ey = label_to_years(str(_r.get("expiry", "")))
+                _ts = str(_r.get("tenor", "")).strip()
+                _ty = float(_ts[:-1]) if _ts and _ts[-1].upper() == "Y" else 0.0
+                if not _ey or _ey <= 0:
+                    return _ed, _ss, _se
+                _exp_dt = _fwd_start_date(_ey, 0)          # option expiry (mod-fol)
+                _start  = _fwd_start_date(_ey, _lag)       # swap start = spot+expiry
+                _end    = _mod_fol(_add_months(_start, int(round(_ty * 12)))) if _ty > 0 else _start
+                _fmt = lambda d: d.strftime("%d-%b-%Y")
+                return (_ed or _fmt(_exp_dt), _ss or _fmt(_start), _se or _fmt(_end))
+            except Exception:
+                return _ed, _ss, _se
 
         for idx, row in df.iterrows():
             _label  = row.get("label", f"{row.get('expiry','')}x{row.get('tenor','')}")
@@ -22788,7 +22827,13 @@ def swaptions_tab(vol_mode: str):
                 _spot_bp_disp = _live_r["pv_bp_spot"]
                 _disp_pv      = _live_r["pv"]
 
-            _rc = st.columns([0.25, 1.30, 0.55, 0.65, 0.55, 0.68, 0.68, 0.68, 0.68, 0.68, 1.10, 0.55, 0.55, 0.55, 0.55])
+            if _show_dates:
+                _ratios = [0.25, 1.10, 0.45, 0.50, 0.45, 0.55, 0.55, 0.55, 0.55, 0.55,
+                           0.65, 0.65, 0.65, 0.85, 0.45, 0.45, 0.45, 0.45]
+            else:
+                _ratios = [0.25, 1.30, 0.55, 0.65, 0.55, 0.68, 0.68, 0.68, 0.68, 0.68,
+                           1.10, 0.55, 0.55, 0.55, 0.55]
+            _rc = st.columns(_ratios)
             _sw_vals = [
                 f"{idx+1}", _struct, _expiry, _tenor,
                 f"{float(row.get('notional_mm',100)):.0f}mm",
@@ -22798,6 +22843,10 @@ def swaptions_tab(vol_mode: str):
                 f"{_fwd_bp:.2f}",
                 f"{_disp_pv/1000:,.1f}",
             ]
+            # v0907n: append the three date cells when shown.
+            if _show_dates:
+                _ed_s, _ss_s, _se_s = _row_dates(row)
+                _sw_vals += [_ed_s, _ss_s, _se_s]
             _sw_colours = {7: "#22c55e", 8: "#38bdf8"}  # green=spot, blue=fwd
             for _ci, _val in enumerate(_sw_vals):
                 _col = _sw_colours.get(_ci, "#1e293b")
@@ -22806,7 +22855,9 @@ def swaptions_tab(vol_mode: str):
                     f"<div style='background:{_bg};padding:5px 3px;font-size:12px;color:{_col};"
                     f"font-weight:{_fw};border-bottom:1px solid #e2e8f0'>{_val}</div>", unsafe_allow_html=True)
 
-            _new_status = _rc[10].selectbox("", _STATUS_OPTS,
+            # v0907n: control columns shift right by 3 when dates are shown.
+            _base = 13 if _show_dates else 10
+            _new_status = _rc[_base].selectbox("", _STATUS_OPTS,
                 index=_STATUS_OPTS.index(_cur_status) if _cur_status in _STATUS_OPTS else 0,
                 key=f"sw_status_{idx}", label_visibility="collapsed")
             if _new_status == "Clear Trade":
@@ -22839,10 +22890,10 @@ def swaptions_tab(vol_mode: str):
                 _save_portfolio()
                 st.rerun()
 
-            if can_quick_tix() and _rc[11].button("📋", key=f"sw_tix_{idx}", help="Quick Tix"):
+            if can_quick_tix() and _rc[_base+1].button("📋", key=f"sw_tix_{idx}", help="Quick Tix"):
                 st.session_state["_sw_tix_open"] = idx if st.session_state.get("_sw_tix_open") != idx else -1
 
-            if can_quick_tix() and _rc[12].button("🎫", key=f"sw_ptix_{idx}", help="Print Tix → Trade Ticket"):
+            if can_quick_tix() and _rc[_base+2].button("🎫", key=f"sw_ptix_{idx}", help="Print Tix → Trade Ticket"):
                 try:
                     from datetime import date as _ptd, timedelta as _pttd
                     _pt_exp_y  = label_to_years(str(row.get("expiry","3m")))
@@ -22864,7 +22915,7 @@ def swaptions_tab(vol_mode: str):
                 except Exception as _pte:
                     st.error(f"Print Tix error: {_pte}")
 
-            if _rc[13].button("⧉", key=f"sw_dup_{idx}", help="Duplicate as LIVE reference"):
+            if _rc[_base+3].button("⧉", key=f"sw_dup_{idx}", help="Duplicate as LIVE reference"):
                 # v0907m: clone the trade as a Live reference running alongside.
                 for _pe in st.session_state["swaption_portfolio"]:
                     if (_pe.get("label") == _label and str(_pe.get("expiry")) == str(_expiry)
@@ -22878,7 +22929,7 @@ def swaptions_tab(vol_mode: str):
                         break
                 _save_portfolio(); st.rerun()
 
-            if _rc[14].button("🗑️", key=f"sw_del_{idx}", help="Remove"):
+            if _rc[_base+4].button("🗑️", key=f"sw_del_{idx}", help="Remove"):
                 st.session_state["swaption_portfolio"].pop(idx)
                 st.session_state["portfolio"] = [p for p in st.session_state["portfolio"]
                                                   if p.get("label") != _label or p.get("expiry") != _expiry]
