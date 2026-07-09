@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907s"
+APP_VERSION = "v0907t"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -21922,12 +21922,10 @@ def swaptions_tab(vol_mode: str):
                 expiry_y = max((_parsed - _sw_today).days / 365.0, 1/365.0)
                 # v0907s: this is a BROKEN date — user picked a specific expiry
                 # that isn't the standard rolled tenor date. Flag it and show
-                # "Broken date" in the Expiry window; blotter shows the date.
+                # Manual date: user picked a specific expiry; blotter shows it.
                 _sw_broken_date = True
                 _sw_broken_dt = _parsed
-                expiry_display = f"Broken ({_parsed.strftime('%d-%b-%Y')})"
-                st.caption(f"⚠️ Broken date: {_parsed.strftime('%d-%b-%Y')} "
-                           f"({(_parsed - _sw_today).days}d)")
+                expiry_display = f"Manual ({_parsed.strftime('%d-%b-%Y')})"
         except: pass
     with col_delay:
         DELAY_PRESETS = ["None","1m","2m","3m","6m","9m","1y","18m","2y"]
@@ -22854,17 +22852,12 @@ def swaptions_tab(vol_mode: str):
                 _ratios = [0.25, 1.30, 0.55, 0.65, 0.55, 0.68, 0.68, 0.68, 0.68, 0.68,
                            1.10, 0.55, 0.55, 0.55, 0.55]
             _rc = st.columns(_ratios)
-            # v0907s: Exp cell. Broken date → show the DATE ONLY (fitted small),
-            # since the tenor label is meaningless for a broken date. Standard
-            # date → show tenor label with the rolled date beneath it.
+            # v0907t: Exp cell. Manual (non-standard) date → show the date,
+            # fitted. Standard tenor → show the tenor label as-is.
             _ed_s, _ss_s, _se_s = _row_dates(row)
-            _is_broken = bool(row.get("is_broken_date", False))
-            if _is_broken and _ed_s:
-                _exp_cell = (f"<div style='line-height:1.1;font-size:10.5px;font-weight:600'>"
-                             f"{_ed_s}<br><span style='font-size:8.5px;color:#94a3b8;font-weight:400'>broken</span></div>")
-            elif _ed_s:
-                _exp_cell = (f"<div style='line-height:1.15'>{_expiry}"
-                             f"<br><span style='font-size:9.5px;color:#64748b'>{_ed_s}</span></div>")
+            _is_manual = bool(row.get("is_broken_date", False))
+            if _is_manual and _ed_s:
+                _exp_cell = f"<div style='font-size:11px;white-space:nowrap'>{_ed_s}</div>"
             else:
                 _exp_cell = _expiry
             _sw_vals = [
