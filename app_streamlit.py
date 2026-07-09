@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907g"
+APP_VERSION = "v0907i"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -2403,6 +2403,352 @@ def _sdr_clean_tape(df, ccy: str, tz_label: str = ""):
 
     except Exception:
         return None, None, 0, ""
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _volrep_cell_stats(ccy: str):
+    """Per-cell ATM vol stats from vol_history (last snapshot per day, 45 days):
+    {(expY,tenY): (avg30, latest)}. Returns None if insufficient."""
+    try:
+        import json as _j, re as _re
+        def _t2y(t):
+            t = str(t).strip().upper()
+            if t.startswith("<"): return 1/52.0
+            m = _re.fullmatch(r"(?:(\d+)Y)?(?:(\d+)M)?", t)
+            if not m or (m.group(1) is None and m.group(2) is None): return None
+            return int(m.group(1) or 0) + int(m.group(2) or 0)/12.0
+        conn = get_db_connection()
+        if conn is None: return None
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT DISTINCT ON (snapshot_date::date) snapshot_date, atm_vols "
+                        "FROM vol_history WHERE currency=%s AND user_id='shared' "
+                        "AND atm_vols IS NOT NULL "
+                        "ORDER BY snapshot_date::date DESC, created_at DESC LIMIT 45", (ccy,))
+            rows = cur.fetchall()
+        finally:
+            try: cur.close()
+            except Exception: pass
+        if not rows: return None
+        cells = {}
+        for _i, (_dte, _js) in enumerate(rows):    # rows newest-first; _i==0 is latest
+            _v = _js if isinstance(_js, dict) else _j.loads(_js)
+            for _ek, _tens in (_v or {}).items():
+                _eY = _t2y(_ek)
+                if _eY is None or not isinstance(_tens, dict): continue
+                for _tk, _vv in _tens.items():
+                    _tY = _t2y(_tk)
+                    try: _fv = float(_vv)
+                    except Exception: continue
+                    if _tY is None or _fv <= 0: continue
+                    _k = (round(_eY,4), round(_tY,4))
+                    _c = cells.setdefault(_k, {"sum":0.0,"n":0,"latest":None})
+                    _c["sum"] += _fv; _c["n"] += 1
+                    if _i == 0: _c["latest"] = _fv
+        return {k: (v["sum"]/v["n"], v["latest"]) for k, v in cells.items() if v["n"] >= 5} or None
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _volrep_emp_betas(ccy: str):
+    """Empirical per-cell vol β vs 1y10y from vol_history (OLS on daily changes,
+    last-per-day, ≤300 snapshots, ≥40 overlapping obs per cell). None if thin."""
+    try:
+        import json as _j, re as _re, numpy as _np
+        def _t2y(t):
+            t = str(t).strip().upper()
+            if t.startswith("<"): return 1/52.0
+            m = _re.fullmatch(r"(?:(\d+)Y)?(?:(\d+)M)?", t)
+            if not m or (m.group(1) is None and m.group(2) is None): return None
+            return int(m.group(1) or 0) + int(m.group(2) or 0)/12.0
+        conn = get_db_connection()
+        if conn is None: return None
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT DISTINCT ON (snapshot_date::date) snapshot_date, atm_vols "
+                        "FROM vol_history WHERE currency=%s AND user_id='shared' "
+                        "AND atm_vols IS NOT NULL "
+                        "ORDER BY snapshot_date::date DESC, created_at DESC LIMIT 300", (ccy,))
+            rows = cur.fetchall()
+        finally:
+            try: cur.close()
+            except Exception: pass
+        if not rows or len(rows) < 45: return None
+        series = {}
+        for _dte, _js in rows:
+            _v = _js if isinstance(_js, dict) else _j.loads(_js)
+            for _ek, _tens in (_v or {}).items():
+                _eY = _t2y(_ek)
+                if _eY is None or not isinstance(_tens, dict): continue
+                for _tk, _vv in _tens.items():
+                    _tY = _t2y(_tk)
+                    try: _fv = float(_vv)
+                    except Exception: continue
+                    if _tY is None or _fv <= 0: continue
+                    series.setdefault((round(_eY,4), round(_tY,4)), {})[str(_dte)[:10]] = _fv
+        if not series: return None
+        _refk = min(series.keys(), key=lambda k: abs(k[0]-1.0)*3 + abs(k[1]-10.0))
+        _ref = series[_refk]; _rd = sorted(_ref)
+        _refchg = {b: _ref[b]-_ref[a] for a, b in zip(_rd[:-1], _rd[1:])}
+        betas = {}
+        for _k, _sv in series.items():
+            _ds = sorted(_sv); _x, _y = [], []
+            for _a, _b in zip(_ds[:-1], _ds[1:]):
+                if _b in _refchg:
+                    _x.append(_refchg[_b]); _y.append(_sv[_b]-_sv[_a])
+            if len(_x) < 40: continue
+            _xa = _np.array(_x); _vx = float(_np.var(_xa))
+            if _vx <= 0: continue
+            betas[_k] = float(_np.cov(_xa, _np.array(_y))[0][1] / _vx)
+        return betas or None
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _volrep_30d_n10eq(ccy: str):
+    """30d average of DAILY total 10Y-eq notional from dtcc_sdr (junk excluded).
+    Returns float (currency units) or None."""
+    try:
+        import re as _re, pandas as _pd
+        def _t2y(t):
+            t = str(t).strip().upper()
+            if t.startswith("<"): return 1/52.0
+            m = _re.fullmatch(r"(?:(\d+)Y)?(?:(\d+)M)?", t)
+            if not m or (m.group(1) is None and m.group(2) is None): return None
+            return int(m.group(1) or 0) + int(m.group(2) or 0)/12.0
+        conn = get_db_connection()
+        if conn is None: return None
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT execution_timestamp::date, swp_tenor, SUM(notional_leg1) "
+                "FROM dtcc_sdr WHERE notional_ccy=%s AND action_type='NEWT' "
+                "AND (strike_pct IS NOT NULL OR premium_amount IS NOT NULL) "
+                "AND swp_tenor IS NOT NULL AND opt_tenor IS NOT NULL "
+                "AND execution_timestamp >= now() - interval '55 days' "
+                "GROUP BY 1,2", (ccy,))
+            rows = cur.fetchall()
+        finally:
+            try: cur.close()
+            except Exception: pass
+        if not rows: return None
+        d = _pd.DataFrame(rows, columns=["d","swp","notl"])
+        d["tY"] = d["swp"].map(_t2y)
+        d = d.dropna(subset=["tY"]); d = d[d["tY"] > 0]
+        d["n10"] = _pd.to_numeric(d["notl"], errors="coerce").fillna(0.0) * d["tY"]/10.0
+        daily = d.groupby("d")["n10"].sum().sort_index()
+        if len(daily) < 10: return None
+        return float(daily.tail(30).mean())
+    except Exception:
+        return None
+
+
+def _sdr_vol_report(df, ccy: str, tz_label: str = "", beta_mode: str = "Auto",
+                    cols_sel=None, include_chart: bool = True, sort_by: str = "Time"):
+    """Per-PAIRED-trade vol report PDF from the tape dataframe (_all_df_excel — the
+    paired set: CALL+PUT pairing, Tradition leg-merge, all-ccy normaliser).
+    beta_mode: Auto (empirical→level fallback) | Empirical only | Level only.
+    cols_sel: optional list of optional columns to include (Time/Struct always shown).
+    include_chart: append a 10Y-eq-by-expiry bar chart. sort_by: "Time" or "10Y-eq".
+    Footer: day total 10Y-eq vs the 30d average of daily totals.
+    Returns (pdf_bytes, n_rows, date_token) or (None, 0, "")."""
+    import re as _re_v, math as _m_v
+    from io import BytesIO as _BIO_v
+    def _t2y(t):
+        t = str(t).strip().upper()
+        if not t or t in ("NAN","NONE","\u2014","—",""): return None
+        if t.startswith("<"): return 1/52.0
+        m = _re_v.fullmatch(r"(?:(\d+)Y)?(?:(\d+)M)?", t)
+        if not m or (m.group(1) is None and m.group(2) is None): return None
+        return int(m.group(1) or 0) + int(m.group(2) or 0)/12.0
+    def _notl(v):
+        s = str(v).strip().upper().replace(",", "")
+        try:
+            if s.endswith("B"): return float(s[:-1]) * 1e9
+            if s.endswith("M"): return float(s[:-1]) * 1e6
+            if s.endswith("K"): return float(s[:-1]) * 1e3
+            return float(s)
+        except Exception:
+            return 0.0
+    def _clean(s):
+        s = "" if s is None else str(s)
+        s = _re_v.sub(r"[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F]", "", s)
+        s = _re_v.sub(r"\s*\[P\d+\]\s*", " ", s)
+        return s.strip()
+    try:
+        import pandas as _pd_v
+        stats = _volrep_cell_stats(ccy)
+        betas = _volrep_emp_betas(ccy) if beta_mode in ("Auto", "Empirical only") else None
+        if beta_mode == "Empirical only" and not betas:
+            betas = None  # will show as level-fallback note
+        _skeys = list(stats.keys()) if stats else []
+        _bkeys = list(betas.keys()) if betas else []
+        _refv = None
+        if stats:
+            _rk = min(_skeys, key=lambda k: abs(k[0]-1.0)*3 + abs(k[1]-10.0))
+            _refv = stats[_rk][1] or stats[_rk][0]
+        def _cell_stats(eY, tY):
+            if not stats: return (None, None)
+            k = min(_skeys, key=lambda k2: abs(k2[0]-eY)*3 + abs(k2[1]-tY))
+            if abs(k[0]-eY) > 1.0 or abs(k[1]-tY) > 5.0: return (None, None)
+            return stats[k]
+        def _beta(eY, tY):
+            if betas:
+                k = min(_bkeys, key=lambda k2: abs(k2[0]-eY)*3 + abs(k2[1]-tY))
+                if abs(k[0]-eY) <= 1.0 and abs(k[1]-tY) <= 5.0:
+                    return betas[k]
+                if beta_mode == "Empirical only":
+                    return None
+            if beta_mode == "Empirical only":
+                return None
+            avg, latest = _cell_stats(eY, tY)
+            v = latest or avg
+            if v and _refv and _refv > 0: return v/_refv
+            return 1.0
+        if betas:
+            beta_src = "empirical (vol_history OLS vs 1y10y)" + ("" if beta_mode!="Auto" else ", level fallback for thin cells")
+        elif beta_mode == "Empirical only":
+            beta_src = "empirical requested but history too thin — cells show \u2014"
+        else:
+            beta_src = "level (\u03c3/\u03c3_1y10y, latest surface)"
+
+        _ALL_OPT = ["Type","Strike","Prem bp","ATM vol","30d avg vol","10Y-eq (M)","\u03b2","\u03b2-VegaEq (M)"]
+        _use = [c for c in _ALL_OPT if (cols_sel is None or c in cols_sel)]
+
+        rows = df.copy()
+        if "Type" in rows.columns:
+            rows = rows[rows["Type"].astype(str) != "__HIDE__"]; rows = rows[rows["Type"].notna()]
+        recs, _dates = [], []
+        tot_n10, tot_bv = 0.0, 0.0
+        _exp_agg = {}
+        def _exp_bucket(y):
+            if y is None: return None
+            if y <= 1/12+0.001: return "0-1M"
+            if y <= 0.26: return "2-3M"
+            if y <= 0.51: return "4-6M"
+            if y <= 1.01: return "7-12M"
+            if y <= 2.01: return "1-2Y"
+            if y <= 5.01: return "2-5Y"
+            return "5Y+"
+        for _, r in rows.iterrows():
+            tp = _clean(r.get("Type","")); exp = _clean(r.get("Opt Expiry","")); ten = _clean(r.get("Swp Tenor",""))
+            strike = _clean(r.get("Strike","")); prem = _clean(r.get("Nett Prem BP",""))
+            tm = r.get("Time","")
+            try:
+                _dtv = _pd_v.to_datetime(tm); _dates.append(_dtv)
+                tms = _dtv.strftime("%d-%b %H:%M")
+            except Exception:
+                tms = str(tm)
+            eY, tY = _t2y(exp), _t2y(ten)
+            N = _notl(r.get("Notional",""))
+            is_hedge = "hedge" in tp.lower()
+            vals = {"Type": tp, "Strike": strike, "Prem bp": prem,
+                    "ATM vol": "\u2014", "30d avg vol": "\u2014", "10Y-eq (M)": "\u2014",
+                    "\u03b2": "\u2014", "\u03b2-VegaEq (M)": "\u2014"}
+            _n10_v = None
+            if eY is not None and tY is not None and tY > 0 and N > 0:
+                n10 = N * tY/10.0; _n10_v = n10
+                avg30, latest = _cell_stats(eY, tY)
+                b = _beta(eY, tY) if not is_hedge else None
+                bv = (N * (tY/10.0) * _m_v.sqrt(max(eY, 1/52.0)) * b) if (b is not None and not is_hedge) else None
+                tot_n10 += n10
+                if bv: tot_bv += bv
+                _bk = _exp_bucket(eY)
+                if _bk: _exp_agg[_bk] = _exp_agg.get(_bk, 0.0) + n10
+                vals.update({"ATM vol": f"{latest:.1f}" if latest else "\u2014",
+                             "30d avg vol": f"{avg30:.1f}" if avg30 else "\u2014",
+                             "10Y-eq (M)": f"{n10/1e6:,.0f}",
+                             "\u03b2": (f"{b:.2f}" if b is not None else "\u2014"),
+                             "\u03b2-VegaEq (M)": (f"{bv/1e6:,.0f}" if bv else "\u2014")})
+            recs.append(([tms, f"{exp} {ten}".strip() or "\u2014"] + [vals[c] for c in _use], _n10_v, _dates[-1] if _dates else None))
+        if not recs: return None, 0, ""
+        if sort_by == "10Y-eq":
+            recs.sort(key=lambda x: (x[1] is None, -(x[1] or 0)))
+        table_rows = [r[0] for r in recs]
+        _dd = sorted(d.date() for d in _dates) if _dates else []
+        _rng, _tok = "", ""
+        if _dd:
+            a, b2 = _dd[0], _dd[-1]
+            def _ord(x): return f"{x}{'th' if 11<=x%100<=13 else {1:'st',2:'nd',3:'rd'}.get(x%10,'th')}"
+            _rng = (f"{_ord(a.day)} {a.strftime('%B %Y')}" if a==b2
+                    else f"{_ord(a.day)} {a.strftime('%B') if a.year==b2.year else a.strftime('%B %Y')} - {_ord(b2.day)} {b2.strftime('%B %Y')}")
+            _tok = a.strftime("%d%b%Y") if a==b2 else f"{a.strftime('%d%b')}-{b2.strftime('%d%b%Y')}"
+
+        # 30d-average context (per trading day; ratio uses report total / n_days)
+        _ctx = ""
+        try:
+            _avg30 = _volrep_30d_n10eq(ccy)
+            if _avg30 and _avg30 > 0 and _dd:
+                _ndays = max(1, len(set(_dd)))
+                _ratio = (tot_n10/_ndays) / _avg30
+                _ctx = (f"&nbsp;\u00b7&nbsp; daily 10Y-eq {tot_n10/_ndays/1e6:,.0f}M = "
+                        f"{_ratio:.2f}\u00d7 the 30d average ({_avg30/1e6:,.0f}M/day)")
+        except Exception:
+            pass
+
+        from reportlab.lib.pagesizes import A4 as _A4, landscape as _ls
+        from reportlab.lib import colors as _rc
+        from reportlab.lib.units import mm as _mm
+        from reportlab.platypus import SimpleDocTemplate as _SDT, Table as _T, TableStyle as _TS, Paragraph as _P, Spacer as _SP
+        from reportlab.lib.styles import getSampleStyleSheet as _gss, ParagraphStyle as _PS
+        pbuf = _BIO_v()
+        doc = _SDT(pbuf, pagesize=_ls(_A4), topMargin=12*_mm, bottomMargin=12*_mm,
+                   leftMargin=12*_mm, rightMargin=12*_mm)
+        styles = _gss()
+        title = f"{ccy} SDR paired-trade vol report"
+        if _rng: title += f" ({_rng})"
+        if tz_label: title += f" &ndash; {tz_label} Time"
+        head = ["Time","Struct"] + _use
+        data = [head] + table_rows
+        _wmap = {"Time":22,"Struct":22,"Type":30,"Strike":48,"Prem bp":18,"ATM vol":18,
+                 "30d avg vol":22,"10Y-eq (M)":24,"\u03b2":14,"\u03b2-VegaEq (M)":26}
+        colw = [_wmap.get(h,22)*_mm for h in head]
+        tbl = _T(data, colWidths=colw, repeatRows=1)
+        tbl.setStyle(_TS([
+            ("BACKGROUND",(0,0),(-1,0),_rc.HexColor("#1F3864")),
+            ("TEXTCOLOR",(0,0),(-1,0),_rc.white),
+            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),7.2),
+            ("FONTNAME",(0,1),(-1,-1),"Helvetica"),
+            ("ROWBACKGROUNDS",(0,1),(-1,-1),[_rc.white,_rc.HexColor("#EEF2F8")]),
+            ("GRID",(0,0),(-1,-1),0.2,_rc.HexColor("#C8CDD6")),
+            ("ALIGN",(4,0),(-1,-1),"RIGHT"),("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+            ("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2),
+        ]))
+        _h = _PS("h", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=12, spaceAfter=1)
+        _s = _PS("s", parent=styles["Normal"], fontSize=7.5, textColor=_rc.HexColor("#555555"), spaceAfter=6)
+        elems = [_P(title,_h),
+                 _P(f"{len(table_rows)} paired trades &nbsp;\u00b7&nbsp; totals: 10Y-eq {tot_n10/1e6:,.0f}M, "
+                    f"\u03b2-VegaEq {tot_bv/1e6:,.0f}M{_ctx} &nbsp;\u00b7&nbsp; \u03b2 source: {beta_src} "
+                    f"&nbsp;\u00b7&nbsp; ATM vol = cell latest / 30d avg from vol_history (Hedge legs excluded from vega)", _s),
+                 _SP(1,2*_mm), tbl]
+        if include_chart and _exp_agg:
+            try:
+                from reportlab.graphics.shapes import Drawing as _Dw, String as _Str
+                from reportlab.graphics.charts.barcharts import VerticalBarChart as _VBC
+                _order = ["0-1M","2-3M","4-6M","7-12M","1-2Y","2-5Y","5Y+"]
+                _cats = [c for c in _order if c in _exp_agg]
+                _valsM = [_exp_agg[c]/1e6 for c in _cats]
+                _dw = _Dw(720, 190)
+                _bc = _VBC(); _bc.x = 40; _bc.y = 28; _bc.width = 640; _bc.height = 130
+                _bc.data = [_valsM]
+                _bc.categoryAxis.categoryNames = _cats
+                _bc.categoryAxis.labels.fontSize = 7
+                _bc.valueAxis.labels.fontSize = 7
+                _bc.valueAxis.valueMin = 0
+                _bc.bars[0].fillColor = _rc.HexColor("#1F3864")
+                _dw.add(_bc)
+                _dw.add(_Str(40, 172, "10Y-eq notional (M) by expiry bucket", fontSize=9,
+                             fillColor=_rc.HexColor("#1F3864"), fontName="Helvetica-Bold"))
+                elems += [_SP(1, 5*_mm), _dw]
+            except Exception:
+                pass
+        doc.build(elems)
+        pbuf.seek(0)
+        return pbuf.getvalue(), len(table_rows), _tok
+    except Exception:
+        return None, 0, ""
 
 
 def export_vol_surface_to_excel(currency: str, include_sabr: bool = True) -> Optional[bytes]:
@@ -12170,7 +12516,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         if _tape_x or _tape_p:
                             _tp_datestr = _tape_date or _local_now.strftime("%d%b%Y")
                             _tp_stub = f"SDR_Tape_{_sdr_ccy}_{_tp_datestr}"
-                            _tp_c1, _tp_c2, _tp_c3 = st.columns([1, 1, 4])
+                            _tp_c1, _tp_c2, _tp_cv, _tp_c3 = st.columns([1, 1, 1, 3])
                             with _tp_c1:
                                 if _tape_x:
                                     st.download_button(
@@ -12187,9 +12533,38 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         key="_sdr_tape_pdf_dl")
                                 elif _tape_x:
                                     st.caption("PDF unavailable (reportlab not installed).")
+                            with _tp_cv:
+                                try:
+                                    with st.popover("⚙ Vol report options"):
+                                        _vr_beta = st.radio("β source", ["Auto", "Empirical only", "Level only"],
+                                                            key="_vr_beta_mode", horizontal=True,
+                                                            help="Auto: empirical per-cell OLS betas from vol_history, "
+                                                                 "level β (σ/σ_1y10y) for thin cells. Empirical only: "
+                                                                 "no fallback — thin cells show —. Level only: pure σ-ratio.")
+                                        _vr_cols = st.multiselect("Columns",
+                                            ["Type","Strike","Prem bp","ATM vol","30d avg vol","10Y-eq (M)","β","β-VegaEq (M)"],
+                                            default=["Type","Strike","Prem bp","ATM vol","30d avg vol","10Y-eq (M)","β","β-VegaEq (M)"],
+                                            key="_vr_cols")
+                                        _vr_chart = st.checkbox("Include expiry chart", value=True, key="_vr_chart")
+                                        _vr_sort = st.radio("Sort", ["Time", "10Y-eq"], key="_vr_sort", horizontal=True)
+                                    _vr_cols_b = [c.replace("β", "\u03b2") for c in _vr_cols]
+                                    _vr_p, _vr_n, _vr_tok = _sdr_vol_report(
+                                        _all_df_excel, _tape_ccy if "_tape_ccy" in dir() else _sdr_ccy,
+                                        _tz_word if "_tz_word" in dir() else _tz_label,
+                                        beta_mode=_vr_beta, cols_sel=_vr_cols_b,
+                                        include_chart=_vr_chart, sort_by=_vr_sort)
+                                    if _vr_p:
+                                        st.download_button(
+                                            "⬇ Vol report (PDF)", data=_vr_p,
+                                            file_name=f"SDR_VolReport_{_sdr_ccy}_{_vr_tok or _tp_datestr}.pdf",
+                                            mime="application/pdf",
+                                            key="_sdr_volrep_pdf_dl")
+                                except Exception:
+                                    pass
                             with _tp_c3:
                                 st.caption(f"Clean {_sdr_ccy} tape — {_tape_n} prints, "
-                                           f"one line each (straddles marked ATM).")
+                                           f"one line each (straddles marked ATM). Vol report adds "
+                                           f"per-trade ATM/30d-avg bp vol, 10Y-eq and β-VegaEq.")
                     except Exception:
                         pass
 
