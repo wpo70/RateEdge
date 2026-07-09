@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907t"
+APP_VERSION = "v0907u"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -21889,13 +21889,16 @@ def swaptions_tab(vol_mode: str):
     with col_not:
         notional = st.number_input("Notional (mm)", min_value=1.0, max_value=10000.0, value=100.0, step=10.0, key="sw_not")
     with col_exp:
-        EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y"]
-        expiry_sel = st.selectbox("Expiry", EXPIRY_PRESETS, index=4, key="sw_expiry")
+        # v0907u: "Manual" at top — when selected, the Expiry Date box drives
+        # everything (whatever date you type IS the expiry; no tenor label).
+        EXPIRY_PRESETS = ["Manual","1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y"]
+        expiry_sel = st.selectbox("Expiry", EXPIRY_PRESETS, index=5, key="sw_expiry")
+        _sw_manual = (expiry_sel == "Manual")
         expiry = expiry_sel
-        expiry_y = label_to_years(expiry)
+        # For Manual, expiry_y is resolved from the typed date below; seed with
+        # a placeholder so _calc_dt (default box value) has something to roll.
+        expiry_y = 0.25 if _sw_manual else label_to_years(expiry)
         expiry_display = expiry
-        # v0907s: broken-date tracking. Set True below if the user overrides
-        # the Expiry Date so it no longer matches the standard rolled date.
         _sw_broken_date = False
         _sw_broken_dt = None
     with col_expdt:
@@ -21909,8 +21912,12 @@ def swaptions_tab(vol_mode: str):
         else:
             _sw_today = _sw_date.today()
         _calc_dt = modified_following(_sw_today + __import__('datetime').timedelta(days=int(expiry_y * 365.25)))
-        _default_dt_str = _calc_dt.strftime("%d/%m/%Y")
-        _custom_dt_str = st.text_input("Expiry Date (DD/MM/YY)", value=_default_dt_str, key=f"sw_expiry_date_{expiry}")
+        # v0907u: Manual mode → box is empty by default so the date picker takes
+        # over; standard mode → box pre-fills with the rolled tenor date.
+        _default_dt_str = "" if _sw_manual else _calc_dt.strftime("%d/%m/%Y")
+        _custom_dt_str = st.text_input("Expiry Date (DD/MM/YY)", value=_default_dt_str,
+                                       key=f"sw_expiry_date_{expiry}",
+                                       placeholder="DD/MM/YYYY" if _sw_manual else None)
         try:
             from datetime import datetime as _swdt
             _formats = ["%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d"]
@@ -21918,14 +21925,23 @@ def swaptions_tab(vol_mode: str):
             for _fmt in _formats:
                 try: _parsed = _swdt.strptime(_custom_dt_str.strip(), _fmt).date(); break
                 except: pass
-            if _parsed and _parsed != _calc_dt:
+            if _sw_manual:
+                # Manual: the typed date IS the expiry. No tenor label anywhere.
+                if _parsed:
+                    expiry_y = max((_parsed - _sw_today).days / 365.0, 1/365.0)
+                    _sw_broken_date = True
+                    _sw_broken_dt = _parsed
+                    expiry = _parsed.strftime("%d-%b-%Y")
+                    expiry_display = _parsed.strftime("%d-%b-%Y")
+                else:
+                    st.caption("⤷ enter an expiry date")
+            elif _parsed and _parsed != _calc_dt:
+                # Standard tenor but date overridden → treat as manual date.
                 expiry_y = max((_parsed - _sw_today).days / 365.0, 1/365.0)
-                # v0907s: this is a BROKEN date — user picked a specific expiry
-                # that isn't the standard rolled tenor date. Flag it and show
-                # Manual date: user picked a specific expiry; blotter shows it.
                 _sw_broken_date = True
                 _sw_broken_dt = _parsed
-                expiry_display = f"Manual ({_parsed.strftime('%d-%b-%Y')})"
+                expiry = _parsed.strftime("%d-%b-%Y")
+                expiry_display = _parsed.strftime("%d-%b-%Y")
         except: pass
     with col_delay:
         DELAY_PRESETS = ["None","1m","2m","3m","6m","9m","1y","18m","2y"]
