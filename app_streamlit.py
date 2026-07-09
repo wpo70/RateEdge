@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907u"
+APP_VERSION = "v0907v"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -22346,7 +22346,8 @@ def swaptions_tab(vol_mode: str):
             # Vanilla: read vol directly from surface at option expiry
             _vol_expiry_lbl = _snap_lbl(expiry_y)
             atm_val = get_matrix_value(atm, _vol_expiry_lbl, tenor_y) if atm is not None else None
-            if atm_val is None:
+            if atm_val is None and not _sw_broken_date:
+                # only retry with the raw label when it IS a tenor label
                 atm_val = get_matrix_value(atm, expiry, tenor_y) if atm is not None else None
             if atm_val is None:
                 st.warning("No ATM vol — using 80bp"); atm_val = 80.0
@@ -22395,7 +22396,11 @@ def swaptions_tab(vol_mode: str):
         else:
             _smile = st.session_state.get("sabr_smile_mode", "Sticky-ATM (alpha-sticky)")
             # Midcurve: use SABR params at (expiry+delay, tenor) not (expiry, tenor)
-            _sabr_expiry_lbl = _vol_expiry_lbl if is_midcurve else expiry
+            # v0907v: use the SNAPPED tenor label, never `expiry` — for a Manual
+            # date `expiry` is a date string ("25-Jul-2026") and the surface is
+            # keyed by tenor labels; label_to_years(date) crashes. _vol_expiry_lbl
+            # is already _snap_lbl(expiry_y) for the vanilla path.
+            _sabr_expiry_lbl = _vol_expiry_lbl
             # For midcurve, evaluate SABR smile at T=swap_start (expiry+delay)
             # so ATM vol matches surface at (expiry+delay, tenor) exactly
             _T_sabr = expiry_y + delay_y if is_midcurve else expiry_y
@@ -22500,7 +22505,8 @@ def swaptions_tab(vol_mode: str):
                 # leg: pinned vol (with bump) vs raw SABR vol (no bump), and how many
                 # pin keys exist for this expiry|tenor bucket. Diagnostic only.
                 try:
-                    _dbg_s = get_sabr_params_from_matrices(a, b, r, n, expiry, tenor_y)
+                    # v0907v: snapped label, not raw `expiry` (date string on Manual).
+                    _dbg_s = get_sabr_params_from_matrices(a, b, r, n, _snap_lbl(expiry_y), tenor_y)
                     if _dbg_s and _dbg_s.get("alpha", 0) > 0:
                         _sp = sabr_normal_vol_smile(fwd_pct/100.0, strike_pct/100.0, expiry_y,
                                                     _dbg_s["alpha"], _dbg_s["beta"], _dbg_s["rho"], _dbg_s["nu"])
