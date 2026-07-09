@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907k"
+APP_VERSION = "v0907m"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -22727,20 +22727,26 @@ def swaptions_tab(vol_mode: str):
         df = df.sort_values("_expiry_sort").reset_index(drop=True)
 
         _STATUS_COLOURS = {
+            "Live":         "rgba(207,231,255,0.95)",
             "Our Trade":     "rgba(220,255,220,0.95)",
             "Away Trade":   "rgba(255,210,210,0.95)",
             "Direct Trade": "rgba(255,235,195,0.95)",
         }
-        _STATUS_OPTS = ["—", "Our Trade", "Away Trade", "Direct Trade"]
+        # v0907m LIVE BLOTTER: default status is Live — the row reprices in
+        # realtime off the current curve + vol surface. Moving to Our/Away/
+        # Direct FREEZES the row at that moment's levels (written into the
+        # stored entry). Status persisted in the row dict so frozen trades
+        # survive app restarts.
+        _STATUS_OPTS = ["Live", "Our Trade", "Away Trade", "Direct Trade"]
 
         # Header row — light grey background
         st.markdown(
-            "<div style='display:grid;grid-template-columns:2.5% 15% 5.5% 6.5% 5.5% 7.0% 7.0% 7.0% 7.0% 7.0% 12.5% 6.0% 6.0% 6.0%;"
+            "<div style='display:grid;grid-template-columns:2.5% 13.0% 5.5% 6.5% 5.5% 6.8% 6.8% 6.8% 6.8% 6.8% 11.0% 5.5% 5.5% 5.5% 5.5%;"
             "gap:3px;background:#e2e8f0;padding:5px 6px;border-radius:4px 4px 0 0;"
             "font-size:11px;font-weight:600;color:#1e293b;border-bottom:2px solid #cbd5e1'>"
             "<span>#</span><span>Structure</span><span>Exp</span><span>Tenor</span>"
             "<span>Notl</span><span>Strike%</span><span>Fwd%</span><span>Spot Prem</span>"
-            "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Prnt</span><span>Del</span></div>",
+            "<span>Fwd Prem</span><span>PV($k)</span><span>Status</span><span>Tix</span><span>Prnt</span><span>Dup</span><span>Del</span></div>",
             unsafe_allow_html=True)
 
         for idx, row in df.iterrows():
@@ -22751,8 +22757,17 @@ def swaptions_tab(vol_mode: str):
             _legs   = row.get("legs",[]) if isinstance(row.get("legs",[]),list) else []
 
             _status_key = f"_sw_status_{_label}_{_expiry}_{_tenor}"
-            _cur_status = st.session_state.get(_status_key, "—")
+            # v0907m: status lives in the row dict (survives restart); session
+            # key is the working copy. Legacy "—" maps to Live.
+            _row_status = str(row.get("status", "")) or "Live"
+            _cur_status = st.session_state.get(_status_key, _row_status)
+            if _cur_status == "—":
+                _cur_status = "Live"
             _bg = _STATUS_COLOURS.get(_cur_status, "white")
+
+            # v0907m LIVE BLOTTER: Live rows reprice off the current curve +
+            # vol surface every render. Frozen rows show stored values.
+            _live_r = _reprice_blotter_row(row) if _cur_status == "Live" else None
 
             # Use stored spot/fwd premiums
             _fwd_bp       = float(row.get('pv_bp_fwd', row.get('pv_bp', 0)))
@@ -22765,16 +22780,23 @@ def swaptions_tab(vol_mode: str):
                     return math.exp(-0.035*ey)
                 except: return 1.0
             _spot_bp_disp = _fwd_bp * _df_exp_bl(label_to_years(str(row.get('expiry','1y'))))
+            _disp_fwd = float(row.get('forward', 0))
+            _disp_pv  = float(row.get('pv', 0))
+            if _live_r is not None:
+                _disp_fwd     = _live_r["forward"]
+                _fwd_bp       = _live_r["pv_bp_fwd"]
+                _spot_bp_disp = _live_r["pv_bp_spot"]
+                _disp_pv      = _live_r["pv"]
 
-            _rc = st.columns([0.25, 1.50, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.25, 0.60, 0.60, 0.65])
+            _rc = st.columns([0.25, 1.30, 0.55, 0.65, 0.55, 0.68, 0.68, 0.68, 0.68, 0.68, 1.10, 0.55, 0.55, 0.55, 0.55])
             _sw_vals = [
                 f"{idx+1}", _struct, _expiry, _tenor,
                 f"{float(row.get('notional_mm',100)):.0f}mm",
                 f"{float(row.get('strike',0)):.4f}",
-                f"{float(row.get('forward',0)):.4f}",
+                f"{_disp_fwd:.4f}",
                 f"{_spot_bp_disp:.2f}",
                 f"{_fwd_bp:.2f}",
-                f"{float(row.get('pv',0))/1000:,.1f}",
+                f"{_disp_pv/1000:,.1f}",
             ]
             _sw_colours = {7: "#22c55e", 8: "#38bdf8"}  # green=spot, blue=fwd
             for _ci, _val in enumerate(_sw_vals):
@@ -22795,7 +22817,26 @@ def swaptions_tab(vol_mode: str):
                 st.session_state.pop("_sw_tix_open", None)
                 _save_portfolio(); st.rerun()
             elif _new_status != _cur_status:
+                # v0907m: leaving Live FREEZES the trade at the current live
+                # levels — written into the stored entry so the marked trade
+                # keeps its traded values permanently (incl. across restarts).
+                for _pi, _pe in enumerate(st.session_state["swaption_portfolio"]):
+                    if (_pe.get("label") == _label and str(_pe.get("expiry")) == str(_expiry)
+                            and str(_pe.get("tenor")) == _tenor):
+                        if _cur_status == "Live" and _new_status in ("Our Trade", "Away Trade", "Direct Trade"):
+                            _fr = _reprice_blotter_row(_pe)
+                            if _fr is not None:
+                                _pe["forward"]    = _fr["forward"]
+                                _pe["pv"]         = _fr["pv"]
+                                _pe["pv_bp_fwd"]  = _fr["pv_bp_fwd"]
+                                _pe["pv_bp"]      = _fr["pv_bp_fwd"]
+                                _pe["pv_bp_spot"] = _fr["pv_bp_spot"]
+                                _pe["delta"]      = _fr["delta"]
+                                _pe["vega"]       = _fr["vega"]
+                        _pe["status"] = _new_status
+                        break
                 st.session_state[_status_key] = _new_status
+                _save_portfolio()
                 st.rerun()
 
             if can_quick_tix() and _rc[11].button("📋", key=f"sw_tix_{idx}", help="Quick Tix"):
@@ -22823,7 +22864,21 @@ def swaptions_tab(vol_mode: str):
                 except Exception as _pte:
                     st.error(f"Print Tix error: {_pte}")
 
-            if _rc[13].button("🗑️", key=f"sw_del_{idx}", help="Remove"):
+            if _rc[13].button("⧉", key=f"sw_dup_{idx}", help="Duplicate as LIVE reference"):
+                # v0907m: clone the trade as a Live reference running alongside.
+                for _pe in st.session_state["swaption_portfolio"]:
+                    if (_pe.get("label") == _label and str(_pe.get("expiry")) == str(_expiry)
+                            and str(_pe.get("tenor")) == _tenor):
+                        _cp = dict(_pe)
+                        _cp["legs"] = [dict(_lg) for _lg in _pe.get("legs", [])] if isinstance(_pe.get("legs"), list) else []
+                        _cp["label"] = f"{_pe.get('label','')} (live ref)"
+                        _cp["status"] = "Live"
+                        st.session_state["swaption_portfolio"].append(_cp)
+                        st.session_state["portfolio"].append(_cp)
+                        break
+                _save_portfolio(); st.rerun()
+
+            if _rc[14].button("🗑️", key=f"sw_del_{idx}", help="Remove"):
                 st.session_state["swaption_portfolio"].pop(idx)
                 st.session_state["portfolio"] = [p for p in st.session_state["portfolio"]
                                                   if p.get("label") != _label or p.get("expiry") != _expiry]
@@ -22957,6 +23012,110 @@ def _usd_wedge_fwd_prem(exp_lbl: str, tenor_y: float):
             model="Normal", label="", use_curve=True)
         res = price_swaption(tk)
         return float(res.get("pv_bp_fwd", res.get("pv_bp", 0.0)))
+    except Exception:
+        return None
+
+
+def _reprice_blotter_row(row) -> dict:
+    """v0907m LIVE BLOTTER: reprice a swaption blotter row from the CURRENT
+    curve + vol surface, through the EXACT pricer engine (price_swaption +
+    forward_and_annuity_from_curve + working surface + SABR smile). Strike is
+    the row's traded strike; forward/vol/discount are live. Returns dict
+    {forward, pv, pv_bp_fwd, pv_bp_spot, delta, vega} or None (caller keeps
+    the stored/frozen values). Midcurves are NOT live-repriced (delay
+    structure not reconstructable from the row) — returns None.
+    """
+    try:
+        if bool(row.get("is_midcurve", False)):
+            return None
+        _ccy = str(row.get("currency", "")) or "AUD"
+        curve = st.session_state.get("config_curves", {}).get(_ccy)
+        if curve is None or (hasattr(curve, "empty") and curve.empty):
+            return None
+        exp_y = label_to_years(str(row.get("expiry", "")))
+        _ten_s = str(row.get("tenor", "")).strip()
+        if not _ten_s or _ten_s[-1].upper() != "Y":
+            return None
+        tenor_y = float(_ten_s[:-1])
+        if not exp_y or exp_y <= 0 or tenor_y <= 0:
+            return None
+        # discount curve: explicit OIS else single-curve alias (USD/GBP/JPY)
+        ois = st.session_state.get("config_basis", {}).get(_ccy, {}).get("ois")
+        if ois is None:
+            try:
+                ois = get_basis_curve(_ccy, "ois")
+            except Exception:
+                ois = None
+        if ois is None and _ccy in ("USD", "GBP", "JPY"):
+            ois = curve
+        fwd, ann, _ = forward_and_annuity_from_curve(curve, _ccy, exp_y, tenor_y, ois)
+        fwd_pct = fwd * 100.0
+        atm, _sa, _sb, _sr, _sn = get_ccy_vol_data(_ccy)
+        if atm is None:
+            return None
+        _exp_lbl = str(row.get("expiry", ""))
+        atm_bp = get_matrix_value(atm, _exp_lbl, tenor_y)
+        if atm_bp is None or pd.isna(atm_bp):
+            return None
+
+        def _vol_k(k_pct):
+            try:
+                if abs(k_pct - fwd_pct) < 1e-4:
+                    return float(atm_bp) / 10000.0
+                sabr = get_sabr_params_from_matrices(_sa, _sb, _sr, _sn, _exp_lbl, tenor_y)
+                if sabr and sabr.get("alpha", 0) > 0:
+                    return smile_vol_pinned(
+                        fwd_pct / 100.0, k_pct / 100.0, exp_y,
+                        sabr["alpha"], sabr["beta"], sabr["rho"], sabr["nu"],
+                        exp_y, tenor_y)
+            except Exception:
+                pass
+            return float(atm_bp) / 10000.0
+
+        try:
+            _ox = ois[ois.columns[0]].to_numpy().astype(float)
+            _oy = ois[ois.columns[1]].to_numpy().astype(float) / 100.0
+            _r = float(np.interp(exp_y, _ox, _oy))
+        except Exception:
+            _r = 0.04
+        _notl = float(row.get("notional_mm", 100)) * 1e6
+        _legs = row.get("legs", []) if isinstance(row.get("legs", []), list) else []
+
+        def _price_leg(side, k_pct, payoff="vanilla"):
+            tk = SwaptionTicket(
+                side=side, payoff_type=payoff, notional=_notl, currency=_ccy,
+                expiry_years=exp_y, swap_tenor_years=tenor_y, forward=fwd,
+                strike=k_pct / 100.0, vol=_vol_k(k_pct), discount_rate=_r,
+                annuity=ann, model="Normal", label="", use_curve=True)
+            return price_swaption(tk)
+
+        _k_row = float(row.get("strike", 0)) or fwd_pct
+        if _legs and len(_legs) > 1:
+            agg = {"pv": 0.0, "pv_bp_fwd": 0.0, "delta": 0.0, "vega": 0.0}
+            for _lg in _legs:
+                _nm = str(_lg.get("name", "")).lower()
+                _side = "Payer" if "payer" in _nm else "Receiver"
+                _q = float(_lg.get("qty", 1))
+                _res = _price_leg(_side, float(_lg.get("strike", _k_row)))
+                agg["pv"]        += _q * _res.get("pv", 0.0)
+                agg["pv_bp_fwd"] += _q * _res.get("pv_bp_fwd", _res.get("pv_bp", 0.0))
+                agg["delta"]     += _q * _res.get("delta", 0.0)
+                agg["vega"]      += _q * _res.get("vega", 0.0)
+            res = agg
+        else:
+            _struct = str(row.get("structure", ""))
+            if "Straddle" in _struct:
+                res_full = _price_leg("Payer", _k_row, payoff="straddle")
+            else:
+                _side = "Payer" if "Payer" in _struct else ("Receiver" if "Receiver" in _struct else "Payer")
+                res_full = _price_leg(_side, _k_row)
+            res = {"pv": res_full.get("pv", 0.0),
+                   "pv_bp_fwd": res_full.get("pv_bp_fwd", res_full.get("pv_bp", 0.0)),
+                   "delta": res_full.get("delta", 0.0), "vega": res_full.get("vega", 0.0)}
+        _df_exp = math.exp(-_r * exp_y)
+        return {"forward": fwd_pct, "pv": res["pv"],
+                "pv_bp_fwd": res["pv_bp_fwd"], "pv_bp_spot": res["pv_bp_fwd"] * _df_exp,
+                "delta": res["delta"], "vega": res["vega"]}
     except Exception:
         return None
 
