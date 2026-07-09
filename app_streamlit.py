@@ -37,7 +37,6 @@ CCY_EOD = {
     "NZD": (17, 0),    # 5:00pm Wellington
     "USD": (16, 30),   # 4:30pm New York
     "GBP": (16, 0),    # 4:00pm London (SONIA swaption EOD)
-    "JPY": (15, 0),    # 3:00pm Tokyo (TONAR swaption EOD — confirm before first vol save)
 }
 from typing import Optional, List, Tuple, Dict
 
@@ -755,13 +754,13 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907e"
+APP_VERSION = "v0907f"
 
-SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
+SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
 # any internal lookups (NZD references in scanner gates, etc.) still resolve.
 # v1405w: NZD removed from sidebar entirely (was "NZD (PENDING)").
-ALL_CURRENCIES = ["AUD", "USD", "EUR", "GBP", "JPY", "CAD (PENDING)"]
+ALL_CURRENCIES = ["AUD", "USD", "EUR", "GBP", "JPY (PENDING)", "CAD (PENDING)"]
 # v1405x: explicit set of ccys to hide from UI dropdowns/filters/status displays.
 # Anything in SUPPORTED_CURRENCIES but NOT in ALL_CURRENCIES (as a non-PENDING entry)
 # should be in here. Backend code that needs NZD data still uses SUPPORTED_CURRENCIES.
@@ -1619,8 +1618,6 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                             _zc_df = bootstrap_usd_sofr_ois(_zc_df)
                         elif ccy == "GBP":
                             _zc_df = bootstrap_gbp_sonia_ois(_zc_df)
-                        elif ccy == "JPY":
-                            _zc_df = bootstrap_jpy_tonar_ois(_zc_df)
                         st.session_state.setdefault("curves", {})[ccy] = _zc_df
                         st.session_state.setdefault("config_curves", {})[ccy] = _zc_df
                         set_timestamp("curves", ccy)
@@ -2996,31 +2993,6 @@ def build_gbp_sonia_schedule(expiry: float, tenor: float) -> List[Tuple[float, f
     return schedule
 
 
-def build_jpy_tonar_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]:
-    """
-    JPY TONAR swaption: T+2 Tokyo BD spot, mod-fol, ACT/365F fixed, SEMI-ANNUAL
-    payments both legs (single-curve TONAR OIS). Returns (t_years, act365f_accrual).
-    v0907e — separate function, mirrors build_gbp_sonia_schedule with
-    spot_lag_bd=2 (vs GBP T+0) and semi-annual periods (vs GBP annual).
-    USD/EUR/GBP/AUD/NZD paths untouched.
-    """
-    today = _pricing_date()
-    fwd_start = _fwd_start_date(expiry, spot_lag_bd=2)
-    months_per_period = 6  # semi-annual
-    total_months = int(round(tenor * 12))
-    n = max(1, int(round(tenor * (12 / months_per_period))))
-    schedule = []
-    prev = fwd_start
-    for i in range(1, n + 1):
-        raw = _add_months(fwd_start, i * months_per_period if i < n else total_months)
-        pay = _mod_fol(raw)
-        accrual = _act365(prev, pay)   # ACT/365F for JPY TONAR
-        t_years = _act365(today, pay)
-        schedule.append((t_years, accrual))
-        prev = pay
-    return schedule
-
-
 def build_generic_schedule(expiry: float, tenor: float, freq: float = 0.5, spot_lag: float = 1.0) -> List[Tuple[float, float]]:
     """T+2BD spot (NZD/USD), mod-fol, Act/365. freq: 0.25=Q/Q, 0.5=S/S."""
     months_per = int(round(freq * 12))
@@ -3072,8 +3044,6 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         sched = build_eur_schedule(expiry, tenor)
     elif ccy == "GBP":
         sched = build_gbp_sonia_schedule(expiry, tenor)
-    elif ccy == "JPY":
-        sched = build_jpy_tonar_schedule(expiry, tenor)
     else:
         sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=1.0)
 
@@ -3139,13 +3109,13 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
 
     # Build log-cubic splines once (USD/EUR only); AUD/NZD use linear-on-zero.
     disc_curve = ois_curve if ois_curve is not None else _proj_curve
-    _proj_sp = _mk_logcubic(_proj_curve) if ccy in ("USD", "EUR", "GBP", "JPY") else None
-    _disc_sp = _mk_logcubic(disc_curve) if ccy in ("USD", "EUR", "GBP", "JPY") else None
+    _proj_sp = _mk_logcubic(_proj_curve) if ccy in ("USD", "EUR", "GBP") else None
+    _disc_sp = _mk_logcubic(disc_curve) if ccy in ("USD", "EUR", "GBP") else None
 
     def _df_proj(crv: pd.DataFrame, t: float, freq: float) -> float:
         """Projection DF. USD/EUR: log-cubic on DFs (market practice, matches
         BlueGamma). AUD/NZD: linear-on-zero (unchanged)."""
-        if ccy in ("USD", "EUR", "GBP", "JPY") and _proj_sp is not None:
+        if ccy in ("USD", "EUR", "GBP") and _proj_sp is not None:
             _sp, _ux, _ld = _proj_sp
             if _sp is not None:
                 return math.exp(float(_sp(t)))
@@ -3156,7 +3126,7 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         return math.exp(-z * t)
 
     def _df_disc(crv: pd.DataFrame, t: float) -> float:
-        if ccy in ("USD", "EUR", "GBP", "JPY") and _disc_sp is not None:
+        if ccy in ("USD", "EUR", "GBP") and _disc_sp is not None:
             _sp, _ux, _ld = _disc_sp
             if _sp is not None:
                 return math.exp(float(_sp(t)))
@@ -5598,9 +5568,6 @@ def get_basis_curve(ccy: str, basis_type: str = "6v3") -> Optional[pd.DataFrame]
         # OIS basis leg, so the OIS discount curve IS the SONIA curve itself.
         # Fixes discounting at every CFS/swaption ois-resolution site at once.
         return st.session_state.get("config_curves", {}).get("GBP")
-    if _bc is None and ccy == "JPY" and basis_type == "ois":
-        # v0907e: JPY TONAR single-curve — TONAR discounts TONAR (same as GBP).
-        return st.session_state.get("config_curves", {}).get("JPY")
     return _bc
 
 
@@ -6497,73 +6464,6 @@ def bootstrap_gbp_sonia_ois(par_df: pd.DataFrame) -> pd.DataFrame:
             else:
                 ann += DCF_ANNUAL * _dfi(n_full + SPOT)
                 dcf_last = (T - n_full) * DCF_ANNUAL
-            df_end = (1.0 - c * ann) / (1.0 + c * dcf_last)
-        if df_end > 0:
-            dfs[te] = df_end
-
-    result_rows = []
-    for _, row in par_df.iterrows():
-        mat = float(row["MaturityY"])
-        if mat > 0:
-            d = _dfi(mat)
-            zero_pct = -math.log(d) / mat * 100.0 if d > 0 else float(row["ZeroRatePct"])
-        else:
-            zero_pct = float(row["ZeroRatePct"])
-        nr = row.copy(); nr["ZeroRatePct"] = zero_pct
-        result_rows.append(nr)
-    return pd.DataFrame(result_rows).reset_index(drop=True)
-
-
-def bootstrap_jpy_tonar_ois(par_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Bootstrap JPY TONAR OIS par swap rates -> continuous zero rates.
-
-    v0907e. TONAR OIS conventions (single-curve OIS): SEMI-ANNUAL fixed,
-    ACT/365F, T+2 Tokyo. Mirrors bootstrap_gbp_sonia_ois EXACTLY except:
-      - payment frequency: semi-annual (DCF_SEMI = 0.5 per clean half-year)
-      - spot lag: T+2 (SPOT = 2/252) vs GBP T+0
-    TONAR is BOTH projection and discount (no basis leg). Separate function so
-    USD/EUR/GBP paths are never touched. In/out format: MaturityY + ZeroRatePct.
-    """
-    import math
-    SPOT = 2.0 / 252.0
-    DCF_SEMI = 0.5  # ACT/365F: a clean semi-annual period accrues ~182.5/365 = 0.5
-
-    par_dict = {}
-    for _, row in par_df.iterrows():
-        mat = float(row["MaturityY"]); rate = float(row["ZeroRatePct"])
-        if mat > 0 and rate != 0:
-            par_dict[mat] = rate
-    if len(par_dict) < 3:
-        return par_df
-
-    dfs = {0.0: 1.0, SPOT: 1.0}
-
-    def _dfi(t):
-        ts = sorted(dfs.keys()); dfv = [dfs[x] for x in ts]
-        if t <= ts[0]:
-            return 1.0
-        if t >= ts[-1]:
-            z = -math.log(max(dfv[-1], 1e-10)) / ts[-1]
-            return math.exp(-z * t)
-        return math.exp(float(np.interp(t, ts, np.log(np.maximum(dfv, 1e-10)))))
-
-    for T in sorted(par_dict):
-        c = par_dict[T] / 100.0
-        te = T + SPOT
-        if T <= 0.5 + 1e-9:
-            dcf = T  # single stub period, ACT/365F ~ year fraction
-            df_end = 1.0 / (1.0 + c * dcf)
-        else:
-            n_half = int(math.floor(T / 0.5))
-            ann = 0.0
-            for k in range(1, n_half):
-                ann += DCF_SEMI * _dfi(k * 0.5 + SPOT)
-            if abs(T - n_half * 0.5) < 1e-6:
-                dcf_last = DCF_SEMI
-            else:
-                ann += DCF_SEMI * _dfi(n_half * 0.5 + SPOT)
-                dcf_last = (T - n_half * 0.5)
             df_end = (1.0 - c * ann) / (1.0 + c * dcf_last)
         if df_end > 0:
             dfs[te] = df_end
@@ -10846,7 +10746,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
     if not df.empty:
         st.markdown("---")
         st.markdown("#### 📊 Analytics")
-        _atab_names = ["Strike Heatmap", "Straddle Detection", "P/R Ratio", "Full Trade Analytics", "📡 Expiry Monitor"]
+        _atab_names = ["Strike Heatmap", "Straddle Detection", "P/R Ratio", "Full Trade Analytics", "📡 Expiry Monitor", "📊 Volume vs Avg"]
         _atab_sel = st.radio("Analytics view", _atab_names, horizontal=True,
                              key="sdr_analytics_view", label_visibility="collapsed")
         # Only the selected panel's body runs (st.tabs rendered all 5 every rerun → slow).
@@ -10860,6 +10760,244 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
         _atab3 = _AtabGate(_atab_sel == _atab_names[2])
         _atab4 = _AtabGate(_atab_sel == _atab_names[3])
         _atab5 = _AtabGate(_atab_sel == _atab_names[4])
+        _atab6 = _AtabGate(_atab_sel == _atab_names[5])
+
+        if _atab6:
+            # ── VOLUME vs ROLLING AVERAGES — 10Y-eq notional & SABR-beta VegaEq ──
+            st.markdown("### 📊 Daily Volume vs 30d / 90d / 180d / 1Y averages")
+            st.caption("10Y-eq = notional × tail/10.  VegaEq = notional × (tail/10) × √T(expiry), "
+                       "1y10y = 1 unit.  β-VegaEq scales each cell by σ_ATM(exp,tail)/σ_ATM(1y10y) "
+                       "from the working SABR-calibrated surface — a vol-level beta. "
+                       "Rows without strike AND premium (junk) or without a swap tenor excluded. "
+                       "Rolling windows are observed trading days.")
+
+            @st.cache_data(ttl=1800, show_spinner=False)
+            def _sdr_daily_vol_agg(_ccy: str):
+                try:
+                    conn = get_db_connection()
+                    if conn is None:
+                        return None
+                    cur = conn.cursor()
+                    try:
+                        cur.execute(
+                            "SELECT execution_timestamp::date, opt_tenor, swp_tenor, "
+                            "COUNT(*), SUM(notional_leg1) FROM dtcc_sdr "
+                            "WHERE notional_ccy=%s AND action_type='NEWT' "
+                            "AND (strike_pct IS NOT NULL OR premium_amount IS NOT NULL) "
+                            "AND swp_tenor IS NOT NULL AND opt_tenor IS NOT NULL "
+                            "AND execution_timestamp >= now() - interval '430 days' "
+                            "GROUP BY 1,2,3", (_ccy,))
+                        rows = cur.fetchall()
+                    finally:
+                        try: cur.close()
+                        except Exception: pass
+                    return rows
+                except Exception:
+                    return None
+
+            def _t2y_va(t):
+                import re as _re_va
+                t = str(t).strip().upper()
+                if not t or t in ("NAN", "NONE"): return None
+                if t.startswith("<"): return 1/52.0
+                m = _re_va.fullmatch(r"(?:(\d+)Y)?(?:(\d+)M)?", t)
+                if not m or (m.group(1) is None and m.group(2) is None): return None
+                return int(m.group(1) or 0) + int(m.group(2) or 0)/12.0
+
+            _va_rows = _sdr_daily_vol_agg(_sdr_ccy_now if "_sdr_ccy_now" in dir() else st.session_state.get("sidebar_ccy","USD").split(" ")[0])
+            if not _va_rows:
+                st.info("No SDR aggregate data available for this currency.")
+            else:
+                import pandas as _pdva, numpy as _npva
+                _va = _pdva.DataFrame(_va_rows, columns=["d","opt","swp","trades","notional"])
+                _va["d"] = _pdva.to_datetime(_va["d"])
+                _va["tailY"] = _va["swp"].map(_t2y_va)
+                _va["expY"]  = _va["opt"].map(_t2y_va)
+                _va = _va.dropna(subset=["tailY","expY"])
+                _va = _va[_va["tailY"] > 0]
+                _va["notional"] = _pdva.to_numeric(_va["notional"], errors="coerce").fillna(0.0)
+
+                # ── β method toggle ──
+                _beta_mode = st.radio(
+                    "β method", ["SABR level β", "Empirical β (vol_history)"],
+                    horizontal=True, key="_va_beta_mode",
+                    help=("SABR level β — today's calibrated ATM vol of each cell ÷ the 1y10y ATM vol. "
+                          "Assumes vol CHANGES scale with vol LEVEL (high-vol cells move more, "
+                          "one-for-one with their level). Instant, always available, but it is an "
+                          "assumption, not a measurement.\n\n"
+                          "Empirical β — OLS slope of each cell's DAILY ATM vol changes regressed on "
+                          "1y10y's daily changes, estimated from your stored vol_history snapshots "
+                          "(last per day, up to ~1y). Measures how each bucket ACTUALLY moves per "
+                          "1y10y move. Cells with <40 overlapping observations fall back to the "
+                          "level β. Recomputed every 6h."))
+
+                @st.cache_data(ttl=21600, show_spinner=False)
+                def _va_emp_betas(_ccy: str):
+                    """Empirical per-cell vol betas vs 1y10y from vol_history EOD series.
+                    Returns (betas dict {(expY,tenY): beta}, n_days) or (None, 0)."""
+                    try:
+                        import json as _jsva
+                        conn = get_db_connection()
+                        if conn is None:
+                            return None, 0
+                        cur = conn.cursor()
+                        try:
+                            cur.execute(
+                                "SELECT DISTINCT ON (snapshot_date) snapshot_date, atm_vols "
+                                "FROM vol_history WHERE currency=%s AND user_id='shared' "
+                                "AND atm_vols IS NOT NULL "
+                                "ORDER BY snapshot_date DESC, created_at DESC LIMIT 300", (_ccy,))
+                            rows = cur.fetchall()
+                        finally:
+                            try: cur.close()
+                            except Exception: pass
+                        if not rows or len(rows) < 45:
+                            return None, len(rows or [])
+                        series = {}   # (expY,tenY) -> {date: vol}
+                        for _dte, _js in rows:
+                            _v = _js if isinstance(_js, dict) else _jsva.loads(_js)
+                            for _ek, _tens in (_v or {}).items():
+                                _eY = _t2y_va(_ek)
+                                if _eY is None or not isinstance(_tens, dict):
+                                    continue
+                                for _tk, _vv in _tens.items():
+                                    _tY = _t2y_va(_tk)
+                                    try:
+                                        _fv = float(_vv)
+                                    except Exception:
+                                        continue
+                                    if _tY is None or _fv <= 0:
+                                        continue
+                                    series.setdefault((round(_eY,4), round(_tY,4)), {})[_dte] = _fv
+                        # reference = nearest cell to (1y,10y)
+                        if not series:
+                            return None, len(rows)
+                        _refk = min(series.keys(), key=lambda k: abs(k[0]-1.0)*3 + abs(k[1]-10.0))
+                        _ref = series[_refk]
+                        _refd = sorted(_ref.keys())
+                        _refchg = {}
+                        for _a, _b in zip(_refd[:-1], _refd[1:]):
+                            _refchg[_b] = _ref[_b] - _ref[_a]
+                        betas = {}
+                        import numpy as _npb
+                        for _k, _sv in series.items():
+                            _ds = sorted(set(_sv.keys()) & set(_refchg.keys()))
+                            _x, _y = [], []
+                            for _a, _b in zip(sorted(_sv.keys())[:-1], sorted(_sv.keys())[1:]):
+                                if _b in _refchg:
+                                    _x.append(_refchg[_b]); _y.append(_sv[_b] - _sv[_a])
+                            if len(_x) < 40:
+                                continue
+                            _xa = _npb.array(_x); _ya = _npb.array(_y)
+                            _vx = float(_npb.var(_xa))
+                            if _vx <= 0:
+                                continue
+                            betas[_k] = float(_npb.cov(_xa, _ya)[0][1] / _vx)
+                        return (betas or None), len(rows)
+                    except Exception:
+                        return None, 0
+
+                # β from the working SABR-calibrated ATM surface: σ(exp,tail)/σ(1y10y)
+                _beta_fn = None
+                try:
+                    _srf = get_working_atm_surface(st.session_state.get("sidebar_ccy","USD").split(" ")[0])
+                    if _srf is not None:
+                        _sv = _srf.copy()
+                        if "Expiry" in _sv.columns: _sv = _sv.set_index("Expiry")
+                        _ey = [( _t2y_va(i), i) for i in _sv.index]
+                        _ty = [( _t2y_va(c), c) for c in _sv.columns]
+                        _ey = [(y,l) for y,l in _ey if y is not None]
+                        _ty = [(y,l) for y,l in _ty if y is not None]
+                        def _near(pairs, y):
+                            return min(pairs, key=lambda p: abs(p[0]-y))[1]
+                        _ref = float(_sv.loc[_near(_ey,1.0), _near(_ty,10.0)])
+                        if _ref and _ref > 0:
+                            def _beta_fn(eY, tY):
+                                try:
+                                    v = float(_sv.loc[_near(_ey,eY), _near(_ty,tY)])
+                                    return (v/_ref) if v and v > 0 else 1.0
+                                except Exception:
+                                    return 1.0
+                except Exception:
+                    _beta_fn = None
+                if _beta_fn is None:
+                    st.caption("⚠️ SABR surface unavailable — β=1 (unadjusted VegaEq).")
+                    _beta_fn = lambda eY, tY: 1.0
+                if _beta_mode.startswith("Empirical"):
+                    _eb, _ndays = _va_emp_betas(st.session_state.get("sidebar_ccy","USD").split(" ")[0])
+                    if _eb:
+                        _ebk = list(_eb.keys())
+                        _lvl_fn = _beta_fn
+                        def _beta_fn(eY, tY, _eb=_eb, _ebk=_ebk, _lvl=_lvl_fn):
+                            _k = min(_ebk, key=lambda k: abs(k[0]-eY)*3 + abs(k[1]-tY))
+                            # nearest cell must be reasonably close, else level fallback
+                            if abs(_k[0]-eY) > 1.0 or abs(_k[1]-tY) > 5.0:
+                                return _lvl(eY, tY)
+                            return _eb[_k]
+                        st.caption(f"Empirical β active — regression over {_ndays} stored EOD "
+                                   f"snapshots, {len(_eb)} cells estimated (thin cells fall back to level β).")
+                    else:
+                        st.caption(f"⚠️ Not enough vol_history for empirical β "
+                                   f"(need ≥45 daily snapshots; cells need ≥40 overlapping obs) — using level β.")
+
+                _va["N10eq"] = _va["notional"] * _va["tailY"]/10.0
+                _va["Vega"]  = _va["notional"] * (_va["tailY"]/10.0) * _npva.sqrt(_npva.maximum(_va["expY"], 1/52.0))
+                _va["BVega"] = _va.apply(lambda r: r["Vega"] * _beta_fn(r["expY"], r["tailY"]), axis=1)
+
+                _dd = _va.groupby("d").agg(trades=("trades","sum"), N10eq=("N10eq","sum"),
+                                           BVega=("BVega","sum")).sort_index()
+                _wins = {"30d":30, "90d":90, "180d":180, "1Y":252}
+                for _wl, _wn in _wins.items():
+                    _dd[f"N10eq_{_wl}"] = _dd["N10eq"].rolling(_wn, min_periods=max(15,_wn//2)).mean()
+                    _dd[f"BVega_{_wl}"] = _dd["BVega"].rolling(_wn, min_periods=max(15,_wn//2)).mean()
+
+                _last = _dd.iloc[-1]; _M = 1e6
+                st.markdown(f"**Latest day: {_dd.index[-1].date()}** — "
+                            f"10Y-eq **{_last['N10eq']/_M:,.0f}M** · β-VegaEq **{_last['BVega']/_M:,.0f}M** · {int(_last['trades'])} trades")
+                _c1 = st.columns(4); _c2 = st.columns(4)
+                for _i, _wl in enumerate(_wins):
+                    _avn = _last.get(f"N10eq_{_wl}"); _avb = _last.get(f"BVega_{_wl}")
+                    _rn = (_last["N10eq"]/_avn) if _avn and _avn > 0 else None
+                    _rb = (_last["BVega"]/_avb) if _avb and _avb > 0 else None
+                    _c1[_i].metric(f"10Y-eq vs {_wl}", f"{_rn:.2f}x" if _rn else "—",
+                                   delta=(f"{(_rn-1)*100:+.0f}%" if _rn else None))
+                    _c2[_i].metric(f"β-VegaEq vs {_wl}", f"{_rb:.2f}x" if _rb else "—",
+                                   delta=(f"{(_rb-1)*100:+.0f}%" if _rb else None))
+
+                try:
+                    import plotly.graph_objects as _gova
+                    _fig = _gova.Figure()
+                    _fig.add_trace(_gova.Scatter(x=_dd.index, y=_dd["N10eq"]/_M, name="Daily 10Y-eq (M)",
+                                                 mode="lines", line=dict(width=1, color="#5a9fd4")))
+                    for _wl, _col in [("30d","#f0b429"),("90d","#e05a5a"),("180d","#9a6ae0"),("1Y","#5ecb8a")]:
+                        _fig.add_trace(_gova.Scatter(x=_dd.index, y=_dd[f"N10eq_{_wl}"]/_M,
+                                                     name=f"{_wl} avg", mode="lines",
+                                                     line=dict(width=1.6, color=_col)))
+                    _fig.update_layout(height=340, margin=dict(l=10,r=10,t=28,b=10),
+                                       title="10Y-eq notional (M) vs rolling averages",
+                                       legend=dict(orientation="h", y=1.12),
+                                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                    st.plotly_chart(_fig, use_container_width=True)
+                    _fig2 = _gova.Figure()
+                    _fig2.add_trace(_gova.Scatter(x=_dd.index, y=_dd["BVega"]/_M, name="Daily β-VegaEq (M)",
+                                                  mode="lines", line=dict(width=1, color="#5a9fd4")))
+                    for _wl, _col in [("30d","#f0b429"),("90d","#e05a5a"),("180d","#9a6ae0"),("1Y","#5ecb8a")]:
+                        _fig2.add_trace(_gova.Scatter(x=_dd.index, y=_dd[f"BVega_{_wl}"]/_M,
+                                                      name=f"{_wl} avg", mode="lines",
+                                                      line=dict(width=1.6, color=_col)))
+                    _fig2.update_layout(height=340, margin=dict(l=10,r=10,t=28,b=10),
+                                        title="1y10y β-VegaEq (M) vs rolling averages",
+                                        legend=dict(orientation="h", y=1.12),
+                                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+                    st.plotly_chart(_fig2, use_container_width=True)
+                except Exception:
+                    st.line_chart((_dd[["N10eq","N10eq_30d","N10eq_90d"]]/_M))
+
+                with st.expander("Last 20 days (table)"):
+                    _tbl = _dd.tail(20).copy()
+                    for _c in _tbl.columns:
+                        if _c != "trades": _tbl[_c] = (_tbl[_c]/_M).round(0)
+                    st.dataframe(_tbl, use_container_width=True)
 
         if _atab1:
             # ── Strike Heatmap ──────────────────────────────────────────────
@@ -15411,7 +15549,6 @@ def vol_config_tab():
                     ("USD", "SOFR"),
                     ("NZD", "3M BKBM"),
                     ("GBP", "SONIA"),
-                    ("JPY", "TONAR"),
                 ]
                 for _db_ccy, _db_fr in _single_curve_map:
                     try:
@@ -15424,9 +15561,6 @@ def vol_config_tab():
                             elif _db_ccy == "GBP":
                                 st.session_state["_gbp_sonia_par"] = _db_curve.copy()
                                 _db_curve = bootstrap_gbp_sonia_ois(_db_curve)
-                            elif _db_ccy == "JPY":
-                                st.session_state["_jpy_tonar_par"] = _db_curve.copy()
-                                _db_curve = bootstrap_jpy_tonar_ois(_db_curve)
                             st.session_state.setdefault("curves", {})[_db_ccy] = _db_curve
                             st.session_state.setdefault("config_curves", {})[_db_ccy] = _db_curve
                             set_timestamp("curves", _db_ccy)
@@ -17245,125 +17379,11 @@ def curves_tab():
                 st.info("Click **\u25b6 Generate GBP Forward Matrix** to compute.")
 
 
-    # JPY CURVES — TONAR OIS (single curve: projection AND discount, SEMI-annual ACT/365F)
-    # v0907e — clone of the GBP SONIA renderer with TONAR labels/conventions.
-    # ══════════════════════════════════════════════════════════════════════════
-    if ccy == "JPY":
-        _tonar_zero = curve_c
-        _tonar_par  = _clean(st.session_state.get("_jpy_tonar_par"))
-
-        _jpy_fig = go.Figure()
-        if _tonar_zero is not None and not _tonar_zero.empty:
-            _jpy_fig.add_trace(go.Scatter(
-                x=_tonar_zero["MaturityY"], y=_tonar_zero["ZeroRatePct"],
-                mode="lines+markers", name="TONAR Zero (bootstrapped)",
-                line=dict(color="#38bdf8", width=2), marker=dict(size=5)))
-        if _tonar_par is not None and not _tonar_par.empty:
-            _jpy_fig.add_trace(go.Scatter(
-                x=_tonar_par["MaturityY"], y=_tonar_par["ZeroRatePct"],
-                mode="lines+markers", name="Par TONAR OIS",
-                line=dict(color="#a78bfa", width=2, dash="dot"), marker=dict(size=4)))
-        _jpy_fig.update_layout(
-            title="JPY TONAR Curve (single-curve OIS \u00b7 semi-annual ACT/365F \u00b7 T+2 Tokyo)",
-            xaxis_title="Maturity (Y)", yaxis_title="Rate (%)", height=420,
-            legend=dict(orientation="h", y=1.1), margin=dict(l=40, r=40, t=40, b=40))
-        st.plotly_chart(_jpy_fig, use_container_width=True)
-
-        def _jpy_mat_to_tenor(_y):
-            _map = [(1/52,"1w"),(1/12,"1m"),(2/12,"2m"),(3/12,"3m"),(4/12,"4m"),
-                    (5/12,"5m"),(6/12,"6m"),(9/12,"9m"),(1.0,"1y"),(1.5,"18m"),
-                    (2.0,"2y"),(3.0,"3y"),(4.0,"4y"),(5.0,"5y"),(6.0,"6y"),(7.0,"7y"),
-                    (8.0,"8y"),(9.0,"9y"),(10.0,"10y"),(12.0,"12y"),(15.0,"15y"),
-                    (20.0,"20y"),(25.0,"25y"),(30.0,"30y"),(35.0,"35y"),(40.0,"40y"),
-                    (50.0,"50y"),(60.0,"60y")]
-            for _v,_lbl in _map:
-                if abs(_y-_v) < 0.005: return _lbl
-            return f"{_y:.4g}Y"
-        def _jpy_relabel(_df):
-            if _df is None or _df.empty: return _df
-            _dc = _df.copy()
-            if "MaturityY" in _dc.columns:
-                _dc["MaturityY"] = _dc["MaturityY"].apply(_jpy_mat_to_tenor)
-            return _dc
-
-        with st.expander("JPY Curve Data", expanded=False):
-            _jpy_tcols = st.columns(2)
-            with _jpy_tcols[0]:
-                st.caption("\U0001F535 Bootstrapped TONAR Zero (%) \u2014 used for pricing")
-                if _tonar_zero is not None and not _tonar_zero.empty:
-                    st.dataframe(
-                        _jpy_relabel(_tonar_zero).rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Zero(%)"}).style.format({"Zero(%)":"{:.4f}"}),
-                        use_container_width=True, hide_index=True)
-            with _jpy_tcols[1]:
-                st.caption("\u26AA Par TONAR OIS (%) \u2014 market input")
-                if _tonar_par is not None and not _tonar_par.empty:
-                    st.dataframe(
-                        _jpy_relabel(_tonar_par).rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Par(%)"}).style.format({"Par(%)":"{:.4f}"}),
-                        use_container_width=True, hide_index=True)
-                else:
-                    st.caption("(reload JPY curve to populate)")
-
-        st.session_state.setdefault("jpy_fwd_matrix", {})
-        if "jpy_fwd_section_open" not in st.session_state:
-            st.session_state["jpy_fwd_section_open"] = False
-        _jfl = "\u25bc Hide JPY Forward Matrix" if st.session_state["jpy_fwd_section_open"] else "\u25b6 Show JPY Forward Matrix"
-        if st.button(_jfl, key="jpy_fwd_toggle"):
-            st.session_state["jpy_fwd_section_open"] = not st.session_state["jpy_fwd_section_open"]
-
-        if st.session_state["jpy_fwd_section_open"]:
-            _jcols = st.columns([3, 1, 3, 3])
-            with _jcols[2]:
-                _gen_jpy_fwd = st.button("\u25b6 Generate JPY Forward Matrix", key="gen_jpy_fwd", type="primary", use_container_width=True)
-            with _jcols[3]:
-                _has_jpy = "TONAR" in st.session_state.get("jpy_fwd_matrix", {})
-                st.download_button("\u2b07 Download",
-                    data=st.session_state["jpy_fwd_matrix"].get("TONAR", pd.DataFrame()).to_csv() if _has_jpy else "",
-                    file_name="JPY_fwd_TONAR.csv", key="dl_jpy_fwd",
-                    use_container_width=True, type="primary", disabled=not _has_jpy)
-
-            if _gen_jpy_fwd:
-                _JPY_EXPIRIES = [1/52, 1/12, 2/12, 3/12, 6/12, 9/12, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30]
-                _JPY_TENORS   = [1, 2, 3, 4, 5, 7, 10, 12, 15, 20, 25, 30]
-                _EXP_LABELS   = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
-                _TEN_LABELS   = ["1Y","2Y","3Y","4Y","5Y","7Y","10Y","12Y","15Y","20Y","25Y","30Y"]
-
-                def _jpy_fwd_rate(df_curve, exp, ten):
-                    """JPY TONAR forward via the EXACT pricer function (T+2 Tokyo,
-                    semi-annual ACT/365F, single-curve TONAR) so matrix == pricer."""
-                    if df_curve is None or df_curve.empty: return None
-                    try:
-                        _f, _, _ = forward_and_annuity_from_curve(
-                            df_curve[["MaturityY", "ZeroRatePct"]].copy(), "JPY", float(exp), float(ten), None)
-                        return round(_f * 100, 4)
-                    except Exception:
-                        return None
-
-                with st.spinner("Generating JPY forward matrix..."):
-                    _rows = {}
-                    for ei, exp in enumerate(_JPY_EXPIRIES):
-                        _row = {}
-                        for ti, ten in enumerate(_JPY_TENORS):
-                            _row[_TEN_LABELS[ti]] = _jpy_fwd_rate(_tonar_zero, exp, ten)
-                        _rows[_EXP_LABELS[ei]] = _row
-                    _jdf = pd.DataFrame(_rows).T
-                    _jdf.index.name = "Expiry"; _jdf = _jdf.reset_index()
-                    st.session_state["jpy_fwd_matrix"]["TONAR"] = _jdf
-
-            _jdisp = st.session_state.get("jpy_fwd_matrix", {}).get("TONAR")
-            if _jdisp is not None and not _jdisp.empty:
-                _jnum = [c for c in _jdisp.columns if c != "Expiry"]
-                st.dataframe(
-                    _jdisp.style.format({c: "{:.4f}" for c in _jnum}).background_gradient(cmap="RdYlGn", subset=_jnum),
-                    use_container_width=True, hide_index=True, height=820)
-            else:
-                st.info("Click **\u25b6 Generate JPY Forward Matrix** to compute.")
-
-
     # ── Chart toggles (AUD/NZD only) ─────────────────────────────────────────
     # AUD/NZD chart — defaults so USD/EUR path through try block is harmless
     # ⛔ LOCKED (v0705g): AUD/NZD branches DO NOT MODIFY.
     _show_par = _show_irs = _show_ois = _show_b6 = _show_b3 = False
-    if ccy not in ("USD", "EUR", "GBP", "JPY"):
+    if ccy not in ("USD", "EUR", "GBP"):
         _ck = st.columns(5)
         with _ck[0]: _show_par = st.checkbox("IRS Par", value=True, key="chart_par")
         with _ck[1]: _show_irs = st.checkbox("IRS Zero", value=True, key="chart_irs")
@@ -17371,7 +17391,7 @@ def curves_tab():
         with _ck[3]: _show_b6  = st.checkbox("6v3 Basis", value=True, key="chart_b6")
         with _ck[4]: _show_b3  = st.checkbox("3v1 Basis", value=True, key="chart_b3")
 
-    if ccy not in ("USD", "EUR", "GBP", "JPY"):
+    if ccy not in ("USD", "EUR", "GBP"):
      try:
         fig = go.Figure()
         if _show_par:
@@ -17434,7 +17454,7 @@ def curves_tab():
      except Exception as _e:
         st.warning(f"Chart: {_e}")
 
-    if ccy not in ("USD", "EUR", "GBP", "JPY"):
+    if ccy not in ("USD", "EUR", "GBP"):
      with st.expander("IRS Par Rates & Curve Data", expanded=False):
         _cols_to_show = []
         if ccy == "USD": pass  # no AUD data tables for USD
@@ -17481,7 +17501,7 @@ def curves_tab():
 
     # ── IRS Forward Matrix (AUD/NZD only) ────────────────────────────────────────
     # ⛔ LOCKED: USD has its own matrix (above), EUR has its own matrix (above).
-    if ccy not in ("USD", "EUR", "GBP", "JPY"):
+    if ccy not in ("USD", "EUR", "GBP"):
         if "fwd_matrix"   not in st.session_state: st.session_state["fwd_matrix"]   = {}
         if "basis_matrix" not in st.session_state: st.session_state["basis_matrix"] = {}
         if "fwd_section_open" not in st.session_state: st.session_state["fwd_section_open"] = True
@@ -20715,21 +20735,6 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
                                                          freq_override=1.0, ois_x=ois_x, ois_y=ois_y,
                                                          basis6v3_x=basis_x, basis6v3_y=basis_y)
                         row[tenor] = mkt_rate * 100
-                    elif ccy == "JPY":
-                        # v0907e JPY TONAR single-curve: EXACT pricer forward (T+2 Tokyo,
-                        # SEMI-annual ACT/365F, mod-fol) so the matrix == swaption pricer.
-                        _jpy_curve_df = pd.DataFrame({
-                            "MaturityY": list(curve_x),
-                            "ZeroRatePct": [z * 100.0 for z in curve_y],
-                        })
-                        try:
-                            mkt_rate, _, _ = forward_and_annuity_from_curve(
-                                _jpy_curve_df, "JPY", exp_y, tenor_y, None)
-                        except Exception:
-                            mkt_rate = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy,
-                                                         freq_override=0.5, ois_x=ois_x, ois_y=ois_y,
-                                                         basis6v3_x=basis_x, basis6v3_y=basis_y)
-                        row[tenor] = mkt_rate * 100
                     else:
                         mkt_rate = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy,
                                                      freq_override=None,
@@ -20775,8 +20780,6 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
         freq = 1.0  # ESTR OIS: annual 30/360 fixed
     elif ccy == "GBP":
         freq = 1.0  # SONIA OIS: annual ACT/365 fixed
-    elif ccy == "JPY":
-        freq = 0.5  # TONAR OIS: SEMI-annual ACT/365F fixed
     else:
         freq = 0.5
 
@@ -20985,10 +20988,6 @@ def swaptions_tab(vol_mode: str):
     # leg; config_basis["GBP"]["ois"] does not exist, so ois_curve is None here.
     if ccy == "GBP" and ois_curve is None and curve is not None:
         ois_curve = curve  # SONIA
-
-    # v0907e: JPY TONAR single-curve — TONAR is both projection and discount.
-    if ccy == "JPY" and ois_curve is None and curve is not None:
-        ois_curve = curve  # TONAR
 
     # USD-specific convention display
     if ccy == "USD":
@@ -26332,8 +26331,6 @@ def exotics_tab(vol_mode: str):
         _ensure_usd_alpha_sticky()  # v0506c: keep alpha sticky to ATM here too
     if ccy == "GBP" and ois_curve is None:
         ois_curve = curve  # GBP single-curve SONIA: SONIA is both projection AND discount
-    if ccy == "JPY" and ois_curve is None:
-        ois_curve = curve  # v0907e: JPY single-curve TONAR: projection AND discount
     basis_6v3 = get_basis_curve(ccy, "6v3")
     atm       = get_working_atm_surface(ccy)
     _, a_m, b_m, r_m, n_m = get_ccy_vol_data(ccy)
@@ -36212,10 +36209,6 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
     if ccy == "GBP" and ois_curve is None:
         ois_curve = curve
 
-    # v0907e: JPY TONAR single-curve (matches pricer guard so matrix == pricer).
-    if ccy == "JPY" and ois_curve is None:
-        ois_curve = curve
-
     # v0406l: USD ATM vol must match the pricer EXACTLY. The pricer's straddle vol is
     # get_vol_for_strike(F) → smile_vol_pinned(F,F,T,α,β,ρ,ν) (SABR-reconstructed ATM
     # + pin bumps), NOT the raw grid. Fetch the SABR matrices so we can reproduce it.
@@ -36737,8 +36730,6 @@ def main():
                     "EUR": [("ESTR", "main"), ("EURIBOR 6M", "euribor_6m"), ("EURIBOR 3M", "euribor_3m")],
                     # GBP SONIA: pure single curve (no basis leg) -- SONIA is both projection and discount.
                     "GBP": [("SONIA", "main")],
-                    # v0907e: JPY TONAR — pure single curve, TONAR is both projection and discount.
-                    "JPY": [("TONAR", "main")],
                 }
                 _eur_estr_zeros = None  # bootstrapped ESTR zeros, consumed by EURIBOR projection
                 for _fr, _role in _curve_map.get(target_ccy, []):
@@ -36773,9 +36764,6 @@ def main():
                                     _eur_estr_zeros = _df.copy()
                                 except Exception:
                                     pass
-                            elif target_ccy == "JPY" and _role == "main":
-                                st.session_state["_jpy_tonar_par"] = _df.copy()
-                                _df = bootstrap_jpy_tonar_ois(_df)
                             elif target_ccy == "GBP":
                                 # GBP SONIA single-curve: bootstrap par -> zero, keep raw
                                 # par for display. SONIA discounts SONIA (no basis leg).
