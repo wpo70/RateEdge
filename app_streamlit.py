@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907r"
+APP_VERSION = "v0907s"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -21894,6 +21894,10 @@ def swaptions_tab(vol_mode: str):
         expiry = expiry_sel
         expiry_y = label_to_years(expiry)
         expiry_display = expiry
+        # v0907s: broken-date tracking. Set True below if the user overrides
+        # the Expiry Date so it no longer matches the standard rolled date.
+        _sw_broken_date = False
+        _sw_broken_dt = None
     with col_expdt:
         from datetime import date as _sw_date
         # USD swaptions expire in NYC — use NYC date for days-to-expiry
@@ -21916,13 +21920,14 @@ def swaptions_tab(vol_mode: str):
                 except: pass
             if _parsed and _parsed != _calc_dt:
                 expiry_y = max((_parsed - _sw_today).days / 365.0, 1/365.0)
-                # Show as approximate term (e.g. "6m (06-Jul-2026)") not raw date
-                _days = (_parsed - _sw_today).days
-                if _days < 21: _term_lbl = f"{_days}d"
-                elif _days < 60: _term_lbl = f"{round(_days/7)}w"
-                elif _days < 335: _term_lbl = f"{round(_days/30)}m"
-                else: _term_lbl = f"{round(_days/365, 1)}y".replace(".0y","y")
-                expiry_display = f"{_term_lbl} ({_parsed.strftime('%d-%b-%Y')})"
+                # v0907s: this is a BROKEN date — user picked a specific expiry
+                # that isn't the standard rolled tenor date. Flag it and show
+                # "Broken date" in the Expiry window; blotter shows the date.
+                _sw_broken_date = True
+                _sw_broken_dt = _parsed
+                expiry_display = f"Broken ({_parsed.strftime('%d-%b-%Y')})"
+                st.caption(f"⚠️ Broken date: {_parsed.strftime('%d-%b-%Y')} "
+                           f"({(_parsed - _sw_today).days}d)")
         except: pass
     with col_delay:
         DELAY_PRESETS = ["None","1m","2m","3m","6m","9m","1y","18m","2y"]
@@ -22622,7 +22627,8 @@ def swaptions_tab(vol_mode: str):
                          legs=[{"name": l[0], "strike": l[1], "qty": l[2],
                                 "pv": l[3].get("pv",0), "pv_bp": l[3].get("pv_bp",0),
                                 "delta": l[3].get("delta",0)} for l in legs],
-                         expiry_date=expiry_date.strftime('%d-%b-%Y') if 'expiry_date' in dir() else "",
+                         is_broken_date=_sw_broken_date,
+                         expiry_date=(_sw_broken_dt.strftime('%d-%b-%Y') if _sw_broken_dt else ""),
                          swap_start=swap_start.strftime('%d-%b-%Y') if 'swap_start' in dir() else "",
                          swap_end=swap_end.strftime('%d-%b-%Y') if 'swap_end' in dir() else "",
                          )
@@ -22848,13 +22854,19 @@ def swaptions_tab(vol_mode: str):
                 _ratios = [0.25, 1.30, 0.55, 0.65, 0.55, 0.68, 0.68, 0.68, 0.68, 0.68,
                            1.10, 0.55, 0.55, 0.55, 0.55]
             _rc = st.columns(_ratios)
-            # v0907r: always resolve the three dates so the Exp cell can carry
-            # the actual expiry date under the tenor label (1w alone is
-            # ambiguous). _row_dates is mod-fol and prefers stored dates.
+            # v0907s: Exp cell. Broken date → show the DATE ONLY (fitted small),
+            # since the tenor label is meaningless for a broken date. Standard
+            # date → show tenor label with the rolled date beneath it.
             _ed_s, _ss_s, _se_s = _row_dates(row)
-            _exp_cell = (f"<div style='line-height:1.15'>{_expiry}"
-                         f"<br><span style='font-size:9.5px;color:#64748b'>{_ed_s}</span></div>"
-                         if _ed_s else _expiry)
+            _is_broken = bool(row.get("is_broken_date", False))
+            if _is_broken and _ed_s:
+                _exp_cell = (f"<div style='line-height:1.1;font-size:10.5px;font-weight:600'>"
+                             f"{_ed_s}<br><span style='font-size:8.5px;color:#94a3b8;font-weight:400'>broken</span></div>")
+            elif _ed_s:
+                _exp_cell = (f"<div style='line-height:1.15'>{_expiry}"
+                             f"<br><span style='font-size:9.5px;color:#64748b'>{_ed_s}</span></div>")
+            else:
+                _exp_cell = _expiry
             _sw_vals = [
                 f"{idx+1}", _struct, _exp_cell, _tenor,
                 f"{float(row.get('notional_mm',100)):.0f}mm",
