@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907w"
+APP_VERSION = "v0907x"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -2931,6 +2931,32 @@ def label_to_years(lbl: str) -> float:
         return float(xl[:-1])
     return float(xl)
 
+
+
+
+def expiry_to_years(val) -> float:
+    """v0907x: resolve an expiry that may be EITHER a tenor label ("3m","1w")
+    OR a date string ("25-Jul-2026","25/07/2026") to a year-fraction from
+    today. Blotter rows store a date string for Manual trades, so any code
+    that used label_to_years(row["expiry"]) must use THIS instead or it
+    crashes on the date string. Falls back to 0.0 rather than raising."""
+    from datetime import date as _e2y_date, datetime as _e2y_dt
+    _s = str(val or "").strip()
+    if not _s:
+        return 0.0
+    # try tenor label first (fast, most rows)
+    try:
+        return float(label_to_years(_s))
+    except Exception:
+        pass
+    # then date formats
+    for _fmt in ("%d-%b-%Y", "%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d", "%d-%b-%y"):
+        try:
+            _d = _e2y_dt.strptime(_s, _fmt).date()
+            return max((_d - _e2y_date.today()).days / 365.0, 1.0 / 365.0)
+        except Exception:
+            pass
+    return 0.0
 
 def load_atm_surface(df: pd.DataFrame, name: str) -> pd.DataFrame:
     if "Expiry" not in df.columns:
@@ -22777,7 +22803,7 @@ def swaptions_tab(vol_mode: str):
                     except Exception:
                         pass
             try:
-                return float(label_to_years(str(_r.get("expiry", "")))) or 0.0
+                return float(expiry_to_years(_r.get("expiry", ""))) or 0.0
             except Exception:
                 return 0.0
         df["_expiry_sort"] = [
@@ -22829,7 +22855,7 @@ def swaptions_tab(vol_mode: str):
             try:
                 _c = str(_r.get("currency", "AUD")) or "AUD"
                 _lag = 2 if _c in ("USD", "EUR", "JPY") else 0 if _c == "GBP" else 1
-                _ey = label_to_years(str(_r.get("expiry", "")))
+                _ey = expiry_to_years(_r.get("expiry", ""))
                 _ts = str(_r.get("tenor", "")).strip()
                 _ty = float(_ts[:-1]) if _ts and _ts[-1].upper() == "Y" else 0.0
                 if not _ey or _ey <= 0:
@@ -22884,7 +22910,7 @@ def swaptions_tab(vol_mode: str):
                         return math.exp(-float(np.interp(ey,_ox,_oy))*ey)
                     return math.exp(-0.035*ey)
                 except: return 1.0
-            _spot_bp_disp = _fwd_bp * _df_exp_bl(label_to_years(str(row.get('expiry','1y'))))
+            _spot_bp_disp = _fwd_bp * _df_exp_bl(expiry_to_years(row.get('expiry','1y')))
             _disp_fwd = float(row.get('forward', 0))
             _disp_pv  = float(row.get('pv', 0))
             if _live_r is not None:
@@ -22960,7 +22986,7 @@ def swaptions_tab(vol_mode: str):
             if can_quick_tix() and _rc[_base+2].button("🎫", key=f"sw_ptix_{_tid}", help="Print Tix → Trade Ticket"):
                 try:
                     from datetime import date as _ptd, timedelta as _pttd
-                    _pt_exp_y  = label_to_years(str(row.get("expiry","3m")))
+                    _pt_exp_y  = expiry_to_years(row.get("expiry","3m"))
                     _pt_ten_y  = float(str(row.get("tenor","5Y")).replace("Y","").replace("y","")) if row.get("tenor") else 5.0
                     _pt_exp_dt = _ptd.today() + _pttd(days=int(_pt_exp_y*365.25))
                     _pt_start  = _pt_exp_dt + _pttd(days=1)
@@ -23126,7 +23152,7 @@ def _reprice_blotter_row(row) -> dict:
         curve = st.session_state.get("config_curves", {}).get(_ccy)
         if curve is None or (hasattr(curve, "empty") and curve.empty):
             return None
-        exp_y = label_to_years(str(row.get("expiry", "")))
+        exp_y = expiry_to_years(row.get("expiry", ""))
         _ten_s = str(row.get("tenor", "")).strip()
         if not _ten_s or _ten_s[-1].upper() != "Y":
             return None
@@ -24046,7 +24072,7 @@ def caps_floors_tab(vol_mode: str):
                                 return math.exp(-float(np.interp(ey,_ox,_oy))*ey)
                             return math.exp(-0.035*ey)
                         except: return 1.0
-                    _cf_spot = _cf_fwd * _df_cf(label_to_years(str(_crow.get('expiry','1y'))))
+                    _cf_spot = _cf_fwd * _df_cf(expiry_to_years(_crow.get('expiry','1y')))
                     _crc = st.columns([0.25, 1.50, 0.55, 0.65, 0.55, 0.70, 0.70, 0.70, 0.70, 0.70, 1.25, 0.60, 0.60, 0.65])
                     _cf_vals = [
                         f"{_cidx+1}", _cst, _cex, _cten,
@@ -24079,7 +24105,7 @@ def caps_floors_tab(vol_mode: str):
                     if can_quick_tix() and _crc[12].button("🎫", key=f"cf_ptix_{_cidx}", help="Print Tix → Trade Ticket"):
                         try:
                             from datetime import date as _cptd, timedelta as _cpttd
-                            _cp_exp_y  = label_to_years(str(_crow.get("expiry","3m")))
+                            _cp_exp_y  = expiry_to_years(_crow.get("expiry","3m"))
                             _cp_ten_y  = float(str(_crow.get("tenor","5Y")).replace("Y","").replace("y","")) if _crow.get("tenor") else 5.0
                             _cp_exp_dt = _cptd.today() + _cpttd(days=int(_cp_exp_y*365.25))
                             _cp_start  = _cp_exp_dt + _cpttd(days=1)
@@ -36392,7 +36418,7 @@ def portfolio_tab():
                             return math.exp(-float(np.interp(ey,_ox,_oy))*ey)
                         return math.exp(-0.035*ey)
                     except: return 1.0
-                _spot = _fwd * _df_ptf(label_to_years(str(row.get('expiry','1y'))))
+                _spot = _fwd * _df_ptf(expiry_to_years(row.get('expiry','1y')))
                 _rc = st.columns(COLS)
                 _vals = [
                     f"{idx+1}", row.get("structure",""), _expiry, _tenor,
@@ -36414,7 +36440,7 @@ def portfolio_tab():
                 if can_quick_tix() and _rc[12].button("🎫",key=f"ptfsw_ptix_{idx}",help="Print Tix → Trade Ticket"):
                     try:
                         from datetime import date as _bptd, timedelta as _bpttd
-                        _bp_exp_y  = label_to_years(str(row.get("expiry","3m")))
+                        _bp_exp_y  = expiry_to_years(row.get("expiry","3m"))
                         _bp_ten_y  = float(str(row.get("tenor","5Y")).replace("Y","").replace("y","")) if row.get("tenor") else 5.0
                         _bp_exp_dt = _bptd.today() + _bpttd(days=int(_bp_exp_y*365.25))
                         _bp_start  = _bp_exp_dt + _bpttd(days=1)
