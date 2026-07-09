@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907j"
+APP_VERSION = "v0907k"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -12562,7 +12562,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     st.caption("PDF unavailable (reportlab not installed).")
                             with _tp_cv:
                                 try:
-                                    with st.popover("⚙ Vol report options"):
+                                    with st.expander("⚙ Vol report options", expanded=False):
                                         _vr_beta = st.radio("β source", ["Auto", "Empirical only", "Level only"],
                                                             key="_vr_beta_mode", horizontal=True,
                                                             help="Auto: empirical per-cell OLS betas from vol_history, "
