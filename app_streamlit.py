@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907v"
+APP_VERSION = "v0907w"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -22756,8 +22756,34 @@ def swaptions_tab(vol_mode: str):
                                   key="_sw_show_dates")
 
         df = pd.DataFrame(st.session_state["swaption_portfolio"])
-        df["_expiry_sort"] = df["expiry"].apply(lambda e: label_to_years(str(e)))
-        df = df.sort_values("_expiry_sort").reset_index(drop=True)
+
+        # v0907w: sort by EXPIRY DATE (the driving date). Manual trades store a
+        # date string in `expiry` (e.g. "25-Jul-2026"); standard trades store a
+        # tenor label ("3m"). Resolve BOTH to a sortable year-fraction, never
+        # calling label_to_years on a date string (that was the crash).
+        from datetime import date as _sort_today_cls
+        _sort_today = _sort_today_cls.today()
+        def _expiry_order_key(_r):
+            # Prefer an explicit stored expiry_date; else parse `expiry` as a
+            # date; else treat `expiry` as a tenor label.
+            for _cand in (_r.get("expiry_date", ""), _r.get("expiry", "")):
+                _cs = str(_cand or "").strip()
+                if not _cs:
+                    continue
+                for _fmt in ("%d-%b-%Y", "%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d"):
+                    try:
+                        from datetime import datetime as _sdt
+                        return (_sdt.strptime(_cs, _fmt).date() - _sort_today).days / 365.0
+                    except Exception:
+                        pass
+            try:
+                return float(label_to_years(str(_r.get("expiry", "")))) or 0.0
+            except Exception:
+                return 0.0
+        df["_expiry_sort"] = [
+            _expiry_order_key(_r) for _r in st.session_state["swaption_portfolio"]
+        ]
+        df = df.sort_values("_expiry_sort", kind="stable").reset_index(drop=True)
 
         _STATUS_COLOURS = {
             "Live":         "white",  # v0907n: white — premiums easier to read
