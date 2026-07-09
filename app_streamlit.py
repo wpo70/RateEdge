@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907q"
+APP_VERSION = "v0907r"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -22848,8 +22848,15 @@ def swaptions_tab(vol_mode: str):
                 _ratios = [0.25, 1.30, 0.55, 0.65, 0.55, 0.68, 0.68, 0.68, 0.68, 0.68,
                            1.10, 0.55, 0.55, 0.55, 0.55]
             _rc = st.columns(_ratios)
+            # v0907r: always resolve the three dates so the Exp cell can carry
+            # the actual expiry date under the tenor label (1w alone is
+            # ambiguous). _row_dates is mod-fol and prefers stored dates.
+            _ed_s, _ss_s, _se_s = _row_dates(row)
+            _exp_cell = (f"<div style='line-height:1.15'>{_expiry}"
+                         f"<br><span style='font-size:9.5px;color:#64748b'>{_ed_s}</span></div>"
+                         if _ed_s else _expiry)
             _sw_vals = [
-                f"{idx+1}", _struct, _expiry, _tenor,
+                f"{idx+1}", _struct, _exp_cell, _tenor,
                 f"{float(row.get('notional_mm',100)):.0f}mm",
                 f"{float(row.get('strike',0)):.4f}",
                 f"{_disp_fwd:.4f}",
@@ -22859,7 +22866,6 @@ def swaptions_tab(vol_mode: str):
             ]
             # v0907n: append the three date cells when shown.
             if _show_dates:
-                _ed_s, _ss_s, _se_s = _row_dates(row)
                 _sw_vals += [_ed_s, _ss_s, _se_s]
             _sw_colours = {7: "#000000", 8: "#dc2626"}  # v0907p: spot bold black, fwd bold red
             for _ci, _val in enumerate(_sw_vals):
