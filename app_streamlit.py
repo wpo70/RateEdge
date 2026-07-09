@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907m"
+APP_VERSION = "v0907n"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -22727,7 +22727,7 @@ def swaptions_tab(vol_mode: str):
         df = df.sort_values("_expiry_sort").reset_index(drop=True)
 
         _STATUS_COLOURS = {
-            "Live":         "rgba(207,231,255,0.95)",
+            "Live":         "white",  # v0907n: white — premiums easier to read
             "Our Trade":     "rgba(220,255,220,0.95)",
             "Away Trade":   "rgba(255,210,210,0.95)",
             "Direct Trade": "rgba(255,235,195,0.95)",
