@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907i"
+APP_VERSION = "v0907j"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -2430,13 +2430,21 @@ def _volrep_cell_stats(ccy: str):
             try: cur.close()
             except Exception: pass
         if not rows: return None
+        _LADDER = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y",
+                   "6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
         cells = {}
         for _i, (_dte, _js) in enumerate(rows):    # rows newest-first; _i==0 is latest
             _v = _js if isinstance(_js, dict) else _j.loads(_js)
-            for _ek, _tens in (_v or {}).items():
-                _eY = _t2y(_ek)
-                if _eY is None or not isinstance(_tens, dict): continue
-                for _tk, _vv in _tens.items():
+            _recs = (_v or {}).get("values") or []
+            for _ri, _rec in enumerate(_recs):
+                if not isinstance(_rec, dict): continue
+                _ek = _rec.get("Expiry")
+                if _ek is None and len(_recs) == 22:
+                    _ek = _LADDER[_ri]          # pre-fix snapshots: labels by position
+                _eY = _t2y(_ek) if _ek is not None else None
+                if _eY is None: continue
+                for _tk, _vv in _rec.items():
+                    if str(_tk) == "Expiry": continue
                     _tY = _t2y(_tk)
                     try: _fv = float(_vv)
                     except Exception: continue
@@ -2475,13 +2483,21 @@ def _volrep_emp_betas(ccy: str):
             try: cur.close()
             except Exception: pass
         if not rows or len(rows) < 45: return None
+        _LADDER = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y",
+                   "6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
         series = {}
         for _dte, _js in rows:
             _v = _js if isinstance(_js, dict) else _j.loads(_js)
-            for _ek, _tens in (_v or {}).items():
-                _eY = _t2y(_ek)
-                if _eY is None or not isinstance(_tens, dict): continue
-                for _tk, _vv in _tens.items():
+            _recs = (_v or {}).get("values") or []
+            for _ri, _rec in enumerate(_recs):
+                if not isinstance(_rec, dict): continue
+                _ek = _rec.get("Expiry")
+                if _ek is None and len(_recs) == 22:
+                    _ek = _LADDER[_ri]
+                _eY = _t2y(_ek) if _ek is not None else None
+                if _eY is None: continue
+                for _tk, _vv in _rec.items():
+                    if str(_tk) == "Expiry": continue
                     _tY = _t2y(_tk)
                     try: _fv = float(_vv)
                     except Exception: continue
@@ -2691,7 +2707,8 @@ def _sdr_vol_report(df, ccy: str, tz_label: str = "", beta_mode: str = "Auto",
         from reportlab.lib.pagesizes import A4 as _A4, landscape as _ls
         from reportlab.lib import colors as _rc
         from reportlab.lib.units import mm as _mm
-        from reportlab.platypus import SimpleDocTemplate as _SDT, Table as _T, TableStyle as _TS, Paragraph as _P, Spacer as _SP
+        from reportlab.platypus import (SimpleDocTemplate as _SDT, Table as _T, TableStyle as _TS,
+                                        Paragraph as _P, Spacer as _SP, PageBreak as _PB)
         from reportlab.lib.styles import getSampleStyleSheet as _gss, ParagraphStyle as _PS
         pbuf = _BIO_v()
         doc = _SDT(pbuf, pagesize=_ls(_A4), topMargin=12*_mm, bottomMargin=12*_mm,
@@ -2741,7 +2758,7 @@ def _sdr_vol_report(df, ccy: str, tz_label: str = "", beta_mode: str = "Auto",
                 _dw.add(_bc)
                 _dw.add(_Str(40, 172, "10Y-eq notional (M) by expiry bucket", fontSize=9,
                              fillColor=_rc.HexColor("#1F3864"), fontName="Helvetica-Bold"))
-                elems += [_SP(1, 5*_mm), _dw]
+                elems += [_PB(), _SP(1, 3*_mm), _dw]
             except Exception:
                 pass
         doc.build(elems)
@@ -11302,14 +11319,24 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             except Exception: pass
                         if not rows or len(rows) < 45:
                             return None, len(rows or [])
+                        _LADDER_VA = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y",
+                                      "5y","6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
                         series = {}   # (expY,tenY) -> {date: vol}
                         for _dte, _js in rows:
                             _v = _js if isinstance(_js, dict) else _jsva.loads(_js)
-                            for _ek, _tens in (_v or {}).items():
-                                _eY = _t2y_va(_ek)
-                                if _eY is None or not isinstance(_tens, dict):
+                            _recs = (_v or {}).get("values") or []
+                            for _ri, _rec in enumerate(_recs):
+                                if not isinstance(_rec, dict):
                                     continue
-                                for _tk, _vv in _tens.items():
+                                _ek = _rec.get("Expiry")
+                                if _ek is None and len(_recs) == 22:
+                                    _ek = _LADDER_VA[_ri]
+                                _eY = _t2y_va(_ek) if _ek is not None else None
+                                if _eY is None:
+                                    continue
+                                for _tk, _vv in _rec.items():
+                                    if str(_tk) == "Expiry":
+                                        continue
                                     _tY = _t2y_va(_tk)
                                     try:
                                         _fv = float(_vv)
@@ -11317,7 +11344,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         continue
                                     if _tY is None or _fv <= 0:
                                         continue
-                                    series.setdefault((round(_eY,4), round(_tY,4)), {})[_dte] = _fv
+                                    series.setdefault((round(_eY,4), round(_tY,4)), {})[str(_dte)] = _fv
                         # reference = nearest cell to (1y,10y)
                         if not series:
                             return None, len(rows)
