@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907p"
+APP_VERSION = "v0907q"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -22606,7 +22606,9 @@ def swaptions_tab(vol_mode: str):
             
             # Add to Trade Blotter — always forward premium
             display_prem_bp = res.get("pv_bp_fwd", res["pv_bp"])
-            entry = dict(instrument_type="Swaption", currency=ccy, structure=structure,
+            import uuid as _uuid_sw
+            entry = dict(_tid=_uuid_sw.uuid4().hex[:12],
+                         instrument_type="Swaption", currency=ccy, structure=structure,
                          expiry=expiry, tenor=_tenor_display, model=vol_mode,
                          delay=delay_sel if is_midcurve else "None",
                          is_midcurve=is_midcurve,
@@ -22788,14 +22790,26 @@ def swaptions_tab(vol_mode: str):
             except Exception:
                 return _ed, _ss, _se
 
+        # v0907p: backfill a stable trade id on any legacy row missing one, so
+        # status binds to the TRADE, not the row position.
+        import uuid as _uuid_bf
+        _bf_changed = False
+        for _pe in st.session_state["swaption_portfolio"]:
+            if not _pe.get("_tid"):
+                _pe["_tid"] = _uuid_bf.uuid4().hex[:12]
+                _bf_changed = True
+        if _bf_changed:
+            _save_portfolio()
+
         for idx, row in df.iterrows():
+            _tid    = str(row.get("_tid", "") or f"pos{idx}")
             _label  = row.get("label", f"{row.get('expiry','')}x{row.get('tenor','')}")
             _expiry = row.get("expiry","")
             _tenor  = str(row.get("tenor",""))
             _struct = row.get("structure","")
             _legs   = row.get("legs",[]) if isinstance(row.get("legs",[]),list) else []
 
-            _status_key = f"_sw_status_{_label}_{_expiry}_{_tenor}"
+            _status_key = f"_sw_status_{_tid}"
             # v0907m: status lives in the row dict (survives restart); session
             # key is the working copy. Legacy "—" maps to Live.
             _row_status = str(row.get("status", "")) or "Live"
@@ -22847,7 +22861,7 @@ def swaptions_tab(vol_mode: str):
             if _show_dates:
                 _ed_s, _ss_s, _se_s = _row_dates(row)
                 _sw_vals += [_ed_s, _ss_s, _se_s]
-            _sw_colours = {7: "#22c55e", 8: "#38bdf8"}  # green=spot, blue=fwd
+            _sw_colours = {7: "#000000", 8: "#dc2626"}  # v0907p: spot bold black, fwd bold red
             for _ci, _val in enumerate(_sw_vals):
                 _col = _sw_colours.get(_ci, "#1e293b")
                 _fw  = "700" if _ci in _sw_colours else "400"
@@ -22859,21 +22873,12 @@ def swaptions_tab(vol_mode: str):
             _base = 13 if _show_dates else 10
             _new_status = _rc[_base].selectbox("", _STATUS_OPTS,
                 index=_STATUS_OPTS.index(_cur_status) if _cur_status in _STATUS_OPTS else 0,
-                key=f"sw_status_{idx}", label_visibility="collapsed")
-            if _new_status == "Clear Trade":
-                st.session_state[_status_key] = "—"
-                st.session_state["swaption_portfolio"].pop(idx)
-                st.session_state["portfolio"] = [p for p in st.session_state["portfolio"]
-                                                  if p.get("label") != _label or p.get("expiry") != _expiry]
-                st.session_state.pop("_sw_tix_open", None)
-                _save_portfolio(); st.rerun()
-            elif _new_status != _cur_status:
-                # v0907m: leaving Live FREEZES the trade at the current live
-                # levels — written into the stored entry so the marked trade
-                # keeps its traded values permanently (incl. across restarts).
-                for _pi, _pe in enumerate(st.session_state["swaption_portfolio"]):
-                    if (_pe.get("label") == _label and str(_pe.get("expiry")) == str(_expiry)
-                            and str(_pe.get("tenor")) == _tenor):
+                key=f"sw_status_{_tid}", label_visibility="collapsed")
+            if _new_status != _cur_status:
+                # v0907p: leaving Live FREEZES the trade at the current live
+                # levels — matched by stable _tid so ONLY this trade changes.
+                for _pe in st.session_state["swaption_portfolio"]:
+                    if _pe.get("_tid") == _tid:
                         if _cur_status == "Live" and _new_status in ("Our Trade", "Away Trade", "Direct Trade"):
                             _fr = _reprice_blotter_row(_pe)
                             if _fr is not None:
@@ -22890,10 +22895,10 @@ def swaptions_tab(vol_mode: str):
                 _save_portfolio()
                 st.rerun()
 
-            if can_quick_tix() and _rc[_base+1].button("📋", key=f"sw_tix_{idx}", help="Quick Tix"):
-                st.session_state["_sw_tix_open"] = idx if st.session_state.get("_sw_tix_open") != idx else -1
+            if can_quick_tix() and _rc[_base+1].button("📋", key=f"sw_tix_{_tid}", help="Quick Tix"):
+                st.session_state["_sw_tix_open"] = _tid if st.session_state.get("_sw_tix_open") != _tid else ""
 
-            if can_quick_tix() and _rc[_base+2].button("🎫", key=f"sw_ptix_{idx}", help="Print Tix → Trade Ticket"):
+            if can_quick_tix() and _rc[_base+2].button("🎫", key=f"sw_ptix_{_tid}", help="Print Tix → Trade Ticket"):
                 try:
                     from datetime import date as _ptd, timedelta as _pttd
                     _pt_exp_y  = label_to_years(str(row.get("expiry","3m")))
@@ -22915,12 +22920,13 @@ def swaptions_tab(vol_mode: str):
                 except Exception as _pte:
                     st.error(f"Print Tix error: {_pte}")
 
-            if _rc[_base+3].button("⧉", key=f"sw_dup_{idx}", help="Duplicate as LIVE reference"):
+            if _rc[_base+3].button("⧉", key=f"sw_dup_{_tid}", help="Duplicate as LIVE reference"):
                 # v0907m: clone the trade as a Live reference running alongside.
                 for _pe in st.session_state["swaption_portfolio"]:
-                    if (_pe.get("label") == _label and str(_pe.get("expiry")) == str(_expiry)
-                            and str(_pe.get("tenor")) == _tenor):
+                    if _pe.get("_tid") == _tid:
+                        import uuid as _uuid_dup
                         _cp = dict(_pe)
+                        _cp["_tid"] = _uuid_dup.uuid4().hex[:12]
                         _cp["legs"] = [dict(_lg) for _lg in _pe.get("legs", [])] if isinstance(_pe.get("legs"), list) else []
                         _cp["label"] = f"{_pe.get('label','')} (live ref)"
                         _cp["status"] = "Live"
@@ -22929,15 +22935,16 @@ def swaptions_tab(vol_mode: str):
                         break
                 _save_portfolio(); st.rerun()
 
-            if _rc[_base+4].button("🗑️", key=f"sw_del_{idx}", help="Remove"):
-                st.session_state["swaption_portfolio"].pop(idx)
-                st.session_state["portfolio"] = [p for p in st.session_state["portfolio"]
-                                                  if p.get("label") != _label or p.get("expiry") != _expiry]
+            if _rc[_base+4].button("🗑️", key=f"sw_del_{_tid}", help="Remove"):
+                st.session_state["swaption_portfolio"] = [
+                    p for p in st.session_state["swaption_portfolio"] if p.get("_tid") != _tid]
+                st.session_state["portfolio"] = [
+                    p for p in st.session_state["portfolio"] if p.get("_tid") != _tid]
                 st.session_state.pop("_sw_tix_open", None)
                 _save_portfolio(); st.rerun()
 
             # Inline Quick Tix
-            if can_quick_tix() and st.session_state.get("_sw_tix_open") == idx:
+            if can_quick_tix() and st.session_state.get("_sw_tix_open") == _tid:
                 from dateutil.relativedelta import relativedelta as _qrd2
                 from datetime import date as _qd2
                 try:
@@ -22997,30 +23004,7 @@ def swaptions_tab(vol_mode: str):
                     st.caption(f"Tix error: {_qe2}")
 
 
-        # Reload into Pricer
-        st.markdown("##### Reload into Pricer")
-        row_labels = [
-            f"{i}: {r.get('label', str(r.get('expiry','?')) + 'x' + str(r.get('tenor','?')))}"
-            for i, r in df.iterrows()
-        ]
-        reload_sel = st.selectbox("Select ticket", ["  —  "] + row_labels, key="sw_reload_blot2")
-        if st.button("🔄 Reload & Reprice", key="sw_reload_btn2") and reload_sel != "  —  ":
-            row_idx = int(reload_sel.split(":")[0])
-            row = df.loc[row_idx]
-            EXPIRY_PRESETS = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","12y","15y","20y","📅 Custom Date..."]
-            tenor_options = ["1Y","2Y","3Y","4Y","5Y","6Y","7Y","8Y","9Y","10Y","12Y","15Y","20Y","25Y","30Y"]
-            import re as _re_sw2
-            exp_val = str(row.get("expiry", "5y"))
-            tenor_val = _re_sw2.sub(r'^\d+[mMwW]', '', str(row.get("tenor","5Y"))).strip() or "5Y"
-            st.session_state["sw_pending_reload"] = {
-                "expiry": exp_val if exp_val in EXPIRY_PRESETS else "5y",
-                "tenor": tenor_val if tenor_val in tenor_options else "5Y",
-                "structure": str(row.get("structure", "ATM Straddle")),
-                "notional_mm": float(row.get("notional_mm", 100)),
-                "strike": float(row["strike"]) if "strike" in row and not pd.isna(row["strike"]) else None,
-            }
-            st.rerun()
-
+        # v0907p: "Reload into Pricer" block removed per request.
 
 
 # v2404r: @st.fragment REMOVED. The CFS tab has too many conditional
