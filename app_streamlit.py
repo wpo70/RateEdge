@@ -37,6 +37,7 @@ CCY_EOD = {
     "NZD": (17, 0),    # 5:00pm Wellington
     "USD": (16, 30),   # 4:30pm New York
     "GBP": (16, 0),    # 4:00pm London (SONIA swaption EOD)
+    "JPY": (15, 0),    # 3:00pm Tokyo (TONAR swaption EOD — confirm before first vol save)
 }
 from typing import Optional, List, Tuple, Dict
 
@@ -754,13 +755,13 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907f"
+APP_VERSION = "v0907g"
 
-SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP"]
+SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
 # any internal lookups (NZD references in scanner gates, etc.) still resolve.
 # v1405w: NZD removed from sidebar entirely (was "NZD (PENDING)").
-ALL_CURRENCIES = ["AUD", "USD", "EUR", "GBP", "JPY (PENDING)", "CAD (PENDING)"]
+ALL_CURRENCIES = ["AUD", "USD", "EUR", "GBP", "JPY", "CAD (PENDING)"]
 # v1405x: explicit set of ccys to hide from UI dropdowns/filters/status displays.
 # Anything in SUPPORTED_CURRENCIES but NOT in ALL_CURRENCIES (as a non-PENDING entry)
 # should be in here. Backend code that needs NZD data still uses SUPPORTED_CURRENCIES.
@@ -1618,6 +1619,11 @@ def load_all_session_data(user_id: str, load_date: str = None) -> int:
                             _zc_df = bootstrap_usd_sofr_ois(_zc_df)
                         elif ccy == "GBP":
                             _zc_df = bootstrap_gbp_sonia_ois(_zc_df)
+                        elif ccy == "JPY":
+                            try:
+                                _zc_df = bootstrap_jpy_tonar_ois(_zc_df)
+                            except Exception:
+                                pass
                         st.session_state.setdefault("curves", {})[ccy] = _zc_df
                         st.session_state.setdefault("config_curves", {})[ccy] = _zc_df
                         set_timestamp("curves", ccy)
@@ -2993,6 +2999,31 @@ def build_gbp_sonia_schedule(expiry: float, tenor: float) -> List[Tuple[float, f
     return schedule
 
 
+def build_jpy_tonar_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]:
+    """
+    JPY TONAR swaption: T+2 Tokyo BD spot, mod-fol, ACT/365F fixed, SEMI-ANNUAL
+    payments both legs (single-curve TONAR OIS). Returns (t_years, act365f_accrual).
+    v0907e — separate function, mirrors build_gbp_sonia_schedule with
+    spot_lag_bd=2 (vs GBP T+0) and semi-annual periods (vs GBP annual).
+    USD/EUR/GBP/AUD/NZD paths untouched.
+    """
+    today = _pricing_date()
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=2)
+    months_per_period = 6  # semi-annual
+    total_months = int(round(tenor * 12))
+    n = max(1, int(round(tenor * (12 / months_per_period))))
+    schedule = []
+    prev = fwd_start
+    for i in range(1, n + 1):
+        raw = _add_months(fwd_start, i * months_per_period if i < n else total_months)
+        pay = _mod_fol(raw)
+        accrual = _act365(prev, pay)   # ACT/365F for JPY TONAR
+        t_years = _act365(today, pay)
+        schedule.append((t_years, accrual))
+        prev = pay
+    return schedule
+
+
 def build_generic_schedule(expiry: float, tenor: float, freq: float = 0.5, spot_lag: float = 1.0) -> List[Tuple[float, float]]:
     """T+2BD spot (NZD/USD), mod-fol, Act/365. freq: 0.25=Q/Q, 0.5=S/S."""
     months_per = int(round(freq * 12))
@@ -3044,6 +3075,8 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         sched = build_eur_schedule(expiry, tenor)
     elif ccy == "GBP":
         sched = build_gbp_sonia_schedule(expiry, tenor)
+    elif ccy == "JPY":
+        sched = build_jpy_tonar_schedule(expiry, tenor)
     else:
         sched = build_generic_schedule(expiry, tenor, freq=0.5, spot_lag=1.0)
 
@@ -3109,13 +3142,13 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
 
     # Build log-cubic splines once (USD/EUR only); AUD/NZD use linear-on-zero.
     disc_curve = ois_curve if ois_curve is not None else _proj_curve
-    _proj_sp = _mk_logcubic(_proj_curve) if ccy in ("USD", "EUR", "GBP") else None
-    _disc_sp = _mk_logcubic(disc_curve) if ccy in ("USD", "EUR", "GBP") else None
+    _proj_sp = _mk_logcubic(_proj_curve) if ccy in ("USD", "EUR", "GBP", "JPY") else None
+    _disc_sp = _mk_logcubic(disc_curve) if ccy in ("USD", "EUR", "GBP", "JPY") else None
 
     def _df_proj(crv: pd.DataFrame, t: float, freq: float) -> float:
         """Projection DF. USD/EUR: log-cubic on DFs (market practice, matches
         BlueGamma). AUD/NZD: linear-on-zero (unchanged)."""
-        if ccy in ("USD", "EUR", "GBP") and _proj_sp is not None:
+        if ccy in ("USD", "EUR", "GBP", "JPY") and _proj_sp is not None:
             _sp, _ux, _ld = _proj_sp
             if _sp is not None:
                 return math.exp(float(_sp(t)))
@@ -3126,7 +3159,7 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         return math.exp(-z * t)
 
     def _df_disc(crv: pd.DataFrame, t: float) -> float:
-        if ccy in ("USD", "EUR", "GBP") and _disc_sp is not None:
+        if ccy in ("USD", "EUR", "GBP", "JPY") and _disc_sp is not None:
             _sp, _ux, _ld = _disc_sp
             if _sp is not None:
                 return math.exp(float(_sp(t)))
@@ -5568,6 +5601,9 @@ def get_basis_curve(ccy: str, basis_type: str = "6v3") -> Optional[pd.DataFrame]
         # OIS basis leg, so the OIS discount curve IS the SONIA curve itself.
         # Fixes discounting at every CFS/swaption ois-resolution site at once.
         return st.session_state.get("config_curves", {}).get("GBP")
+    if _bc is None and ccy == "JPY" and basis_type == "ois":
+        # v0907g: JPY TONAR single-curve — TONAR discounts TONAR (same as GBP).
+        return st.session_state.get("config_curves", {}).get("JPY")
     return _bc
 
 
@@ -6464,6 +6500,73 @@ def bootstrap_gbp_sonia_ois(par_df: pd.DataFrame) -> pd.DataFrame:
             else:
                 ann += DCF_ANNUAL * _dfi(n_full + SPOT)
                 dcf_last = (T - n_full) * DCF_ANNUAL
+            df_end = (1.0 - c * ann) / (1.0 + c * dcf_last)
+        if df_end > 0:
+            dfs[te] = df_end
+
+    result_rows = []
+    for _, row in par_df.iterrows():
+        mat = float(row["MaturityY"])
+        if mat > 0:
+            d = _dfi(mat)
+            zero_pct = -math.log(d) / mat * 100.0 if d > 0 else float(row["ZeroRatePct"])
+        else:
+            zero_pct = float(row["ZeroRatePct"])
+        nr = row.copy(); nr["ZeroRatePct"] = zero_pct
+        result_rows.append(nr)
+    return pd.DataFrame(result_rows).reset_index(drop=True)
+
+
+def bootstrap_jpy_tonar_ois(par_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Bootstrap JPY TONAR OIS par swap rates -> continuous zero rates.
+
+    v0907e. TONAR OIS conventions (single-curve OIS): SEMI-ANNUAL fixed,
+    ACT/365F, T+2 Tokyo. Mirrors bootstrap_gbp_sonia_ois EXACTLY except:
+      - payment frequency: semi-annual (DCF_SEMI = 0.5 per clean half-year)
+      - spot lag: T+2 (SPOT = 2/252) vs GBP T+0
+    TONAR is BOTH projection and discount (no basis leg). Separate function so
+    USD/EUR/GBP paths are never touched. In/out format: MaturityY + ZeroRatePct.
+    """
+    import math
+    SPOT = 2.0 / 252.0
+    DCF_SEMI = 0.5  # ACT/365F: a clean semi-annual period accrues ~182.5/365 = 0.5
+
+    par_dict = {}
+    for _, row in par_df.iterrows():
+        mat = float(row["MaturityY"]); rate = float(row["ZeroRatePct"])
+        if mat > 0 and rate != 0:
+            par_dict[mat] = rate
+    if len(par_dict) < 3:
+        return par_df
+
+    dfs = {0.0: 1.0, SPOT: 1.0}
+
+    def _dfi(t):
+        ts = sorted(dfs.keys()); dfv = [dfs[x] for x in ts]
+        if t <= ts[0]:
+            return 1.0
+        if t >= ts[-1]:
+            z = -math.log(max(dfv[-1], 1e-10)) / ts[-1]
+            return math.exp(-z * t)
+        return math.exp(float(np.interp(t, ts, np.log(np.maximum(dfv, 1e-10)))))
+
+    for T in sorted(par_dict):
+        c = par_dict[T] / 100.0
+        te = T + SPOT
+        if T <= 0.5 + 1e-9:
+            dcf = T  # single stub period, ACT/365F ~ year fraction
+            df_end = 1.0 / (1.0 + c * dcf)
+        else:
+            n_half = int(math.floor(T / 0.5))
+            ann = 0.0
+            for k in range(1, n_half):
+                ann += DCF_SEMI * _dfi(k * 0.5 + SPOT)
+            if abs(T - n_half * 0.5) < 1e-6:
+                dcf_last = DCF_SEMI
+            else:
+                ann += DCF_SEMI * _dfi(n_half * 0.5 + SPOT)
+                dcf_last = (T - n_half * 0.5)
             df_end = (1.0 - c * ann) / (1.0 + c * dcf_last)
         if df_end > 0:
             dfs[te] = df_end
@@ -15549,6 +15652,7 @@ def vol_config_tab():
                     ("USD", "SOFR"),
                     ("NZD", "3M BKBM"),
                     ("GBP", "SONIA"),
+                    ("JPY", "TONAR"),
                 ]
                 for _db_ccy, _db_fr in _single_curve_map:
                     try:
@@ -15561,6 +15665,12 @@ def vol_config_tab():
                             elif _db_ccy == "GBP":
                                 st.session_state["_gbp_sonia_par"] = _db_curve.copy()
                                 _db_curve = bootstrap_gbp_sonia_ois(_db_curve)
+                            elif _db_ccy == "JPY":
+                                try:
+                                    st.session_state["_jpy_tonar_par"] = _db_curve.copy()
+                                    _db_curve = bootstrap_jpy_tonar_ois(_db_curve)
+                                except Exception as _jex2:
+                                    _curve_warnings.append(f"⚠️ JPY TONAR bootstrap failed: {type(_jex2).__name__}: {_jex2} — stored par.")
                             st.session_state.setdefault("curves", {})[_db_ccy] = _db_curve
                             st.session_state.setdefault("config_curves", {})[_db_ccy] = _db_curve
                             set_timestamp("curves", _db_ccy)
@@ -17379,11 +17489,125 @@ def curves_tab():
                 st.info("Click **\u25b6 Generate GBP Forward Matrix** to compute.")
 
 
+    # JPY CURVES — TONAR OIS (single curve: projection AND discount, SEMI-annual ACT/365F)
+    # v0907e — clone of the GBP SONIA renderer with TONAR labels/conventions.
+    # ══════════════════════════════════════════════════════════════════════════
+    if ccy == "JPY":
+        _tonar_zero = curve_c
+        _tonar_par  = _clean(st.session_state.get("_jpy_tonar_par"))
+
+        _jpy_fig = go.Figure()
+        if _tonar_zero is not None and not _tonar_zero.empty:
+            _jpy_fig.add_trace(go.Scatter(
+                x=_tonar_zero["MaturityY"], y=_tonar_zero["ZeroRatePct"],
+                mode="lines+markers", name="TONAR Zero (bootstrapped)",
+                line=dict(color="#38bdf8", width=2), marker=dict(size=5)))
+        if _tonar_par is not None and not _tonar_par.empty:
+            _jpy_fig.add_trace(go.Scatter(
+                x=_tonar_par["MaturityY"], y=_tonar_par["ZeroRatePct"],
+                mode="lines+markers", name="Par TONAR OIS",
+                line=dict(color="#a78bfa", width=2, dash="dot"), marker=dict(size=4)))
+        _jpy_fig.update_layout(
+            title="JPY TONAR Curve (single-curve OIS \u00b7 semi-annual ACT/365F \u00b7 T+2 Tokyo)",
+            xaxis_title="Maturity (Y)", yaxis_title="Rate (%)", height=420,
+            legend=dict(orientation="h", y=1.1), margin=dict(l=40, r=40, t=40, b=40))
+        st.plotly_chart(_jpy_fig, use_container_width=True)
+
+        def _jpy_mat_to_tenor(_y):
+            _map = [(1/52,"1w"),(1/12,"1m"),(2/12,"2m"),(3/12,"3m"),(4/12,"4m"),
+                    (5/12,"5m"),(6/12,"6m"),(9/12,"9m"),(1.0,"1y"),(1.5,"18m"),
+                    (2.0,"2y"),(3.0,"3y"),(4.0,"4y"),(5.0,"5y"),(6.0,"6y"),(7.0,"7y"),
+                    (8.0,"8y"),(9.0,"9y"),(10.0,"10y"),(12.0,"12y"),(15.0,"15y"),
+                    (20.0,"20y"),(25.0,"25y"),(30.0,"30y"),(35.0,"35y"),(40.0,"40y"),
+                    (50.0,"50y"),(60.0,"60y")]
+            for _v,_lbl in _map:
+                if abs(_y-_v) < 0.005: return _lbl
+            return f"{_y:.4g}Y"
+        def _jpy_relabel(_df):
+            if _df is None or _df.empty: return _df
+            _dc = _df.copy()
+            if "MaturityY" in _dc.columns:
+                _dc["MaturityY"] = _dc["MaturityY"].apply(_jpy_mat_to_tenor)
+            return _dc
+
+        with st.expander("JPY Curve Data", expanded=False):
+            _jpy_tcols = st.columns(2)
+            with _jpy_tcols[0]:
+                st.caption("\U0001F535 Bootstrapped TONAR Zero (%) \u2014 used for pricing")
+                if _tonar_zero is not None and not _tonar_zero.empty:
+                    st.dataframe(
+                        _jpy_relabel(_tonar_zero).rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Zero(%)"}).style.format({"Zero(%)":"{:.4f}"}),
+                        use_container_width=True, hide_index=True)
+            with _jpy_tcols[1]:
+                st.caption("\u26AA Par TONAR OIS (%) \u2014 market input")
+                if _tonar_par is not None and not _tonar_par.empty:
+                    st.dataframe(
+                        _jpy_relabel(_tonar_par).rename(columns={"MaturityY":"Tenor","ZeroRatePct":"Par(%)"}).style.format({"Par(%)":"{:.4f}"}),
+                        use_container_width=True, hide_index=True)
+                else:
+                    st.caption("(reload JPY curve to populate)")
+
+        st.session_state.setdefault("jpy_fwd_matrix", {})
+        if "jpy_fwd_section_open" not in st.session_state:
+            st.session_state["jpy_fwd_section_open"] = False
+        _jfl = "\u25bc Hide JPY Forward Matrix" if st.session_state["jpy_fwd_section_open"] else "\u25b6 Show JPY Forward Matrix"
+        if st.button(_jfl, key="jpy_fwd_toggle"):
+            st.session_state["jpy_fwd_section_open"] = not st.session_state["jpy_fwd_section_open"]
+
+        if st.session_state["jpy_fwd_section_open"]:
+            _jcols = st.columns([3, 1, 3, 3])
+            with _jcols[2]:
+                _gen_jpy_fwd = st.button("\u25b6 Generate JPY Forward Matrix", key="gen_jpy_fwd", type="primary", use_container_width=True)
+            with _jcols[3]:
+                _has_jpy = "TONAR" in st.session_state.get("jpy_fwd_matrix", {})
+                st.download_button("\u2b07 Download",
+                    data=st.session_state["jpy_fwd_matrix"].get("TONAR", pd.DataFrame()).to_csv() if _has_jpy else "",
+                    file_name="JPY_fwd_TONAR.csv", key="dl_jpy_fwd",
+                    use_container_width=True, type="primary", disabled=not _has_jpy)
+
+            if _gen_jpy_fwd:
+                _JPY_EXPIRIES = [1/52, 1/12, 2/12, 3/12, 6/12, 9/12, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 25, 30]
+                _JPY_TENORS   = [1, 2, 3, 4, 5, 7, 10, 12, 15, 20, 25, 30]
+                _EXP_LABELS   = ["1w","1m","2m","3m","6m","9m","1y","18m","2y","3y","4y","5y","6y","7y","8y","9y","10y","12y","15y","20y","25y","30y"]
+                _TEN_LABELS   = ["1Y","2Y","3Y","4Y","5Y","7Y","10Y","12Y","15Y","20Y","25Y","30Y"]
+
+                def _jpy_fwd_rate(df_curve, exp, ten):
+                    """JPY TONAR forward via the EXACT pricer function (T+2 Tokyo,
+                    semi-annual ACT/365F, single-curve TONAR) so matrix == pricer."""
+                    if df_curve is None or df_curve.empty: return None
+                    try:
+                        _f, _, _ = forward_and_annuity_from_curve(
+                            df_curve[["MaturityY", "ZeroRatePct"]].copy(), "JPY", float(exp), float(ten), None)
+                        return round(_f * 100, 4)
+                    except Exception:
+                        return None
+
+                with st.spinner("Generating JPY forward matrix..."):
+                    _rows = {}
+                    for ei, exp in enumerate(_JPY_EXPIRIES):
+                        _row = {}
+                        for ti, ten in enumerate(_JPY_TENORS):
+                            _row[_TEN_LABELS[ti]] = _jpy_fwd_rate(_tonar_zero, exp, ten)
+                        _rows[_EXP_LABELS[ei]] = _row
+                    _jdf = pd.DataFrame(_rows).T
+                    _jdf.index.name = "Expiry"; _jdf = _jdf.reset_index()
+                    st.session_state["jpy_fwd_matrix"]["TONAR"] = _jdf
+
+            _jdisp = st.session_state.get("jpy_fwd_matrix", {}).get("TONAR")
+            if _jdisp is not None and not _jdisp.empty:
+                _jnum = [c for c in _jdisp.columns if c != "Expiry"]
+                st.dataframe(
+                    _jdisp.style.format({c: "{:.4f}" for c in _jnum}).background_gradient(cmap="RdYlGn", subset=_jnum),
+                    use_container_width=True, hide_index=True, height=820)
+            else:
+                st.info("Click **\u25b6 Generate JPY Forward Matrix** to compute.")
+
+
     # ── Chart toggles (AUD/NZD only) ─────────────────────────────────────────
     # AUD/NZD chart — defaults so USD/EUR path through try block is harmless
     # ⛔ LOCKED (v0705g): AUD/NZD branches DO NOT MODIFY.
     _show_par = _show_irs = _show_ois = _show_b6 = _show_b3 = False
-    if ccy not in ("USD", "EUR", "GBP"):
+    if ccy not in ("USD", "EUR", "GBP", "JPY"):
         _ck = st.columns(5)
         with _ck[0]: _show_par = st.checkbox("IRS Par", value=True, key="chart_par")
         with _ck[1]: _show_irs = st.checkbox("IRS Zero", value=True, key="chart_irs")
@@ -17391,7 +17615,7 @@ def curves_tab():
         with _ck[3]: _show_b6  = st.checkbox("6v3 Basis", value=True, key="chart_b6")
         with _ck[4]: _show_b3  = st.checkbox("3v1 Basis", value=True, key="chart_b3")
 
-    if ccy not in ("USD", "EUR", "GBP"):
+    if ccy not in ("USD", "EUR", "GBP", "JPY"):
      try:
         fig = go.Figure()
         if _show_par:
@@ -17454,7 +17678,7 @@ def curves_tab():
      except Exception as _e:
         st.warning(f"Chart: {_e}")
 
-    if ccy not in ("USD", "EUR", "GBP"):
+    if ccy not in ("USD", "EUR", "GBP", "JPY"):
      with st.expander("IRS Par Rates & Curve Data", expanded=False):
         _cols_to_show = []
         if ccy == "USD": pass  # no AUD data tables for USD
@@ -17501,7 +17725,7 @@ def curves_tab():
 
     # ── IRS Forward Matrix (AUD/NZD only) ────────────────────────────────────────
     # ⛔ LOCKED: USD has its own matrix (above), EUR has its own matrix (above).
-    if ccy not in ("USD", "EUR", "GBP"):
+    if ccy not in ("USD", "EUR", "GBP", "JPY"):
         if "fwd_matrix"   not in st.session_state: st.session_state["fwd_matrix"]   = {}
         if "basis_matrix" not in st.session_state: st.session_state["basis_matrix"] = {}
         if "fwd_section_open" not in st.session_state: st.session_state["fwd_section_open"] = True
@@ -20735,6 +20959,21 @@ def _generate_forward_matrix_cached(ccy: str, curve_tuple: tuple, basis_tuple: O
                                                          freq_override=1.0, ois_x=ois_x, ois_y=ois_y,
                                                          basis6v3_x=basis_x, basis6v3_y=basis_y)
                         row[tenor] = mkt_rate * 100
+                    elif ccy == "JPY":
+                        # v0907e JPY TONAR single-curve: EXACT pricer forward (T+2 Tokyo,
+                        # SEMI-annual ACT/365F, mod-fol) so the matrix == swaption pricer.
+                        _jpy_curve_df = pd.DataFrame({
+                            "MaturityY": list(curve_x),
+                            "ZeroRatePct": [z * 100.0 for z in curve_y],
+                        })
+                        try:
+                            mkt_rate, _, _ = forward_and_annuity_from_curve(
+                                _jpy_curve_df, "JPY", exp_y, tenor_y, None)
+                        except Exception:
+                            mkt_rate = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy,
+                                                         freq_override=0.5, ois_x=ois_x, ois_y=ois_y,
+                                                         basis6v3_x=basis_x, basis6v3_y=basis_y)
+                        row[tenor] = mkt_rate * 100
                     else:
                         mkt_rate = fast_forward_rate(curve_x, curve_y, exp_y, tenor_y, ccy,
                                                      freq_override=None,
@@ -20780,6 +21019,8 @@ def fast_forward_rate(curve_x: np.ndarray, curve_y: np.ndarray, expiry: float, t
         freq = 1.0  # ESTR OIS: annual 30/360 fixed
     elif ccy == "GBP":
         freq = 1.0  # SONIA OIS: annual ACT/365 fixed
+    elif ccy == "JPY":
+        freq = 0.5  # TONAR OIS: SEMI-annual ACT/365F fixed
     else:
         freq = 0.5
 
@@ -20988,6 +21229,10 @@ def swaptions_tab(vol_mode: str):
     # leg; config_basis["GBP"]["ois"] does not exist, so ois_curve is None here.
     if ccy == "GBP" and ois_curve is None and curve is not None:
         ois_curve = curve  # SONIA
+
+    # v0907g: JPY TONAR single-curve — TONAR is both projection and discount.
+    if ccy == "JPY" and ois_curve is None and curve is not None:
+        ois_curve = curve  # TONAR
 
     # USD-specific convention display
     if ccy == "USD":
@@ -26331,6 +26576,8 @@ def exotics_tab(vol_mode: str):
         _ensure_usd_alpha_sticky()  # v0506c: keep alpha sticky to ATM here too
     if ccy == "GBP" and ois_curve is None:
         ois_curve = curve  # GBP single-curve SONIA: SONIA is both projection AND discount
+    if ccy == "JPY" and ois_curve is None:
+        ois_curve = curve  # v0907g: JPY single-curve TONAR: projection AND discount
     basis_6v3 = get_basis_curve(ccy, "6v3")
     atm       = get_working_atm_surface(ccy)
     _, a_m, b_m, r_m, n_m = get_ccy_vol_data(ccy)
@@ -36209,6 +36456,10 @@ def calculate_atm_premium_matrix(ccy: str, curve: pd.DataFrame, atm_vols: pd.Dat
     if ccy == "GBP" and ois_curve is None:
         ois_curve = curve
 
+    # v0907g: JPY TONAR single-curve (matches pricer guard so matrix == pricer).
+    if ccy == "JPY" and ois_curve is None:
+        ois_curve = curve
+
     # v0406l: USD ATM vol must match the pricer EXACTLY. The pricer's straddle vol is
     # get_vol_for_strike(F) → smile_vol_pinned(F,F,T,α,β,ρ,ν) (SABR-reconstructed ATM
     # + pin bumps), NOT the raw grid. Fetch the SABR matrices so we can reproduce it.
@@ -36730,12 +36981,17 @@ def main():
                     "EUR": [("ESTR", "main"), ("EURIBOR 6M", "euribor_6m"), ("EURIBOR 3M", "euribor_3m")],
                     # GBP SONIA: pure single curve (no basis leg) -- SONIA is both projection and discount.
                     "GBP": [("SONIA", "main")],
+                    # v0907g: JPY TONAR — pure single curve, TONAR is both projection and discount.
+                    "JPY": [("TONAR", "main")],
                 }
                 _eur_estr_zeros = None  # bootstrapped ESTR zeros, consumed by EURIBOR projection
                 for _fr, _role in _curve_map.get(target_ccy, []):
                     try:
                         _df = _load_curve_from_db_latest(_fr, target_ccy)
                         if _df is None or len(_df) == 0:
+                            # v0907g: JPY visibility — say so instead of silent skip.
+                            if target_ccy == "JPY":
+                                st.warning(f"JPY: no rows returned from swap_rates for floating_rate='{_fr}'.")
                             continue
                         if _role == "main":
                             # USD SOFR: bootstrap par swap rates → zero rates before
@@ -36764,6 +37020,15 @@ def main():
                                     _eur_estr_zeros = _df.copy()
                                 except Exception:
                                     pass
+                            elif target_ccy == "JPY" and _role == "main":
+                                # v0907g: GBP-pattern hardening — bootstrap failure
+                                # falls back to storing PAR (curve still loads) and
+                                # WARNS instead of dying silently in the outer except.
+                                try:
+                                    st.session_state["_jpy_tonar_par"] = _df.copy()
+                                    _df = bootstrap_jpy_tonar_ois(_df)
+                                except Exception as _jex:
+                                    st.warning(f"JPY TONAR bootstrap failed ({type(_jex).__name__}: {_jex}) — storing par rates.")
                             elif target_ccy == "GBP":
                                 # GBP SONIA single-curve: bootstrap par -> zero, keep raw
                                 # par for display. SONIA discounts SONIA (no basis leg).
