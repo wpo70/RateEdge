@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1307e"
+APP_VERSION = "v1307g"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -16016,6 +16016,8 @@ def vol_config_tab():
             if _avail_dates:
                 st.caption(f"Curve dates in DB: {', '.join(str(d) for d in _avail_dates[:5])}{'...' if len(_avail_dates)>5 else ''}")
 
+        if st.session_state.get("_jpy_load_diag"):
+            st.info(st.session_state["_jpy_load_diag"])
         col_db1, col_db2, col_db3 = st.columns([2, 2, 4])
         with col_db1:
             if st.button(" Load from Database", key="load_db_btn_top", type="primary"):
@@ -16085,10 +16087,24 @@ def vol_config_tab():
                 for _db_ccy, _db_fr in _single_curve_map:
                     try:
                         _db_curve = _load_curve_from_db_latest(_db_fr, _db_ccy, load_date=str(_load_date))
+                        # v1307g: single-shot retry on a fresh connection when the
+                        # first read comes back empty (stale pooled conn returns
+                        # None, which cache_data would otherwise memoise → the
+                        # "works after 3-4 clicks" bug). Applies to every single
+                        # curve, not just JPY.
+                        if _db_curve is None or len(_db_curve) == 0:
+                            st.session_state.pop("_db_conn_cached", None)
+                            st.session_state.pop("_db_conn_ts", None)
+                            try: _load_curve_from_db_latest.clear()
+                            except Exception: pass
+                            _db_curve = _load_curve_from_db_latest(_db_fr, _db_ccy, load_date=str(_load_date))
                         if _db_ccy == "JPY":
                             _n = 0 if _db_curve is None else len(_db_curve)
                             _sd = "" if (_db_curve is None or _db_curve.empty) else str(_db_curve.get("_source_date", pd.Series(["?"])).iloc[0])
-                            st.info(f"🔎 JPY TONAR load: {_n} rows for date≤{_load_date} (source {_sd}). config_curves has JPY: {'JPY' in st.session_state.get('config_curves', {})}")
+                            # v1307f: STICKY — persist so it survives the rerun.
+                            st.session_state["_jpy_load_diag"] = (
+                                f"🔎 JPY TONAR read: {_n} rows for date≤{_load_date} "
+                                f"(source {_sd}).")
                         if _db_curve is not None and len(_db_curve) > 0:
                             # Bootstrap par → zero for USD SOFR OIS
                             if _db_ccy == "USD":
@@ -16107,10 +16123,22 @@ def vol_config_tab():
                             st.session_state.setdefault("config_curves", {})[_db_ccy] = _db_curve
                             set_timestamp("curves", _db_ccy)
                             loaded_count += 1
+                            if _db_ccy == "JPY":
+                                st.session_state["_jpy_load_diag"] = (
+                                    st.session_state.get("_jpy_load_diag", "") +
+                                    f" ✅ stored to config_curves ({len(_db_curve)} pts).")
                         else:
                             _curve_warnings.append(f"⚠️ {_db_ccy} {_db_fr}: no rates found in swap_rates for {_load_date}")
+                            if _db_ccy == "JPY":
+                                st.session_state["_jpy_load_diag"] = (
+                                    f"❌ JPY TONAR: 0 rows returned for date≤{_load_date}. "
+                                    f"The loader filters currency='JPY' AND floating_rate='TONAR' "
+                                    f"AND date<={_load_date}. Check that date has TONAR rows.")
                     except Exception as _sc_err:
                         _curve_warnings.append(f"⚠️ {_db_ccy} {_db_fr} load failed: {_sc_err}")
+                        if _db_ccy == "JPY":
+                            st.session_state["_jpy_load_diag"] = (
+                                f"❌ JPY TONAR load raised: {type(_sc_err).__name__}: {_sc_err}")
                 # Show curve load warnings
                 for _cw in _curve_warnings:
                     st.warning(_cw)
@@ -16956,6 +16984,10 @@ def _load_curve_from_db_latest(floating_rate: str, ccy: str = "AUD", load_date: 
     try:
         conn = get_db_connection()
         if conn is None:
+            # v1307g: do NOT let cache_data memoise a connection failure —
+            # clear this fn's cache so the next call re-queries on a fresh conn.
+            try: _load_curve_from_db_latest.clear()
+            except Exception: pass
             return None
         cur = conn.cursor()
         # Use specified date or find the most recent available
@@ -17000,6 +17032,14 @@ def _load_curve_from_db_latest(floating_rate: str, ccy: str = "AUD", load_date: 
         df["_source_date"] = str(latest_date)
         return df
     except Exception:
+        # v1307g: don't cache a transient failure (stale pooled connection) —
+        # evict so a retry re-queries. This is the "works after 3-4 clicks" bug.
+        try:
+            st.session_state.pop("_db_conn_cached", None)
+            st.session_state.pop("_db_conn_ts", None)
+            _load_curve_from_db_latest.clear()
+        except Exception:
+            pass
         return None
 
 
