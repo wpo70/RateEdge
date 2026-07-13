@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1307b"
+APP_VERSION = "v1307c"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -5272,37 +5272,10 @@ def apply_rateedge_theme(theme_name: str):
             -webkit-text-fill-color: {muted} !important;
             opacity: 0.7;
         }}
-        /* Selectbox dropdown text — broadened: newer Streamlit builds moved the
-           value text out of the span the old rule targeted, leaving values
-           dark-on-dark. Target every descendant of the select control + the
-           value container directly, and the open dropdown menu items. */
+        /* Selectbox dropdown text */
         .stSelectbox label,
-        .stSelectbox [data-baseweb="select"] span,
-        .stSelectbox [data-baseweb="select"] div,
-        [data-testid="stSidebar"] [data-baseweb="select"] *,
-        [data-baseweb="select"] [data-baseweb="tag"] span,
-        div[data-baseweb="select"] > div {{
+        .stSelectbox [data-baseweb="select"] span {{
             color: {text} !important;
-        }}
-        /* open dropdown menu (rendered in a popover at body level) */
-        [data-baseweb="popover"] [data-baseweb="menu"] li,
-        [data-baseweb="popover"] [role="listbox"] li,
-        [data-baseweb="popover"] [role="option"] {{
-            color: {text} !important;
-            -webkit-text-fill-color: {text} !important;
-            opacity: 1 !important;
-        }}
-        /* NUKE: new Streamlit dims select values via -webkit-text-fill-color and
-           opacity, which plain color: cannot override. Force all three on the
-           select control and every descendant, sidebar and main alike. */
-        div[data-baseweb="select"],
-        div[data-baseweb="select"] * {{
-            color: {text} !important;
-            -webkit-text-fill-color: {text} !important;
-            opacity: 1 !important;
-        }}
-        div[data-baseweb="select"] svg {{
-            fill: {text} !important;
         }}
         /* Number input labels */
         .stNumberInput label {{
@@ -27590,8 +27563,8 @@ def exotics_tab(vol_mode: str):
             r2.metric(f"Delta {short_tenor_sel}", f"{delta_short:.4f}")
             r3.metric("Vega ($/bp vol)", f"${vega_dollar:,.0f}")
             r4.metric("df(T)", f"{df_T_so:.6f}")
-        st.caption(f"┬ñ├ó_long={vol_long_bp:.1f}bp  ┬ñ├ó_short={vol_short_bp:.1f}bp  "
-                   f"ρ,ν={rho:.3f}  ┬ñ├ó_spread={vol_spread_bp:.2f}bp  d={d_so:.4f}  T={so_T:.4f}y")
+        st.caption(f"vol_long={vol_long_bp:.1f}bp  vol_short={vol_short_bp:.1f}bp  "
+                   f"rho={rho:.3f}  vol_spread={vol_spread_bp:.2f}bp  d={d_so:.4f}  T={so_T:.4f}y")
 
         # ── Payoff chart ─────────────────────────────────────────────
         spread_range = np.linspace(X_fwd - 150, X_fwd + 150, 100)
