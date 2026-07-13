@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1307d"
+APP_VERSION = "v1307e"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -16085,6 +16085,10 @@ def vol_config_tab():
                 for _db_ccy, _db_fr in _single_curve_map:
                     try:
                         _db_curve = _load_curve_from_db_latest(_db_fr, _db_ccy, load_date=str(_load_date))
+                        if _db_ccy == "JPY":
+                            _n = 0 if _db_curve is None else len(_db_curve)
+                            _sd = "" if (_db_curve is None or _db_curve.empty) else str(_db_curve.get("_source_date", pd.Series(["?"])).iloc[0])
+                            st.info(f"🔎 JPY TONAR load: {_n} rows for date≤{_load_date} (source {_sd}). config_curves has JPY: {'JPY' in st.session_state.get('config_curves', {})}")
                         if _db_curve is not None and len(_db_curve) > 0:
                             # Bootstrap par → zero for USD SOFR OIS
                             if _db_ccy == "USD":
