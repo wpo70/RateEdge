@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1307j"
+APP_VERSION = "v1307k"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -8442,6 +8442,7 @@ _EU_BROKER_NAMES = {
     "TSAF": "Tradition", "TCDS": "Tradition", "TREU": "Tradition", "TEUR": "Tradition",
     "TEIR": "Tradition",
     "UTSL": "Tradition", "UTST": "Tradition",  # v1307i: Ueda Tradition Securities (Tokyo) — JPY IDB
+    "TSIG": "Tradition",  # v1307k: Tradition Singapore — Asia-session (AEST am) flow
     # GFI (BGC group)
     "GSEF": "GFI", "GFSO": "GFI",
     # Bloomberg
@@ -10588,6 +10589,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
         "TSAF": "Tradition", "TCDS": "Tradition", "TREU": "Tradition", "TEUR": "Tradition",
         "TEIR": "Tradition",
         "UTSL": "Tradition", "UTST": "Tradition",  # v1307i: Ueda Tradition Securities (Tokyo) — JPY IDB
+        "TSIG": "Tradition",  # v1307k: Tradition Singapore — Asia-session (AEST am) flow
         "TPSE": "Tullett Prebon", "TPIR": "Tullett Prebon", "TPEU": "Tullett Prebon",
         "IGDL": "ICAP", "ISWE": "ICAP (E)", "ISWV": "ICAP (V)",
         "IOIR": "ICAP UK OTF", "IMRD": "TP ICAP UK MTF",
@@ -10798,7 +10800,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             _BROKER_MICS = ["BGCD", "BGCO", "BGCI", "AURO", "BILT", "DWSF", "GSEF", "GFSO",
                            "IGDL", "ISWE", "ISWV", "IOIR", "IMRD",
                            "TPSE", "TPIR", "TPEU", "TSEF", "TSIR", "TSAF", "TWSF", "TWEM",
-                           "UTSL", "UTST",  # v1307j: Ueda Tradition (Tokyo) — selectable platform filter
+                           "UTSL", "UTST", "TSIG",  # v1307j/k: Ueda Tradition (Tokyo) + Tradition Singapore — selectable
                            "BBSF", "BMTF", "BTFE", "XOFF", "XXXX"]
             _all_platforms = sorted(_BROKER_MICS, key=lambda p: PLATFORM_NAMES.get(p, p))
             _platform_display = [f"{PLATFORM_NAMES.get(p, p)} ({p})" for p in _all_platforms]
@@ -37338,6 +37340,7 @@ _SDR_BROKER_NAMES = {
     "TSAF": "Tradition", "TCDS": "Tradition", "TREU": "Tradition", "TEUR": "Tradition",
     "TEIR": "Tradition",
     "UTSL": "Tradition", "UTST": "Tradition",  # v1307i: Ueda Tradition Securities (Tokyo) — JPY IDB
+    "TSIG": "Tradition",  # v1307k: Tradition Singapore — Asia-session (AEST am) flow
     "TPSE": "Tullett Prebon", "TPIR": "Tullett Prebon", "TPEU": "Tullett Prebon",
     "IGDL": "ICAP", "ISWE": "ICAP (E)", "ISWV": "ICAP (V)",
     "IOIR": "ICAP UK OTF", "IMRD": "TP ICAP UK MTF",
