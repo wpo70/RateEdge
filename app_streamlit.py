@@ -755,13 +755,14 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1307g"
+APP_VERSION = "v1307h"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
 # any internal lookups (NZD references in scanner gates, etc.) still resolve.
 # v1405w: NZD removed from sidebar entirely (was "NZD (PENDING)").
-ALL_CURRENCIES = ["AUD", "USD", "EUR", "GBP", "JPY", "CAD (PENDING)"]
+# v1307h: AUD moved to bottom of the sidebar; CAD removed for now.
+ALL_CURRENCIES = ["USD", "EUR", "GBP", "JPY", "AUD"]
 # v1405x: explicit set of ccys to hide from UI dropdowns/filters/status displays.
 # Anything in SUPPORTED_CURRENCIES but NOT in ALL_CURRENCIES (as a non-PENDING entry)
 # should be in here. Backend code that needs NZD data still uses SUPPORTED_CURRENCIES.
