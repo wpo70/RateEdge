@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1307m"
+APP_VERSION = "v1307n"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -8094,7 +8094,7 @@ def _sdr_bucket_atm_vols(sdf, curve, hl_days=21.0, max_age=0.0):
     out = {}
     if sdf is None or getattr(sdf, "empty", True) or "strike_pct" not in sdf.columns:
         return out
-    _DED = {"BGCD", "TPSE", "TSEF", "TWSF", "IGDL", "ISWE", "ISWV", "GSEF", "BILT", "XXXX"}
+    _DED = {"BGCD", "TPSE", "TSEF", "TWSF", "UTSL", "UTST", "TSIG", "IGDL", "ISWE", "ISWV", "GSEF", "BILT", "XXXX"}
     _newt = sdf[sdf["action_type"] == "NEWT"].copy() if "action_type" in sdf.columns else sdf.copy()
     _pay = _newt[_newt["option_type_decoded"] == "CALL"].copy()
     _rcv = _newt[_newt["option_type_decoded"] == "PUT"].copy()
@@ -8456,7 +8456,7 @@ _EU_BROKER_NAMES = {
     "BLOM": "Bloomberg", "ICSE": "ICE",
 }
 _PREM_DEDUP_MICS_EU = {"BGCD", "BGCO", "BGCI", "TPSE", "TPIR", "TPEU", "TSEF", "TSIR",
-                       "TSAF", "TWSF", "TWEM", "IGDL", "ISWE", "ISWV", "IOIR", "IMRD",
+                       "TSAF", "TWSF", "TWEM", "UTSL", "UTST", "TSIG", "IGDL", "ISWE", "ISWV", "IOIR", "IMRD",
                        "GSEF", "GFSO", "BILT", "XXXX"}
 
 _LONDON_TZ = None
@@ -10814,6 +10814,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             _saved_plat = _sv.get("sdr_platform")
             if _saved_plat is not None:
                 _sv_plat = [p for p in _saved_plat if p in _platform_display]
+                # v1307n: auto-include newly-added default venues that didn't exist
+                # when the selection was saved (UTSL/UTST/TSIG), so new Tradition
+                # MICs appear without the user re-selecting.
+                _NEW_SINCE_SAVE = {"UTSL", "UTST", "TSIG"}
+                for _nm in _NEW_SINCE_SAVE:
+                    _lbl = f"{PLATFORM_NAMES.get(_nm, _nm)} ({_nm})"
+                    if _lbl in _platform_display and _lbl not in _sv_plat:
+                        _sv_plat.append(_lbl)
             else:
                 _sv_plat = _default_display
             sel_platform_labels = st.multiselect("Platform", _platform_display,
@@ -11608,7 +11616,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             if _time_r is not pd.NaT and abs((_time_p - _time_r).total_seconds()) <= 120:
                                 _p_prem = float(_p.get("premium_amount") or 0)
                                 _r_prem = float(_r.get("premium_amount") or 0)
-                                _PREM_DEDUP_MICS_SD = {"BGCD","TPSE","TSEF","TWSF","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
+                                _PREM_DEDUP_MICS_SD = {"BGCD","TPSE","TSEF","TWSF","UTSL","UTST","TSIG","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
                                 _sd_mic = str(_p.get("platform_identifier", ""))
                                 if _sd_mic in _PREM_DEDUP_MICS_SD and _p_prem > 0 and _r_prem > 0:
                                     _strd_prem = max(_p_prem, _r_prem)
@@ -11839,7 +11847,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                                     # Brokers report full straddle prem on EACH leg — but only dedup same-strike
                                     # Strangles/RRs have genuinely different prems; deduping corrupts them
-                                    _PREM_DEDUP_MICS = {"BGCD","BGCO","BGCI","TPSE","TPIR","TPEU","TSEF","TSIR","TSAF","TWSF","TWEM","IGDL","ISWE","ISWV","IOIR","IMRD","GSEF","GFSO","BILT","XXXX"}
+                                    _PREM_DEDUP_MICS = {"BGCD","BGCO","BGCI","TPSE","TPIR","TPEU","TSEF","TSIR","TSAF","TWSF","TWEM","UTSL","UTST","TSIG","IGDL","ISWE","ISWV","IOIR","IMRD","GSEF","GFSO","BILT","XXXX"}
                                     _broker_mic = str(_p.get("platform_identifier", ""))
                                     _prem_deduped = _same_strike and _broker_mic in _PREM_DEDUP_MICS and _p_prem > 0 and _r_prem > 0
                                     if _prem_deduped:
@@ -14801,7 +14809,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     st.caption(f"Live fwd ({_days_to_exp}d exp_y={_days_to_exp/365.0:.5f}):{_live_fwd_diag}")
 
                                 # Price each trade
-                                _PREM_DEDUP_MICS_EM = {"BGCD","TPSE","TSEF","TWSF","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
+                                _PREM_DEDUP_MICS_EM = {"BGCD","TPSE","TSEF","TWSF","UTSL","UTST","TSIG","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
                                 _today = _nyc_today
                                 _priced_rows = []
                                 for _, _tr in _day_df.iterrows():
@@ -15117,7 +15125,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             _top20_idx = set(_atm_df.nlargest(20, "notional_mm").index)
 
                             # Compute pricing for each row (same logic as daily loop)
-                            _PREM_DEDUP_MICS_XL = {"BGCD","TPSE","TSEF","TWSF","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
+                            _PREM_DEDUP_MICS_XL = {"BGCD","TPSE","TSEF","TWSF","UTSL","UTST","TSIG","IGDL","ISWE","ISWV","GSEF","BILT","XXXX"}
                             _em_atm_vol = st.session_state.get("vol_data", {}).get(_em_ccy, {}).get("atm")
                             _xl_rows = []
                             for _idx, _r in _atm_df.sort_values(["expiry_date", "swp_tenor", "strike_pct"]).iterrows():
