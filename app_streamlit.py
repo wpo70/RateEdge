@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1307a"
+APP_VERSION = "v1307b"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -5289,6 +5289,20 @@ def apply_rateedge_theme(theme_name: str):
         [data-baseweb="popover"] [role="listbox"] li,
         [data-baseweb="popover"] [role="option"] {{
             color: {text} !important;
+            -webkit-text-fill-color: {text} !important;
+            opacity: 1 !important;
+        }}
+        /* NUKE: new Streamlit dims select values via -webkit-text-fill-color and
+           opacity, which plain color: cannot override. Force all three on the
+           select control and every descendant, sidebar and main alike. */
+        div[data-baseweb="select"],
+        div[data-baseweb="select"] * {{
+            color: {text} !important;
+            -webkit-text-fill-color: {text} !important;
+            opacity: 1 !important;
+        }}
+        div[data-baseweb="select"] svg {{
+            fill: {text} !important;
         }}
         /* Number input labels */
         .stNumberInput label {{
