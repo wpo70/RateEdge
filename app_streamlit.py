@@ -749,13 +749,13 @@ def render_ticket_tab(ss):
         if not pricing_ok:  missing.append("pricing (run pricer)")
         if not buyer_ok:    missing.append("buyer counterparty")
         if not seller_ok:   missing.append("seller counterparty")
-        st.info("Complete: " + " · ".join(missing))
+        st.info("Complete: " + " * ".join(missing))
 
 HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1307c"
+APP_VERSION = "v1307d"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -8932,7 +8932,7 @@ def eu_combined_analysis():
             n_sdr += ns; n_mif += nm
             cnt_grid[e][col] = f"{ns}S/{nm}M"
 
-    st.caption(f"{n_sdr} SDR + {n_mif} MiFIR EUR trades · "
+    st.caption(f"{n_sdr} SDR + {n_mif} MiFIR EUR trades * "
                f"{_from_d.strftime('%d-%b-%Y')} → {_to_d.strftime('%d-%b-%Y')} · "
                f"surface {surf.get('label','')} ({str(surf.get('snapshot',''))[:19]}).")
 
@@ -10452,7 +10452,7 @@ def sdr_live_tab():
             if _sb_hb_age < 10:
                 st.success(f"🟢 SDR fetcher running · {_sb_hb_disp}")
             elif _sb_hb_age < 30:
-                st.warning(f"🟡 SDR fetcher delayed · {_sb_hb_disp}")
+                st.warning(f"🟡 SDR fetcher delayed * {_sb_hb_disp}")
             else:
                 st.error(f"🔴 SDR fetcher stopped · last poll {_sb_hb_disp}")
             if _sb_hb_status and ("ERROR" in str(_sb_hb_status).upper()
@@ -10931,7 +10931,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             c[4].markdown(_pre_map[pre_now] if pre_now else _status_map[active])
 
         st.markdown("")
-        st.caption(f"Current Sydney time: {_now_utc.astimezone(__import__('zoneinfo').ZoneInfo('Australia/Sydney')).strftime('%H:%M %Z')} · Refresh: every 5 min · Pre-open lookback: 90 min · Active poll: 10 min")
+        st.caption(f"Current Sydney time: {_now_utc.astimezone(__import__('zoneinfo').ZoneInfo('Australia/Sydney')).strftime('%H:%M %Z')} * Refresh: every 5 min * Pre-open lookback: 90 min * Active poll: 10 min")
 
     # ── Build query ───────────────────────────────────────────────────────────
     filters = []
@@ -11232,7 +11232,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             hide_index=True,
         )
 
-        st.caption(f"Showing {len(disp_df):,} trades · Last loaded: {(lambda _syd_now: _syd_now.strftime('%H:%M ') + ('AEDT' if _syd_now.utcoffset().total_seconds()==39600 else 'AEST'))(__import__('datetime').datetime.now(__import__('zoneinfo').ZoneInfo('Australia/Sydney')))} · Alert count this session: {st.session_state['sdr_alert_count']}")
+        st.caption(f"Showing {len(disp_df):,} trades * Last loaded: {(lambda _syd_now: _syd_now.strftime('%H:%M ') + ('AEDT' if _syd_now.utcoffset().total_seconds()==39600 else 'AEST'))(__import__('datetime').datetime.now(__import__('zoneinfo').ZoneInfo('Australia/Sydney')))} * Alert count this session: {st.session_state['sdr_alert_count']}")
 
     # ── Analytics ─────────────────────────────────────────────────────────────
     if not df.empty:
@@ -11257,7 +11257,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
         if _atab6:
             # ── VOLUME vs ROLLING AVERAGES — 10Y-eq notional & SABR-beta VegaEq ──
             st.markdown("### 📊 Daily Volume vs 30d / 90d / 180d / 1Y averages")
-            st.caption("10Y-eq = notional × tail/10.  VegaEq = notional × (tail/10) × √T(expiry), "
+            st.caption("10Y-eq = notional x tail/10.  VegaEq = notional x (tail/10) x sqrt(T expiry), "
                        "1y10y = 1 unit.  β-VegaEq scales each cell by σ_ATM(exp,tail)/σ_ATM(1y10y) "
                        "from the working SABR-calibrated surface — a vol-level beta. "
                        "Rows without strike AND premium (junk) or without a swap tenor excluded. "
@@ -11313,7 +11313,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 _beta_mode = st.radio(
                     "β method", ["SABR level β", "Empirical β (vol_history)"],
                     horizontal=True, key="_va_beta_mode",
-                    help=("SABR level β — today's calibrated ATM vol of each cell ÷ the 1y10y ATM vol. "
+                    help=("SABR level beta — today's calibrated ATM vol of each cell / the 1y10y ATM vol. "
                           "Assumes vol CHANGES scale with vol LEVEL (high-vol cells move more, "
                           "one-for-one with their level). Instant, always available, but it is an "
                           "assumption, not a measurement.\n\n"
@@ -11423,7 +11423,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                 except Exception:
                     _beta_fn = None
                 if _beta_fn is None:
-                    st.caption("⚠️ SABR surface unavailable — β=1 (unadjusted VegaEq).")
+                    st.caption("⚠️ SABR surface unavailable — beta=1 (unadjusted VegaEq).")
                     _beta_fn = lambda eY, tY: 1.0
                 if _beta_mode.startswith("Empirical"):
                     _eb, _ndays = _va_emp_betas(st.session_state.get("sidebar_ccy","USD").split(" ")[0])
@@ -11436,10 +11436,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                             if abs(_k[0]-eY) > 1.0 or abs(_k[1]-tY) > 5.0:
                                 return _lvl(eY, tY)
                             return _eb[_k]
-                        st.caption(f"Empirical β active — regression over {_ndays} stored EOD "
+                        st.caption(f"Empirical beta active — regression over {_ndays} stored EOD "
                                    f"snapshots, {len(_eb)} cells estimated (thin cells fall back to level β).")
                     else:
-                        st.caption(f"⚠️ Not enough vol_history for empirical β "
+                        st.caption(f"⚠️ Not enough vol_history for empirical beta "
                                    f"(need ≥45 daily snapshots; cells need ≥40 overlapping obs) — using level β.")
 
                 _va["N10eq"] = _va["notional"] * _va["tailY"]/10.0
@@ -11535,7 +11535,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _hm_data["notional_m"] = _hm_data["notional_leg1"].fillna(0) / 1e6
 
                     _ccy_label = ", ".join(sel_ccy) if sel_ccy else "All CCY"
-                    st.caption(f"Currency: **{_ccy_label}** · {_hm_view} · {_hm_metric}")
+                    st.caption(f"Currency: **{_ccy_label}** * {_hm_view} * {_hm_metric}")
 
                     if _hm_metric == "Notional ($M)":
                         _pivot = _hm_data.pivot_table(
@@ -11561,7 +11561,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         use_container_width=True,
                         height=min(600, 40 + len(_pivot) * 35)
                     )
-                    st.caption("Rows = strike (25bp buckets) · Columns = swap tenor · " +
+                    st.caption("Rows = strike (25bp buckets) * Columns = swap tenor * " +
                                ("Notional $M" if _hm_metric == "Notional ($M)" else "Trade count"))
                 else:
                     st.info("No trades with strike data in current filter.")
@@ -11658,7 +11658,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _pr_tenor["Receiver $M"] = (_pr_tenor["PUT"] / 1e6).round(0).fillna(0).astype(int)
                     _pr_tenor = _pr_tenor[["Payer $M","Receiver $M","Payer %"]].rename_axis("Swap Tenor")
                     st.dataframe(_pr_tenor, use_container_width=True)
-                    st.caption("Notional in $M · Payer % = Payer / (Payer + Receiver) by swap tenor")
+                    st.caption("Notional in $M * Payer % = Payer / (Payer + Receiver) by swap tenor")
 
         if _atab4:
             # ── Full Trade Analytics — straddles, strangles, collars, singles, exotics ──
@@ -13002,7 +13002,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             "SABR P bp":"—","SABR R bp":"—","SABR Skew":"—","Δ Skew bp":"—","":"❌"})
 
                                 if _sabr_ana_rows:
-                                    st.caption(f"SABR ref: **{_sabr_lbl}** | vols in bp | Δ Skew = Mkt − SABR | ⚠️ = |Δ|>2bp | ℹ️ = no straddle for F")
+                                    st.caption(f"SABR ref: **{_sabr_lbl}** | vols in bp | delta Skew = Mkt - SABR | ⚠️ = |delta|>2bp | ℹ️ = no straddle for F")
                                     st.dataframe(pd.DataFrame(_sabr_ana_rows), use_container_width=True, hide_index=True,
                                                  column_config={
                                                      "Bucket":    st.column_config.TextColumn(width=90),
@@ -13584,12 +13584,12 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                 st.dataframe(pd.DataFrame(_bl_prev["fit_rows"]), use_container_width=True, hide_index=True)
                                             _mc1, _mc2 = st.columns(2)
                                             with _mc1:
-                                                st.caption("Δρ = change in rho — the skew parameter. Negative rho = payer skew. More negative = steeper payer skew.")
+                                                st.caption("delta-rho = change in rho — the skew parameter. Negative rho = payer skew. More negative = steeper payer skew.")
                                                 st.markdown("**Δρ (blended)**")
                                                 if _bl_prev.get("show_dr"):
                                                     st.dataframe(pd.DataFrame(_bl_prev["show_dr"]).set_index("Expiry"), use_container_width=True)
                                             with _mc2:
-                                                st.caption("Δν = change in nu — vol of vol, the smile curvature parameter. Higher nu = more pronounced wings.")
+                                                st.caption("delta-nu = change in nu — vol of vol, the smile curvature parameter. Higher nu = more pronounced wings.")
                                                 st.markdown("**Δν (blended)**")
                                                 if _bl_prev.get("show_dn"):
                                                     st.dataframe(pd.DataFrame(_bl_prev["show_dn"]).set_index("Expiry"), use_container_width=True)
@@ -13610,7 +13610,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             _ncl = _bl_prev.get("n_clamped", 0)
                                             _ungp = _bl_prev.get("unpinned_grouped", []) or []
                                             _n_pinned_bk = max(_ng - len(_ungp), 0)
-                                            st.caption(f"Coverage: {_ng} grouped bucket(s) · "
+                                            st.caption(f"Coverage: {_ng} grouped bucket(s) * "
                                                        f"{_n_pinned_bk} pinned · {_ncl} clamped to sane ρ/ν.")
                                             if _ungp:
                                                 _fdrops = _bl_prev.get("fit_drops", {}) or {}
@@ -13941,7 +13941,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         try:
                                             _nz = int((_chg_ndf.abs() >= 0.05).to_numpy().sum())
                                             _mx = float(_chg_ndf.abs().to_numpy()[~pd.isna(_chg_ndf.to_numpy())].max())
-                                            st.caption(f"{_nz} cell(s) move on upload · largest move {_mx:+.1f}bp.")
+                                            st.caption(f"{_nz} cell(s) move on upload * largest move {_mx:+.1f}bp.")
                                         except Exception:
                                             pass
                                     except Exception:
@@ -14355,7 +14355,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         if _em_filtered["strike_var_bp"].notna().any():
                             _avg_var = _em_filtered["strike_var_bp"].mean()
                             _atm_count = len(_em_filtered[_em_filtered["strike_var_bp"].fillna(999) <= 10])
-                            st.caption(f"Avg variance: {_avg_var:.1f}bp | ATM (≤10bp): {_atm_count} trades")
+                            st.caption(f"Avg variance: {_avg_var:.1f}bp | ATM (<=10bp): {_atm_count} trades")
 
                     if _em_filtered.empty:
                         st.info("No trades for selected swap tenor.")
@@ -14409,7 +14409,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                 _hem_base = _hem_base.iloc[0:0]  # empty
 
                             if _hem_base.empty:
-                                st.info(f"No trades within ±50bp of ATM expiring in {_hem_window}.")
+                                st.info(f"No trades within +/-50bp of ATM expiring in {_hem_window}.")
                             else:
                                 # Vectorized 25bp buckets
                                 _hem_base["strike_norm"]  = (_hem_base["strike_pct"].fillna(0) / 0.0025).round() * 0.0025
@@ -18408,7 +18408,7 @@ def curves_tab():
             if has_atm:
                 st.markdown("---")
                 st.markdown("#### 📐 Ratio Calculator — Vega Neutral / Premium Neutral / BP Vol")
-                st.caption("Click a cell in the matrix to load it into Leg 1 or Leg 2. Ratio = Leg 1 ÷ Leg 2.")
+                st.caption("Click a cell in the matrix to load it into Leg 1 or Leg 2. Ratio = Leg 1 / Leg 2.")
 
                 _ad2 = st.session_state["atm_prem_matrix"][ccy]
                 _grid_opts = ["ATM Vol (bp)", "Forward Premium (bp)", "Vega ($/1bp 1mm)"]
@@ -19227,7 +19227,7 @@ def fwd_analysis_tab():
     # ── TAB 7: 6v3 BUTTERFLIES ──────────────────────────────────
     if _an_active == 6:
         st.markdown("#### 6v3 Basis Butterflies")
-        st.caption("Fly = 6v3(body)  →  0.5≈[6v3(wing1) + 6v3(wing2)]")
+        st.caption("Fly = 6v3(body)  →  0.5~[6v3(wing1) + 6v3(wing2)]")
         _com6v3_bfly = sorted([c for c in _w6.columns if c in _w3.columns and c.endswith("Y")],
                                key=lambda x: int(x[:-1]))
         if len(_com6v3_bfly) < 3:
@@ -20059,7 +20059,7 @@ def _fwd_analysis_tab_usd():
     # ─────────────────────────────────────────────────────────────
     if _an_active == 6:
         st.markdown("#### SOFR-FF Basis Butterflies")
-        st.caption("Fly = SOFR-FF(body) − 0.5 × [SOFR-FF(wing1) + SOFR-FF(wing2)]")
+        st.caption("Fly = SOFR-FF(body) - 0.5 x [SOFR-FF(wing1) + SOFR-FF(wing2)]")
         if _basis.empty:
             st.info("No SOFR-FF basis history loaded — click **Load USD Swap Rate History** above.")
         elif len(_basis_tn_opts) < 3:
@@ -21001,7 +21001,7 @@ def _fwd_analysis_tab_eur():
     # ─────────────────────────────────────────────────────────────
     if _an_active == 6:
         st.markdown("#### EURIBOR 6M-3M Basis Butterflies")
-        st.caption("Fly = EURIBOR 6M-3M(body) − 0.5 × [EURIBOR 6M-3M(wing1) + EURIBOR 6M-3M(wing2)]")
+        st.caption("Fly = EURIBOR 6M-3M(body) - 0.5 x [EURIBOR 6M-3M(wing1) + EURIBOR 6M-3M(wing2)]")
         if _basis.empty:
             st.info("No EURIBOR 6M-3M basis history loaded — click **Load EUR Swap Rate History** above.")
         elif len(_basis_tn_opts) < 3:
@@ -21726,7 +21726,7 @@ def swaptions_tab(vol_mode: str):
             )
         with _info_col:
             if "Sticky-ATM" in _smile_mode:
-                st.caption("⚙️ ~, ρ,ν, × locked from config. ~ recalibrated to ATM surface each session. Stale ~ cells flagged below.")
+                st.caption("⚙️ ~, rho,nu, x locked from config. ~ recalibrated to ATM surface each session. Stale ~ cells flagged below.")
             elif "Sticky-Delta" in _smile_mode:
                 st.caption("⚙️ All SABR params fixed. Smile moves with forward. May understate repricing on large rate moves.")
             else:
@@ -21796,13 +21796,13 @@ def swaptions_tab(vol_mode: str):
             if _alpha_result:
                 _rows = _alpha_result["rows"]; _any_stale = _alpha_result["stale"]
                 if _any_stale:
-                    st.warning("⚙️ Stale α — 🟡 >10%, 🔴 >20%. Consider recalibrating.")
+                    st.warning("⚙️ Stale alpha — 🟡 >10%, 🔴 >20%. Consider recalibrating.")
                 else:
                     st.success("✅ α consistent with committed ATM surface (within 10%)")
                 if _rows:
                     _alpha_df = pd.DataFrame(_rows).set_index("Expiry")
                     st.dataframe(_alpha_df, use_container_width=True)
-                    st.caption("Divergence = (implied α from ATM vol − stored α) / stored α × 100%. β, ρ, ν held fixed.")
+                    st.caption("Divergence = (implied alpha from ATM vol - stored alpha) / stored alpha x 100%. beta, rho, nu held fixed.")
 
             _rc1, _rc2 = st.columns([2, 4])
             with _rc1:
@@ -21892,7 +21892,7 @@ def swaptions_tab(vol_mode: str):
                         st.success(f"✅ Alpha recalibrated   —   {_updated} cells updated. ~, ρ,ν, × unchanged.")
                         st.rerun()
             with _rc2:
-                st.caption("Updates ~ to match current ATM surface. ~, ρ,ν, × remain locked. Run daily at session start in Sticky-ATM mode.")
+                st.caption("Updates ~ to match current ATM surface. ~, rho,nu, x remain locked. Run daily at session start in Sticky-ATM mode.")
 
     # Row 1: Structure Type and Model
     col_struct, col_model = st.columns([2, 1])
@@ -22367,7 +22367,7 @@ def swaptions_tab(vol_mode: str):
             atm_val = math.sqrt(max(_var_mc, 0) / _T_short) if _T_short > 0 else _v_long
             _vol_expiry_lbl = _lbl_short
             vol_used_display = round(atm_val, 2)
-            st.caption(f"Vol: {atm_val:.1f}bp  (variance bootstrap: √[{_v_long:.1f}²×{_T_long:.2f} − {_v_short:.1f}²×{_T_short:.2f}]÷{_T_short:.2f})")
+            st.caption(f"Vol: {atm_val:.1f}bp  (variance bootstrap: sqrt[{_v_long:.1f}^2x{_T_long:.2f} - {_v_short:.1f}^2x{_T_short:.2f}]/{_T_short:.2f})")
         else:
             # Vanilla: read vol directly from surface at option expiry
             _vol_expiry_lbl = _snap_lbl(expiry_y)
@@ -23461,7 +23461,7 @@ def caps_floors_tab(vol_mode: str):
         model = st.selectbox("Model", ["Normal", "Black"], index=0, key="cf_model")
     with col_prem_mode:
         cf_prem_mode = st.radio("Premium", ["Spot", "Forward"], index=0, key="cf_prem_mode", horizontal=True)
-        st.caption("Fwd = Spot ÷ df(expiry)")
+        st.caption("Fwd = Spot / df(expiry)")
 
     col_not, col_first, col_tenor = st.columns(3)
     with col_not:
@@ -23664,7 +23664,7 @@ def caps_floors_tab(vol_mode: str):
         st.caption(f"Width: **{(strike-strike_pct_2)*10000:.0f} bp**")
 
     elif cf_type in ["Digital Cap", "Digital Floor"]:
-        st.caption(f"{'Binary Cap' if cf_type=='Digital Cap' else 'Binary Floor'} — pays **100bp × notional × accrual** on each reset date if BBSW fixes {'at or above' if cf_type=='Digital Cap' else 'at or below'} strike. Priced as tight call spread.")
+        st.caption(f"{'Binary Cap' if cf_type=='Digital Cap' else 'Binary Floor'} — pays **100bp x notional x accrual** on each reset date if BBSW fixes {'at or above' if cf_type=='Digital Cap' else 'at or below'} strike. Priced as tight call spread.")
         strike_mode = st.radio("Strike Mode", ["ATM", "10 bp", "25 bp", "50 bp", "100 bp", "Manual"],
                                horizontal=True, key="cf_dig_strike_mode")
         offset_map = {"ATM": 0, "10 bp": 10, "25 bp": 25, "50 bp": 50, "100 bp": 100, "Manual": None}
@@ -29365,7 +29365,7 @@ def vol_surface_editor_tab():
                     _amean = _np.nanmean(_rc_a[_acols].apply(pd.to_numeric, errors="coerce").values)
                     _rmean = _np.nanmean(_rc_r[_acols].apply(pd.to_numeric, errors="coerce").values) if _rc_r is not None else float("nan")
                     _nmean = _np.nanmean(_rc_n[_acols].apply(pd.to_numeric, errors="coerce").values) if _rc_n is not None else float("nan")
-                    st.info(f"**Loaded SABR ({_rc_ccy})** — mean α={_amean:.4f}, ρ={_rmean:.3f}, ν={_nmean:.3f}"
+                    st.info(f"**Loaded SABR ({_rc_ccy})** — mean alpha={_amean:.4f}, rho={_rmean:.3f}, nu={_nmean:.3f}"
                             + (f"  |  source: {_src}" if _src else ""))
                 except Exception:
                     st.caption(f"SABR params loaded for {_rc_ccy}" + (f" — {_src}" if _src else ""))
@@ -29749,7 +29749,7 @@ def vol_surface_editor_tab():
                 st.markdown("---")
                 st.markdown("##### 💾 Save Amended SABRs")
                 _sabr_src = st.session_state.get("_sabr_src_USD", "session SABRs")
-                st.caption(f"Save the current session USD SABR params (α/ρ/ν) to the database. Source: {_sabr_src}.")
+                st.caption(f"Save the current session USD SABR params (alpha/rho/nu) to the database. Source: {_sabr_src}.")
                 import datetime as _dt_sv2
                 _src_tag = _sabr_src if _sabr_src else "SABR"
                 _sv2_c1, _sv2_c2 = st.columns([3, 2])
@@ -30649,7 +30649,7 @@ def backtesting_tab():
                             getattr(_load_vol_snapshots_for_viz, "clear", lambda: None)()
                             st.rerun()
         else:
-            st.caption(f"Found **{len(snaps)}** snapshots  ·  "
+            st.caption(f"Found **{len(snaps)}** snapshots  *  "
                        f"{snaps[0]['date'].strftime('%Y-%m-%d')} → {snaps[-1]['date'].strftime('%Y-%m-%d')}")
 
             if _vs_mode == "Animated Timeline":
@@ -30720,7 +30720,7 @@ def backtesting_tab():
         if _pivot.empty:
             st.info(f"No {_fr_type} data in this date range. Load data into swap_rates table first.")
         else:
-            st.caption(f"Loaded **{len(_pivot)}** daily curves  ·  "
+            st.caption(f"Loaded **{len(_pivot)}** daily curves  *  "
                        f"Tenors: {', '.join(list(_pivot.columns)[:6])}{'...' if len(_pivot.columns) > 6 else ''}")
 
             _fwd_mode = st.radio("View", ["3D Surface (time × tenor)", "Single Date Curve",
@@ -30851,7 +30851,7 @@ def _backtesting_tab_usd():
             st.info("No USD vol snapshots in this date range. Save EOD snapshots from the Vol Export tab.")
             st.caption(f"DEBUG: 0 snapshots loaded from DB for USD between {_vs_start} and {_vs_end}")
         else:
-            st.caption(f"Found **{len(snaps)}** snapshots  ·  "
+            st.caption(f"Found **{len(snaps)}** snapshots  *  "
                        f"{snaps[0]['date'].strftime('%Y-%m-%d')} → {snaps[-1]['date'].strftime('%Y-%m-%d')}")
 
             if _vs_mode == "Animated Timeline":
@@ -30921,7 +30921,7 @@ def _backtesting_tab_usd():
         if _pivot.empty:
             st.info(f"No {_fr_type} data in this date range. Load data into swap_rates table first.")
         else:
-            st.caption(f"Loaded **{len(_pivot)}** daily curves  ·  "
+            st.caption(f"Loaded **{len(_pivot)}** daily curves  *  "
                        f"Tenors: {', '.join(list(_pivot.columns)[:6])}{'...' if len(_pivot.columns) > 6 else ''}")
 
             _fwd_mode = st.radio("View", ["3D Surface (time × tenor)", "Single Date Curve",
@@ -31063,7 +31063,7 @@ def _backtesting_tab_eur():
             st.info("No EUR vol snapshots in this date range. Save EOD snapshots from the Vol Export tab.")
             st.caption(f"DEBUG: 0 snapshots loaded from DB for USD between {_vs_start} and {_vs_end}")
         else:
-            st.caption(f"Found **{len(snaps)}** snapshots  ·  "
+            st.caption(f"Found **{len(snaps)}** snapshots  *  "
                        f"{snaps[0]['date'].strftime('%Y-%m-%d')} → {snaps[-1]['date'].strftime('%Y-%m-%d')}")
 
             if _vs_mode == "Animated Timeline":
@@ -31133,7 +31133,7 @@ def _backtesting_tab_eur():
         if _pivot.empty:
             st.info(f"No {_fr_type} data in this date range. Load data into swap_rates table first.")
         else:
-            st.caption(f"Loaded **{len(_pivot)}** daily curves  ·  "
+            st.caption(f"Loaded **{len(_pivot)}** daily curves  *  "
                        f"Tenors: {', '.join(list(_pivot.columns)[:6])}{'...' if len(_pivot.columns) > 6 else ''}")
 
             _fwd_mode = st.radio("View", ["3D Surface (time × tenor)", "Single Date Curve",
@@ -31813,7 +31813,7 @@ def _render_realised_delivered_vol():
     from datetime import timedelta as _td
 
     st.markdown("#### 📈 Realised & Delivered Vol")
-    st.caption("Realised vol = close-to-close log returns ×√252 (bp/annum). Delivered = ATM vol surface from EOD snapshots.")
+    st.caption("Realised vol = close-to-close log returns xsqrt252 (bp/annum). Delivered = ATM vol surface from EOD snapshots.")
 
     ccy = "AUD"
 
@@ -31884,7 +31884,7 @@ def _render_realised_delivered_vol():
     # ── Section 1: Realised Vol ───────────────────────────────────────────────
     st.markdown("---")
     st.markdown("#### 🎯 Realised ATM Vol (bp/annum)")
-    st.caption("Close-to-close log returns of ATM vol surface, annualised ×√252")
+    st.caption("Close-to-close log returns of ATM vol surface, annualised xsqrt252")
 
     _rv_window = st.radio("Window", list(_WINDOWS.keys()), horizontal=True, key="rdv_rv_window")
     _rv_days = _WINDOWS[_rv_window]
@@ -31907,7 +31907,7 @@ def _render_realised_delivered_vol():
         _atm_surf = get_working_atm_surface(ccy)
         if _atm_surf is not None and not _atm_surf.empty:
             st.markdown("#### 📊 ATM Vol vs Realised (bp)")
-            st.caption("ATM vol − Realised vol. Positive = vol rich vs realised (sell signal). Negative = cheap (buy signal).")
+            st.caption("ATM vol - Realised vol. Positive = vol rich vs realised (sell signal). Negative = cheap (buy signal).")
             _diff_matrix = {}
             _exp_col = _atm_surf.columns[0]
             for _exp in _EXP_LABELS:
@@ -32227,7 +32227,7 @@ def rv_tab():
         else:
             # ── Butterfly richness ────────────────────────────────────
             st.markdown("#### Volatility Butterfly (Smile Curvature)")
-            st.caption("Fly = ATM vol  →  0.5≈(short-expiry vol + long-expiry vol). "
+            st.caption("Fly = ATM vol  →  0.5~(short-expiry vol + long-expiry vol). "
                        "Positive = ATM rich vs wings. Negative = wings rich vs ATM.")
 
             expiry_list = ["1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y"]
@@ -32315,7 +32315,7 @@ def rv_tab():
 
             # ── VRP Surface — Implied vs Realised ────────────────────────
             st.markdown("#### Vol Risk Premium Surface   —   Implied ÷ Realised (21d)")
-            st.caption("VRP = meeting-adjusted implied vol ÷ 21-day realised vol. "
+            st.caption("VRP = meeting-adjusted implied vol / 21-day realised vol. "
                        "Red > 1.4 (rich). Green < 0.8 (cheap). "
                        "Realised pulled from swap_rates history.")
             _vrp_exp_lbls  = ["1m", "3m", "6m", "1y", "2y"]
@@ -32366,7 +32366,7 @@ def rv_tab():
                                    .format("{:.2f}", subset=_vrp_surf_exp_cols, na_rep="—")
                                    .format("{:.1f}", subset=["Realised 21d (bp)"], na_rep="—"),
                     use_container_width=True)
-                st.caption("Implied adj = implied − (N CB meetings × meeting premium). "
+                st.caption("Implied adj = implied - (N CB meetings x meeting premium). "
                            f"CB premium assumption: {_CB_MEETING_PREMIUM_BP.get(ccy,3):.0f}bp/meeting for {ccy}.")
             else:
                 st.info("Load swap_rates history to compute realised vol. "
@@ -32450,7 +32450,7 @@ def rv_tab():
 
                 # ── Option 3: Vol Regime Quadrant ─────────────────────
                 with st.expander("🎯 Vol Regime Quadrant — Equity vs Rates", expanded=False):
-                    st.caption("Today's cross-asset vol position. X = SPI 50D ATM (%), Y = Swaption 3m×5Y ATM (bp)")
+                    st.caption("Today's cross-asset vol position. X = SPI 50D ATM (%), Y = Swaption 3mx5Y ATM (bp)")
 
                     _sw_3m5y = get_matrix_value(atm, "3m", 5.0)
                     if _sw_3m5y and _spi_front_atm:
@@ -32506,7 +32506,7 @@ def rv_tab():
                             paper_bgcolor="rgba(0,0,0,0)",
                         )
                         st.plotly_chart(_xav_fig, use_container_width=True)
-                        st.caption(f"Today — SPI: **{_spi_front_atm:.5f}%** | Swptn 3m×5Y: **{_sw_3m5y:.1f}bp** | "
+                        st.caption(f"Today — SPI: **{_spi_front_atm:.5f}%** | Swptn 3mx5Y: **{_sw_3m5y:.1f}bp** | "
                                    f"Ratio: **{_sw_3m5y/(_spi_front_atm*100*math.sqrt(0.25)):.3f}**")
 
         # ── Cross-Asset Vol: Swaption vs VIX/SPX (USD) ────────────────
@@ -32575,7 +32575,7 @@ def rv_tab():
                                f"{_eq_label} bp-equiv = {_eq_label}% × 100 × √T.")
 
                 with st.expander(f"🎯 Vol Regime Quadrant — {_eq_label} vs Rates", expanded=False):
-                    st.caption(f"Today's cross-asset vol position. X = {_eq_label} ATM (%), Y = Swaption 3m×5Y ATM (bp)")
+                    st.caption(f"Today's cross-asset vol position. X = {_eq_label} ATM (%), Y = Swaption 3mx5Y ATM (bp)")
                     _sw_3m5y = get_matrix_value(atm, "3m", 5.0)
                     if _sw_3m5y and _eq_vol:
                         import plotly.graph_objects as go
@@ -32620,7 +32620,7 @@ def rv_tab():
                             paper_bgcolor="rgba(0,0,0,0)",
                         )
                         st.plotly_chart(_xav_fig, use_container_width=True)
-                        st.caption(f"Today — {_eq_label}: **{_eq_vol:.5f}%** | Swptn 3m×5Y: **{_sw_3m5y:.1f}bp** | "
+                        st.caption(f"Today — {_eq_label}: **{_eq_vol:.5f}%** | Swptn 3mx5Y: **{_sw_3m5y:.1f}bp** | "
                                    f"Ratio: **{_sw_3m5y/(_eq_vol*100*math.sqrt(0.25)):.3f}**")
             elif atm is None:
                 st.warning(f"Load your {ccy} ATM vol surface first to see cross-asset analysis.")
@@ -33331,7 +33331,7 @@ def rv_tab():
                     with _ti_c2:
                         st.markdown("##### 💡 Trade Idea")
                         if abs(_sos_z) < 0.5:
-                            st.info(f"**No signal** — {_xccy_a} vs {_xccy_b} spread-of-spreads is within 0.5σ of mean. No clear RV.")
+                            st.info(f"**No signal** — {_xccy_a} vs {_xccy_b} spread-of-spreads is within 0.5sigma of mean. No clear RV.")
                         else:
                             # Generate trade idea
                             if _sos_z > 0:
@@ -33492,7 +33492,7 @@ def rv_tab():
                                 {"VRP (adj/real)": "{:.2f}", "Implied (bp)": "{:.1f}",
                                  "Implied Adj (bp)": "{:.1f}", "Realised 21d (bp)": "{:.1f}"}, na_rep="—"),
                             use_container_width=True, hide_index=True)
-                        st.caption(f"Implied Adj = Implied − (N meetings × {_CB_MEETING_PREMIUM_BP.get(ccy,3):.0f}bp).  "
+                        st.caption(f"Implied Adj = Implied - (N meetings x {_CB_MEETING_PREMIUM_BP.get(ccy,3):.0f}bp).  "
                                    f"VRP > 1.40 → vol RICH vs realised → sell signal.  "
                                    f"VRP < 0.80 → vol CHEAP → buy signal.")
                         if ccy == "USD" and _move_val:
@@ -33627,7 +33627,7 @@ def rv_tab():
                     # SPI vol surface for AUD
                     if ccy == "AUD":
                         st.markdown("**ASX SPI 200 Implied Vol Surface (%)**")
-                        st.caption("Contracts × delta strikes. Edit cells then click Apply. 50D ATM used as SPI context vol.")
+                        st.caption("Contracts x delta strikes. Edit cells then click Apply. 50D ATM used as SPI context vol.")
 
                         _SPI_CONTRACTS = ["Jun-26", "Sep-26", "Dec-26", "Mar-27"]
                         _SPI_STRIKES   = ["10DP", "15DP", "25DP", "35DP", "50D", "35DC", "25DC", "15DC", "10DC"]
@@ -33690,7 +33690,7 @@ def rv_tab():
                     # SPX vol surface for USD
                     if ccy == "USD":
                         st.markdown("**VIX + SPX Implied Vol Surface (%)**")
-                        st.caption("VIX spot + SPX options by expiry × delta strike. Edit cells then click Apply. Front 50D ATM used as equity vol context.")
+                        st.caption("VIX spot + SPX options by expiry x delta strike. Edit cells then click Apply. Front 50D ATM used as equity vol context.")
 
                         _vix_col, _ = st.columns([2, 4])
                         with _vix_col:
@@ -33767,7 +33767,7 @@ def rv_tab():
             # ── Forward vol surface RV ──────────────────────────────────────
             if _fv_stats and atm is not None:
                 with st.expander("🔬 Forward Vol Surface RV — Bucket Consistency"):
-                    st.caption("σ_fwd(T1→T2) = √[(σ²(T2)·T2 − σ²(T1)·T1)/(T2−T1)].  "
+                    st.caption("sigma_fwd(T1→T2) = sqrt[(sigma^2(T2)*T2 - sigma^2(T1)*T1)/(T2-T1)].  "
                                "Z > +1.5 = forward vol RICH vs history.  Z < −1.5 = CHEAP.")
                     EXP_PAIRS = [
                         ("1y","2y",1.0,2.0), ("2y","3y",2.0,3.0),
@@ -34672,7 +34672,7 @@ def rv_tab():
                             _show_fwd_curve = st.checkbox("Show interpolated curve for this date", value=True,
                                                           key="rv_pnl_show_curve")
                         with _dc3:
-                            st.caption(f"Matrix has {len(_matrix_exp_labels)} expiry rows ≈ {len(_matrix_tenors)} tenor cols. "
+                            st.caption(f"Matrix has {len(_matrix_exp_labels)} expiry rows ~ {len(_matrix_tenors)} tenor cols. "
                                        f"Cubic spline across expiry axis, linear across tenors.")
 
                         _val_date_used = _val_date
@@ -34796,7 +34796,7 @@ def rv_tab():
 
                     if _pnl_rows:
                         st.dataframe(pd.DataFrame(_pnl_rows), use_container_width=True, hide_index=True)
-                        st.caption("⚙️ Estimates only   —   DV01 ≈ rate move proxy. "
+                        st.caption("⚙️ Estimates only   —   DV01 ~ rate move proxy. "
                                    "Use Swaptions/Caps tabs for full vol-adjusted pricing.")
 
                         _vals = [float(r["Est. P&L"].replace("k","").replace("+","")) for r in _pnl_rows]
@@ -35028,7 +35028,7 @@ def rv_tab():
                     _1sigma_bp = _hz_impl_vol * math.sqrt(_hz_exp_y)  # 1σ move in bp
                     _x_range   = max(int(_1sigma_bp * 2.2 / 5) * 5, 50)  # round to 5bp, min 50bp
                     _hz_rate_scenarios = list(range(-_x_range, _x_range + 1, max(1, _x_range // 40)))
-                    st.caption(f"X axis = rate shift (bp) | ±{_x_range}bp = ±2σ at {_hz_impl_vol:.0f}bp vol, {_hz_exp_y:.2f}y expiry. "
+                    st.caption(f"X axis = rate shift (bp) | +/-{_x_range}bp = +/-2sigma at {_hz_impl_vol:.0f}bp vol, {_hz_exp_y:.2f}y expiry. "
                                f"Each line = one horizon. Y = P&L ($k).")
 
                     _hz_fig = go.Figure()
@@ -39266,7 +39266,7 @@ def _render_sr3_convexity_panel(grid_state: dict):
         flag_thresh = st.number_input(
             "Model spread flag (bp)", value=2.0, min_value=0.1, max_value=20.0,
             step=0.1, format="%.1f", key="sr3_ca_spread_thresh",
-            help="Flag row red if max(model) − min(model) > threshold."
+            help="Flag row red if max(model) - min(model) > threshold."
         )
     with _tc2:
         show_mc = st.checkbox("Include Mid-Curves", value=True, key="sr3_ca_incl_mc")
@@ -39522,7 +39522,7 @@ def sr3_vol_tab():
 
     # Status line
     if cur_key:
-        st.caption(f"**Loaded:** {cur_key}  ·  **Rows in memory:** "
+        st.caption(f"**Loaded:** {cur_key}  *  **Rows in memory:** "
                    f"{sum(1 for v in st.session_state['sr3_grid_data'].values() if v.get('atm_vol') is not None)}")
     else:
         st.caption("No snapshot loaded yet.")
@@ -39785,7 +39785,7 @@ def sr3_vol_tab():
                     if ca_results:
                         n_ca = save_sr3_ca_snapshot(_snap_dt, _label, ca_results)
                         if n_ca:
-                            st.info(f"⚙️ Also wrote {n_ca} CA rows ({len(ca_results)} contracts × 3 models) to sr3_convexity_adj")
+                            st.info(f"⚙️ Also wrote {n_ca} CA rows ({len(ca_results)} contracts x 3 models) to sr3_convexity_adj")
                 except Exception as _ca_e:
                     st.warning(f"Vol saved but CA auto-compute failed: {_ca_e}")
             else:
@@ -39915,7 +39915,7 @@ def midcurve_tab():
 
     # ── Display ────────────────────────────────────────────────────
     st.markdown(f"#### {ccy} Midcurve — {view}")
-    st.caption("Rows = option expiry | Columns = underlying swap (fwd start × tenor) | Vol from ATM surface, fwd premium uses simplified annuity")
+    st.caption("Rows = option expiry | Columns = underlying swap (fwd start x tenor) | Vol from ATM surface, fwd premium uses simplified annuity")
 
     disp_num = disp.copy()
     for c in disp_num.columns:
@@ -39975,7 +39975,7 @@ def midcurve_tab():
     # ══════════════════════════════════════════════════════════════════
     st.divider()
     st.markdown("### 📐 Curve Options Matrix")
-    st.caption("Spread option pricing on swap curve slope. σ_spread = √(σ_long² + σ_short² − 2ρσ_longσ_short). "
+    st.caption("Spread option pricing on swap curve slope. sigma_spread = sqrt(sigma_long^2 + sigma_short^2 - 2rhosigma_longsigma_short). "
                "ATM spread = fwd_long(T) − fwd_short(T). Straddle premium in bp of notional rate (Bachelier).")
 
     CURVE_EXPIRIES  = ["1m", "3m", "6m", "1y", "2y"]
@@ -40009,7 +40009,7 @@ def midcurve_tab():
             _t1k = f"{_ts_}Y"; _t2k = f"{_tl_}Y"
             _pair_rhos[_cpn] = get_correlation(_t1k, _t2k)
         _rho_str = " | ".join(f"{k}: {v:.3f}" for k, v in _pair_rhos.items())
-        st.caption(f"Config ρ: {_rho_str}")
+        st.caption(f"Config rho: {_rho_str}")
 
     # ── Build matrices ─────────────────────────────────────────────────
     co_spread_mat = pd.DataFrame(index=CURVE_EXPIRIES, columns=list(CURVE_PAIRS.keys()), dtype=float)
@@ -40972,7 +40972,7 @@ def vol_lookup_tab():
 
     # ── Section B: auto N×N beta matrix ──
     st.markdown("**Beta matrix (all parsed pairs)**")
-    st.caption("Entry [row=Y, col=X] = β such that ΔY ≈ β·ΔX. Diagonal always 1.000.")
+    st.caption("Entry [row=Y, col=X] = beta such that deltaY ~ beta*deltaX. Diagonal always 1.000.")
     import pandas as _pd_bm
     _beta_matrix = []
     _r2_matrix = []
@@ -42146,7 +42146,7 @@ def usd_sod_tab():
     _dl_2y = _fwd_level_change(0.0, 2.0)
     _dl_5y = _fwd_level_change(0.0, 5.0)
     _dl_10y = _fwd_level_change(0.0, 10.0)
-    st.caption(f"Fwd rate Δ: 2Y {_dl_2y:+.1f}bp | 5Y {_dl_5y:+.1f}bp | 10Y {_dl_10y:+.1f}bp")
+    st.caption(f"Fwd rate delta: 2Y {_dl_2y:+.1f}bp | 5Y {_dl_5y:+.1f}bp | 10Y {_dl_10y:+.1f}bp")
 
     _typical_tokyo_move = 3.0
     if max(abs(_dl_2y), abs(_dl_5y), abs(_dl_10y)) > _typical_tokyo_move * 2:
@@ -42215,11 +42215,11 @@ def usd_sod_tab():
     _using_calibrated = bool(_cal_betas)
     if _using_calibrated:
         _avg_r2 = np.mean([v["r2"] for v in _cal_betas.values()])
-        st.caption(f"🔬 Using **calibrated betas** ({len(_cal_betas)} cells, avg R²={_avg_r2:.3f}). "
+        st.caption(f"🔬 Using **calibrated betas** ({len(_cal_betas)} cells, avg R^2={_avg_r2:.3f}). "
                    f"Theoretical priors used for cells without calibration.")
 
     if not _using_calibrated:
-        st.caption("📐 Using **theoretical beta priors** (β_level ∝ 1/√T). "
+        st.caption("📐 Using **theoretical beta priors** (beta_level prop. to 1/sqrtT). "
                    "Run calibration below to improve with empirical data.")
 
     def _beta_level(exp_y):
@@ -42347,7 +42347,7 @@ def usd_sod_tab():
                 return ""
             except: return ""
         st.dataframe(_df_delta.set_index("Expiry").style.map(_delta_style), use_container_width=True)
-        st.caption("🟢 >+0.2bp  |  🔴 <−0.2bp  |  bold >2bp")
+        st.caption("🟢 >+0.2bp  |  🔴 <-0.2bp  |  bold >2bp")
 
         _deltas_flat = [r[f"{tn}Y"] for r in _adj_rows if r["type"] == "delta"
                         for tn in TENORS if r.get(f"{tn}Y") is not None]
@@ -42706,7 +42706,7 @@ def usd_sod_tab():
         if _cal_hist:
             st.markdown("**Previous calibrations:**")
             for _cd, _cn, _cr2 in _cal_hist:
-                st.caption(f"{_cd}: {_cn} cells, avg R²={_cr2:.3f}")
+                st.caption(f"{_cd}: {_cn} cells, avg R^2={_cr2:.3f}")
 
     # ═══════════════════════════════════════════════════════════════════
     # USD SOD COMMENTARY + TRADE IDEAS (Tokyo Open)
@@ -43691,7 +43691,7 @@ If all 5 triggers fire and agree on direction, you're still bounded.
         _sm_sigma_ten = st.slider(
             "Smoothing σ (tenor)", min_value=0.0, max_value=3.0, value=1.0, step=0.1,
             key="_eur_sm_ten",
-            help="Standard deviation in tenor-column-step units. Same falloff curve as expiry σ.")
+            help="Standard deviation in tenor-column-step units. Same falloff curve as expiry sigma.")
     with _smooth_cols[2]:
         st.caption(
             "**Smoothing**: anchor cells get full adjustment; surrounding cells get a "
@@ -45061,7 +45061,7 @@ def sod_report_tab():
             _bs_raw = st.slider("Short-end beta (≤6m, %)", 10, 90,
                                 st.session_state.get("_sod_beta_s", 30), 5,
                                 key="sod_beta_short",
-                                help="% of USD vol move passed through to AUD ≤6m expiries")
+                                help="% of USD vol move passed through to AUD <=6m expiries")
             st.session_state["_sod_beta_s"] = _bs_raw
             _beta_short = _bs_raw / 100
         with _sens_c2:
