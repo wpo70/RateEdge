@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0907x"
+APP_VERSION = "v1307a"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -5272,9 +5272,22 @@ def apply_rateedge_theme(theme_name: str):
             -webkit-text-fill-color: {muted} !important;
             opacity: 0.7;
         }}
-        /* Selectbox dropdown text */
+        /* Selectbox dropdown text — broadened: newer Streamlit builds moved the
+           value text out of the span the old rule targeted, leaving values
+           dark-on-dark. Target every descendant of the select control + the
+           value container directly, and the open dropdown menu items. */
         .stSelectbox label,
-        .stSelectbox [data-baseweb="select"] span {{
+        .stSelectbox [data-baseweb="select"] span,
+        .stSelectbox [data-baseweb="select"] div,
+        [data-testid="stSidebar"] [data-baseweb="select"] *,
+        [data-baseweb="select"] [data-baseweb="tag"] span,
+        div[data-baseweb="select"] > div {{
+            color: {text} !important;
+        }}
+        /* open dropdown menu (rendered in a popover at body level) */
+        [data-baseweb="popover"] [data-baseweb="menu"] li,
+        [data-baseweb="popover"] [role="listbox"] li,
+        [data-baseweb="popover"] [role="option"] {{
             color: {text} !important;
         }}
         /* Number input labels */
