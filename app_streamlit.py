@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1307i"
+APP_VERSION = "v1307j"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -10798,6 +10798,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
             _BROKER_MICS = ["BGCD", "BGCO", "BGCI", "AURO", "BILT", "DWSF", "GSEF", "GFSO",
                            "IGDL", "ISWE", "ISWV", "IOIR", "IMRD",
                            "TPSE", "TPIR", "TPEU", "TSEF", "TSIR", "TSAF", "TWSF", "TWEM",
+                           "UTSL", "UTST",  # v1307j: Ueda Tradition (Tokyo) — selectable platform filter
                            "BBSF", "BMTF", "BTFE", "XOFF", "XXXX"]
             _all_platforms = sorted(_BROKER_MICS, key=lambda p: PLATFORM_NAMES.get(p, p))
             _platform_display = [f"{PLATFORM_NAMES.get(p, p)} ({p})" for p in _all_platforms]
