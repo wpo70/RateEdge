@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1307h"
+APP_VERSION = "v1307i"
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -8441,6 +8441,7 @@ _EU_BROKER_NAMES = {
     "TWSF": "Tradition", "TWEM": "Tradition", "TSEF": "Tradition", "TSIR": "Tradition",
     "TSAF": "Tradition", "TCDS": "Tradition", "TREU": "Tradition", "TEUR": "Tradition",
     "TEIR": "Tradition",
+    "UTSL": "Tradition", "UTST": "Tradition",  # v1307i: Ueda Tradition Securities (Tokyo) — JPY IDB
     # GFI (BGC group)
     "GSEF": "GFI", "GFSO": "GFI",
     # Bloomberg
@@ -10586,6 +10587,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
         "TWSF": "Tradition", "TWEM": "Tradition", "TSEF": "Tradition", "TSIR": "Tradition",
         "TSAF": "Tradition", "TCDS": "Tradition", "TREU": "Tradition", "TEUR": "Tradition",
         "TEIR": "Tradition",
+        "UTSL": "Tradition", "UTST": "Tradition",  # v1307i: Ueda Tradition Securities (Tokyo) — JPY IDB
         "TPSE": "Tullett Prebon", "TPIR": "Tullett Prebon", "TPEU": "Tullett Prebon",
         "IGDL": "ICAP", "ISWE": "ICAP (E)", "ISWV": "ICAP (V)",
         "IOIR": "ICAP UK OTF", "IMRD": "TP ICAP UK MTF",
@@ -37334,6 +37336,7 @@ _SDR_BROKER_NAMES = {
     "TWSF": "Tradition", "TWEM": "Tradition", "TSEF": "Tradition", "TSIR": "Tradition",
     "TSAF": "Tradition", "TCDS": "Tradition", "TREU": "Tradition", "TEUR": "Tradition",
     "TEIR": "Tradition",
+    "UTSL": "Tradition", "UTST": "Tradition",  # v1307i: Ueda Tradition Securities (Tokyo) — JPY IDB
     "TPSE": "Tullett Prebon", "TPIR": "Tullett Prebon", "TPEU": "Tullett Prebon",
     "IGDL": "ICAP", "ISWE": "ICAP (E)", "ISWV": "ICAP (V)",
     "IOIR": "ICAP UK OTF", "IMRD": "TP ICAP UK MTF",
