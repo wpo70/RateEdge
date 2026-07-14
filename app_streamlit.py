@@ -755,7 +755,100 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1307n"
+APP_VERSION = "v1407a"
+
+# ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
+# v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
+# XLSX links (URLs roll and 404 once superseded, so the filename must be
+# discovered each run), download, and parse the two Summary tables. This is
+# aggregate cleared-volume context for the JPY page — clearly labelled so it is
+# never confused with the SDR print tape.
+import io as _io_jscc, re as _re_jscc
+
+@st.cache_data(ttl=21600, show_spinner=False)  # 6h — source updates ~once/day
+def _jscc_fetch_stats():
+    """Returns dict {daily: DataFrame, outstanding: DataFrame,
+    monthly_cleared: DataFrame, monthly_outstanding: DataFrame, err: str|None}.
+    Each tidy DF: Date|Bucket|Trades|Notional_MMyen."""
+    import requests
+    out = {"daily": None, "outstanding": None,
+           "monthly_cleared": None, "monthly_outstanding": None, "err": None}
+    try:
+        _base = "https://www.jpx.co.jp"
+        _pg = "https://www.jpx.co.jp/jscc/en/interest_rate_swap.html"
+        _hdr = {"User-Agent": "Mozilla/5.0 RateEdge/1.0"}
+        _html = requests.get(_pg, headers=_hdr, timeout=20).text
+        _daily_m = _re_jscc.search(r'href="([^"]*irs_statisticsdata_daily_\d{8}\.xlsx)"', _html)
+        _mon_m   = _re_jscc.search(r'href="([^"]*irs_statisticsdata_monthly_\d{6}\.xlsx)"', _html)
+        if not _daily_m:
+            out["err"] = "Could not find the JSCC daily statistics link on the page."
+            return out
+        _durl = _daily_m.group(1)
+        if _durl.startswith("/"):
+            _durl = _base + _durl
+        _dbytes = requests.get(_durl, headers=_hdr, timeout=30).content
+        out["daily"]       = _jscc_parse_summary(_dbytes, "cleared")
+        out["outstanding"] = _jscc_parse_summary(_dbytes, "outstanding")
+        if _mon_m:
+            _murl = _mon_m.group(1)
+            if _murl.startswith("/"):
+                _murl = _base + _murl
+            _mbytes = requests.get(_murl, headers=_hdr, timeout=30).content
+            out["monthly_cleared"]     = _jscc_parse_summary(_mbytes, "cleared")
+            out["monthly_outstanding"] = _jscc_parse_summary(_mbytes, "outstanding")
+    except Exception as _e:
+        out["err"] = f"{type(_e).__name__}: {_e}"
+    return out
+
+
+def _jscc_parse_summary(xls_bytes, section):
+    """Parse JSCC IRS XLSX Summary table. section 'cleared' -> table (1);
+    'outstanding' -> table (2). Locates sections by LABEL text (not row index)
+    so it survives the rolling file. Returns Date|Bucket|Trades|Notional_MMyen."""
+    import pandas as _pd
+    from datetime import datetime as _dt
+    try:
+        _df = _pd.read_excel(_io_jscc.BytesIO(xls_bytes), sheet_name=0, header=None, engine="openpyxl")
+    except Exception:
+        return _pd.DataFrame()
+    _c0 = _df[0].astype(str)
+    if section == "cleared":
+        _anc = _c0[_c0.str.contains("Number and Notional of Cleared Trades", na=False)].index
+    else:
+        _anc = _c0[_c0.str.contains("Number and Notional of Outstanding Cleared Trades", na=False)].index
+    if len(_anc) == 0:
+        return _pd.DataFrame()
+    _start = _anc[0]
+    _summ = _c0[(_c0.str.contains("<Summary>", na=False)) & (_c0.index >= _start)].index
+    if len(_summ) == 0:
+        return _pd.DataFrame()
+    _hdr = _c0[(_c0.str.contains("Month-Day", na=False)) & (_c0.index > _summ[0])].index
+    if len(_hdr) == 0:
+        return _pd.DataFrame()
+    _h = _hdr[0]
+    _buckets = ["Total", "0-2Y", "2-5Y", "5-10Y", "10-30Y", "30+Y"]
+    _rows = []
+    _r = _h + 1
+    while _r < len(_df):
+        _dv = _df.iloc[_r, 0]
+        if _pd.isna(_dv) or not _re_jscc.match(r"[A-Z][a-z]{2}-\d{2}-\d{2}", str(_dv)):
+            break
+        try:
+            _dd = _dt.strptime(str(_dv), "%b-%d-%y").date()
+        except Exception:
+            break
+        for _bi, _b in enumerate(_buckets):
+            _tc = 1 + _bi * 2
+            _nc = 2 + _bi * 2
+            if _nc < _df.shape[1]:
+                _tr = _df.iloc[_r, _tc]; _no = _df.iloc[_r, _nc]
+                if _pd.notna(_no):
+                    _rows.append({"Date": _dd, "Bucket": _b,
+                                  "Trades": int(_tr) if _pd.notna(_tr) else 0,
+                                  "Notional_MMyen": float(_no)})
+        _r += 1
+    return _pd.DataFrame(_rows)
+
 
 SUPPORTED_CURRENCIES = ["AUD", "NZD", "USD", "EUR", "GBP", "JPY"]
 # v1405a: NZD hidden from sidebar selector. Keep SUPPORTED_CURRENCIES intact so
@@ -18092,6 +18185,59 @@ def curves_tab():
                     use_container_width=True, hide_index=True, height=820)
             else:
                 st.info("Click **\u25b6 Generate JPY Forward Matrix** to compute.")
+
+        # ── JSCC Cleared JPY IRS (aggregate volume, T+3 — NOT prints) ────────
+        # v1407a: context panel. This is CLEARED volume from JSCC, not the SDR
+        # print tape. Daily flow + outstanding positions by tenor bucket.
+        st.markdown("---")
+        with st.expander("\U0001F5FE JSCC Cleared JPY IRS \u2014 aggregate cleared volume (T+3, not trade prints)", expanded=False):
+            st.caption("Source: Japan Securities Clearing Corporation (JSCC) IRS statistics. "
+                       "Cleared-Contract basis. Notionals in \u00a5mn. This is aggregate cleared "
+                       "volume/positions \u2014 NOT individual trade prints like the SDR tape.")
+            _jscc = _jscc_fetch_stats()
+            if _jscc.get("err"):
+                st.warning(f"Could not load JSCC data: {_jscc['err']}")
+            else:
+                _dly = _jscc.get("daily")
+                _out = _jscc.get("outstanding")
+                if _dly is not None and not _dly.empty:
+                    _latest = _dly["Date"].max()
+                    st.markdown(f"**Daily cleared flow \u2014 {_latest:%d-%b-%Y}** (latest available)")
+                    _piv = _dly[_dly["Date"] == _latest].set_index("Bucket")
+                    _order = ["Total", "0-2Y", "2-5Y", "5-10Y", "10-30Y", "30+Y"]
+                    _piv = _piv.reindex([b for b in _order if b in _piv.index])
+                    _disp = _piv[["Trades", "Notional_MMyen"]].copy()
+                    _disp["Notional (\u00a5tn)"] = _disp["Notional_MMyen"] / 1e6
+                    _disp = _disp[["Trades", "Notional (\u00a5tn)"]]
+                    st.dataframe(_disp.style.format({"Trades": "{:,.0f}", "Notional (\u00a5tn)": "{:,.2f}"}),
+                                 use_container_width=True)
+                    # trend chart: total cleared notional over available history
+                    _tot = _dly[_dly["Bucket"] == "Total"].sort_values("Date")
+                    if len(_tot) > 1:
+                        import plotly.graph_objects as _go_j
+                        _f = _go_j.Figure()
+                        _f.add_trace(_go_j.Bar(x=_tot["Date"], y=_tot["Notional_MMyen"] / 1e6,
+                                               name="Daily cleared \u00a5tn", marker_color="#38bdf8"))
+                        _f.update_layout(height=240, margin=dict(l=30, r=20, t=10, b=30),
+                                         yaxis_title="\u00a5tn", showlegend=False)
+                        st.plotly_chart(_f, use_container_width=True)
+                if _out is not None and not _out.empty:
+                    _ol = _out["Date"].max()
+                    st.markdown(f"**Outstanding cleared positions \u2014 {_ol:%d-%b-%Y}**")
+                    _op = _out[_out["Date"] == _ol].set_index("Bucket")
+                    _op = _op.reindex([b for b in ["Total","0-2Y","2-5Y","5-10Y","10-30Y","30+Y"] if b in _op.index])
+                    _od = _op[["Trades", "Notional_MMyen"]].copy()
+                    _od["Notional (\u00a5tn)"] = _od["Notional_MMyen"] / 1e6
+                    _od = _od[["Trades", "Notional (\u00a5tn)"]]
+                    st.dataframe(_od.style.format({"Trades": "{:,.0f}", "Notional (\u00a5tn)": "{:,.2f}"}),
+                                 use_container_width=True)
+                _mc = _jscc.get("monthly_cleared")
+                if _mc is not None and not _mc.empty:
+                    _mtot = _mc[_mc["Bucket"] == "Total"].sort_values("Date")
+                    if not _mtot.empty:
+                        _ml = _mtot["Date"].max()
+                        _mval = _mtot[_mtot["Date"] == _ml]["Notional_MMyen"].iloc[0] / 1e6
+                        st.caption(f"Monthly cleared total (latest, {_ml:%b-%Y}): \u00a5{_mval:,.1f}tn")
 
 
     # ── Chart toggles (AUD/NZD only) ─────────────────────────────────────────
