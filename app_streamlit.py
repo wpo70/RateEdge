@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1407a"
+APP_VERSION = "v1507a"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -12063,7 +12063,8 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     # ICAP/Dealerweb which print one STR with the full premium. Pair those
                     # legs so the tape shows ONE straddle at the summed premium.
                     _TRAD_MICS = {"TWSF", "TWEM", "TSEF", "TSIR", "TSAF",
-                                  "TCDS", "TREU", "TEUR", "TEIR"}
+                                  "TCDS", "TREU", "TEUR", "TEIR",
+                                  "TSIG"}   # Tradition Singapore — AUD leg-split prints
                     _trad_groups = {}
                     _str_ref_bps = {}   # (opt,swp) -> [bp,...] from NON-Tradition STR prints
                     for _si, _s_row in _newt_all.iterrows():
@@ -18473,8 +18474,26 @@ def curves_tab():
                                         "value": round(_v, 4),
                                         "label": f"ATM vol {_el} {_tc} bp"}
                             except: pass
-                # BP Premium mids — from pricer's own Generate ATM Matrix
-                _prem_df = st.session_state.get("atm_prem_matrix", {}).get(_pub_ccy, {}).get("prem")
+                # BP Premium mids — REBUILT from the live surface + curve at publish
+                # time (same builder as the Generate ATM Matrix button), so the prems
+                # pushed always match the pricer's premium matrix on screen. Previously
+                # read from session state: if the ATM matrix had not been generated in
+                # the publishing session, prem_ keys were silently skipped and the
+                # blotter kept serving STALE prems from an earlier publish.
+                _prem_df = None
+                try:
+                    if _atm_s is not None:
+                        _mc_pub2 = st.session_state.get("config_curves", {}).get(_pub_ccy)
+                        _mb_pub2 = st.session_state.get("config_basis", {}).get(_pub_ccy, {}).get("6v3")
+                        if _mc_pub2 is not None:
+                            _pm_pub, _vm_pub = calculate_atm_premium_matrix(_pub_ccy, _mc_pub2, _atm_s, _mb_pub2)
+                            _prem_df = _pm_pub
+                            st.session_state.setdefault("atm_prem_matrix", {})[_pub_ccy] = {
+                                "vol": _atm_s, "prem": _pm_pub, "vega": _vm_pub}
+                except Exception:
+                    _prem_df = None
+                if _prem_df is None:
+                    _prem_df = st.session_state.get("atm_prem_matrix", {}).get(_pub_ccy, {}).get("prem")
                 if _prem_df is not None:
                     _pv = _prem_df.copy()
                     if "Expiry" in _pv.columns: _pv = _pv.set_index("Expiry")
