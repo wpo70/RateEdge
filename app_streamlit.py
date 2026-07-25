@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1507a"
+APP_VERSION = "v2507a"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -11865,6 +11865,29 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         ).sort_values("_has_same", ascending=False)
                     except Exception:
                         pass
+                    # ── PERF (v1507b): precompute receiver fields ONCE. The previous
+                    # per-payer DataFrame filtering + .apply(pd.to_datetime) re-parsed
+                    # every receiver timestamp for every payer — O(P×R) with pandas
+                    # overhead — which hung/killed the container on year-long ranges.
+                    # Selection semantics are IDENTICAL: same filters, same ranked
+                    # order (same-strike, strike gap, time gap), same 600s window,
+                    # first-in-window wins, each leg consumed once.
+                    _rts_ser = pd.to_datetime(
+                        _rcvrs_a["execution_timestamp"].where(
+                            _rcvrs_a["execution_timestamp"].notna() & (_rcvrs_a["execution_timestamp"].astype(str) != ""),
+                            _rcvrs_a.get("event_timestamp")), errors="coerce")
+                    _r_strike_map = _rcvrs_a["strike_pct"].astype(float).to_dict()
+                    _r_not_map = _rcvrs_a["notional_leg1"].astype(float).to_dict()
+                    _r_ts_map = _rts_ser.to_dict()
+                    _EMPTY_TENS = {"", "—", "NA", "None", "nan", "NaT"}
+                    _rcv_buckets = {}
+                    for _ri0, _r0 in _rcvrs_a.iterrows():
+                        _t0 = str(_r0.get("swp_tenor", "") or "").strip()
+                        if _t0 in _EMPTY_TENS:
+                            _t0 = ""
+                        _k0 = (str(_r0.get("opt_tenor", "") or "").strip(),
+                               str(_r0.get("notional_ccy", "")), _t0)
+                        _rcv_buckets.setdefault(_k0, []).append(_ri0)
                     for _pi, _p in _payers_a.iterrows():
                         if _pi in _matched_p_ids:
                             continue
@@ -11874,51 +11897,35 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         _ccy_p = str(_p.get("notional_ccy",""))
                         _time_p = pd.to_datetime(_p.get("execution_timestamp") or _p.get("event_timestamp"), errors="coerce")
 
-                        # Match: same expiry, same ccy, within 2 min
-                        _match = _rcvrs_a[
-                            (~_rcvrs_a.index.isin(_matched_r_ids)) &
-                            (_rcvrs_a["opt_tenor"] == _e_p) &
-                            (_rcvrs_a["notional_ccy"] == _ccy_p)
-                        ]
-                        # Also require same swp_tenor (or both empty for caps/floors)
-                        if _t_p and _t_p not in ("—","NA","None",""):
-                            _match = _match[_match["swp_tenor"] == _t_p]
+                        # Match: same expiry, same ccy, within 2 min — via prebuilt
+                        # buckets (identical filters to the previous DataFrame chain)
+                        _tp_key = "" if (not _t_p or _t_p in ("—","NA","None","")) else _t_p
+                        _cand_ids = [_ri for _ri in _rcv_buckets.get((_e_p, _ccy_p, _tp_key), [])
+                                     if _ri not in _matched_r_ids]
+                        # notional within 1% of the payer's leg
+                        _np_p = float(_p.get("notional_leg1") or 0)
+                        if _np_p > 0:
+                            _cand_ids = [_ri for _ri in _cand_ids
+                                         if abs(_r_not_map.get(_ri, 0.0) - _np_p) <= 0.01 * _np_p]
                         else:
-                            _match = _match[_match["swp_tenor"].isin(["","—","NA","None",None]) | _match["swp_tenor"].isna()]
-                        # Straddle/strangle legs are the SAME notional — require the receiver
-                        # leg's notional to match the payer's (within 1%). Without this a 50M
-                        # payer can grab a 100M receiver at the same strike/time, inheriting the
-                        # larger leg's full premium onto the smaller notional and doubling the bp
-                        # (the 5Y5Y ICAP/BGC case). Legs that aren't the same size aren't one trade.
-                        try:
-                            _np_p = float(_p.get("notional_leg1") or 0)
-                            if _np_p > 0:
-                                _rn = _match["notional_leg1"].astype(float)
-                                _match = _match[(_rn - _np_p).abs() <= 0.01 * _np_p]
-                        except Exception:
-                            pass
-
-                        if not _match.empty and _time_p is not pd.NaT:
-                            # GROUPING IS PRIMARY, TIME IS SECONDARY. Candidates already
-                            # share expiry/tenor/ccy. Rank by: exact same-strike first
-                            # (straddle partner), then nearest strike, then closest in
-                            # time. Time only breaks ties between equally-good strikes —
-                            # it never rejects an otherwise-good grouping. A generous
-                            # same-day window guards against linking unrelated next-day
-                            # prints only.
-                            try:
-                                _sp_arr = _match["strike_pct"].astype(float)
-                                _gap = (_sp_arr - _s_p).abs()
-                                _same = (_gap < 0.01).astype(int)
-                                _tsec = _match.apply(lambda _row: abs((
-                                    _time_p - pd.to_datetime(_row.get("execution_timestamp") or _row.get("event_timestamp"), errors="coerce")
-                                ).total_seconds()) if pd.notna(pd.to_datetime(_row.get("execution_timestamp") or _row.get("event_timestamp"), errors="coerce")) else 9e9, axis=1)
-                                _match = _match.assign(
-                                    _is_same=_same, _strike_gap=_gap, _tsec=_tsec
-                                ).sort_values(["_is_same", "_strike_gap", "_tsec"],
-                                              ascending=[False, True, True])
-                            except Exception:
-                                pass
+                            _cand_ids = []
+                        if _cand_ids:
+                            # Rank: exact same-strike first (straddle partner), then
+                            # nearest strike, then closest in time — identical keys to
+                            # the previous sort_values(["_is_same","_strike_gap","_tsec"]).
+                            import math as _mth_pr
+                            def _rank_key(_ri):
+                                _sk = _r_strike_map.get(_ri)
+                                _gap = abs((_sk if _sk == _sk else 1e18) - _s_p)
+                                _same = 1 if _gap < 0.01 else 0
+                                _tr = _r_ts_map.get(_ri)
+                                _tsec = abs((_time_p - _tr).total_seconds()) if (_tr is not None and _tr == _tr and _time_p is not pd.NaT) else 9e9
+                                return (-_same, _gap, _tsec)
+                            _cand_ids.sort(key=_rank_key)
+                            _match = _rcvrs_a.loc[_cand_ids]
+                        else:
+                            _match = _rcvrs_a.iloc[0:0]
+                        if not _match.empty:
                             for _ri, _r in _match.iterrows():
                                 _time_r = pd.to_datetime(_r.get("execution_timestamp") or _r.get("event_timestamp"), errors="coerce")
                                 # Generous window: 10 min. Same-day package legs can
