@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v2507a"
+APP_VERSION = "v2807a"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -10119,18 +10119,17 @@ def eu_mifir_tab():
             if _hb_top.get("login_ok"):
                 _rl = _hb_top.get("reports_listed") or 0
                 if _rl > 0:
-                    st.success(f"🟢 Fenics auto-pull cookie OK — last login {_age_top}, "
-                               f"{_rl} reports listed.")
+                    st.success(f"🟢 Fenics auto-pull HEALTHY — cron logged in {_age_top}, "
+                               f"{_rl} reports listed. No manual refresh needed.")
                 else:
-                    st.warning(f"🟡 Fenics login returned OK but **0 reports listed** "
-                               f"({_age_top}). If prints exist on the portal, the session is "
-                               f"likely stale — paste a fresh JSESSIONID below and pull.")
+                    st.warning(f"🟡 Fenics cron logged in OK but **0 reports listed** "
+                               f"({_age_top}) — likely just an empty portal day.")
             else:
-                st.error(f"🔴 Fenics auto-pull login FAILED ({_age_top}) — the scheduled "
-                         f"task on your machine couldn't log in. Check FENICS_USER/PASS.")
+                st.error(f"🔴 Fenics auto-pull login FAILED ({_age_top}) — the Render cron "
+                         f"couldn't log in. Check FENICS_USER / FENICS_PASS on the cron service.")
         else:
-            st.caption("⚪ Fenics auto-pull: no run recorded yet. Run fenics_auto.py once on "
-                       "your machine (it logs in locally and writes a heartbeat here).")
+            st.caption("⚪ Fenics auto-pull: no run recorded yet. The Render cron "
+                       "(fenics_auto.py) writes a heartbeat here on its first run.")
     except Exception:
         pass
 
@@ -10256,48 +10255,50 @@ Keeps `HR*` swaptions only (drops `HF*` FX options), decodes payer/receiver, kee
 """)
             # ── In-app Fenics pull (no PowerShell; isolated from the editor) ──
             st.markdown("---")
-            # Note: there is no manual cookie check here. Fenics binds the JSESSIONID to the
-            # browser's IP, so a cookie minted in your browser cannot be validated from this
-            # app (which runs on a different server IP). The reliable status is the auto-pull
-            # heartbeat banner at the top of the tab — it reflects the LOCAL scheduled task,
-            # which runs from your machine where the cookie actually works.
-            st.markdown("**🔵 Pull Fenics (BGC / GFI / Aurel) from here — no PowerShell:**")
-            _fck = st.text_input(
-                "Fenics JSESSIONID", type="password", key="_fen_ck_inapp",
-                help="regdata.fenicsmd.com → log in → DevTools → Application → Cookies → copy JSESSIONID")
-            _fdt = st.text_input("Date YYYY-MM-DD (blank = everything currently listed)",
-                                 key="_fen_dt_inapp")
-            if st.button("⬇️ Pull Fenics + Load now", key="_fen_pull_btn_inapp", type="primary"):
-                with st.spinner("Pulling Fenics and loading swaptions…"):
-                    _fres = _fenics_pull_load(_fck, _fdt.strip())
-                _fs = _fres.get("status")
-                if _fs == "OK":
-                    st.success(
-                        f"✅ Pulled {_fres.get('files', 0)} TRADES file(s) of "
-                        f"{_fres.get('listed', 0)} listed — upserted "
-                        f"{_fres.get('upserted', 0)} swaption print(s) to eu_iro_prints.")
-                    if _fres.get("upserted", 0) == 0:
-                        st.caption("No swaptions in the pulled slices (likely all bonds for that day).")
-                elif _fs == "EMPTY":
-                    st.info("Logged in OK, but Fenics is listing 0 reports right now (portal empty, "
-                            "or the cookie is IP-bound to your browser so the cloud app can't use it).")
-                elif _fs == "EXPIRED":
-                    st.error("🔴 FENICS REJECTED THE SESSION. If you are on the deployed (cloud) app, "
-                             "this button cannot work — Fenics binds the session to your browser/IP, and "
-                             "the cloud pulls from a different IP, so it always gets the login page. "
-                             "Capture still runs via the local loop (fenics_auto.py); check the ICAP feed "
-                             "banner on the EU MiFIR tab for health. If you are running the app locally, "
-                             "then the cookie genuinely expired — refresh the JSESSIONID and retry.")
-                elif _fs == "NO_COOKIE":
-                    st.warning("Paste the JSESSIONID first.")
-                elif _fs == "NET_ERR":
-                    st.error(f"Couldn't reach Fenics: {_fres.get('detail', '')}")
-                elif _fs == "NO_DB":
-                    st.error("No DB connection — couldn't write the pulled rows.")
-                elif _fs == "DB_ERR":
-                    st.error(f"DB write failed: {_fres.get('detail', '')}")
-                else:
-                    st.error(f"Pull failed: {_fres}")
+            st.caption("Fenics (BGC/GFI/Aurel) is now fully automated by the Render cron — "
+                       "it logs in, pulls, and loads on schedule. The banner above is the "
+                       "health check; there is normally nothing to do here.")
+            with st.expander("🛠 Manual Fenics pull (emergency only — needs local run)"):
+                st.caption("Only works when the app runs on your own machine (Fenics binds the "
+                           "session to your browser/IP). If the cron banner is red and you need "
+                           "data now: run `python fenics_auto.py` in eu-trade-capture, or paste a "
+                           "fresh JSESSIONID below.")
+                _fck = st.text_input(
+                    "Fenics JSESSIONID", type="password", key="_fen_ck_inapp",
+                    help="regdata.fenicsmd.com → log in → DevTools → Application → Cookies → copy JSESSIONID")
+                _fdt = st.text_input("Date YYYY-MM-DD (blank = everything currently listed)",
+                                     key="_fen_dt_inapp")
+                if st.button("⬇️ Pull Fenics + Load now", key="_fen_pull_btn_inapp", type="primary"):
+                    with st.spinner("Pulling Fenics and loading swaptions…"):
+                        _fres = _fenics_pull_load(_fck, _fdt.strip())
+                    _fs = _fres.get("status")
+                    if _fs == "OK":
+                        st.success(
+                            f"✅ Pulled {_fres.get('files', 0)} TRADES file(s) of "
+                            f"{_fres.get('listed', 0)} listed — upserted "
+                            f"{_fres.get('upserted', 0)} swaption print(s) to eu_iro_prints.")
+                        if _fres.get("upserted", 0) == 0:
+                            st.caption("No swaptions in the pulled slices (likely all bonds for that day).")
+                    elif _fs == "EMPTY":
+                        st.info("Logged in OK, but Fenics is listing 0 reports right now (portal empty, "
+                                "or the cookie is IP-bound to your browser so the cloud app can't use it).")
+                    elif _fs == "EXPIRED":
+                        st.error("🔴 FENICS REJECTED THE SESSION. If you are on the deployed (cloud) app, "
+                                 "this button cannot work — Fenics binds the session to your browser/IP, and "
+                                 "the cloud pulls from a different IP, so it always gets the login page. "
+                                 "Capture still runs via the local loop (fenics_auto.py); check the ICAP feed "
+                                 "banner on the EU MiFIR tab for health. If you are running the app locally, "
+                                 "then the cookie genuinely expired — refresh the JSESSIONID and retry.")
+                    elif _fs == "NO_COOKIE":
+                        st.warning("Paste the JSESSIONID first.")
+                    elif _fs == "NET_ERR":
+                        st.error(f"Couldn't reach Fenics: {_fres.get('detail', '')}")
+                    elif _fs == "NO_DB":
+                        st.error("No DB connection — couldn't write the pulled rows.")
+                    elif _fs == "DB_ERR":
+                        st.error(f"DB write failed: {_fres.get('detail', '')}")
+                    else:
+                        st.error(f"Pull failed: {_fres}")
         elif _eu_admin_pw:
             st.error("Incorrect password.")
 
