@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v2807a"
+APP_VERSION = "v2807b"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -14633,11 +14633,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     except Exception: pass
                                 _sys4 = ("You are a senior USD rates options desk head. "
                                          "Terse, analytical, no filler. Reference specific strikes, tenors, notionals.")
-                                _usr4 = ("Two short paragraphs, no intro sentence, start with the data. "
-                                         "Para 1: where is expiring open interest concentrated by strike and tenor, "
-                                         "how does it sit vs current forwards, and what does the payer/receiver skew "
-                                         "tell you about positioning into expiry. "
-                                         "Para 2: vol surface context relevant for this expiry window, "
+                                _usr4 = ("Write exactly two short paragraphs of prose. Do NOT label them, "
+                                         "do NOT write 'Para 1' / 'Paragraph 1' or any heading — just the two "
+                                         "paragraphs separated by a blank line. No intro sentence; start with the data.\n\n"
+                                         "First paragraph: where expiring open interest is concentrated by strike and "
+                                         "tenor, how it sits vs current forwards, and what the payer/receiver skew "
+                                         "says about positioning into expiry.\n"
+                                         "Second paragraph: vol surface context relevant for this expiry window, "
                                          "and what the desk should watch.\n\n"
                                          + "\n".join(_ali4))
                                 try:
