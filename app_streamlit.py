@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v2807b"
+APP_VERSION = "v1109a"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -11906,8 +11906,11 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                         # notional within 1% of the payer's leg
                         _np_p = float(_p.get("notional_leg1") or 0)
                         if _np_p > 0:
+                            # 3% notional tolerance (was 1%): Dealerweb split-fills and
+                            # some Tradition prints round notionals slightly differently
+                            # between legs. 3% catches those without cross-linking trades.
                             _cand_ids = [_ri for _ri in _cand_ids
-                                         if abs(_r_not_map.get(_ri, 0.0) - _np_p) <= 0.01 * _np_p]
+                                         if abs(_r_not_map.get(_ri, 0.0) - _np_p) <= 0.03 * _np_p]
                         else:
                             _cand_ids = []
                         if _cand_ids:
@@ -11974,7 +11977,29 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     elif not _same_strike and _has_swp:
                                         # RR flag: net prem < 30% of total → one leg likely sold
                                         _rr_flag = " ⚠️ poss. R/R" if _comb_prem > 0 and (_net_prem / _comb_prem) < 0.30 else ""
-                                        _ptype = f"🟠 Strangle{_rr_flag}"
+                                        # Symmetric-OTM strangle detection: if midpoint of
+                                        # payer/receiver strikes is within 15bp of the current
+                                        # forward for this expiry/tenor, label with the ±Xbp
+                                        # width. Catches the classic Dealerweb ±100 pattern
+                                        # (e.g. 1y10y payer 5.494 / receiver 3.494 straddles
+                                        # around a 4.494 forward as a ±100bp strangle).
+                                        _sym_lbl = ""
+                                        try:
+                                            _mid_k = (_s_p + _s_r) / 2.0
+                                            _half_w = abs(_s_p - _s_r) / 2.0
+                                            _fwd_ccy = str(_p.get("notional_ccy","")).upper()
+                                            _fwd_val = None
+                                            _cc = st.session_state.get("config_curves", {}).get(_fwd_ccy)
+                                            if _cc is not None:
+                                                _fwd_val = calculate_forward_rate(
+                                                    _fwd_ccy, _cc,
+                                                    label_to_years(_e_p),
+                                                    label_to_years(_t_p) if _t_p else 10.0)
+                                            if _fwd_val is not None and abs(_mid_k - _fwd_val*100) < 0.15:
+                                                _sym_lbl = f" ±{int(round(_half_w*100))}bp"
+                                        except Exception:
+                                            _sym_lbl = ""
+                                        _ptype = f"🟠 Strangle{_sym_lbl}{_rr_flag}"
                                         _strike_disp = f"P:{_s_p:.5f}% / R:{_s_r:.5f}%"
                                         _net_str = f"  net {_net_bp:.1f}bp" if _net_bp else ""
                                         _prem_disp = f"P:{_fmt_premium(_p_prem)} / R:{_fmt_premium(_r_prem)} = {_fmt_premium(_comb_prem)}{_net_str}" if _comb_prem else "—"
