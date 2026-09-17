@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1709b"
+APP_VERSION = "v1709c"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -17034,11 +17034,17 @@ def vol_config_tab():
                     if _lc not in st.session_state["vol_data"]:
                         st.session_state["vol_data"][_lc] = {}
                     st.session_state["vol_data"][_lc]["atm"] = loaded_snap["atm"]
-                    st.session_state["vol_data"][_lc]["alpha"] = loaded_snap["alpha"]
-                    st.session_state["vol_data"][_lc]["beta"] = loaded_snap["beta"]
-                    st.session_state["vol_data"][_lc]["rho"] = loaded_snap["rho"]
-                    st.session_state["vol_data"][_lc]["nu"] = loaded_snap["nu"]
-                    st.session_state["vol_data"][_lc]["pin_map"] = loaded_snap.get("pin_map", {}) or {}
+                    # v1709c: an ATM-only snapshot (e.g. loaded via SQL, no SABR columns) must NOT
+                    # wipe the session SABR. Only overwrite alpha/beta/rho/nu/pins that the snapshot
+                    # actually carries; otherwise keep the current smile and re-pin alpha to the new ATM.
+                    _snap_has_sabr = False
+                    for _pk in ("alpha", "beta", "rho", "nu"):
+                        if loaded_snap.get(_pk) is not None:
+                            st.session_state["vol_data"][_lc][_pk] = loaded_snap[_pk]
+                            _snap_has_sabr = True
+                    if loaded_snap.get("pin_map"):
+                        st.session_state["vol_data"][_lc]["pin_map"] = loaded_snap["pin_map"]
+                    _fill_usd_alpha_placeholder(_lc)
                     if "vol_editor" in st.session_state:
                         st.session_state["vol_editor"]["working"].pop(_lc, None)
                         st.session_state["vol_editor"]["base"].pop(_lc, None)
@@ -21765,6 +21771,32 @@ def interpolate_basis(basis_df: pd.DataFrame, t: float) -> float:
     if t >= xs[-1]:
         return float(ys[-1])
     return float(np.interp(t, xs, ys))
+
+
+def _fill_usd_alpha_placeholder(ccy: str):
+    """v1709c: USD only. If rho/nu are in session but alpha (or beta) is missing — e.g.
+    after loading an ATM-only snapshot or a rho/nu calibration — seed alpha = ATM/1e4 and
+    beta = 0.5 so _recalibrate_usd_alpha_to_atm() can run (it no-ops if any param is None).
+    The real alpha is then solved from the new ATM on the next USD pricing render."""
+    if ccy != "USD":
+        return
+    try:
+        _vd = st.session_state.get("vol_data", {}).get("USD") or {}
+        _atm = _vd.get("atm")
+        if _atm is None or _vd.get("rho") is None or _vd.get("nu") is None:
+            return
+        _tc = [c for c in _atm.columns if c != "Expiry"]
+        if _vd.get("beta") is None:
+            _b = _atm[["Expiry"]].copy()
+            for _t in _tc: _b[_t] = 0.5
+            _vd["beta"] = _b
+        if _vd.get("alpha") is None:
+            _a = _atm.copy()
+            for _t in _tc: _a[_t] = pd.to_numeric(_a[_t], errors="coerce") / 10000.0
+            _vd["alpha"] = _a
+        st.session_state.pop("_usd_alpha_recal_sig", None)   # force the sticky re-pin
+    except Exception:
+        pass
 
 
 def _recalibrate_usd_alpha_to_atm():
@@ -37827,6 +37859,7 @@ def main():
                                         try: st.session_state["vol_data"][_cc2][_pm] = pd.DataFrame(_pd["values"])
                                         except: pass
                                 _vd = st.session_state["vol_data"][_cc2]
+                                _fill_usd_alpha_placeholder(_cc2)   # v1709c: keep USD SABR usable on ATM-only snapshots
                                 if _cc2 != "USD" and _vd.get("alpha") is None and _vd.get("atm") is not None:
                                     try:
                                         _ar = _vd["atm"].copy()
