@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1109a"
+APP_VERSION = "v1709a"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -8531,7 +8531,7 @@ _EU_BROKER_NAMES = {
     "IGDL": "ICAP", "ISWE": "ICAP (E)", "ISWV": "ICAP (V)", "IOTF": "ICAP",
     "IOIR": "ICAP UK OTF", "IMRD": "TP ICAP UK MTF",
     # Tradition family
-    "TWSF": "Tradition", "TWEM": "Tradition", "TSEF": "Tradition", "TSIR": "Tradition",
+    "TWSF": "Tradeweb", "TWEM": "Tradeweb", "TSEF": "Tradition", "TSIR": "Tradition",
     "TSAF": "Tradition", "TCDS": "Tradition", "TREU": "Tradition", "TEUR": "Tradition",
     "TEIR": "Tradition",
     "UTSL": "Tradition", "UTST": "Tradition",  # v1307i: Ueda Tradition Securities (Tokyo) — JPY IDB
@@ -10679,7 +10679,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
     # ── Platform code → full name ─────────────────────────────────────────────
     PLATFORM_NAMES = {
         "BGCD": "BGC", "BGCO": "BGC", "BGCI": "BGC", "AURO": "Aurel BGC",
-        "TWSF": "Tradition", "TWEM": "Tradition", "TSEF": "Tradition", "TSIR": "Tradition",
+        "TWSF": "Tradeweb", "TWEM": "Tradeweb", "TSEF": "Tradition", "TSIR": "Tradition",
         "TSAF": "Tradition", "TCDS": "Tradition", "TREU": "Tradition", "TEUR": "Tradition",
         "TEIR": "Tradition",
         "UTSL": "Tradition", "UTST": "Tradition",  # v1307i: Ueda Tradition Securities (Tokyo) — JPY IDB
@@ -10916,6 +10916,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                     _lbl = f"{PLATFORM_NAMES.get(_nm, _nm)} ({_nm})"
                     if _lbl in _platform_display and _lbl not in _sv_plat:
                         _sv_plat.append(_lbl)
+                # v1709a: TWSF/TWEM renamed Tradition -> Tradeweb. Carry saved selections
+                # across the label change so those venues don't silently drop out.
+                for _tw in ("TWSF", "TWEM"):
+                    if f"Tradition ({_tw})" in _saved_plat:
+                        _lbl = f"{PLATFORM_NAMES.get(_tw, _tw)} ({_tw})"
+                        if _lbl in _platform_display and _lbl not in _sv_plat:
+                            _sv_plat.append(_lbl)
             else:
                 _sv_plat = _default_display
             sel_platform_labels = st.multiselect("Platform", _platform_display,
@@ -37549,7 +37556,7 @@ def clear_matrix_cache():
 # MIC → broker display name for SDR alert toasts (mirror of PLATFORM_NAMES in sdr_live_tab)
 _SDR_BROKER_NAMES = {
     "BGCD": "BGC", "BGCO": "BGC", "BGCI": "BGC", "AURO": "Aurel BGC",
-    "TWSF": "Tradition", "TWEM": "Tradition", "TSEF": "Tradition", "TSIR": "Tradition",
+    "TWSF": "Tradeweb", "TWEM": "Tradeweb", "TSEF": "Tradition", "TSIR": "Tradition",
     "TSAF": "Tradition", "TCDS": "Tradition", "TREU": "Tradition", "TEUR": "Tradition",
     "TEIR": "Tradition",
     "UTSL": "Tradition", "UTST": "Tradition",  # v1307i: Ueda Tradition Securities (Tokyo) — JPY IDB
