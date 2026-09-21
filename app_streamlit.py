@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1709c"
+APP_VERSION = "v2109a"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -16376,6 +16376,29 @@ def vol_config_tab():
                                 f"⚠️ No saved data found for **{user_id}**. "
                                 "You need to upload RateEdge_Config.xlsx and Save to Database from a desktop session first."
                             )
+            # v2109a: live USD SOFR from gateway 5-min feed (swap_rates_live)
+            if st.button("⚡ Load live USD", key="load_usd_live_btn", type="secondary",
+                         help="Latest 5-min USD SOFR snapshot from the RateEdge gateway. EOD loads unaffected."):
+                _lv_ok, _lv_msg = _load_usd_live_curve()
+                if _lv_ok:
+                    st.session_state["_usd_live_msg"] = _lv_msg
+                    st.rerun()
+                else:
+                    st.warning(_lv_msg)
+            _lv_meta = st.session_state.get("_usd_live_meta")
+            if _lv_meta and st.session_state.get("config_curves", {}).get("USD") is _lv_meta.get("curve"):
+                from datetime import datetime as _dt_lvc
+                _lv_snap = _lv_meta.get("snap_ldn")
+                if _lv_snap is not None:
+                    _lv_age = (_dt_lvc.now(LONDON_TZ) - _lv_snap).total_seconds() / 60.0
+                    _lv_txt = f"USD curve = LIVE {_lv_snap.strftime('%H:%M %Z')} ({_lv_age:.0f} min ago)"
+                    if _lv_age > _USD_LIVE_STALE_MIN:
+                        st.warning(f"⚠️ {_lv_txt} - stale, click Load live USD again")
+                    else:
+                        st.caption(f"⚡ {_lv_txt}")
+            _lv_toast = st.session_state.pop("_usd_live_msg", None)
+            if _lv_toast:
+                st.toast(_lv_toast, icon="⚡")
         with col_db2:
             if st.button(" Save to Database", key="save_db_btn_top", type="secondary"):
                 user_id = st.session_state.get("username", "default")
@@ -17137,6 +17160,87 @@ def vol_config_tab():
                                           st.session_state.update({"_pending_snap_del": _sid}))
 
 
+
+
+# v2109a: USD live SOFR curve from the RateEdge gateway 5-min feed.
+# Reads swap_rates_live only. The EOD swap_rates path is untouched.
+# Node set matches EOD loads: 1W dropped (EOD loader skips W), and
+# 9M/18M/30M/35Y/45Y filled as linear mids.
+_USD_LIVE_FILL = (("9M", "6M", "1Y"), ("18M", "1Y", "2Y"), ("30M", "2Y", "3Y"),
+                  ("35Y", "30Y", "40Y"), ("45Y", "40Y", "50Y"))
+_USD_LIVE_STALE_MIN = 10
+
+
+def _load_usd_live_curve():
+    """Load latest USD SOFR par curve from swap_rates_live, bootstrap and store
+    exactly as the EOD Load-from-Database USD branch does. Returns (ok, message)."""
+    import re as _re_lv
+    from datetime import datetime as _dt_lv, timezone as _tz_lv
+    conn = get_db_connection()
+    if conn is None:
+        return False, "Database connection failed."
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT tenor, rate, snap_ts FROM swap_rates_live "
+            "WHERE currency=%s AND floating_rate=%s",
+            ("USD", "SOFR"),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+    except Exception as _lv_err:
+        st.session_state.pop("_db_conn_cached", None)
+        st.session_state.pop("_db_conn_ts", None)
+        return False, f"swap_rates_live read failed: {_lv_err}"
+    if not rows:
+        return False, "No USD SOFR rows in swap_rates_live - is the gateway task running?"
+
+    par = {}
+    snap = None
+    for tenor, rate, ts in rows:
+        t = str(tenor).strip().upper()
+        if not _re_lv.match(r"^\d+[MY]$", t):
+            continue  # 1W skipped, same as EOD loader
+        par[t] = float(rate)
+        if ts is not None and (snap is None or ts > snap):
+            snap = ts
+    for node, lo, hi in _USD_LIVE_FILL:
+        if node not in par and lo in par and hi in par:
+            par[node] = round((par[lo] + par[hi]) / 2.0, 6)
+    if len(par) < 10:
+        return False, f"Only {len(par)} usable USD tenors in swap_rates_live - not loaded."
+
+    if snap is not None and snap.tzinfo is None:
+        snap = snap.replace(tzinfo=_tz_lv.utc)
+    snap_ldn = snap.astimezone(LONDON_TZ) if snap is not None else None
+    age_min = ((_dt_lv.now(_tz_lv.utc) - snap).total_seconds() / 60.0) if snap is not None else None
+    src = f"{snap_ldn.strftime('%Y-%m-%d %H:%M %Z')} live" if snap_ldn else "live"
+
+    recs = []
+    for t, r in par.items():
+        n, u = int(t[:-1]), t[-1]
+        recs.append({"MaturityY": n / 12.0 if u == "M" else float(n), "ZeroRatePct": r})
+    par_df = pd.DataFrame(recs).sort_values("MaturityY").reset_index(drop=True)
+    par_df["_source_date"] = src
+
+    st.session_state["_usd_sofr_par"] = par_df.copy()
+    zc = bootstrap_usd_sofr_ois(par_df)
+    st.session_state.setdefault("curves", {})["USD"] = zc
+    st.session_state.setdefault("config_curves", {})["USD"] = zc
+    set_timestamp("curves", "USD")
+    # Invalidate USD forward/annuity cache so the live curve reprices
+    _cids = st.session_state.setdefault("_curve_commit_ids", {})
+    _cids["USD"] = _cids.get("USD", 0) + 1
+    _fc = st.session_state.get("_fwd_ann_cache", {})
+    for _k in [k for k in _fc if isinstance(k, tuple) and k and k[0] == "USD"]:
+        del _fc[_k]
+
+    st.session_state["_usd_live_meta"] = {"curve": zc, "snap_ldn": snap_ldn, "n": len(par)}
+    msg = f"USD SOFR live loaded: {len(par)} nodes, snapshot {snap_ldn.strftime('%H:%M %Z') if snap_ldn else '?'}"
+    if age_min is not None and age_min > _USD_LIVE_STALE_MIN:
+        msg += f" - WARNING: {age_min:.0f} min old"
+    return True, msg
 
 
 @st.cache_data(ttl=300, show_spinner=False)
