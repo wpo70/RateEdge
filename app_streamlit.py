@@ -3623,73 +3623,6 @@ def forward_and_annuity_from_curve(curve: pd.DataFrame,
         except Exception:
             return (None, ux, logdf)
 
-    # ── USD/EUR/GBP/JPY: use the SAME method as fast_forward_rate so the
-    # swaption pricer forward exactly matches the forward matrix. The date-based
-    # schedule + log-cubic spline was diverging by ~10bp from the matrix (and market).
-    # AUD/NZD: untouched — keep date-based schedule + linear-on-zero.
-    if ccy in ("USD", "EUR", "GBP", "JPY"):
-        _crv_x = curve["MaturityY"].to_numpy().astype(float)
-        _crv_y = curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
-        _ois_x = ois_curve["MaturityY"].to_numpy().astype(float) if ois_curve is not None else _crv_x
-        _ois_y = ois_curve["ZeroRatePct"].to_numpy().astype(float) / 100.0 if ois_curve is not None else _crv_y
-
-        # EUR projection: use EURIBOR curve if available
-        if ccy == "EUR":
-            _eur_b = st.session_state.get("config_basis", {}).get("EUR", {})
-            _e6m = _eur_b.get("euribor_6m")
-            _e3m = _eur_b.get("euribor_3m")
-            _eur_proj = None
-            if tenor <= 1.0 and _e3m is not None and not _e3m.empty:
-                _eur_proj = _e3m
-            elif _e6m is not None and not _e6m.empty:
-                _eur_proj = _e6m
-            elif _e3m is not None and not _e3m.empty:
-                _eur_proj = _e3m
-            if _eur_proj is not None:
-                _crv_x = _eur_proj["MaturityY"].to_numpy().astype(float)
-                _crv_y = _eur_proj["ZeroRatePct"].to_numpy().astype(float) / 100.0
-
-        _fwd_val = fast_forward_rate(_crv_x, _crv_y, expiry, tenor, ccy,
-                                      freq_override=freq_override,
-                                      ois_x=_ois_x, ois_y=_ois_y)
-        # Compute annuity with same method as fast_forward_rate
-        SPOT_FF = 1.0 / 252.0
-        if freq_override is not None:
-            _ff_freq = freq_override
-        elif ccy == "USD":
-            _ff_freq = 1.0
-        elif ccy == "EUR":
-            _ff_freq = 1.0
-        elif ccy == "GBP":
-            _ff_freq = 1.0
-        elif ccy == "JPY":
-            _ff_freq = 0.5
-        else:
-            _ff_freq = 0.5
-        _ff_start = expiry + SPOT_FF
-        _ff_end = _ff_start + tenor
-        _ff_times = []
-        _ff_t = _ff_start + _ff_freq
-        while _ff_t <= _ff_end + 1e-9:
-            _ff_times.append(min(_ff_t, _ff_end))
-            _ff_t += _ff_freq
-        if not _ff_times or (_ff_times[-1] < _ff_end - 1e-9):
-            _ff_times.append(_ff_end)
-        _ff_ann = 0.0
-        _ff_prev = _ff_start
-        for _ff_ti in _ff_times:
-            _ff_ann += math.exp(-float(np.interp(_ff_ti, _ois_x, _ois_y)) * _ff_ti) * (_ff_ti - _ff_prev)
-            _ff_prev = _ff_ti
-        _ff_sched = [(_ff_ti, _ff_ti - _ff_start) for _ff_ti in _ff_times]  # dummy sched for return
-        _result = (_fwd_val, _ff_ann, _ff_sched)
-        try:
-            if _ck is not None and len(_fc) < 5000:
-                _fc[_ck] = _result
-        except Exception:
-            pass
-        return _result
-
-    # ── AUD/NZD: date-based schedule + linear-on-zero (UNCHANGED) ──
     # Build log-cubic splines once (USD/EUR only); AUD/NZD use linear-on-zero.
     disc_curve = ois_curve if ois_curve is not None else _proj_curve
     _proj_sp = _mk_logcubic(_proj_curve) if ccy in ("USD", "EUR", "GBP", "JPY") else None
@@ -22481,6 +22414,17 @@ def swaptions_tab(vol_mode: str):
             fwd_source = f"midcurve ({expiry}→{delay_sel}{swap_tenor})"
         else:
             fwd, ann, _ = forward_and_annuity_from_curve(curve, ccy, expiry_y, tenor_y, ois_curve, freq_override=freq_override)
+            # v2109b: For USD/EUR/GBP/JPY, override the displayed forward with
+            # fast_forward_rate so it matches the forward matrix exactly.
+            # Keep ann from forward_and_annuity (needed for pricing).
+            if ccy in ("USD", "EUR", "GBP", "JPY"):
+                _crv_x = curve["MaturityY"].to_numpy().astype(float)
+                _crv_y = curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
+                _ois_x = ois_curve["MaturityY"].to_numpy().astype(float) if ois_curve is not None else _crv_x
+                _ois_y = ois_curve["ZeroRatePct"].to_numpy().astype(float) / 100.0 if ois_curve is not None else _crv_y
+                fwd = fast_forward_rate(_crv_x, _crv_y, expiry_y, tenor_y, ccy,
+                                        freq_override=freq_override,
+                                        ois_x=_ois_x, ois_y=_ois_y)
             fwd_source = "curve"
             # Clear cache to ensure fresh computation
             st.session_state.pop("_fwd_ann_cache", None)
