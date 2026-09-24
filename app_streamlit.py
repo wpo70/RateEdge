@@ -22413,7 +22413,9 @@ def swaptions_tab(vol_mode: str):
                 fwd = fwd_mid
             fwd_source = f"midcurve ({expiry}→{delay_sel}{swap_tenor})"
         else:
-            fwd, ann, _ = forward_and_annuity_from_curve(curve, ccy, expiry_y, tenor_y, ois_curve, freq_override=freq_override)
+            # USD/EUR: pass ois=None to match the forward matrix exactly (L17653)
+            _ois_for_fwd = None if ccy in ("USD", "EUR", "GBP", "JPY") else ois_curve
+            fwd, ann, _ = forward_and_annuity_from_curve(curve, ccy, expiry_y, tenor_y, _ois_for_fwd, freq_override=freq_override)
             fwd_source = "curve"
             # Clear cache to ensure fresh computation
             st.session_state.pop("_fwd_ann_cache", None)
