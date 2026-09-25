@@ -40253,7 +40253,10 @@ def otm_grids_tab():
     # Map expiry labels to year fractions
     def _exp_to_y(lbl):
         lbl = str(lbl).strip().upper()
-        if lbl.endswith("MO") or lbl.endswith("M"):
+        if lbl.endswith("W"):
+            n = float(lbl.replace("W", ""))
+            return n / 52.0
+        elif lbl.endswith("MO") or lbl.endswith("M"):
             n = float(lbl.replace("MO", "").replace("M", ""))
             return n / 12.0
         elif lbl.endswith("Y") or lbl.endswith("YR"):
@@ -40346,8 +40349,8 @@ def otm_grids_tab():
                     continue
 
                 # SABR implied alpha from ATM vol
-                _atm_vol = _a_val  # alpha in vol_data is already decimal (ATM bp / 10000)
-                _sabr_a = sabr_implied_alpha_from_atm(_atm_vol, _fwd, exp_y, _b_val, _r_val, _n_val)
+                _atm_vol = _a_val  # after Recalibrate Alpha, this IS the SABR alpha
+                _sabr_a = _a_val  # use directly — don't re-solve
 
                 # SABR vols at OTM strikes
                 K_p = _fwd + _otm_width
@@ -40495,7 +40498,22 @@ def otm_grids_tab():
                     if _a_c is None or _a_c <= 0:
                         continue
 
-                    _atm_c = _a_c  # already decimal
+                    # For calibration, need the ATM vol to pin alpha at each trial rho/nu
+                    # Get ATM vol from the ATM surface, NOT from alpha (which is SABR alpha after recal)
+                    _atm_surf_c = st.session_state.get("vol_data", {}).get(ccy, {}).get("atm")
+                    _atm_c = None
+                    if _atm_surf_c is not None:
+                        try:
+                            _atm_c = float(get_matrix_value(_atm_surf_c, exp_lbl_c, ten_y_c))
+                            if _atm_c is not None:
+                                _atm_c = _atm_c / 10000.0  # ATM surface is in bp
+                        except Exception:
+                            pass
+                    if _atm_c is None or _atm_c <= 0:
+                        # Fallback: reconstruct ATM vol from current SABR alpha
+                        _atm_c = sabr_normal_vol_smile(_fwd_c, _fwd_c, exp_y_c, _a_c, _b_c,
+                                                        float(sabr_rho.iloc[ei][ten_lbl_c]) if ten_lbl_c in sabr_rho.columns else 0.10,
+                                                        float(sabr_nu.iloc[ei][ten_lbl_c]) if ten_lbl_c in sabr_nu.columns else 0.30)
                     _fwd_c = fast_forward_rate(_crv_x, _crv_y, exp_y_c, ten_y_c, ccy)
                     if _fwd_c is None or _fwd_c <= 0:
                         continue
