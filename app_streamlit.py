@@ -40224,10 +40224,25 @@ def otm_grids_tab():
         return
 
     vol_mode = st.session_state.get("sidebar_volmode", "Normal (bp)")
-    _, sabr_alpha, sabr_beta, sabr_rho, sabr_nu = get_ccy_vol_data(ccy)
-    if sabr_alpha is None:
-        st.warning(f"No SABR params loaded for {ccy}. Upload vol surface first.")
+    _vd = st.session_state.get("vol_data", {}).get(ccy, {})
+    _atm_surf = get_published_atm_surface(ccy)
+    if _atm_surf is None:
+        _atm_surf = _vd.get("atm")
+    sabr_beta = _vd.get("beta")
+    sabr_rho = _vd.get("rho")
+    sabr_nu = _vd.get("nu")
+    if _atm_surf is None or (hasattr(_atm_surf, 'empty') and _atm_surf.empty):
+        st.warning(f"No ATM vol surface loaded for {ccy}. Load vols first.")
         return
+    if sabr_rho is None or sabr_nu is None:
+        st.warning(f"No SABR rho/nu loaded for {ccy}. Upload SABR params or run Recalibrate Alpha.")
+        return
+
+    # Debug: show what we're reading
+    _ecol = "Expiry" if "Expiry" in _atm_surf.columns else _atm_surf.columns[0]
+    st.caption(f"📡 ATM surface: {len(_atm_surf)} rows, cols={list(_atm_surf.columns)[:5]}... | "
+               f"rho: {list(sabr_rho.columns)[:5]}... | "
+               f"Expiry sample: {list(_atm_surf[_ecol])[:3]}")
 
     # ── OTM width selector ──
     _otm_c1, _otm_c2 = st.columns([3, 1])
@@ -40247,8 +40262,23 @@ def otm_grids_tab():
     _otm_width = _otm_width_bp / 10000.0  # convert to decimal
 
     # ── Grid definition ──
-    _EXP_LABELS = list(sabr_alpha.iloc[:, 0]) if "Expiry" in sabr_alpha.columns else list(sabr_alpha.index)
-    _TEN_LABELS = [c for c in sabr_alpha.columns if c not in ("Expiry",)]
+    _ecol = "Expiry" if "Expiry" in _atm_surf.columns else _atm_surf.columns[0]
+    _EXP_LABELS = list(_atm_surf[_ecol])
+    _TEN_LABELS = [c for c in _atm_surf.columns if c != _ecol]
+
+    # Build case-insensitive column lookup for SABR params
+    def _find_col(df, col):
+        """Find column in df matching col case-insensitively."""
+        if df is None:
+            return None
+        if col in df.columns:
+            return col
+        col_u = col.upper()
+        col_l = col.lower()
+        for c in df.columns:
+            if c.upper() == col_u or c.lower() == col_l:
+                return c
+        return None
 
     # Map expiry labels to year fractions
     def _exp_to_y(lbl):
@@ -40305,16 +40335,21 @@ def otm_grids_tab():
                 continue
 
             try:
-                # Get SABR params for this cell
-                _a_val = float(sabr_alpha.iloc[ei][ten_lbl]) if ten_lbl in sabr_alpha.columns else None
-                _b_val = float(sabr_beta.iloc[ei][ten_lbl]) if sabr_beta is not None and ten_lbl in sabr_beta.columns else 0.5
-                _r_val = float(sabr_rho.iloc[ei][ten_lbl]) if sabr_rho is not None and ten_lbl in sabr_rho.columns else 0.20
-                _n_val = float(sabr_nu.iloc[ei][ten_lbl]) if sabr_nu is not None and ten_lbl in sabr_nu.columns else 0.30
+                # Get SABR params for this cell (case-insensitive column match)
+                _rc = _find_col(sabr_rho, ten_lbl)
+                _nc = _find_col(sabr_nu, ten_lbl)
+                _bc = _find_col(sabr_beta, ten_lbl)
+                _b_val = float(sabr_beta.iloc[ei][_bc]) if _bc else 0.5
+                _r_val = float(sabr_rho.iloc[ei][_rc]) if _rc else 0.20
+                _n_val = float(sabr_nu.iloc[ei][_nc]) if _nc else 0.30
 
-                if _a_val is None or _a_val <= 0 or math.isnan(_a_val):
+                # ATM vol from the surface (bp) → solve SABR alpha
+                _atm_bp = float(_atm_surf.iloc[ei][ten_lbl]) if ten_lbl in _atm_surf.columns else None
+                if _atm_bp is None or _atm_bp <= 0 or math.isnan(_atm_bp):
                     rr_row.append(None)
                     str_row.append(None)
                     continue
+                _atm_dec = _atm_bp / 10000.0
 
                 # Forward and annuity
                 _fwd = fast_forward_rate(_crv_x, _crv_y, exp_y, ten_y, ccy)
@@ -40349,8 +40384,12 @@ def otm_grids_tab():
                     continue
 
                 # SABR implied alpha from ATM vol
-                _atm_vol = _a_val  # after Recalibrate Alpha, this IS the SABR alpha
-                _sabr_a = _a_val  # use directly — don't re-solve
+                # Solve SABR alpha from ATM vol + forward + rho/nu/beta
+                _sabr_a = sabr_implied_alpha_from_atm(_atm_dec, _fwd, exp_y, _b_val, _r_val, _n_val)
+                if _sabr_a is None or _sabr_a <= 0:
+                    rr_row.append(None)
+                    str_row.append(None)
+                    continue
 
                 # SABR vols at OTM strikes
                 K_p = _fwd + _otm_width
