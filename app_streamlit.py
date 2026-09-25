@@ -38291,6 +38291,7 @@ def main():
                 ("✅ Vol Editor", "tab_show_voleditor"),
                 ("📑 Vol Export", "tab_show_volexport"),
                 ("📐 Midcurve & Curve Options", "tab_show_midcurve"),
+                ("📊 OTM Grids", "tab_show_otm_grids"),
                 ("📍 Multi-CCY", "tab_show_multiccy"),
                 ("🎫 Trade Ticket", "tab_show_ticket"),
             ]
@@ -38587,6 +38588,7 @@ def main():
         ("📏 SOD Report",                "tab_show_sod",       sod_report_tab),
         ("📑 Vol Export",                "tab_show_volexport", vol_export_tab),
         ("📐 Midcurve & Curve Options",  "tab_show_midcurve",  midcurve_tab),
+        ("📊 OTM Grids",                "tab_show_otm_grids", otm_grids_tab),
         ("🎫 Trade Ticket",              "tab_show_ticket",    lambda: render_ticket_tab(st.session_state)),
     ]
     # v2904a: SOD tab routing by currency
@@ -40206,6 +40208,210 @@ def sr3_vol_tab():
                     st.warning(f"Vol saved but CA auto-compute failed: {_ca_e}")
             else:
                 st.error("Save failed — see error above.")
+
+
+def otm_grids_tab():
+    """OTM Swaption Grids — Risk Reversal and Strangle matrices across the expiry/tenor surface."""
+    import numpy as _np_otm
+    from scipy.stats import norm as _norm_otm
+
+    st.subheader("📊 OTM Swaption Grids")
+
+    ccy = st.session_state.get("sidebar_ccy", "USD")
+    curve = st.session_state.get("config_curves", {}).get(ccy)
+    if curve is None or (hasattr(curve, 'empty') and curve.empty):
+        st.warning(f"No {ccy} curve loaded. Load from Database first.")
+        return
+
+    vol_mode = st.session_state.get("sidebar_volmode", "Normal (bp)")
+    _, sabr_alpha, sabr_beta, sabr_rho, sabr_nu = get_ccy_vol_data(ccy)
+    if sabr_alpha is None:
+        st.warning(f"No SABR params loaded for {ccy}. Upload vol surface first.")
+        return
+
+    # ── OTM width selector ──
+    _otm_c1, _otm_c2 = st.columns([3, 1])
+    with _otm_c1:
+        _otm_preset = st.radio(
+            "OTM Width (bp)",
+            ["±25", "±50", "±100", "±150", "±250", "Manual"],
+            index=2, horizontal=True, key="otm_grid_preset"
+        )
+    with _otm_c2:
+        if _otm_preset == "Manual":
+            _otm_width_bp = st.number_input("Width (bp)", value=100, min_value=1, max_value=500, step=5, key="otm_grid_manual_width")
+        else:
+            _otm_width_bp = int(_otm_preset.replace("±", ""))
+            st.metric("Width", f"±{_otm_width_bp}bp")
+
+    _otm_width = _otm_width_bp / 10000.0  # convert to decimal
+
+    # ── Grid definition ──
+    _EXP_LABELS = list(sabr_alpha.iloc[:, 0]) if "Expiry" in sabr_alpha.columns else list(sabr_alpha.index)
+    _TEN_LABELS = [c for c in sabr_alpha.columns if c not in ("Expiry",)]
+
+    # Map expiry labels to year fractions
+    def _exp_to_y(lbl):
+        lbl = str(lbl).strip().upper()
+        if lbl.endswith("MO") or lbl.endswith("M"):
+            n = float(lbl.replace("MO", "").replace("M", ""))
+            return n / 12.0
+        elif lbl.endswith("Y") or lbl.endswith("YR"):
+            n = float(lbl.replace("YR", "").replace("Y", ""))
+            return n
+        try:
+            return float(lbl)
+        except:
+            return None
+
+    def _ten_to_y(lbl):
+        lbl = str(lbl).strip().upper()
+        if lbl.endswith("Y") or lbl.endswith("YR"):
+            n = float(lbl.replace("YR", "").replace("Y", ""))
+            return n
+        if lbl.endswith("M") or lbl.endswith("MO"):
+            n = float(lbl.replace("MO", "").replace("M", ""))
+            return n / 12.0
+        try:
+            return float(lbl)
+        except:
+            return None
+
+    # ── Compute grids ──
+    _crv_x = curve["MaturityY"].to_numpy().astype(float)
+    _crv_y = curve["ZeroRatePct"].to_numpy().astype(float) / 100.0
+
+    rr_data = []
+    str_data = []
+
+    for ei, exp_lbl in enumerate(_EXP_LABELS):
+        exp_y = _exp_to_y(exp_lbl)
+        if exp_y is None or exp_y <= 0:
+            rr_data.append([None] * len(_TEN_LABELS))
+            str_data.append([None] * len(_TEN_LABELS))
+            continue
+
+        rr_row = []
+        str_row = []
+
+        for ti, ten_lbl in enumerate(_TEN_LABELS):
+            ten_y = _ten_to_y(ten_lbl)
+            if ten_y is None or ten_y <= 0:
+                rr_row.append(None)
+                str_row.append(None)
+                continue
+
+            try:
+                # Get SABR params for this cell
+                _a_val = float(sabr_alpha.iloc[ei][ten_lbl]) if ten_lbl in sabr_alpha.columns else None
+                _b_val = float(sabr_beta.iloc[ei][ten_lbl]) if sabr_beta is not None and ten_lbl in sabr_beta.columns else 0.5
+                _r_val = float(sabr_rho.iloc[ei][ten_lbl]) if sabr_rho is not None and ten_lbl in sabr_rho.columns else 0.20
+                _n_val = float(sabr_nu.iloc[ei][ten_lbl]) if sabr_nu is not None and ten_lbl in sabr_nu.columns else 0.30
+
+                if _a_val is None or _a_val <= 0 or math.isnan(_a_val):
+                    rr_row.append(None)
+                    str_row.append(None)
+                    continue
+
+                # Forward and annuity
+                _fwd = fast_forward_rate(_crv_x, _crv_y, exp_y, ten_y, ccy)
+                if _fwd is None or _fwd <= 0:
+                    rr_row.append(None)
+                    str_row.append(None)
+                    continue
+
+                # Annuity
+                SPOT = 1.0 / 252.0
+                _freq = 1.0 if ccy in ("USD", "EUR", "GBP") else 0.5 if ccy == "JPY" else 0.5
+                if ccy in ("AUD", "NZD"):
+                    _freq = 0.25 if ten_y <= 3.25 else 0.5
+                _t_start = exp_y + SPOT
+                _t_end = _t_start + ten_y
+                _times = []
+                _t = _t_start + _freq
+                while _t <= _t_end + 1e-9:
+                    _times.append(min(_t, _t_end))
+                    _t += _freq
+                if not _times or _times[-1] < _t_end - 1e-9:
+                    _times.append(_t_end)
+                _ann = 0.0
+                _prev = _t_start
+                for _ti in _times:
+                    _ann += math.exp(-float(_np_otm.interp(_ti, _crv_x, _crv_y)) * _ti) * (_ti - _prev)
+                    _prev = _ti
+
+                if _ann <= 0:
+                    rr_row.append(None)
+                    str_row.append(None)
+                    continue
+
+                # SABR implied alpha from ATM vol
+                _atm_vol = _a_val / 10000.0  # alpha stored as ATM bp
+                _sabr_a = sabr_implied_alpha_from_atm(_atm_vol, _fwd, exp_y, _b_val, _r_val, _n_val)
+
+                # SABR vols at OTM strikes
+                K_p = _fwd + _otm_width
+                K_r = _fwd - _otm_width
+                if K_r <= 0:
+                    K_r = 0.0001
+
+                _vol_p = sabr_normal_vol_smile(_fwd, K_p, exp_y, _sabr_a, _b_val, _r_val, _n_val)
+                _vol_r = sabr_normal_vol_smile(_fwd, K_r, exp_y, _sabr_a, _b_val, _r_val, _n_val)
+
+                if _vol_p is None or _vol_r is None or _vol_p <= 0 or _vol_r <= 0:
+                    rr_row.append(None)
+                    str_row.append(None)
+                    continue
+
+                # Bachelier prices (bp of notional)
+                _sqrt_T = math.sqrt(max(exp_y, 1e-6))
+                _d_p = (_fwd - K_p) / (_vol_p * _sqrt_T)
+                _d_r = (_fwd - K_r) / (_vol_r * _sqrt_T)
+                _payer_px = _ann * _vol_p * _sqrt_T * (_d_p * _norm_otm.cdf(_d_p) + _norm_otm.pdf(_d_p)) * 10000
+                _recv_px = _ann * _vol_r * _sqrt_T * (-_d_r * _norm_otm.cdf(-_d_r) + _norm_otm.pdf(_d_r)) * 10000
+
+                _rr_val = round(_payer_px - _recv_px, 1)
+                _str_val = round(_payer_px + _recv_px, 1)
+
+                rr_row.append(_rr_val)
+                str_row.append(_str_val)
+            except Exception:
+                rr_row.append(None)
+                str_row.append(None)
+
+        rr_data.append(rr_row)
+        str_data.append(str_row)
+
+    # ── Display ──
+    _df_rr = pd.DataFrame(rr_data, columns=_TEN_LABELS, index=_EXP_LABELS)
+    _df_rr.index.name = "Expiry"
+    _df_str = pd.DataFrame(str_data, columns=_TEN_LABELS, index=_EXP_LABELS)
+    _df_str.index.name = "Expiry"
+
+    # Heatmap styling
+    def _otm_heatmap(df, title, cmap="RdYlGn"):
+        st.markdown(f"#### {title}")
+        _numeric = df.apply(pd.to_numeric, errors='coerce')
+        _vmin = _numeric.min().min()
+        _vmax = _numeric.max().max()
+        if _vmin is not None and _vmax is not None and not math.isnan(_vmin) and not math.isnan(_vmax):
+            styled = _numeric.style.background_gradient(cmap=cmap, vmin=_vmin, vmax=_vmax) \
+                          .format("{:.1f}", na_rep="—")
+        else:
+            styled = _numeric.style.format("{:.1f}", na_rep="—")
+        st.dataframe(styled, use_container_width=True, height=min(len(df) * 36 + 40, 820))
+
+    _otm_heatmap(_df_rr, f"{ccy} Risk Reversal — Payers Over (bp) ±{_otm_width_bp}bp OTM")
+    _otm_heatmap(_df_str, f"{ccy} Strangle (bp) ±{_otm_width_bp}bp OTM")
+
+    # Download
+    _dl_c1, _dl_c2 = st.columns(2)
+    with _dl_c1:
+        _buf_rr = _df_rr.to_csv()
+        st.download_button("⬇ Download R/R", _buf_rr, f"{ccy}_RR_{_otm_width_bp}bp.csv", use_container_width=True)
+    with _dl_c2:
+        _buf_str = _df_str.to_csv()
+        st.download_button("⬇ Download Strangle", _buf_str, f"{ccy}_Strangle_{_otm_width_bp}bp.csv", use_container_width=True)
 
 
 def midcurve_tab():
