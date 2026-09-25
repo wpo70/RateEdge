@@ -40346,7 +40346,7 @@ def otm_grids_tab():
                     continue
 
                 # SABR implied alpha from ATM vol
-                _atm_vol = _a_val / 10000.0  # alpha stored as ATM bp
+                _atm_vol = _a_val  # alpha in vol_data is already decimal (ATM bp / 10000)
                 _sabr_a = sabr_implied_alpha_from_atm(_atm_vol, _fwd, exp_y, _b_val, _r_val, _n_val)
 
                 # SABR vols at OTM strikes
@@ -40412,6 +40412,200 @@ def otm_grids_tab():
     with _dl_c2:
         _buf_str = _df_str.to_csv()
         st.download_button("⬇ Download Strangle", _buf_str, f"{ccy}_Strangle_{_otm_width_bp}bp.csv", use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════
+    # LIVE SABR CALIBRATION — input market R/R mids, fit rho/nu
+    # ══════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("#### 🎯 Live SABR Calibration — Input Market R/R Mids")
+    st.caption(
+        f"Enter live market R/R values (payers over, bp) at ±{_otm_width_bp}bp. "
+        "Click **Calibrate** to solve rho/nu at marked cells, then smooth across the surface."
+    )
+
+    # Build editable grid pre-populated with current model R/R
+    _cal_key = f"_otm_cal_input_{ccy}"
+    if _cal_key not in st.session_state:
+        # Seed with current model values — user overwrites with market
+        st.session_state[_cal_key] = _df_rr.copy()
+
+    _cal_df = st.session_state[_cal_key]
+
+    # Editable dataframe
+    _edited_rr = st.data_editor(
+        _cal_df,
+        use_container_width=True,
+        height=min(len(_cal_df) * 36 + 40, 820),
+        num_rows="fixed",
+        key=f"_otm_cal_editor_{ccy}",
+    )
+
+    _cal_b1, _cal_b2, _cal_b3 = st.columns([2, 2, 2])
+
+    with _cal_b1:
+        _do_calibrate = st.button("🎯 Calibrate SABR to Market", key="otm_cal_btn", type="primary", use_container_width=True)
+    with _cal_b2:
+        _do_apply = st.button("✅ Apply to Vol Surface", key="otm_apply_btn", use_container_width=True)
+    with _cal_b3:
+        _do_reset = st.button("↩ Reset to Model", key="otm_reset_btn", use_container_width=True)
+
+    if _do_reset:
+        st.session_state.pop(_cal_key, None)
+        st.session_state.pop(f"_otm_cal_rho_{ccy}", None)
+        st.session_state.pop(f"_otm_cal_nu_{ccy}", None)
+        st.rerun()
+
+    if _do_calibrate:
+        from scipy.optimize import minimize as _minimize_cal
+
+        _new_rho = sabr_rho.copy() if sabr_rho is not None else pd.DataFrame(0.20, index=_EXP_LABELS, columns=_TEN_LABELS)
+        _new_nu = sabr_nu.copy() if sabr_nu is not None else pd.DataFrame(0.30, index=_EXP_LABELS, columns=_TEN_LABELS)
+        _cal_count = 0
+        _cal_errors = []
+
+        for ei, exp_lbl_c in enumerate(_EXP_LABELS):
+            exp_y_c = _exp_to_y(exp_lbl_c)
+            if exp_y_c is None or exp_y_c <= 0:
+                continue
+            for ti, ten_lbl_c in enumerate(_TEN_LABELS):
+                ten_y_c = _ten_to_y(ten_lbl_c)
+                if ten_y_c is None or ten_y_c <= 0:
+                    continue
+                try:
+                    _mkt_val = float(_edited_rr.iloc[ei][ten_lbl_c])
+                except (ValueError, TypeError, KeyError):
+                    continue
+                if _mkt_val is None or math.isnan(_mkt_val):
+                    continue
+
+                # Get current model R/R for comparison
+                try:
+                    _model_val = float(_df_rr.iloc[ei][ti]) if _df_rr.iloc[ei][ti] is not None else None
+                except:
+                    _model_val = None
+
+                # Skip if market matches model (user didn't change)
+                if _model_val is not None and abs(_mkt_val - _model_val) < 0.05:
+                    continue
+
+                # Calibrate rho/nu to match this market R/R
+                try:
+                    _a_c = float(sabr_alpha.iloc[ei][ten_lbl_c]) if ten_lbl_c in sabr_alpha.columns else None
+                    _b_c = float(sabr_beta.iloc[ei][ten_lbl_c]) if sabr_beta is not None and ten_lbl_c in sabr_beta.columns else 0.5
+                    if _a_c is None or _a_c <= 0:
+                        continue
+
+                    _atm_c = _a_c  # already decimal
+                    _fwd_c = fast_forward_rate(_crv_x, _crv_y, exp_y_c, ten_y_c, ccy)
+                    if _fwd_c is None or _fwd_c <= 0:
+                        continue
+
+                    # Annuity
+                    _freq_c = 1.0 if ccy in ("USD", "EUR", "GBP") else 0.5
+                    if ccy in ("AUD", "NZD"):
+                        _freq_c = 0.25 if ten_y_c <= 3.25 else 0.5
+                    _ts_c = exp_y_c + 1/252
+                    _te_c = _ts_c + ten_y_c
+                    _tms_c = []
+                    _tc = _ts_c + _freq_c
+                    while _tc <= _te_c + 1e-9:
+                        _tms_c.append(min(_tc, _te_c)); _tc += _freq_c
+                    if not _tms_c or _tms_c[-1] < _te_c - 1e-9:
+                        _tms_c.append(_te_c)
+                    _ann_c = 0.0; _pv_c = _ts_c
+                    for _ti_c in _tms_c:
+                        _ann_c += math.exp(-float(_np_otm.interp(_ti_c, _crv_x, _crv_y)) * _ti_c) * (_ti_c - _pv_c)
+                        _pv_c = _ti_c
+                    if _ann_c <= 0:
+                        continue
+
+                    K_p_c = _fwd_c + _otm_width
+                    K_r_c = max(_fwd_c - _otm_width, 0.0001)
+                    _sqrt_Tc = math.sqrt(max(exp_y_c, 1e-6))
+
+                    # Get current rho/nu as starting point
+                    _r0 = float(_new_rho.iloc[ei][ten_lbl_c]) if ten_lbl_c in _new_rho.columns else 0.10
+                    _n0 = float(_new_nu.iloc[ei][ten_lbl_c]) if ten_lbl_c in _new_nu.columns else 0.40
+
+                    def _cal_obj(params):
+                        _rr, _nn = params
+                        if abs(_rr) >= 0.95 or _nn <= 0.02 or _nn > 2.0:
+                            return 1e6
+                        try:
+                            _sa = sabr_implied_alpha_from_atm(_atm_c, _fwd_c, exp_y_c, _b_c, _rr, _nn)
+                            _vp = sabr_normal_vol_smile(_fwd_c, K_p_c, exp_y_c, _sa, _b_c, _rr, _nn)
+                            _vr = sabr_normal_vol_smile(_fwd_c, K_r_c, exp_y_c, _sa, _b_c, _rr, _nn)
+                            if _vp is None or _vr is None or _vp <= 0 or _vr <= 0:
+                                return 1e6
+                            _dp = (_fwd_c - K_p_c) / (_vp * _sqrt_Tc)
+                            _dr = (_fwd_c - K_r_c) / (_vr * _sqrt_Tc)
+                            _pp = _ann_c * _vp * _sqrt_Tc * (_dp * _norm_otm.cdf(_dp) + _norm_otm.pdf(_dp)) * 10000
+                            _rp = _ann_c * _vr * _sqrt_Tc * (-_dr * _norm_otm.cdf(-_dr) + _norm_otm.pdf(_dr)) * 10000
+                            return (_pp - _rp - _mkt_val) ** 2
+                        except:
+                            return 1e6
+
+                    _res = _minimize_cal(_cal_obj, [_r0, _n0], method='Nelder-Mead',
+                                         options={'maxiter': 2000, 'xatol': 1e-6, 'fatol': 1e-10})
+                    _rho_fit, _nu_fit = _res.x
+                    _rho_fit = max(-0.95, min(0.95, _rho_fit))
+                    _nu_fit = max(0.02, min(2.0, _nu_fit))
+
+                    if ten_lbl_c in _new_rho.columns:
+                        _new_rho.iloc[ei, _new_rho.columns.get_loc(ten_lbl_c)] = round(_rho_fit, 4)
+                    if ten_lbl_c in _new_nu.columns:
+                        _new_nu.iloc[ei, _new_nu.columns.get_loc(ten_lbl_c)] = round(_nu_fit, 4)
+                    _cal_count += 1
+
+                except Exception as _cal_e:
+                    _cal_errors.append(f"{exp_lbl_c}/{ten_lbl_c}: {_cal_e}")
+
+        # Store calibrated params
+        st.session_state[f"_otm_cal_rho_{ccy}"] = _new_rho
+        st.session_state[f"_otm_cal_nu_{ccy}"] = _new_nu
+
+        if _cal_count > 0:
+            st.success(f"✅ Calibrated {_cal_count} cells. Review rho/nu below, then click **Apply to Vol Surface**.")
+        else:
+            st.info("No market changes detected — all cells match current model.")
+        if _cal_errors:
+            with st.expander(f"⚠️ {len(_cal_errors)} calibration errors"):
+                for _ce in _cal_errors[:10]:
+                    st.caption(_ce)
+
+    # Show calibrated rho/nu if available
+    _cal_rho = st.session_state.get(f"_otm_cal_rho_{ccy}")
+    _cal_nu = st.session_state.get(f"_otm_cal_nu_{ccy}")
+    if _cal_rho is not None and _cal_nu is not None:
+        with st.expander("📋 Calibrated SABR Params (rho / nu)", expanded=False):
+            _rc1, _rc2 = st.columns(2)
+            with _rc1:
+                st.markdown("**Calibrated ρ (rho)**")
+                st.dataframe(_cal_rho.style.format("{:.4f}"), use_container_width=True, height=400)
+            with _rc2:
+                st.markdown("**Calibrated ν (nu)**")
+                st.dataframe(_cal_nu.style.format("{:.4f}"), use_container_width=True, height=400)
+
+    if _do_apply and _cal_rho is not None and _cal_nu is not None:
+        # Write calibrated rho/nu into vol_data
+        _vd = st.session_state.setdefault("vol_data", {}).setdefault(ccy, {})
+        _vd["rho"] = _cal_rho
+        _vd["nu"] = _cal_nu
+        # Persist to DB
+        if HAS_POSTGRES:
+            try:
+                _uid_cal = st.session_state.get("username", "wpo@rateedge.au")
+                _rho_dict = _cal_rho.to_dict()
+                _nu_dict = _cal_nu.to_dict()
+                save_user_config(_uid_cal, "sabr_rho", ccy, _rho_dict)
+                save_user_config(_uid_cal, "sabr_nu", ccy, _nu_dict)
+                for _alt_cal in ["wpo@rateedge.au", "wpo70@icloud.com"]:
+                    if _alt_cal != _uid_cal:
+                        save_user_config(_alt_cal, "sabr_rho", ccy, _rho_dict)
+                        save_user_config(_alt_cal, "sabr_nu", ccy, _nu_dict)
+            except Exception:
+                pass
+        st.success("✅ SABR rho/nu applied to vol surface and saved to DB. Recalibrate Alpha to update pricer.")
 
 
 def midcurve_tab():
