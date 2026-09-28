@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v2809b"
+APP_VERSION = "v2809c"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -3266,6 +3266,184 @@ def sabr_implied_alpha_from_atm(atm_vol_normal: float, F: float, T: float,
     if abs(denom) < 1e-12:
         return 0.0
     return atm_vol_normal / denom
+
+
+# ============================
+# Gaussian copula spread option pricer (SABR marginals)
+# ============================
+
+def _copula_spread_price(F_long: float, F_short: float, T: float,
+                         atm_vol_long_bp: float, atm_vol_short_bp: float,
+                         sabr_long: dict, sabr_short: dict,
+                         rho_copula: float, K_spread: float, df_T: float,
+                         option_type: str = "straddle",
+                         n_paths: int = 200_000,
+                         n_smile_pts: int = 120) -> dict:
+    """
+    Gaussian copula with SABR-calibrated marginals for CMS spread options.
+
+    Steps:
+    1. Solve SABR α from ATM vol for each leg
+    2. Build SABR normal vol smile → Bachelier call prices over a strike grid
+    3. Breeden-Litzenberger: d²C/dK² → terminal PDF → CDF for each leg
+    4. Gaussian copula: draw correlated uniforms, invert each CDF
+    5. Price spread payoff under the copula measure
+
+    Returns dict with copula_prem_bp, simple_prem_bp, uplift_pct, etc.
+    """
+    from scipy.stats import norm as _norm_dist
+
+    # --- 1. Solve SABR alpha for each leg ---
+    atm_vol_long  = atm_vol_long_bp / 10000.0   # decimal
+    atm_vol_short = atm_vol_short_bp / 10000.0
+
+    beta_l  = sabr_long.get("beta", 0.5)
+    rho_l   = sabr_long.get("rho", 0.0)
+    nu_l    = sabr_long.get("nu", 0.5)
+    beta_s  = sabr_short.get("beta", 0.5)
+    rho_s   = sabr_short.get("rho", 0.0)
+    nu_s    = sabr_short.get("nu", 0.5)
+
+    alpha_l = sabr_implied_alpha_from_atm(atm_vol_long, F_long, T, beta_l, rho_l, nu_l)
+    alpha_s = sabr_implied_alpha_from_atm(atm_vol_short, F_short, T, beta_s, rho_s, nu_s)
+
+    if alpha_l <= 0 or alpha_s <= 0:
+        return {"copula_prem_bp": None, "error": "Could not solve SABR alpha"}
+
+    # --- 2. Build strike grid + SABR vols + Bachelier call prices for each leg ---
+    def _build_cdf(F, alpha, beta, rho_sabr, nu, n_pts):
+        """Build CDF via Breeden-Litzenberger on SABR Bachelier prices."""
+        # Strike grid: F ± 6 sigma_ATM
+        sigma_atm = sabr_normal_atm_vol(F, T, alpha, beta, rho_sabr, nu)
+        if sigma_atm <= 0:
+            sigma_atm = abs(F) * 0.01  # fallback
+        half_range = max(6.0 * sigma_atm * math.sqrt(T), abs(F) * 0.02)
+        K_lo = F - half_range
+        K_hi = F + half_range
+        Ks = np.linspace(K_lo, K_hi, n_pts)
+        dK = Ks[1] - Ks[0]
+        sqT = math.sqrt(max(T, 1e-8))
+
+        # Bachelier call prices at each strike
+        calls = np.zeros(n_pts)
+        for i, Ki in enumerate(Ks):
+            sv = sabr_normal_vol_smile(F, Ki, T, alpha, beta, rho_sabr, nu)
+            if sv <= 0:
+                sv = 1e-6
+            d = (F - Ki) / (sv * sqT) if sv * sqT > 0 else 0.0
+            calls[i] = df_T * ((F - Ki) * _norm_dist.cdf(d) + sv * sqT * _norm_dist.pdf(d))
+
+        # Breeden-Litzenberger: CDF(K) = 1 + dC/dK (undiscounted)
+        # d²C/dK² = pdf, but we need CDF = 1 - (-dC/dK)/df_T
+        # dC/dK via central differences
+        dCdK = np.gradient(calls, dK)
+        cdf_vals = 1.0 + dCdK / df_T  # CDF(K) = 1 + (1/df) * dC/dK
+
+        # Clamp and monotonise
+        cdf_vals = np.clip(cdf_vals, 0.0, 1.0)
+        # Force monotone non-decreasing
+        for i in range(1, len(cdf_vals)):
+            if cdf_vals[i] < cdf_vals[i-1]:
+                cdf_vals[i] = cdf_vals[i-1]
+        # Force endpoints
+        cdf_vals[0] = max(cdf_vals[0], 1e-8)
+        cdf_vals[-1] = min(cdf_vals[-1], 1.0 - 1e-8)
+
+        return Ks, cdf_vals
+
+    Ks_l, cdf_l = _build_cdf(F_long, alpha_l, beta_l, rho_l, nu_l, n_smile_pts)
+    Ks_s, cdf_s = _build_cdf(F_short, alpha_s, beta_s, rho_s, nu_s, n_smile_pts)
+
+    # --- 3. Inverse CDF via interpolation ---
+    def _make_inv_cdf(Ks, cdf_vals):
+        """Return a function u → K using linear interpolation on CDF."""
+        # Remove any flat sections for clean inversion
+        mask = np.diff(cdf_vals, prepend=-1) > 0
+        mask[0] = True
+        mask[-1] = True
+        cdf_clean = cdf_vals[mask]
+        Ks_clean = Ks[mask]
+        def inv_cdf(u_arr):
+            return np.interp(u_arr, cdf_clean, Ks_clean)
+        return inv_cdf
+
+    inv_cdf_l = _make_inv_cdf(Ks_l, cdf_l)
+    inv_cdf_s = _make_inv_cdf(Ks_s, cdf_s)
+
+    # --- 4. Gaussian copula MC ---
+    rng = np.random.default_rng(42)
+    Z1 = rng.standard_normal(n_paths)
+    Z2 = rho_copula * Z1 + math.sqrt(max(1 - rho_copula**2, 0)) * rng.standard_normal(n_paths)
+
+    U1 = _norm_dist.cdf(Z1)
+    U2 = _norm_dist.cdf(Z2)
+
+    R_long  = inv_cdf_l(U1)
+    R_short = inv_cdf_s(U2)
+
+    # Martingale correction: shift sampled rates so E[R] = F exactly
+    # (Breeden-Litzenberger CDF from SABR smile may not integrate to exact forward)
+    R_long  = R_long  + (F_long  - np.mean(R_long))
+    R_short = R_short + (F_short - np.mean(R_short))
+
+    spread = (R_long - R_short) * 10000.0  # bp
+    K_bp = K_spread  # always in bp (from the UI widget)
+
+    # --- 5. Price ---
+    is_straddle = option_type.lower() in ("straddle", "both")
+    is_payer    = option_type.lower() in ("payer", "steepener")
+
+    if is_straddle:
+        payoff = np.abs(spread - K_bp)
+    elif is_payer:
+        payoff = np.maximum(spread - K_bp, 0.0)
+    else:  # receiver / flattener
+        payoff = np.maximum(K_bp - spread, 0.0)
+
+    copula_prem_bp = float(df_T * np.mean(payoff))
+
+    # --- 6. Simple Bachelier comparison ---
+    sigma_spread_simple = math.sqrt(max(
+        atm_vol_long**2 + atm_vol_short**2 - 2*rho_copula*atm_vol_long*atm_vol_short, 1e-12))
+    vol_spread_bp_simple = sigma_spread_simple * 10000.0
+    fwd_spread_bp = (F_long - F_short) * 10000.0
+    sqT = math.sqrt(max(T, 1e-8))
+    d_s = (fwd_spread_bp - K_bp) / (vol_spread_bp_simple * sqT) if vol_spread_bp_simple * sqT > 0 else 0.0
+
+    def _bach_payer(Xf, Ks, sv, sqT_, df_):
+        d_ = (Xf - Ks) / (sv * sqT_) if sv * sqT_ > 0 else 0.0
+        return df_ * ((Xf - Ks) * _norm_dist.cdf(d_) + sv * sqT_ * _norm_dist.pdf(d_))
+
+    def _bach_recv(Xf, Ks, sv, sqT_, df_):
+        d_ = (Xf - Ks) / (sv * sqT_) if sv * sqT_ > 0 else 0.0
+        return df_ * ((Ks - Xf) * _norm_dist.cdf(-d_) + sv * sqT_ * _norm_dist.pdf(d_))
+
+    if is_straddle:
+        simple_prem_bp = _bach_payer(fwd_spread_bp, K_bp, vol_spread_bp_simple, sqT, df_T) + \
+                         _bach_recv(fwd_spread_bp, K_bp, vol_spread_bp_simple, sqT, df_T)
+    elif is_payer:
+        simple_prem_bp = _bach_payer(fwd_spread_bp, K_bp, vol_spread_bp_simple, sqT, df_T)
+    else:
+        simple_prem_bp = _bach_recv(fwd_spread_bp, K_bp, vol_spread_bp_simple, sqT, df_T)
+
+    uplift = (copula_prem_bp / simple_prem_bp - 1.0) * 100 if simple_prem_bp > 0.01 else 0.0
+
+    # MC stats
+    mean_spread = float(np.mean(spread))
+    std_spread  = float(np.std(spread))
+    mc_se       = float(df_T * np.std(payoff) / math.sqrt(n_paths))
+
+    return {
+        "copula_prem_bp": copula_prem_bp,
+        "simple_prem_bp": simple_prem_bp,
+        "uplift_pct": uplift,
+        "mc_se_bp": mc_se,
+        "mean_spread_bp": mean_spread,
+        "std_spread_bp": std_spread,
+        "alpha_long": alpha_l,
+        "alpha_short": alpha_s,
+        "n_paths": n_paths,
+    }
 
 
 # ============================
@@ -27752,7 +27930,7 @@ def exotics_tab(vol_mode: str):
     # ├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë├ö├▓├ë
     if _ex_active == 0:
         st.markdown("### Curve Spread Options")
-        st.caption("Option on the spread between two swap rates   —   steepener/flattener. Bachelier (Normal) model.")
+        st.caption("Option on the spread between two swap rates   —   steepener/flattener. Bachelier + Gaussian Copula (SABR marginals).")
 
         # ── Leg inputs ──────────────────────────────────────────────
         col1, col2, col3 = st.columns(3)
@@ -27951,15 +28129,62 @@ def exotics_tab(vol_mode: str):
         if is_straddle:
             vega_dollar *= 2.0
 
+        # ── Copula model (SABR marginals + Gaussian copula) ────────
+        # Get SABR params for each leg from vol surfaces
+        _cop_result = None
+        _cop_err = None
+        try:
+            _sabr_long = get_sabr_params_from_matrices(a_m, b_m, r_m, n_m,
+                                                        so_expiry_sel, long_y)
+            _sabr_short = get_sabr_params_from_matrices(a_m, b_m, r_m, n_m,
+                                                         so_expiry_sel, short_y)
+            if _sabr_long is None or _sabr_short is None:
+                _cop_err = "SABR params not available — load vol surface"
+            else:
+                # Alpha in the matrices = ATM vols in BP (rule #9)
+                # We pass ATM vols separately; override alpha with solved value inside _copula_spread_price
+                # sabr dict needs rho (SABR rho, NOT rate correlation), nu, beta
+                _sabr_l_dict = {"beta": _sabr_long["beta"], "rho": _sabr_long["rho"], "nu": _sabr_long["nu"]}
+                _sabr_s_dict = {"beta": _sabr_short["beta"], "rho": _sabr_short["rho"], "nu": _sabr_short["nu"]}
+
+                _otype = "straddle" if is_straddle else ("payer" if is_payer_spread else "receiver")
+                _cop_result = _copula_spread_price(
+                    F_long=fwd_long, F_short=fwd_short, T=so_T,
+                    atm_vol_long_bp=vol_long_bp, atm_vol_short_bp=vol_short_bp,
+                    sabr_long=_sabr_l_dict, sabr_short=_sabr_s_dict,
+                    rho_copula=rho, K_spread=K_spread_bp,
+                    df_T=df_T_so, option_type=_otype,
+                    n_paths=200_000, n_smile_pts=120)
+        except Exception as _cop_exc:
+            _cop_err = str(_cop_exc)
+
         # ── Results ─────────────────────────────────────────────────
         st.markdown("---")
+        # Row 1: Forwards + Simple Bachelier
         m1,m2,m3,m4,m5,m6 = st.columns(6)
         m1.metric(f"Fwd {long_tenor_sel}", f"{fwd_long*100:.4f}%")
         m2.metric(f"Fwd {short_tenor_sel}", f"{fwd_short*100:.4f}%")
         m3.metric("Fwd Spread", f"{X_fwd:.2f}bp")
         m4.metric("Spread Vol (bp)", f"{vol_spread_bp:.2f}bp")
-        m5.metric("Premium (bp notl)", f"{prem_bp:.3f}bp")
-        m6.metric("Premium (AUD)", f"${prem_dollar:,.0f}")
+        m5.metric("Bachelier (bp)", f"{prem_bp:.3f}bp")
+        m6.metric("Bachelier ($)", f"${prem_dollar:,.0f}")
+
+        # Row 2: Copula model results
+        if _cop_result and _cop_result.get("copula_prem_bp") is not None:
+            cop_bp = _cop_result["copula_prem_bp"]
+            cop_dollar = cop_bp / 10000.0 * so_notional * 1e6
+            uplift = _cop_result["uplift_pct"]
+            mc_se = _cop_result["mc_se_bp"]
+            c1, c2, c3, c4, c5, c6 = st.columns(6)
+            c1.metric("Copula (bp)", f"{cop_bp:.3f}bp",
+                      delta=f"+{uplift:.1f}% vs Bachelier" if uplift > 0 else f"{uplift:.1f}%")
+            c2.metric("Copula ($)", f"${cop_dollar:,.0f}")
+            c3.metric("MC s.e.", f"±{mc_se:.3f}bp")
+            c4.metric("SABR ρ (long)", f"{_sabr_l_dict['rho']:.3f}")
+            c5.metric("SABR ν (long)", f"{_sabr_l_dict['nu']:.3f}")
+            c6.metric("SABR ν (short)", f"{_sabr_s_dict['nu']:.3f}")
+        elif _cop_err:
+            st.caption(f"⚠ Copula: {_cop_err}")
 
         if is_straddle:
             rs1, rs2, rs3, rs4, rs5 = st.columns(5)
@@ -27979,15 +28204,22 @@ def exotics_tab(vol_mode: str):
 
         # ── Implied correlation solver ───────────────────────────────
         with st.expander("⇄ Implied Correlation Solver", expanded=False):
-            ic1, ic2, ic3 = st.columns(3)
+            ic1, ic2, ic3, ic4 = st.columns(4)
             with ic1:
                 mkt_prem_bp = st.number_input("Market Premium (bp)", 0.0, 500.0, 0.0,
                                                step=0.5, key="so_mkt_prem",
                                                help="Enter a market premium to back-solve implied ρ")
+            _use_copula_solver = _cop_result is not None and _cop_result.get("copula_prem_bp") is not None
+            with ic4:
+                _solver_model = st.radio("Solver model", ["Copula+SABR", "Simple Bachelier"],
+                                          index=0 if _use_copula_solver else 1,
+                                          key="so_solver_model", horizontal=True,
+                                          disabled=not _use_copula_solver)
             if mkt_prem_bp > 0.01:
-                # Back-solve: find rho such that Bachelier straddle/payer/recv = mkt_prem
-                import bisect as _bisect_mod
-                def _so_price_for_rho(rho_try):
+                _use_cop = _solver_model == "Copula+SABR" and _use_copula_solver
+
+                # --- Bachelier solver (fast, always available) ---
+                def _so_price_for_rho_bach(rho_try):
                     sv_ = math.sqrt(max(sigma_long**2 + sigma_short**2
                                         - 2*rho_try*sigma_long*sigma_short, 1e-12)) * 10000
                     if is_straddle:
@@ -27998,15 +28230,29 @@ def exotics_tab(vol_mode: str):
                     else:
                         return _recv_prem(X_fwd, K, sv_, sqrt_T, df_T_so)
 
+                # --- Copula solver (MC, slower but correct) ---
+                def _so_price_for_rho_copula(rho_try):
+                    _otype = "straddle" if is_straddle else ("payer" if is_payer_spread else "receiver")
+                    r = _copula_spread_price(
+                        F_long=fwd_long, F_short=fwd_short, T=so_T,
+                        atm_vol_long_bp=vol_long_bp, atm_vol_short_bp=vol_short_bp,
+                        sabr_long=_sabr_l_dict, sabr_short=_sabr_s_dict,
+                        rho_copula=rho_try, K_spread=K_spread_bp,
+                        df_T=df_T_so, option_type=_otype,
+                        n_paths=50_000, n_smile_pts=80)  # fewer paths for solver speed
+                    return r.get("copula_prem_bp", 0.0) if r else 0.0
+
+                _price_fn = _so_price_for_rho_copula if _use_cop else _so_price_for_rho_bach
+
                 # Bisection: higher rho → lower spread vol → lower premium
                 lo_r, hi_r = -0.5, 0.9999
                 try:
-                    p_lo = _so_price_for_rho(lo_r)
-                    p_hi = _so_price_for_rho(hi_r)
+                    p_lo = _price_fn(lo_r)
+                    p_hi = _price_fn(hi_r)
                     if p_lo >= mkt_prem_bp >= p_hi:
-                        for _ in range(80):
+                        for _ in range(30 if _use_cop else 80):
                             mid_r = (lo_r + hi_r) / 2.0
-                            p_mid = _so_price_for_rho(mid_r)
+                            p_mid = _price_fn(mid_r)
                             if p_mid > mkt_prem_bp:
                                 lo_r = mid_r
                             else:
@@ -28018,7 +28264,8 @@ def exotics_tab(vol_mode: str):
                             st.metric("Implied ρ", f"{impl_rho:.4f}")
                         with ic3:
                             st.metric("Implied Spread Vol", f"{impl_sv:.2f}bp")
-                        st.caption(f"ρ_config={rho_cfg:.3f}  ρ_implied={impl_rho:.4f}  "
+                        _model_label = "copula" if _use_cop else "Bachelier"
+                        st.caption(f"[{_model_label}]  ρ_config={rho_cfg:.3f}  ρ_implied={impl_rho:.4f}  "
                                    f"Δρ={impl_rho - rho_cfg:+.4f}")
                     elif mkt_prem_bp > p_lo:
                         with ic2:
