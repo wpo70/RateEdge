@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v2809c"
+APP_VERSION = "v2809d"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -6008,6 +6008,8 @@ _SABR_REF = {
         },
     },
     "USD": {
+        # Seed surface — overwritten by R/R + strangle calibration.
+        # These are pre-calibration placeholders only.
         "expiries": ["1m","3m","6m","9m","1y","2y","3y","5y","7y","10y","15y","20y","30y"],
         "tenors":   ["1Y","2Y","5Y","10Y","15Y","20Y","30Y"],
         "rho": {
@@ -13503,7 +13505,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                             if _a_t <= 0: return 1e6
                                                             _vp_s = sabr_normal_vol_smile(_F,_Kp,_T,_a_t,_b0,_rho_t,_nu_t)*10000
                                                             _vr_s = sabr_normal_vol_smile(_F,_Kr,_T,_a_t,_b0,_rho_t,_nu_t)*10000
-                                                            # v0506p: tiny ridge toward a sane interior (ρ=0, ν=0.5).
+                                                            # v0506p: tiny ridge toward interior (ρ=0, ν=0.5).
                                                             # λ is small enough that a genuine fit (resid≫λ) is
                                                             # unchanged; it only breaks the truly-flat degenerate
                                                             # case where the objective is insensitive and L-BFGS-B
@@ -13519,14 +13521,14 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     # boundary can't descend and returns the start point
                                                     # unchanged → Δ=0 (fit does nothing). Start mid-range.
                                                     _seed_rho = float(np.clip(_r0, -0.6, 0.6)) if (_r0 is not None and abs(_r0) < 0.9) else 0.0
-                                                    _seed_nu  = float(_n0) if (_n0 is not None and 0.1 < _n0 < 1.5) else 0.4
+                                                    _seed_nu  = float(_n0) if (_n0 is not None and 0.1 < _n0 < 3.5) else 0.5
                                                     # v0506p: bound the FIT to the SAME sane band the pricing
                                                     # clamp (v0506l) enforces, so the displayed/stored fit
                                                     # equals what is actually priced — no more "fit shows
                                                     # ν=2.0 but the backbone prices at the 1.5 clamp". Pins
                                                     # still correct the traded strikes exactly; only the
                                                     # untraded backbone is bounded.
-                                                    _FIT_BNDS = [(-0.60, 0.60), (0.05, 1.50)]
+                                                    _FIT_BNDS = [(-0.60, 0.60), (0.05, 4.00)]
                                                     _res = _sopt.minimize(
                                                         _obj, [_seed_rho, _seed_nu],
                                                         bounds=_FIT_BNDS,
@@ -13536,7 +13538,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                     # Retry from a second/third seed if it stalled at a bound
                                                     # or left a large residual — avoids a single bad start.
                                                     if _res.fun > 1.0:
-                                                        for _seed2 in ([0.0, 0.5], [0.3, 0.9]):
+                                                        for _seed2 in ([0.0, 0.5], [0.3, 1.5], [0.0, 2.5]):
                                                             _res2 = _sopt.minimize(
                                                                 _obj, _seed2,
                                                                 bounds=_FIT_BNDS,
@@ -13579,7 +13581,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                 # ── Confidence-weighted smoothing of the ABSOLUTE ρ/ν
                                                 # surface (not deltas), in log-expiry/log-tenor space.
                                                 #  • Cap fitted ρ/ν to sane bounds first (NU_CAP/RHO_CAP)
-                                                #    — no real swaption surface has ν=2.0.
+                                                #    — normal SABR (β=0.5) ν can reach 2-3+ for short expiries.
                                                 #  • Per-point smoothing weight = confidence = min(1, trades/3)
                                                 #    so 3+ trades pins to its fit, 1-2 trades bends toward
                                                 #    neighbours. Any trade still sets a level; smoothing only
@@ -13588,7 +13590,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                 #    bleed into longer expiries).
                                                 # Downstream apply uses (_r_cur + _dr_grid); we therefore
                                                 # output the smoothed-absolute minus current as the delta.
-                                                _NU_CAP = 1.2; _RHO_CAP = 0.9; _SMAX = 1.0
+                                                _NU_CAP = 4.0; _RHO_CAP = 0.9; _SMAX = 1.0
                                                 _pts_exp = [v["exp_y"] for v in _fit_results.values()]
                                                 _pts_ten = [v["ten_y"] for v in _fit_results.values()]
                                                 _pts_rf  = [max(-_RHO_CAP, min(_RHO_CAP, v["rho_fit"])) for v in _fit_results.values()]
@@ -13731,7 +13733,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                 # the grid ATM with the clamped ρ/ν so the ATM backbone is
                                                 # unchanged.
                                                 _RHO_LO, _RHO_HI = -0.60, 0.60
-                                                _NU_LO,  _NU_HI  = 0.05, 1.50
+                                                _NU_LO,  _NU_HI  = 0.05, 4.00
                                                 def _cin(_df, _t):
                                                     if _t in _df.columns: return _t
                                                     _tl = str(_t).lower().strip()
@@ -25141,7 +25143,7 @@ def caps_floors_tab(vol_mode: str):
                     sr[0].markdown(f"<div style='font-size:0.80rem;padding-top:6px;color:#94a3b8;text-align:center'>{_exp}</div>", unsafe_allow_html=True)
                     st.session_state[f"cf_sabr_{_exp}_beta"]  = sr[1].number_input("", value=st.session_state[f"cf_sabr_{_exp}_beta"],  key=f"s_b_{_exp}", min_value=0.0, max_value=1.0,  step=0.05, format="%.2f", label_visibility="collapsed")
                     st.session_state[f"cf_sabr_{_exp}_rho"]   = sr[2].number_input("", value=st.session_state[f"cf_sabr_{_exp}_rho"],   key=f"s_r_{_exp}", min_value=-1.0, max_value=1.0, step=0.05, format="%.2f", label_visibility="collapsed")
-                    st.session_state[f"cf_sabr_{_exp}_nu"]    = sr[3].number_input("", value=st.session_state[f"cf_sabr_{_exp}_nu"],    key=f"s_n_{_exp}", min_value=0.0, max_value=2.0,  step=0.05, format="%.2f", label_visibility="collapsed")
+                    st.session_state[f"cf_sabr_{_exp}_nu"]    = sr[3].number_input("", value=st.session_state[f"cf_sabr_{_exp}_nu"],    key=f"s_n_{_exp}", min_value=0.0, max_value=4.0,  step=0.05, format="%.2f", label_visibility="collapsed")
                     st.session_state[f"cf_sabr_{_exp}_shift"] = sr[4].number_input("", value=st.session_state[f"cf_sabr_{_exp}_shift"], key=f"s_sh_{_exp}", min_value=0.0, max_value=0.05, step=0.005, format="%.3f", label_visibility="collapsed")
 
             new_spread_3m1y  = new_spread_values["cf_spr_3m1y"]
@@ -28130,31 +28132,64 @@ def exotics_tab(vol_mode: str):
             vega_dollar *= 2.0
 
         # ── Copula model (SABR marginals + Gaussian copula) ────────
-        # Get SABR params for each leg from vol surfaces
+        # Get SABR params from vol surfaces as defaults
         _cop_result = None
         _cop_err = None
-        try:
-            _sabr_long = get_sabr_params_from_matrices(a_m, b_m, r_m, n_m,
+        _sabr_long_raw = get_sabr_params_from_matrices(a_m, b_m, r_m, n_m,
                                                         so_expiry_sel, long_y)
-            _sabr_short = get_sabr_params_from_matrices(a_m, b_m, r_m, n_m,
+        _sabr_short_raw = get_sabr_params_from_matrices(a_m, b_m, r_m, n_m,
                                                          so_expiry_sel, short_y)
-            if _sabr_long is None or _sabr_short is None:
-                _cop_err = "SABR params not available — load vol surface"
-            else:
-                # Alpha in the matrices = ATM vols in BP (rule #9)
-                # We pass ATM vols separately; override alpha with solved value inside _copula_spread_price
-                # sabr dict needs rho (SABR rho, NOT rate correlation), nu, beta
-                _sabr_l_dict = {"beta": _sabr_long["beta"], "rho": _sabr_long["rho"], "nu": _sabr_long["nu"]}
-                _sabr_s_dict = {"beta": _sabr_short["beta"], "rho": _sabr_short["rho"], "nu": _sabr_short["nu"]}
+        # Defaults from matrices, or fallbacks if not calibrated
+        _def_nu_l  = float(_sabr_long_raw["nu"])   if _sabr_long_raw  else 1.0
+        _def_rho_l = float(_sabr_long_raw["rho"])  if _sabr_long_raw  else 0.0
+        _def_nu_s  = float(_sabr_short_raw["nu"])  if _sabr_short_raw else 1.0
+        _def_rho_s = float(_sabr_short_raw["rho"]) if _sabr_short_raw else 0.0
 
-                _otype = "straddle" if is_straddle else ("payer" if is_payer_spread else "receiver")
-                _cop_result = _copula_spread_price(
-                    F_long=fwd_long, F_short=fwd_short, T=so_T,
-                    atm_vol_long_bp=vol_long_bp, atm_vol_short_bp=vol_short_bp,
-                    sabr_long=_sabr_l_dict, sabr_short=_sabr_s_dict,
-                    rho_copula=rho, K_spread=K_spread_bp,
-                    df_T=df_T_so, option_type=_otype,
-                    n_paths=200_000, n_smile_pts=120)
+        # SABR param overrides — show when defaults look uncalibrated or user wants to tweak
+        _sabr_needs_override = (_def_nu_l < 0.5 and _def_nu_s < 0.5)
+        with st.expander("🔧 SABR Smile Params (Copula Model)", expanded=_sabr_needs_override):
+            st.caption("SABR ν (vol-of-vol) and ρ_sabr (rate-vol corr) per leg. "
+                       "These drive the fat-tail premium in the copula model. "
+                       "Seeded from calibrated surfaces; override here if uncalibrated.")
+            sp1, sp2, sp3, sp4 = st.columns(4)
+            with sp1:
+                _so_nu_l = st.number_input(f"ν {long_tenor_sel}", 0.01, 5.0,
+                                            float(round(_def_nu_l, 4)), step=0.05,
+                                            format="%.4f", key="so_nu_long",
+                                            help="Vol-of-vol for long leg")
+            with sp2:
+                _so_rho_sabr_l = st.number_input(f"ρ_sabr {long_tenor_sel}", -0.99, 0.99,
+                                                   float(round(_def_rho_l, 4)), step=0.01,
+                                                   format="%.4f", key="so_rho_sabr_long",
+                                                   help="SABR rate-vol correlation, long leg")
+            with sp3:
+                _so_nu_s = st.number_input(f"ν {short_tenor_sel}", 0.01, 5.0,
+                                            float(round(_def_nu_s, 4)), step=0.05,
+                                            format="%.4f", key="so_nu_short",
+                                            help="Vol-of-vol for short leg")
+            with sp4:
+                _so_rho_sabr_s = st.number_input(f"ρ_sabr {short_tenor_sel}", -0.99, 0.99,
+                                                   float(round(_def_rho_s, 4)), step=0.01,
+                                                   format="%.4f", key="so_rho_sabr_short",
+                                                   help="SABR rate-vol correlation, short leg")
+            if _sabr_needs_override:
+                st.warning("⚠ SABR ν values from matrices look uncalibrated (< 0.5). "
+                           "Override with calibrated values for meaningful copula uplift. "
+                           "Typical: 5Y ν≈2.0-2.6, 10Y ν≈1.5-2.0, 30Y ν≈1.0-1.3")
+
+        # Build final SABR param dicts from overrides
+        _sabr_l_dict = {"beta": 0.5, "rho": _so_rho_sabr_l, "nu": _so_nu_l}
+        _sabr_s_dict = {"beta": 0.5, "rho": _so_rho_sabr_s, "nu": _so_nu_s}
+
+        try:
+            _otype = "straddle" if is_straddle else ("payer" if is_payer_spread else "receiver")
+            _cop_result = _copula_spread_price(
+                F_long=fwd_long, F_short=fwd_short, T=so_T,
+                atm_vol_long_bp=vol_long_bp, atm_vol_short_bp=vol_short_bp,
+                sabr_long=_sabr_l_dict, sabr_short=_sabr_s_dict,
+                rho_copula=rho, K_spread=K_spread_bp,
+                df_T=df_T_so, option_type=_otype,
+                n_paths=200_000, n_smile_pts=120)
         except Exception as _cop_exc:
             _cop_err = str(_cop_exc)
 
@@ -30096,7 +30131,7 @@ def vol_surface_editor_tab():
                     _rho_max = st.number_input("ρ,ν max", value=0.0, min_value=-1.0, max_value=1.0, step=0.05, key="sabr_rho_max")
                 with _cc3:
                     _nu_min = st.number_input("× min", value=0.1, min_value=0.0, max_value=2.0, step=0.05, key="sabr_nu_min")
-                    _nu_max = st.number_input("× max", value=1.0, min_value=0.0, max_value=2.0, step=0.05, key="sabr_nu_max")
+                    _nu_max = st.number_input("× max", value=3.0, min_value=0.0, max_value=5.0, step=0.05, key="sabr_nu_max")
                 with _cc4:
                     _alpha_min = st.number_input("~ min", value=0.001, min_value=0.0, step=0.001, format="%.4f", key="sabr_alpha_min")
                     _alpha_max = st.number_input("~ max", value=0.2, min_value=0.0, step=0.01, format="%.4f", key="sabr_alpha_max")
