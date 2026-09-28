@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v2809a"
+APP_VERSION = "v2809b"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -27793,7 +27793,7 @@ def exotics_tab(vol_mode: str):
         # ── Vol inputs ──────────────────────────────────────────────
         st.markdown("---")
         st.markdown("**Volatility Inputs**")
-        vc1, vc2, vc3, vc4 = st.columns(4)
+        vc1, vc2, vc3, vc3b, vc4 = st.columns(5)
         # Reset vol + strike session state when tenors/expiry change
         _so_tenor_key = f"{long_tenor_sel}_{short_tenor_sel}_{so_expiry_sel}"
         if st.session_state.get("_so_last_tenor_key") != _so_tenor_key:
@@ -27882,10 +27882,13 @@ def exotics_tab(vol_mode: str):
             t1_key = _nearest_tenor(long_y)
             t2_key = _nearest_tenor(short_y)
             rho_cfg = get_correlation(t1_key, t2_key)
-            rho = st.number_input("Correlation ρ,ν", 0.0, 1.0,
+            st.metric("Config ρ", f"{rho_cfg:.3f}")
+            st.caption(f"{t1_key}/{t2_key}")
+        with vc3b:
+            rho = st.number_input("Implied ρ", 0.0, 1.0,
                                    round(rho_cfg, 3), step=0.005,
                                    format="%.3f", key="so_rho")
-            st.caption(f"From config: {t1_key}/{t2_key}")
+            st.caption("Override for pricing")
         with vc4:
             # Strike: default ATM (fwd spread)
             K_spread_bp = st.number_input("Strike Spread (bp)",
@@ -27972,7 +27975,60 @@ def exotics_tab(vol_mode: str):
             r3.metric("Vega ($/bp vol)", f"${vega_dollar:,.0f}")
             r4.metric("df(T)", f"{df_T_so:.6f}")
         st.caption(f"vol_long={vol_long_bp:.1f}bp  vol_short={vol_short_bp:.1f}bp  "
-                   f"rho={rho:.3f}  vol_spread={vol_spread_bp:.2f}bp  d={d_so:.4f}  T={so_T:.4f}y")
+                   f"ρ_cfg={rho_cfg:.3f}  ρ_impl={rho:.3f}  vol_spread={vol_spread_bp:.2f}bp  d={d_so:.4f}  T={so_T:.4f}y")
+
+        # ── Implied correlation solver ───────────────────────────────
+        with st.expander("⇄ Implied Correlation Solver", expanded=False):
+            ic1, ic2, ic3 = st.columns(3)
+            with ic1:
+                mkt_prem_bp = st.number_input("Market Premium (bp)", 0.0, 500.0, 0.0,
+                                               step=0.5, key="so_mkt_prem",
+                                               help="Enter a market premium to back-solve implied ρ")
+            if mkt_prem_bp > 0.01:
+                # Back-solve: find rho such that Bachelier straddle/payer/recv = mkt_prem
+                import bisect as _bisect_mod
+                def _so_price_for_rho(rho_try):
+                    sv_ = math.sqrt(max(sigma_long**2 + sigma_short**2
+                                        - 2*rho_try*sigma_long*sigma_short, 1e-12)) * 10000
+                    if is_straddle:
+                        return _payer_prem(X_fwd, K, sv_, sqrt_T, df_T_so) + \
+                               _recv_prem(X_fwd, K, sv_, sqrt_T, df_T_so)
+                    elif is_payer_spread:
+                        return _payer_prem(X_fwd, K, sv_, sqrt_T, df_T_so)
+                    else:
+                        return _recv_prem(X_fwd, K, sv_, sqrt_T, df_T_so)
+
+                # Bisection: higher rho → lower spread vol → lower premium
+                lo_r, hi_r = -0.5, 0.9999
+                try:
+                    p_lo = _so_price_for_rho(lo_r)
+                    p_hi = _so_price_for_rho(hi_r)
+                    if p_lo >= mkt_prem_bp >= p_hi:
+                        for _ in range(80):
+                            mid_r = (lo_r + hi_r) / 2.0
+                            p_mid = _so_price_for_rho(mid_r)
+                            if p_mid > mkt_prem_bp:
+                                lo_r = mid_r
+                            else:
+                                hi_r = mid_r
+                        impl_rho = (lo_r + hi_r) / 2.0
+                        impl_sv = math.sqrt(max(sigma_long**2 + sigma_short**2
+                                                - 2*impl_rho*sigma_long*sigma_short, 1e-12)) * 10000
+                        with ic2:
+                            st.metric("Implied ρ", f"{impl_rho:.4f}")
+                        with ic3:
+                            st.metric("Implied Spread Vol", f"{impl_sv:.2f}bp")
+                        st.caption(f"ρ_config={rho_cfg:.3f}  ρ_implied={impl_rho:.4f}  "
+                                   f"Δρ={impl_rho - rho_cfg:+.4f}")
+                    elif mkt_prem_bp > p_lo:
+                        with ic2:
+                            st.warning(f"Premium {mkt_prem_bp:.1f}bp exceeds max ({p_lo:.1f}bp at ρ={lo_r})")
+                    else:
+                        with ic2:
+                            st.warning(f"Premium {mkt_prem_bp:.1f}bp below min ({p_hi:.1f}bp at ρ≈1)")
+                except Exception as e:
+                    with ic2:
+                        st.error(f"Solver error: {e}")
 
         # ── Payoff chart ─────────────────────────────────────────────
         spread_range = np.linspace(X_fwd - 150, X_fwd + 150, 100)
