@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v2909b"
+APP_VERSION = "v2909c"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -40910,8 +40910,29 @@ def otm_grids_tab():
     if _do_calibrate:
         from scipy.optimize import minimize as _minimize_cal
 
-        _new_rho = sabr_rho.copy() if sabr_rho is not None else pd.DataFrame(0.20, index=_EXP_LABELS, columns=_TEN_LABELS)
-        _new_nu = sabr_nu.copy() if sabr_nu is not None else pd.DataFrame(0.30, index=_EXP_LABELS, columns=_TEN_LABELS)
+        # ── Build NEW rho/nu matrices aligned to _EXP_LABELS × _TEN_LABELS ──
+        # Seed from current params via get_matrix_value (label-based, safe).
+        # NEVER use iloc positional — sabr_rho/nu may have different row/col structure.
+        _rho_grid = []
+        _nu_grid_cal = []
+        for _exp_s in _EXP_LABELS:
+            _exp_yr = _exp_to_y(_exp_s)
+            _rho_row_init = []
+            _nu_row_init = []
+            for _ten_s in _TEN_LABELS:
+                _ten_yr = _ten_to_y(_ten_s)
+                if _exp_yr and _ten_yr:
+                    _rv = get_matrix_value(sabr_rho, str(_exp_s), _ten_yr)
+                    _nv = get_matrix_value(sabr_nu, str(_exp_s), _ten_yr)
+                else:
+                    _rv, _nv = None, None
+                _rho_row_init.append(_rv if _rv is not None else 0.10)
+                _nu_row_init.append(_nv if _nv is not None else 1.0)
+            _rho_grid.append(_rho_row_init)
+            _nu_grid_cal.append(_nu_row_init)
+        _new_rho = pd.DataFrame(_rho_grid, columns=_TEN_LABELS, index=_EXP_LABELS)
+        _new_nu = pd.DataFrame(_nu_grid_cal, columns=_TEN_LABELS, index=_EXP_LABELS)
+
         _cal_count = 0
         _cal_errors = []
 
@@ -40923,88 +40944,92 @@ def otm_grids_tab():
                 ten_y_c = _ten_to_y(ten_lbl_c)
                 if ten_y_c is None or ten_y_c <= 0:
                     continue
+
+                # Read user's market R/R from the editor
                 try:
-                    _mkt_val = float(_edited_rr.iloc[ei][ten_lbl_c])
-                except (ValueError, TypeError, KeyError):
+                    _mkt_val = float(_edited_rr.iloc[ei, ti])
+                except (ValueError, TypeError, KeyError, IndexError):
                     continue
                 if _mkt_val is None or math.isnan(_mkt_val):
                     continue
 
-                # Get current model R/R for comparison
+                # Compare to current model R/R — skip unchanged cells
                 try:
-                    _model_val = float(_df_rr.iloc[ei][ti]) if _df_rr.iloc[ei][ti] is not None else None
-                except:
+                    _model_val = float(_df_rr.iloc[ei, ti])
+                except (ValueError, TypeError, KeyError, IndexError):
                     _model_val = None
-
-                # Skip if market matches model (user didn't change)
-                if _model_val is not None and abs(_mkt_val - _model_val) < 0.05:
+                if _model_val is not None and not math.isnan(_model_val) and abs(_mkt_val - _model_val) < 0.05:
                     continue
 
-                # Calibrate rho/nu to match this market R/R
+                # ── Calibrate rho/nu to match this market R/R ──
                 try:
                     _b_c = get_matrix_value(sabr_beta, str(exp_lbl_c), ten_y_c) if sabr_beta is not None else 0.5
-                    if _b_c is None: _b_c = 0.5
+                    if _b_c is None:
+                        _b_c = 0.5
 
-                    # Forward rate — must be computed before ATM vol fallback
                     _fwd_c = fast_forward_rate(_crv_x, _crv_y, exp_y_c, ten_y_c, ccy)
                     if _fwd_c is None or _fwd_c <= 0:
+                        _cal_errors.append(f"{exp_lbl_c}/{ten_lbl_c}: no forward rate")
                         continue
 
                     # ATM vol from surface (bp → decimal)
-                    _atm_c = None
-                    if _atm_surf is not None:
-                        try:
-                            _atm_bp_c = float(get_matrix_value(_atm_surf, str(exp_lbl_c), ten_y_c))
-                            if _atm_bp_c is not None and _atm_bp_c > 0:
-                                _atm_c = _atm_bp_c / 10000.0
-                        except Exception:
-                            pass
-                    if _atm_c is None or _atm_c <= 0:
-                        continue  # Can't calibrate without ATM vol
+                    _atm_bp_c = get_matrix_value(_atm_surf, str(exp_lbl_c), ten_y_c)
+                    if _atm_bp_c is None or float(_atm_bp_c) <= 0:
+                        _cal_errors.append(f"{exp_lbl_c}/{ten_lbl_c}: no ATM vol")
+                        continue
+                    _atm_c = float(_atm_bp_c) / 10000.0
 
                     # Annuity
                     _freq_c = 1.0 if ccy in ("USD", "EUR", "GBP") else 0.5
                     if ccy in ("AUD", "NZD"):
                         _freq_c = 0.25 if ten_y_c <= 3.25 else 0.5
-                    _ts_c = exp_y_c + 1/252
+                    _ts_c = exp_y_c + 1.0 / 252.0
                     _te_c = _ts_c + ten_y_c
                     _tms_c = []
                     _tc = _ts_c + _freq_c
                     while _tc <= _te_c + 1e-9:
-                        _tms_c.append(min(_tc, _te_c)); _tc += _freq_c
+                        _tms_c.append(min(_tc, _te_c))
+                        _tc += _freq_c
                     if not _tms_c or _tms_c[-1] < _te_c - 1e-9:
                         _tms_c.append(_te_c)
-                    _ann_c = 0.0; _pv_c = _ts_c
+                    _ann_c = 0.0
+                    _pv_c = _ts_c
                     for _ti_c in _tms_c:
                         _ann_c += math.exp(-float(_np_otm.interp(_ti_c, _crv_x, _crv_y)) * _ti_c) * (_ti_c - _pv_c)
                         _pv_c = _ti_c
                     if _ann_c <= 0:
+                        _cal_errors.append(f"{exp_lbl_c}/{ten_lbl_c}: zero annuity")
                         continue
 
                     K_p_c = _fwd_c + _otm_width
                     K_r_c = max(_fwd_c - _otm_width, 0.0001)
                     _sqrt_Tc = math.sqrt(max(exp_y_c, 1e-6))
 
-                    # Get current rho/nu as starting point
-                    _r0 = float(_new_rho.iloc[ei][ten_lbl_c]) if ten_lbl_c in _new_rho.columns else 0.10
-                    _n0 = float(_new_nu.iloc[ei][ten_lbl_c]) if ten_lbl_c in _new_nu.columns else 0.40
+                    # Starting point from seeded matrices (guaranteed aligned)
+                    _r0 = float(_new_rho.iloc[ei, ti])
+                    _n0 = float(_new_nu.iloc[ei, ti])
 
-                    def _cal_obj(params):
+                    def _cal_obj(params, _atm=_atm_c, _fwd=_fwd_c, _ey=exp_y_c,
+                                 _bc=_b_c, _Kp=K_p_c, _Kr=K_r_c, _sqT=_sqrt_Tc,
+                                 _an=_ann_c, _tgt=_mkt_val):
+                        """Objective: (model_RR - market_RR)^2.  Default args freeze loop vars."""
                         _rr, _nn = params
                         if abs(_rr) >= 0.95 or _nn <= 0.02 or _nn > 4.0:
                             return 1e6
                         try:
-                            _sa = sabr_implied_alpha_from_atm(_atm_c, _fwd_c, exp_y_c, _b_c, _rr, _nn)
-                            _vp = sabr_normal_vol_smile(_fwd_c, K_p_c, exp_y_c, _sa, _b_c, _rr, _nn)
-                            _vr = sabr_normal_vol_smile(_fwd_c, K_r_c, exp_y_c, _sa, _b_c, _rr, _nn)
+                            _sa = sabr_implied_alpha_from_atm(_atm, _fwd, _ey, _bc, _rr, _nn)
+                            if _sa is None or _sa <= 0:
+                                return 1e6
+                            _vp = sabr_normal_vol_smile(_fwd, _Kp, _ey, _sa, _bc, _rr, _nn)
+                            _vr = sabr_normal_vol_smile(_fwd, _Kr, _ey, _sa, _bc, _rr, _nn)
                             if _vp is None or _vr is None or _vp <= 0 or _vr <= 0:
                                 return 1e6
-                            _dp = (_fwd_c - K_p_c) / (_vp * _sqrt_Tc)
-                            _dr = (_fwd_c - K_r_c) / (_vr * _sqrt_Tc)
-                            _pp = _ann_c * _vp * _sqrt_Tc * (_dp * _norm_otm.cdf(_dp) + _norm_otm.pdf(_dp)) * 10000
-                            _rp = _ann_c * _vr * _sqrt_Tc * (-_dr * _norm_otm.cdf(-_dr) + _norm_otm.pdf(_dr)) * 10000
-                            return (_pp - _rp - _mkt_val) ** 2
-                        except:
+                            _dp = (_fwd - _Kp) / (_vp * _sqT)
+                            _dr = (_fwd - _Kr) / (_vr * _sqT)
+                            _pp = _an * _vp * _sqT * (_dp * _norm_otm.cdf(_dp) + _norm_otm.pdf(_dp)) * 10000
+                            _rp = _an * _vr * _sqT * (-_dr * _norm_otm.cdf(-_dr) + _norm_otm.pdf(_dr)) * 10000
+                            return (_pp - _rp - _tgt) ** 2
+                        except Exception:
                             return 1e6
 
                     _res = _minimize_cal(_cal_obj, [_r0, _n0], method='Nelder-Mead',
@@ -41013,10 +41038,9 @@ def otm_grids_tab():
                     _rho_fit = max(-0.95, min(0.95, _rho_fit))
                     _nu_fit = max(0.02, min(4.0, _nu_fit))
 
-                    if ten_lbl_c in _new_rho.columns:
-                        _new_rho.iloc[ei, _new_rho.columns.get_loc(ten_lbl_c)] = round(_rho_fit, 4)
-                    if ten_lbl_c in _new_nu.columns:
-                        _new_nu.iloc[ei, _new_nu.columns.get_loc(ten_lbl_c)] = round(_nu_fit, 4)
+                    # Write back — safe because _new_rho/_new_nu are aligned to _EXP_LABELS × _TEN_LABELS
+                    _new_rho.iloc[ei, ti] = round(_rho_fit, 4)
+                    _new_nu.iloc[ei, ti] = round(_nu_fit, 4)
                     _cal_count += 1
 
                 except Exception as _cal_e:
@@ -41027,47 +41051,58 @@ def otm_grids_tab():
         st.session_state[f"_otm_cal_nu_{ccy}"] = _new_nu
 
         if _cal_count > 0:
-            st.success(f"✅ Calibrated {_cal_count} cells. Review rho/nu below, then click **Apply to Vol Surface**.")
+            st.success(f"✅ Calibrated {_cal_count} cells. Review below, then click **Apply to Vol Surface**.")
         else:
-            st.info("No market changes detected — all cells match current model.")
+            st.info("No market changes detected — all cells match current model within 0.05bp.")
         if _cal_errors:
-            with st.expander(f"⚠️ {len(_cal_errors)} calibration errors"):
-                for _ce in _cal_errors[:10]:
+            with st.expander(f"⚠️ {len(_cal_errors)} calibration issues"):
+                for _ce in _cal_errors[:20]:
                     st.caption(_ce)
 
-    # Show calibrated rho/nu if available
+    # ── Show calibrated rho/nu if available ──
     _cal_rho = st.session_state.get(f"_otm_cal_rho_{ccy}")
     _cal_nu = st.session_state.get(f"_otm_cal_nu_{ccy}")
     if _cal_rho is not None and _cal_nu is not None:
-        with st.expander("📋 Calibrated SABR Params (rho / nu)", expanded=False):
+        with st.expander("📋 Calibrated SABR Params (rho / nu)", expanded=True):
             _rc1, _rc2 = st.columns(2)
             with _rc1:
                 st.markdown("**Calibrated ρ (rho)**")
-                st.dataframe(_cal_rho.apply(pd.to_numeric, errors='coerce').style.format("{:.4f}", na_rep="—"), use_container_width=True, height=400)
+                try:
+                    _rho_num = _cal_rho.select_dtypes(include="number")
+                    st.dataframe(_rho_num.style.format("{:.4f}", na_rep="—"),
+                                 use_container_width=True, height=min(len(_rho_num) * 36 + 40, 400))
+                except Exception as _disp_e:
+                    st.dataframe(_cal_rho, use_container_width=True, height=400)
+                    st.caption(f"Display note: {_disp_e}")
             with _rc2:
                 st.markdown("**Calibrated ν (nu)**")
-                st.dataframe(_cal_nu.apply(pd.to_numeric, errors='coerce').style.format("{:.4f}", na_rep="—"), use_container_width=True, height=400)
+                try:
+                    _nu_num = _cal_nu.select_dtypes(include="number")
+                    st.dataframe(_nu_num.style.format("{:.4f}", na_rep="—"),
+                                 use_container_width=True, height=min(len(_nu_num) * 36 + 40, 400))
+                except Exception as _disp_e:
+                    st.dataframe(_cal_nu, use_container_width=True, height=400)
+                    st.caption(f"Display note: {_disp_e}")
 
     if _do_apply and _cal_rho is not None and _cal_nu is not None:
-        # Write calibrated rho/nu into vol_data
-        _vd = st.session_state.setdefault("vol_data", {}).setdefault(ccy, {})
-        _vd["rho"] = _cal_rho
-        _vd["nu"] = _cal_nu
-        # Persist to DB
+        # Write calibrated rho/nu into vol_data — must match structure that
+        # get_matrix_value expects (columns = tenor labels, index = expiry labels).
+        _vd_apply = st.session_state.setdefault("vol_data", {}).setdefault(ccy, {})
+        _vd_apply["rho"] = _cal_rho.copy()
+        _vd_apply["nu"] = _cal_nu.copy()
+        # Also clear the calibration input so it re-seeds from new model on next render
+        st.session_state.pop(_cal_key, None)
+        # Persist to DB for both user IDs
         if HAS_POSTGRES:
             try:
-                _uid_cal = st.session_state.get("username", "wpo@rateedge.au")
-                _rho_dict = _cal_rho.to_dict()
-                _nu_dict = _cal_nu.to_dict()
-                save_user_config(_uid_cal, "sabr_rho", ccy, _rho_dict)
-                save_user_config(_uid_cal, "sabr_nu", ccy, _nu_dict)
-                for _alt_cal in ["wpo@rateedge.au", "wpo70@icloud.com"]:
-                    if _alt_cal != _uid_cal:
-                        save_user_config(_alt_cal, "sabr_rho", ccy, _rho_dict)
-                        save_user_config(_alt_cal, "sabr_nu", ccy, _nu_dict)
+                _rho_dict = _cal_rho.reset_index().rename(columns={_cal_rho.index.name or "index": "Expiry"}).to_dict()
+                _nu_dict = _cal_nu.reset_index().rename(columns={_cal_nu.index.name or "index": "Expiry"}).to_dict()
+                for _uid_cal in ["wpo@rateedge.au", "wpo70@icloud.com"]:
+                    save_user_config(_uid_cal, "sabr_rho", ccy, _rho_dict)
+                    save_user_config(_uid_cal, "sabr_nu", ccy, _nu_dict)
             except Exception:
                 pass
-        st.success("✅ SABR rho/nu applied to vol surface and saved to DB.")
+        st.success("✅ SABR rho/nu applied to vol surface and saved.")
         st.rerun()
 
 
