@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v2809d"
+APP_VERSION = "v2809e"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -3183,10 +3183,16 @@ def sabr_implied_vol_black(F: float, K: float, T: float,
 
 
 def sabr_normal_atm_vol(F: float, T: float, alpha: float, beta: float, rho: float, nu: float) -> float:
-    """Normal (Bachelier) SABR ATM vol approximation."""
+    """Normal (Bachelier) SABR ATM vol — full Hagan B correction including α-dependent terms.
+    σ_ATM = α·F^β · {1 + [(1-β)²/24·α²/F^(2-2β) + ρβνα/(4F^(1-β)) + (2-3ρ²)/24·ν²]·T}
+    """
     if T <= 0 or alpha <= 0 or F <= 0:
         return 0.0
-    return alpha * (F ** beta) * (1.0 + (2.0 - 3.0 * rho ** 2) / 24.0 * nu ** 2 * T)
+    _Fb = F ** beta
+    _c1 = (1.0 - beta) ** 2 / 24.0 * alpha ** 2 / F ** (2.0 - 2.0 * beta)
+    _c2 = rho * beta * nu * alpha / (4.0 * F ** (1.0 - beta))
+    _c3 = (2.0 - 3.0 * rho ** 2) / 24.0 * nu ** 2
+    return alpha * _Fb * (1.0 + (_c1 + _c2 + _c3) * T)
 
 
 def sabr_normal_vol_smile(F: float, K: float, T: float,
@@ -3257,15 +3263,40 @@ def smile_vol_pinned(F: float, K: float, T: float,
 
 def sabr_implied_alpha_from_atm(atm_vol_normal: float, F: float, T: float,
                                   beta: float, rho: float, nu: float) -> float:
-    """Back out alpha from ATM normal vol, given fixed beta/rho/nu.
-    Solves: atm_vol = alpha * F^beta * (1 + (2-3ρ,ν~)/24 * ×~ * T)
+    """Back out alpha from ATM normal vol using Newton iteration on the full
+    Hagan ATM formula:
+      σ_ATM = α·F^β·{1 + [(1-β)²/24·α²/F^(2-2β) + ρβνα/(4F^(1-β)) + (2-3ρ²)/24·ν²]·T}
+    The old closed-form dropped the α-dependent correction terms, making α ~2-5%
+    too high.  That shrinks z=ν/α and flattens the smile, systematically under-
+    pricing OTM strangles (observed: app 15-25% below BBG at mid/long expiries).
     """
     if T <= 0 or F <= 0:
         return 0.0
-    denom = (F ** beta) * (1.0 + (2.0 - 3.0 * rho ** 2) / 24.0 * nu ** 2 * T)
-    if abs(denom) < 1e-12:
+    _Fb = F ** beta
+    _c1 = (1.0 - beta) ** 2 / 24.0 / F ** (2.0 - 2.0 * beta)   # coeff of α²
+    _c2 = rho * beta * nu / (4.0 * F ** (1.0 - beta))            # coeff of α
+    _c3 = (2.0 - 3.0 * rho ** 2) / 24.0 * nu ** 2                # constant
+    # --- initial guess from simplified formula (drop c1,c2 terms) ---
+    _denom0 = _Fb * (1.0 + _c3 * T)
+    if abs(_denom0) < 1e-12:
         return 0.0
-    return atm_vol_normal / denom
+    _a = atm_vol_normal / _denom0
+    if _a <= 0 or T < 1e-6:
+        return max(_a, 0.0)
+    # --- Newton refinement (typically 3-4 iterations) ---
+    for _ in range(15):
+        _B = 1.0 + (_c1 * _a * _a + _c2 * _a + _c3) * T
+        _f = _a * _Fb * _B - atm_vol_normal
+        _fp = _Fb * (_B + _a * (2.0 * _c1 * _a + _c2) * T)
+        if abs(_fp) < 1e-15:
+            break
+        _a_new = _a - _f / _fp
+        if _a_new <= 0:
+            _a_new = _a * 0.5
+        if abs(_a_new - _a) < 1e-14:
+            break
+        _a = _a_new
+    return max(_a, 0.0)
 
 
 # ============================
@@ -13665,7 +13696,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                         _b_cur = _sabr_param(_sabr_bdf, _exp, _ten)
                                                         if _r_cur is not None and _n_cur is not None:
                                                             _r_new = float(np.clip(_r_cur + _dr_val, -0.95, 0.95))
-                                                            _n_new = float(np.clip(_n_cur + _dn_val, 0.01, 2.0))
+                                                            _n_new = float(np.clip(_n_cur + _dn_val, 0.01, 4.0))
                                                             # Display the ACTUAL applied change (post-clamp),
                                                             # not the raw interpolated delta — RBF/griddata
                                                             # extrapolates wild values in the long×long corner
@@ -40654,6 +40685,7 @@ def otm_grids_tab():
 
     rr_data = []
     str_data = []
+    _diag_data = []   # diagnostic: (exp, ten, rho, nu, alpha, fwd) for debug panel
 
     for ei, exp_lbl in enumerate(_EXP_LABELS):
         exp_y = _exp_to_y(exp_lbl)
@@ -40673,13 +40705,15 @@ def otm_grids_tab():
                 continue
 
             try:
-                # Get SABR params for this cell (case-insensitive column match)
-                _rc = _find_col(sabr_rho, ten_lbl)
-                _nc = _find_col(sabr_nu, ten_lbl)
-                _bc = _find_col(sabr_beta, ten_lbl)
-                _b_val = float(sabr_beta.iloc[ei][_bc]) if _bc else 0.5
-                _r_val = float(sabr_rho.iloc[ei][_rc]) if _rc else 0.20
-                _n_val = float(sabr_nu.iloc[ei][_nc]) if _nc else 0.30
+                # Get SABR params via get_matrix_value (label-based, interpolated)
+                # — replaces iloc[ei] positional lookup which fails when ATM surface
+                #   and SABR DataFrames have different row counts/ordering.
+                _b_val = get_matrix_value(sabr_beta, str(exp_lbl), ten_y)
+                _r_val = get_matrix_value(sabr_rho, str(exp_lbl), ten_y)
+                _n_val = get_matrix_value(sabr_nu, str(exp_lbl), ten_y)
+                if _b_val is None: _b_val = 0.5
+                if _r_val is None: _r_val = 0.0
+                if _n_val is None: _n_val = 1.0  # normal SABR β=0.5 default (NOT 0.3 which is lognormal)
 
                 # ATM vol from the surface (bp) → solve SABR alpha
                 _atm_bp = float(_atm_surf.iloc[ei][ten_lbl]) if ten_lbl in _atm_surf.columns else None
@@ -40755,6 +40789,15 @@ def otm_grids_tab():
 
                 rr_row.append(_rr_val)
                 str_row.append(_str_val)
+                _diag_data.append({
+                    "Expiry": str(exp_lbl), "Tenor": str(ten_lbl),
+                    "ρ": round(_r_val, 4), "ν": round(_n_val, 4),
+                    "β": round(_b_val, 3), "α": round(_sabr_a, 6),
+                    "Fwd%": round(_fwd * 100, 3), "Ann": round(_ann, 4),
+                    "ATM_bp": round(_atm_bp, 1),
+                    "σ_P": round(_vol_p * 10000, 1), "σ_R": round(_vol_r * 10000, 1),
+                    "Str_bp": _str_val,
+                })
             except Exception:
                 rr_row.append(None)
                 str_row.append(None)
@@ -40784,6 +40827,23 @@ def otm_grids_tab():
     _otm_heatmap(_df_rr, f"{ccy} Risk Reversal — Payers Over (bp) ±{_otm_width_bp}bp OTM")
     _otm_heatmap(_df_str, f"{ccy} Strangle (bp) ±{_otm_width_bp}bp OTM")
 
+    # Build ν matrix heatmap for quick visual comparison with BBG Excel
+    _nu_grid = []
+    for ei, exp_lbl in enumerate(_EXP_LABELS):
+        _nu_row = []
+        exp_y = _exp_to_y(exp_lbl)
+        for ti, ten_lbl in enumerate(_TEN_LABELS):
+            ten_y = _ten_to_y(ten_lbl)
+            if exp_y and ten_y:
+                _nv = get_matrix_value(sabr_nu, str(exp_lbl), ten_y)
+                _nu_row.append(round(_nv, 3) if _nv is not None else None)
+            else:
+                _nu_row.append(None)
+        _nu_grid.append(_nu_row)
+    _df_nu = pd.DataFrame(_nu_grid, columns=_TEN_LABELS, index=_EXP_LABELS)
+    _df_nu.index.name = "Expiry"
+    _otm_heatmap(_df_nu, f"{ccy} SABR ν (loaded values)", cmap="YlOrRd")
+
     # Download
     _dl_c1, _dl_c2 = st.columns(2)
     with _dl_c1:
@@ -40792,6 +40852,18 @@ def otm_grids_tab():
     with _dl_c2:
         _buf_str = _df_str.to_csv()
         st.download_button("⬇ Download Strangle", _buf_str, f"{ccy}_Strangle_{_otm_width_bp}bp.csv", use_container_width=True)
+
+    # ── SABR Diagnostic Panel ──
+    if _diag_data:
+        with st.expander("🔍 SABR Params Diagnostic — verify rho/nu/alpha per cell", expanded=False):
+            _diag_df = pd.DataFrame(_diag_data)
+            st.dataframe(_diag_df, use_container_width=True, height=min(len(_diag_df) * 36 + 40, 600))
+            # Quick summary: flag any cells using fallback defaults
+            _low_nu = [r for r in _diag_data if r["ν"] < 0.5]
+            if _low_nu:
+                st.warning(f"⚠ {len(_low_nu)} cells have ν < 0.5 — likely fallback defaults, not BBG-loaded values. "
+                           f"Check SABR nu matrix alignment. Cells: "
+                           + ", ".join(f"{r['Expiry']}×{r['Tenor']} ν={r['ν']}" for r in _low_nu[:8]))
 
     # ══════════════════════════════════════════════════════════════════
     # LIVE SABR CALIBRATION — input market R/R mids, fit rho/nu
@@ -40944,7 +41016,7 @@ def otm_grids_tab():
                                          options={'maxiter': 2000, 'xatol': 1e-6, 'fatol': 1e-10})
                     _rho_fit, _nu_fit = _res.x
                     _rho_fit = max(-0.95, min(0.95, _rho_fit))
-                    _nu_fit = max(0.02, min(2.0, _nu_fit))
+                    _nu_fit = max(0.02, min(4.0, _nu_fit))
 
                     if ten_lbl_c in _new_rho.columns:
                         _new_rho.iloc[ei, _new_rho.columns.get_loc(ten_lbl_c)] = round(_rho_fit, 4)
