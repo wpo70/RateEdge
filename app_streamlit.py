@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v2909a"
+APP_VERSION = "v2909b"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -40942,30 +40942,25 @@ def otm_grids_tab():
 
                 # Calibrate rho/nu to match this market R/R
                 try:
-                    _a_c = float(sabr_alpha.iloc[ei][ten_lbl_c]) if ten_lbl_c in sabr_alpha.columns else None
-                    _b_c = float(sabr_beta.iloc[ei][ten_lbl_c]) if sabr_beta is not None and ten_lbl_c in sabr_beta.columns else 0.5
-                    if _a_c is None or _a_c <= 0:
-                        continue
+                    _b_c = get_matrix_value(sabr_beta, str(exp_lbl_c), ten_y_c) if sabr_beta is not None else 0.5
+                    if _b_c is None: _b_c = 0.5
 
-                    # For calibration, need the ATM vol to pin alpha at each trial rho/nu
-                    # Get ATM vol from the ATM surface, NOT from alpha (which is SABR alpha after recal)
-                    _atm_surf_c = st.session_state.get("vol_data", {}).get(ccy, {}).get("atm")
-                    _atm_c = None
-                    if _atm_surf_c is not None:
-                        try:
-                            _atm_c = float(get_matrix_value(_atm_surf_c, exp_lbl_c, ten_y_c))
-                            if _atm_c is not None:
-                                _atm_c = _atm_c / 10000.0  # ATM surface is in bp
-                        except Exception:
-                            pass
-                    if _atm_c is None or _atm_c <= 0:
-                        # Fallback: reconstruct ATM vol from current SABR alpha
-                        _atm_c = sabr_normal_vol_smile(_fwd_c, _fwd_c, exp_y_c, _a_c, _b_c,
-                                                        float(sabr_rho.iloc[ei][ten_lbl_c]) if ten_lbl_c in sabr_rho.columns else 0.10,
-                                                        float(sabr_nu.iloc[ei][ten_lbl_c]) if ten_lbl_c in sabr_nu.columns else 0.30)
+                    # Forward rate — must be computed before ATM vol fallback
                     _fwd_c = fast_forward_rate(_crv_x, _crv_y, exp_y_c, ten_y_c, ccy)
                     if _fwd_c is None or _fwd_c <= 0:
                         continue
+
+                    # ATM vol from surface (bp → decimal)
+                    _atm_c = None
+                    if _atm_surf is not None:
+                        try:
+                            _atm_bp_c = float(get_matrix_value(_atm_surf, str(exp_lbl_c), ten_y_c))
+                            if _atm_bp_c is not None and _atm_bp_c > 0:
+                                _atm_c = _atm_bp_c / 10000.0
+                        except Exception:
+                            pass
+                    if _atm_c is None or _atm_c <= 0:
+                        continue  # Can't calibrate without ATM vol
 
                     # Annuity
                     _freq_c = 1.0 if ccy in ("USD", "EUR", "GBP") else 0.5
@@ -41072,7 +41067,8 @@ def otm_grids_tab():
                         save_user_config(_alt_cal, "sabr_nu", ccy, _nu_dict)
             except Exception:
                 pass
-        st.success("✅ SABR rho/nu applied to vol surface and saved to DB. Recalibrate Alpha to update pricer.")
+        st.success("✅ SABR rho/nu applied to vol surface and saved to DB.")
+        st.rerun()
 
 
 def midcurve_tab():
