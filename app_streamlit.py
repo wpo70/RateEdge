@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v2809e"
+APP_VERSION = "v2909a"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -40996,7 +40996,7 @@ def otm_grids_tab():
 
                     def _cal_obj(params):
                         _rr, _nn = params
-                        if abs(_rr) >= 0.95 or _nn <= 0.02 or _nn > 2.0:
+                        if abs(_rr) >= 0.95 or _nn <= 0.02 or _nn > 4.0:
                             return 1e6
                         try:
                             _sa = sabr_implied_alpha_from_atm(_atm_c, _fwd_c, exp_y_c, _b_c, _rr, _nn)
@@ -41048,10 +41048,10 @@ def otm_grids_tab():
             _rc1, _rc2 = st.columns(2)
             with _rc1:
                 st.markdown("**Calibrated ρ (rho)**")
-                st.dataframe(_cal_rho.style.format("{:.4f}"), use_container_width=True, height=400)
+                st.dataframe(_cal_rho.apply(pd.to_numeric, errors='coerce').style.format("{:.4f}", na_rep="—"), use_container_width=True, height=400)
             with _rc2:
                 st.markdown("**Calibrated ν (nu)**")
-                st.dataframe(_cal_nu.style.format("{:.4f}"), use_container_width=True, height=400)
+                st.dataframe(_cal_nu.apply(pd.to_numeric, errors='coerce').style.format("{:.4f}", na_rep="—"), use_container_width=True, height=400)
 
     if _do_apply and _cal_rho is not None and _cal_nu is not None:
         # Write calibrated rho/nu into vol_data
