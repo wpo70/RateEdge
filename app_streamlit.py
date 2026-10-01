@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v2909c"
+APP_VERSION = "v0110a"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -38235,6 +38235,323 @@ def _sdr_global_alert_poll():
         pass
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ── ECONOMIC CALENDAR TAB ────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _load_econ_calendar():
+    """Load economic calendar from Supabase. Returns list of dicts with
+    keys: date, time_utc, event_name, currency, importance.
+    Falls back to hardcoded 2026 US events if table doesn't exist."""
+    from datetime import date as _dt_ec, timedelta as _td_ec
+    sb = get_supabase()
+    if sb:
+        try:
+            _today_str = _dt_ec.today().isoformat()
+            _horizon = (_dt_ec.today() + _td_ec(days=200)).isoformat()
+            resp = sb.table("economic_calendar").select("*") \
+                .gte("date", _today_str).lte("date", _horizon) \
+                .order("date").order("time_utc").execute()
+            if resp.data:
+                return resp.data
+        except Exception:
+            pass  # table may not exist yet — fall back
+
+    # ── Hardcoded fallback: 2026 US events ────────────────────────────────
+    from datetime import date
+    _FOMC_2026 = [
+        date(2026,1,28), date(2026,3,18), date(2026,4,29), date(2026,6,17),
+        date(2026,7,29), date(2026,9,16), date(2026,10,28), date(2026,12,9),
+    ]
+    _events = []
+    for d in _FOMC_2026:
+        _events.append({"date": d.isoformat(), "time_utc": "19:00", "event_name": "FOMC Decision",
+                        "currency": "USD", "importance": "HIGH"})
+    _ECON_2026 = [
+        # CPI
+        (date(2026,2,13),"CPI","13:30","HIGH"),(date(2026,3,11),"CPI","13:30","HIGH"),
+        (date(2026,4,14),"CPI","13:30","HIGH"),(date(2026,5,12),"CPI","13:30","HIGH"),
+        (date(2026,6,10),"CPI","13:30","HIGH"),(date(2026,7,14),"CPI","13:30","HIGH"),
+        (date(2026,8,12),"CPI","13:30","HIGH"),(date(2026,9,15),"CPI","13:30","HIGH"),
+        (date(2026,10,13),"CPI","13:30","HIGH"),(date(2026,11,12),"CPI","13:30","HIGH"),
+        (date(2026,12,10),"CPI","13:30","HIGH"),
+        # NFP
+        (date(2026,2,11),"Nonfarm Payrolls","13:30","HIGH"),(date(2026,3,6),"Nonfarm Payrolls","13:30","HIGH"),
+        (date(2026,4,3),"Nonfarm Payrolls","13:30","HIGH"),(date(2026,5,8),"Nonfarm Payrolls","13:30","HIGH"),
+        (date(2026,6,5),"Nonfarm Payrolls","13:30","HIGH"),(date(2026,7,2),"Nonfarm Payrolls","13:30","HIGH"),
+        (date(2026,8,7),"Nonfarm Payrolls","13:30","HIGH"),(date(2026,9,4),"Nonfarm Payrolls","13:30","HIGH"),
+        (date(2026,10,2),"Nonfarm Payrolls","13:30","HIGH"),(date(2026,11,6),"Nonfarm Payrolls","13:30","HIGH"),
+        (date(2026,12,4),"Nonfarm Payrolls","13:30","HIGH"),
+        # GDP
+        (date(2026,2,20),"GDP Advance","13:30","HIGH"),(date(2026,2,26),"GDP Second","13:30","MED"),
+        (date(2026,3,27),"GDP Final","13:30","MED"),(date(2026,4,30),"GDP Advance","13:30","HIGH"),
+        (date(2026,5,28),"GDP Second","13:30","MED"),(date(2026,8,26),"GDP Second","13:30","MED"),
+        (date(2026,9,30),"GDP Final","13:30","MED"),(date(2026,10,29),"GDP Advance","13:30","HIGH"),
+        (date(2026,11,25),"GDP Second","13:30","MED"),(date(2026,12,23),"GDP Final","13:30","MED"),
+        # ISM Manufacturing
+        (date(2026,1,5),"ISM Manufacturing","15:00","HIGH"),(date(2026,2,2),"ISM Manufacturing","15:00","HIGH"),
+        (date(2026,3,2),"ISM Manufacturing","15:00","HIGH"),(date(2026,4,1),"ISM Manufacturing","15:00","HIGH"),
+        (date(2026,5,1),"ISM Manufacturing","15:00","HIGH"),(date(2026,6,1),"ISM Manufacturing","15:00","HIGH"),
+        (date(2026,7,1),"ISM Manufacturing","15:00","HIGH"),(date(2026,8,3),"ISM Manufacturing","15:00","HIGH"),
+        (date(2026,9,1),"ISM Manufacturing","15:00","HIGH"),(date(2026,10,1),"ISM Manufacturing","15:00","HIGH"),
+        (date(2026,11,2),"ISM Manufacturing","15:00","HIGH"),(date(2026,12,1),"ISM Manufacturing","15:00","HIGH"),
+        # ISM Services
+        (date(2026,1,7),"ISM Services","15:00","HIGH"),(date(2026,2,5),"ISM Services","15:00","HIGH"),
+        (date(2026,3,5),"ISM Services","15:00","HIGH"),(date(2026,4,6),"ISM Services","15:00","HIGH"),
+        (date(2026,5,6),"ISM Services","15:00","HIGH"),(date(2026,6,4),"ISM Services","15:00","HIGH"),
+        (date(2026,7,7),"ISM Services","15:00","HIGH"),(date(2026,8,6),"ISM Services","15:00","HIGH"),
+        (date(2026,9,4),"ISM Services","15:00","HIGH"),(date(2026,10,6),"ISM Services","15:00","HIGH"),
+        (date(2026,11,5),"ISM Services","15:00","HIGH"),(date(2026,12,4),"ISM Services","15:00","HIGH"),
+        # PPI
+        (date(2026,2,12),"PPI","13:30","MED"),(date(2026,3,12),"PPI","13:30","MED"),
+        (date(2026,4,9),"PPI","13:30","MED"),(date(2026,5,13),"PPI","13:30","MED"),
+        (date(2026,6,11),"PPI","13:30","MED"),(date(2026,7,15),"PPI","13:30","MED"),
+        (date(2026,8,11),"PPI","13:30","MED"),(date(2026,9,11),"PPI","13:30","MED"),
+        (date(2026,10,8),"PPI","13:30","MED"),(date(2026,11,13),"PPI","13:30","MED"),
+        (date(2026,12,11),"PPI","13:30","MED"),
+        # Retail Sales
+        (date(2026,2,18),"Retail Sales","13:30","HIGH"),(date(2026,3,17),"Retail Sales","13:30","HIGH"),
+        (date(2026,4,16),"Retail Sales","13:30","HIGH"),(date(2026,5,15),"Retail Sales","13:30","HIGH"),
+        (date(2026,6,16),"Retail Sales","13:30","HIGH"),(date(2026,7,16),"Retail Sales","13:30","HIGH"),
+        (date(2026,8,14),"Retail Sales","13:30","HIGH"),(date(2026,9,16),"Retail Sales","13:30","HIGH"),
+        (date(2026,10,16),"Retail Sales","13:30","HIGH"),(date(2026,11,17),"Retail Sales","13:30","HIGH"),
+        (date(2026,12,16),"Retail Sales","13:30","HIGH"),
+        # PCE (Core PCE Price Index — Fed's preferred inflation gauge)
+        (date(2026,1,30),"PCE Price Index","13:30","HIGH"),(date(2026,2,27),"PCE Price Index","13:30","HIGH"),
+        (date(2026,3,27),"PCE Price Index","13:30","HIGH"),(date(2026,5,1),"PCE Price Index","13:30","HIGH"),
+        (date(2026,5,29),"PCE Price Index","13:30","HIGH"),(date(2026,6,26),"PCE Price Index","13:30","HIGH"),
+        (date(2026,7,31),"PCE Price Index","13:30","HIGH"),(date(2026,8,28),"PCE Price Index","13:30","HIGH"),
+        (date(2026,9,25),"PCE Price Index","13:30","HIGH"),(date(2026,10,30),"PCE Price Index","13:30","HIGH"),
+        (date(2026,11,25),"PCE Price Index","13:30","HIGH"),(date(2026,12,23),"PCE Price Index","13:30","HIGH"),
+        # ADP Employment
+        (date(2026,2,4),"ADP Employment","13:15","MED"),(date(2026,3,4),"ADP Employment","13:15","MED"),
+        (date(2026,4,1),"ADP Employment","13:15","MED"),(date(2026,5,6),"ADP Employment","13:15","MED"),
+        (date(2026,6,3),"ADP Employment","13:15","MED"),(date(2026,7,1),"ADP Employment","13:15","MED"),
+        (date(2026,8,5),"ADP Employment","13:15","MED"),(date(2026,9,2),"ADP Employment","13:15","MED"),
+        (date(2026,10,7),"ADP Employment","13:15","MED"),(date(2026,11,4),"ADP Employment","13:15","MED"),
+        (date(2026,12,2),"ADP Employment","13:15","MED"),
+        # Consumer Confidence
+        (date(2026,1,27),"Consumer Confidence","15:00","MED"),(date(2026,2,24),"Consumer Confidence","15:00","MED"),
+        (date(2026,3,31),"Consumer Confidence","15:00","MED"),(date(2026,4,28),"Consumer Confidence","15:00","MED"),
+        (date(2026,5,26),"Consumer Confidence","15:00","MED"),(date(2026,6,30),"Consumer Confidence","15:00","MED"),
+        (date(2026,7,28),"Consumer Confidence","15:00","MED"),(date(2026,8,25),"Consumer Confidence","15:00","MED"),
+        (date(2026,9,29),"Consumer Confidence","15:00","MED"),(date(2026,10,27),"Consumer Confidence","15:00","MED"),
+        (date(2026,11,24),"Consumer Confidence","15:00","MED"),(date(2026,12,29),"Consumer Confidence","15:00","MED"),
+        # U of Michigan Consumer Sentiment (preliminary)
+        (date(2026,1,16),"UMich Sentiment","15:00","MED"),(date(2026,2,13),"UMich Sentiment","15:00","MED"),
+        (date(2026,3,13),"UMich Sentiment","15:00","MED"),(date(2026,4,10),"UMich Sentiment","15:00","MED"),
+        (date(2026,5,15),"UMich Sentiment","15:00","MED"),(date(2026,6,12),"UMich Sentiment","15:00","MED"),
+        (date(2026,7,10),"UMich Sentiment","15:00","MED"),(date(2026,8,14),"UMich Sentiment","15:00","MED"),
+        (date(2026,9,11),"UMich Sentiment","15:00","MED"),(date(2026,10,16),"UMich Sentiment","15:00","MED"),
+        (date(2026,11,13),"UMich Sentiment","15:00","MED"),(date(2026,12,11),"UMich Sentiment","15:00","MED"),
+        # Durable Goods
+        (date(2026,1,27),"Durable Goods","13:30","MED"),(date(2026,2,26),"Durable Goods","13:30","MED"),
+        (date(2026,3,25),"Durable Goods","13:30","MED"),(date(2026,4,24),"Durable Goods","13:30","MED"),
+        (date(2026,5,27),"Durable Goods","13:30","MED"),(date(2026,6,25),"Durable Goods","13:30","MED"),
+        (date(2026,7,27),"Durable Goods","13:30","MED"),(date(2026,8,26),"Durable Goods","13:30","MED"),
+        (date(2026,9,25),"Durable Goods","13:30","MED"),(date(2026,10,27),"Durable Goods","13:30","MED"),
+        (date(2026,11,25),"Durable Goods","13:30","MED"),(date(2026,12,23),"Durable Goods","13:30","MED"),
+    ]
+    for d, name, t, imp in _ECON_2026:
+        _events.append({"date": d.isoformat(), "time_utc": t, "event_name": name,
+                        "currency": "USD", "importance": imp})
+    # Filter to future only
+    _today = _dt_ec.today().isoformat()
+    return [e for e in _events if e["date"] >= _today]
+
+
+def _expiry_date(today, label):
+    """Convert an expiry label like '1W', '2M' to a calendar date from today."""
+    from dateutil.relativedelta import relativedelta
+    _map = {
+        "1D": today + pd.tseries.offsets.BDay(1),
+        "1W": today + pd.tseries.offsets.BDay(5),
+        "2W": today + pd.tseries.offsets.BDay(10),
+        "1M": today + relativedelta(months=1),
+        "2M": today + relativedelta(months=2),
+        "3M": today + relativedelta(months=3),
+        "6M": today + relativedelta(months=6),
+        "9M": today + relativedelta(months=9),
+        "1Y": today + relativedelta(years=1),
+    }
+    d = _map.get(label)
+    if d is None:
+        return None
+    # Convert to date if it's a Timestamp
+    if hasattr(d, 'date'):
+        return d.date()
+    return d
+
+
+def econ_calendar_tab():
+    """📅 Economic Calendar — maps upcoming releases to swaption expiry buckets."""
+    from datetime import date as _dt_ec, timedelta as _td_ec
+
+    st.markdown("### 📅 Economic Calendar")
+    st.caption("Upcoming US economic releases mapped to swaption expiry windows. "
+               "Events inside an expiry window represent event risk for that tenor.")
+
+    _ccy = st.session_state.get("sidebar_ccy", "USD")
+    if _ccy != "USD":
+        st.info("Economic calendar currently supports USD only.")
+        return
+
+    _today = _dt_ec.today()
+
+    # Load events
+    _events_raw = _load_econ_calendar()
+    if not _events_raw:
+        st.warning("No upcoming economic events loaded.")
+        return
+
+    # Parse into structured list
+    _events = []
+    for e in _events_raw:
+        d = e.get("date", "")
+        if isinstance(d, str):
+            d = _dt_ec.fromisoformat(d)
+        _events.append({
+            "date": d,
+            "time_utc": e.get("time_utc", ""),
+            "event": e.get("event_name", ""),
+            "importance": e.get("importance", "MED"),
+        })
+    _events.sort(key=lambda x: (x["date"], x["time_utc"]))
+
+    # ── Expiry buckets ────────────────────────────────────────────────────
+    _BUCKETS = ["1D", "1W", "2W", "1M", "2M", "3M", "6M", "9M", "1Y"]
+    _bucket_dates = {}
+    for b in _BUCKETS:
+        _bd = _expiry_date(_today, b)
+        if _bd:
+            _bucket_dates[b] = _bd
+
+    # ── Summary grid: events per expiry bucket ────────────────────────────
+    st.markdown("#### Event Risk by Expiry")
+    _ncols = len(_BUCKETS)
+    _cols = st.columns(_ncols)
+    for i, b in enumerate(_BUCKETS):
+        _exp = _bucket_dates.get(b)
+        if not _exp:
+            continue
+        _in_bucket = [e for e in _events if _today < e["date"] <= _exp]
+        _high = [e for e in _in_bucket if e["importance"] == "HIGH"]
+        _med = [e for e in _in_bucket if e["importance"] == "MED"]
+        with _cols[i]:
+            _total = len(_in_bucket)
+            _high_n = len(_high)
+            if _high_n > 0:
+                _bg = "#3d1111"
+                _border = "#8b2020"
+            elif _total > 0:
+                _bg = "#2d2a11"
+                _border = "#7a7020"
+            else:
+                _bg = "#0d1b2a"
+                _border = "#1f3a52"
+            st.markdown(
+                f'<div style="background:{_bg};border:1px solid {_border};border-radius:6px;'
+                f'padding:8px 6px;text-align:center;min-height:90px;">'
+                f'<div style="font-size:16px;font-weight:800;color:#e8eef5;letter-spacing:1px;">{b}</div>'
+                f'<div style="font-size:10px;color:#8aa0b6;margin-bottom:4px;">'
+                f'{_exp.strftime("%d-%b")}</div>'
+                f'<div style="font-size:22px;font-weight:700;'
+                f'color:{"#ff4444" if _high_n > 0 else "#e8eef5"};">{_total}</div>'
+                f'<div style="font-size:9px;color:#ff6666;">'
+                f'{"🔴 " + str(_high_n) + " HIGH" if _high_n > 0 else ""}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("---")
+
+    # ── Detail view: by-bucket or chronological ───────────────────────────
+    _view = st.radio("View", ["By Expiry Bucket", "Chronological"], horizontal=True,
+                     key="_econ_view", label_visibility="collapsed")
+
+    if _view == "By Expiry Bucket":
+        _sel_bucket = st.selectbox("Expiry", _BUCKETS, index=3, key="_econ_bucket")
+        _exp = _bucket_dates.get(_sel_bucket)
+        if _exp:
+            _in_bucket = [e for e in _events if _today < e["date"] <= _exp]
+            if _in_bucket:
+                _rows = []
+                for e in _in_bucket:
+                    _imp_icon = "🔴" if e["importance"] == "HIGH" else "🟡" if e["importance"] == "MED" else "⚪"
+                    _days_away = (e["date"] - _today).days
+                    _rows.append({
+                        "Date": e["date"].strftime("%a %d-%b"),
+                        "Time (UTC)": str(e["time_utc"])[:5] if e["time_utc"] else "",
+                        "Event": e["event"],
+                        "Impact": f'{_imp_icon} {e["importance"]}',
+                        "Days": _days_away,
+                    })
+                _df = pd.DataFrame(_rows)
+                st.dataframe(_df, use_container_width=True, hide_index=True,
+                             column_config={
+                                 "Days": st.column_config.NumberColumn("Days", width="small"),
+                             })
+                _high_list = [e["event"] for e in _in_bucket if e["importance"] == "HIGH"]
+                if _high_list:
+                    _unique_high = list(dict.fromkeys(_high_list))
+                    st.warning(f"⚠️ {len(_unique_high)} HIGH-impact release(s) in {_sel_bucket} window: "
+                               f"{', '.join(_unique_high)}")
+            else:
+                st.caption(f"No economic events between now and {_sel_bucket} expiry ({_exp.strftime('%d-%b')}).")
+    else:
+        # Chronological — show all events with first-expiry marker
+        _rows = []
+        for e in _events:
+            _days_away = (e["date"] - _today).days
+            if _days_away < 0:
+                continue
+            # Find first bucket this event falls into
+            _first_bucket = "—"
+            for b in _BUCKETS:
+                _exp = _bucket_dates.get(b)
+                if _exp and e["date"] <= _exp:
+                    _first_bucket = b
+                    break
+            _imp_icon = "🔴" if e["importance"] == "HIGH" else "🟡" if e["importance"] == "MED" else "⚪"
+            _rows.append({
+                "Date": e["date"].strftime("%a %d-%b"),
+                "Time (UTC)": str(e["time_utc"])[:5] if e["time_utc"] else "",
+                "Event": e["event"],
+                "Impact": f'{_imp_icon} {e["importance"]}',
+                "First Expiry": _first_bucket,
+                "Days": _days_away,
+            })
+        if _rows:
+            # Limit to ~6 months out
+            _rows = [r for r in _rows if r["Days"] <= 200]
+            _df = pd.DataFrame(_rows)
+            st.dataframe(_df, use_container_width=True, hide_index=True, height=600)
+        else:
+            st.caption("No upcoming events.")
+
+    # ── Data management (admin only) ──────────────────────────────────────
+    if is_super_admin():
+        with st.expander("🔧 Manage Calendar Data", expanded=False):
+            st.caption("Load economic calendar events into Supabase. "
+                       "Table: economic_calendar (date, time_utc, event_name, currency, importance).")
+            _sql = st.text_area("Paste SQL (INSERT INTO economic_calendar ...)", height=150,
+                                key="_econ_sql_input")
+            if st.button("Execute SQL", key="_econ_sql_exec", type="secondary"):
+                if _sql and HAS_POSTGRES:
+                    try:
+                        _conn = get_db_connection()
+                        _cur = _conn.cursor()
+                        _cur.execute(_sql)
+                        _conn.commit()
+                        _conn.close()
+                        st.success("SQL executed successfully.")
+                        st.cache_data.clear()
+                    except Exception as _ex:
+                        st.error(f"SQL error: {_ex}")
+                else:
+                    st.error("No SQL provided or no DB connection.")
+
+
 def main():
     st.set_page_config(
         page_title="RateEdge Options",
@@ -38959,6 +39276,7 @@ def main():
         ("📑 Vol Export",                "tab_show_volexport", vol_export_tab),
         ("📐 Midcurve & Curve Options",  "tab_show_midcurve",  midcurve_tab),
         ("🎫 Trade Ticket",              "tab_show_ticket",    lambda: render_ticket_tab(st.session_state)),
+        ("📅 Econ Calendar",             "tab_show_econ",      econ_calendar_tab),
     ]
     # v2904a: SOD tab routing by currency
     # AUD SOD code is LOCKED — do not modify sod_report_tab() without explicit per-session approval
