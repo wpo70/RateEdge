@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0110a"
+APP_VERSION = "v0110b"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -39258,8 +39258,9 @@ def main():
 
     _ALL_TAB_DEFS = [
         ("🏡 Home",                      "tab_show_home",      home_tab),
+        ("📅 Econ Calendar",             "tab_show_econ",      econ_calendar_tab),
         ("📋 IRS / Vol Upload",          "tab_show_upload",    vol_config_tab),
-        ("📏 Curves",                    "tab_show_curves",    curves_tab),
+        ("📏 ATM Grids",                 "tab_show_curves",    curves_tab),
         ("📡 SDR Live",                  "tab_show_sdr",       sdr_live_tab),
         ("✅ Vol Editor",                "tab_show_voleditor", vol_surface_editor_tab),
         ("📊 OTM Grids",                "tab_show_otm_grids", otm_grids_tab),
@@ -39276,7 +39277,6 @@ def main():
         ("📑 Vol Export",                "tab_show_volexport", vol_export_tab),
         ("📐 Midcurve & Curve Options",  "tab_show_midcurve",  midcurve_tab),
         ("🎫 Trade Ticket",              "tab_show_ticket",    lambda: render_ticket_tab(st.session_state)),
-        ("📅 Econ Calendar",             "tab_show_econ",      econ_calendar_tab),
     ]
     # v2904a: SOD tab routing by currency
     # AUD SOD code is LOCKED — do not modify sod_report_tab() without explicit per-session approval
