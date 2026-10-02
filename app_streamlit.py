@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0110d"
+APP_VERSION = "v0209a"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -44438,7 +44438,7 @@ def usd_sod_tab():
             )
 
         if _usd_clear_btn:
-            for _k in ("usd_sod_raw_news", "_usd_sod_output", "usd_sod_desk_colour"):
+            for _k in ("usd_sod_raw_news", "_usd_sod_output", "usd_sod_desk_colour", "_usd_sod_edit"):
                 if _k in st.session_state:
                     del st.session_state[_k]
             st.rerun()
@@ -44551,6 +44551,8 @@ def usd_sod_tab():
                         _commentary = "\n\n".join(_text_blocks).strip()
                         if _commentary:
                             st.session_state["_usd_sod_output"] = _commentary
+                            # Clear the text_area widget key so it picks up the new value
+                            st.session_state.pop("_usd_sod_edit", None)
                         else:
                             st.warning("Empty response from API. Try again.")
                     except _ue2.HTTPError as _he:
@@ -44567,8 +44569,14 @@ def usd_sod_tab():
     _usd_cached = st.session_state.get("_usd_sod_output")
     if _usd_cached:
         st.markdown("---")
-        _edit_usd = st.text_area("Edit commentary", value=_usd_cached, height=400, key="_usd_sod_edit")
-        st.session_state["_usd_sod_output"] = _edit_usd
+        # Rendered view
+        st.markdown(_usd_cached)
+        st.markdown("---")
+        with st.expander("✏️ Edit commentary", expanded=False):
+            _edit_usd = st.text_area("Edit commentary", value=_usd_cached, height=400,
+                                      key="_usd_sod_edit", label_visibility="collapsed")
+            if _edit_usd != _usd_cached:
+                st.session_state["_usd_sod_output"] = _edit_usd
 
         _dl_c1, _dl_c2 = st.columns(2)
         with _dl_c1:
