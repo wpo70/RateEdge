@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0110b"
+APP_VERSION = "v0110d"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -16832,11 +16832,13 @@ def vol_config_tab():
             # Save uploaded curves to swap_rates (AUD 6M BBSW/3M BBSW/AONIA, NZD 3M BKBM/NZONIA, USD SOFR)
             # AUD: publish PAR rates from _aud_par_qq / _aud_par_ss (not zero rates)
             # NZD/USD/OIS: config_curves/config_basis store BBG mids directly (par rates)
+            st.info("🔍 DEBUG swap_rates: block reached")
             if HAS_POSTGRES and is_admin():
                 try:
                     import datetime as _dt
                     _today = str(_dt.date.today())
                     _conn = get_db_connection()
+                    st.info(f"🔍 DEBUG swap_rates: _conn={'OK' if _conn else 'NONE'}, _today={_today}")
                     if _conn:
                         _cur = _conn.cursor()
                         _swap_rows_saved = 0
@@ -16894,7 +16896,9 @@ def vol_config_tab():
 
                         # ── USD: BBG mids stored directly (par rates) ──
                         _usd_df = st.session_state.get("config_curves", {}).get("USD")
+                        st.info(f"🔍 DEBUG swap_rates: USD df={'YES '+str(len(_usd_df))+' rows' if _usd_df is not None and len(_usd_df)>0 else 'NONE'}")
                         if _usd_df is not None and len(_usd_df) > 0:
+                            st.info(f"🔍 DEBUG swap_rates: USD cols={list(_usd_df.columns)}")
                             _publish_df(_usd_df, "SOFR", "USD")
                         _usd_ff = st.session_state.get("config_basis", {}).get("USD", {}).get("ois")
                         if _usd_ff is None:
@@ -16902,6 +16906,7 @@ def vol_config_tab():
                         if _usd_ff is not None and len(_usd_ff) > 0:
                             _publish_df(_usd_ff, "FEDFUNDS", "USD")
 
+                        st.info(f"🔍 DEBUG swap_rates: about to commit, _swap_rows_saved={_swap_rows_saved}")
                         # Show commit sanity warnings BEFORE success message
                         for _csw in _commit_sanity_warns:
                             st.error(f"🔴 COMMIT SANITY — {_csw}")
@@ -16946,6 +16951,8 @@ def vol_config_tab():
                             except Exception: pass
                 except Exception as _se:
                     st.warning(f"Curve save to swap_rates failed: {_se}")
+            else:
+                st.warning("🔍 DEBUG swap_rates: HAS_POSTGRES or is_admin() is False — should not happen")
         else:
             st.warning("No matching data found in file for selected option.")
     
@@ -38383,6 +38390,23 @@ def _expiry_date(today, label):
     return d
 
 
+def _utc_to_et(utc_str, event_date):
+    """Convert a UTC time string like '13:30' to ET (handles EDT/EST via event date)."""
+    if not utc_str or len(utc_str) < 4:
+        return ""
+    try:
+        from datetime import datetime as _dt_conv
+        import zoneinfo
+        _hh, _mm = int(utc_str[:2]), int(utc_str[3:5]) if len(utc_str) >= 5 else 0
+        _utc_dt = _dt_conv(event_date.year, event_date.month, event_date.day, _hh, _mm,
+                           tzinfo=zoneinfo.ZoneInfo("UTC"))
+        _et_dt = _utc_dt.astimezone(zoneinfo.ZoneInfo("America/New_York"))
+        _suffix = "ET"
+        return _et_dt.strftime("%-I:%M%p ") + _suffix
+    except Exception:
+        return utc_str
+
+
 def econ_calendar_tab():
     """📅 Economic Calendar — maps upcoming releases to swaption expiry buckets."""
     from datetime import date as _dt_ec, timedelta as _td_ec
@@ -38481,7 +38505,7 @@ def econ_calendar_tab():
                     _days_away = (e["date"] - _today).days
                     _rows.append({
                         "Date": e["date"].strftime("%a %d-%b"),
-                        "Time (UTC)": str(e["time_utc"])[:5] if e["time_utc"] else "",
+                        "Time (ET)": _utc_to_et(str(e["time_utc"]), e["date"]),
                         "Event": e["event"],
                         "Impact": f'{_imp_icon} {e["importance"]}',
                         "Days": _days_away,
@@ -38515,7 +38539,7 @@ def econ_calendar_tab():
             _imp_icon = "🔴" if e["importance"] == "HIGH" else "🟡" if e["importance"] == "MED" else "⚪"
             _rows.append({
                 "Date": e["date"].strftime("%a %d-%b"),
-                "Time (UTC)": str(e["time_utc"])[:5] if e["time_utc"] else "",
+                "Time (ET)": _utc_to_et(str(e["time_utc"]), e["date"]),
                 "Event": e["event"],
                 "Impact": f'{_imp_icon} {e["importance"]}',
                 "First Expiry": _first_bucket,
