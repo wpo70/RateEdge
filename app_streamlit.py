@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0209b"
+APP_VERSION = "v0209c"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -44375,7 +44375,8 @@ def usd_sod_tab():
     from zoneinfo import ZoneInfo as _ZI_stale
     _today_tky_str = str(_dt_stale.now(_ZI_stale("Asia/Tokyo")).date())
     _sod_gen_date = st.session_state.get("_usd_sod_gen_date")
-    if st.session_state.get("_usd_sod_output") and _sod_gen_date and _sod_gen_date != _today_tky_str:
+    if st.session_state.get("_usd_sod_output") and _sod_gen_date != _today_tky_str:
+        # Clears if date stamp is missing (pre-v0209b) OR from a previous day
         st.session_state.pop("_usd_sod_output", None)
         st.session_state.pop("_usd_sod_edit", None)
         st.session_state.pop("_usd_sod_gen_date", None)
