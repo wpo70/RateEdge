@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0209a"
+APP_VERSION = "v0209b"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -44370,6 +44370,16 @@ def usd_sod_tab():
     st.markdown("---")
     st.markdown("### 📝 USD SOD Commentary — Tokyo Open")
 
+    # ── Auto-clear stale SOD from previous day ──
+    from datetime import datetime as _dt_stale
+    from zoneinfo import ZoneInfo as _ZI_stale
+    _today_tky_str = str(_dt_stale.now(_ZI_stale("Asia/Tokyo")).date())
+    _sod_gen_date = st.session_state.get("_usd_sod_gen_date")
+    if st.session_state.get("_usd_sod_output") and _sod_gen_date and _sod_gen_date != _today_tky_str:
+        st.session_state.pop("_usd_sod_output", None)
+        st.session_state.pop("_usd_sod_edit", None)
+        st.session_state.pop("_usd_sod_gen_date", None)
+
     # ── Build vol data block from carry-forward estimator ──
     _usd_vol_block = ""
     if _base_atm_df is not None and _adj_rows:
@@ -44551,6 +44561,7 @@ def usd_sod_tab():
                         _commentary = "\n\n".join(_text_blocks).strip()
                         if _commentary:
                             st.session_state["_usd_sod_output"] = _commentary
+                            st.session_state["_usd_sod_gen_date"] = _today_tky_str
                             # Clear the text_area widget key so it picks up the new value
                             st.session_state.pop("_usd_sod_edit", None)
                         else:
