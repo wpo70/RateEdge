@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0209c"
+APP_VERSION = "v0209d"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -44501,7 +44501,10 @@ def usd_sod_tab():
                     "   Describe: gamma zone (≤3m) vs mid vol (3m-2y) vs vega (2y+).\n\n"
                     "4. TERM STRUCTURE (1-2 sentences on front/back vol spread)\n\n"
                     "5. FLOW (1-2 sentences on notable SDR activity)\n"
-                    "   CRITICAL: ONLY reference flow data explicitly provided.\n\n"
+                    "   CRITICAL: ONLY reference flow data explicitly provided.\n"
+                    "   Flow data may appear in RAW NEWS, SDR FLOW section, or DESK COLOUR.\n"
+                    "   Summarise the most notable prints — volume, concentration, outliers.\n"
+                    "   Say 'No SDR flow data available' ONLY if zero trade data was provided anywhere.\n\n"
                     "6. WATCH (1 sentence — technically interesting observation)\n\n"
                     f"TODAY IS {_today_usd}. Start with "
                     f"'{_today_usd} AM — USD SOD Tokyo Open' as header.\n\n"
@@ -44516,7 +44519,7 @@ def usd_sod_tab():
                 if _usd_sdr_block:
                     _data_secs.append("\n=== USD OPTIONS FLOW (DTCC SDR, last 24h) ===")
                     _data_secs.append(_usd_sdr_block)
-                else:
+                elif not (_usd_desk_colour and _usd_desk_colour.strip()):
                     _data_secs.append("\n=== USD OPTIONS FLOW ===")
                     _data_secs.append("NO SDR FLOW DATA AVAILABLE. Do NOT invent flow.")
                 if _usd_desk_colour and _usd_desk_colour.strip():
