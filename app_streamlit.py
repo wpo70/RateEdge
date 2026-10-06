@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0610b"
+APP_VERSION = "v0610c"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -14941,7 +14941,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     except Exception: pass
                                     if not _ak4: _ak4 = os.environ.get("ANTHROPIC_API_KEY")
                                     if _ak4:
-                                        _bd4 = _js4.dumps({"model":"claude-sonnet-4-6","max_tokens":350,"system":_sys4,"messages":[{"role":"user","content":_usr4}]}).encode()
+                                        _bd4 = _js4.dumps({"model":"claude-sonnet-5","max_tokens":350,"system":_sys4,"messages":[{"role":"user","content":_usr4}]}).encode()
                                         _rq4 = _ur4.Request("https://api.anthropic.com/v1/messages",data=_bd4,method="POST",headers={"x-api-key":_ak4,"anthropic-version":"2023-06-01","content-type":"application/json"})
                                         with st.spinner("Analysing..."):
                                             with _ur4.urlopen(_rq4, timeout=30) as _rp4: _rs4 = _js4.loads(_rp4.read().decode())
@@ -44607,7 +44607,7 @@ def usd_sod_tab():
                 import json as _json_usd
 
                 _body_usd = _json_usd.dumps({
-                    "model": "claude-sonnet-4-6",
+                    "model": "claude-sonnet-5",
                     "max_tokens": 2000,
                     "system": _sys_prompt_usd,
                     "messages": [{"role": "user", "content": _user_prompt_usd}],
@@ -46370,7 +46370,7 @@ def sod_report_tab():
                     import json as _json_api
 
                     _body = _json_api.dumps({
-                        "model": "claude-sonnet-4-6",
+                        "model": "claude-sonnet-5",
                         "max_tokens": 2000,
                         "system": _system_prompt,
                         "messages": [{"role": "user", "content": _user_prompt}],
