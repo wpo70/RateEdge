@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0209d"
+APP_VERSION = "v0610b"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -7011,6 +7011,45 @@ def bootstrap_usd_sofr_ois(par_df: pd.DataFrame) -> pd.DataFrame:
     if len(par_dict) < 3:
         return par_df  # Not enough points to bootstrap
 
+    # v0610b: DOUBLE-BOOTSTRAP GUARD — if input data is already bootstrapped
+    # zeros (e.g. historical swap_rates rows stored as zeros instead of par),
+    # bootstrapping again produces systematically lower zeros and ~6bp low
+    # forwards vs Bloomberg.  Detect by trial-bootstrapping and checking if
+    # input ≈ output (zeros bootstrap to themselves within noise).
+    try:
+        _test_rates = sorted(par_dict.items())
+        if len(_test_rates) >= 5:
+            # Quick bootstrap of just the first 5 points
+            _tdfs = {0.0: 1.0, SPOT: 1.0}
+            for _T, _r in _test_rates[:5]:
+                _c = _r / 100.0
+                _te = _T + SPOT
+                if _T <= 1.0:
+                    _tdfs[_te] = 1.0 / (1.0 + _c * _T * DCF_ANNUAL)
+                else:
+                    _nf = int(math.floor(_T))
+                    _a = 0.0
+                    for _yr in range(1, _nf):
+                        _ti = _yr + SPOT
+                        _tts = sorted(_tdfs.keys())
+                        _tdfv = [_tdfs[x] for x in _tts]
+                        _a += DCF_ANNUAL * math.exp(float(np.interp(_ti, _tts, np.log(np.maximum(_tdfv, 1e-10)))))
+                    _tdfs[_te] = (1.0 - _c * _a) / (1.0 + _c * DCF_ANNUAL)
+            # Compare input rates to bootstrapped zeros at a few maturities
+            _max_diff = 0.0
+            for _T, _r in _test_rates[:5]:
+                _tts = sorted(_tdfs.keys())
+                _tdfv = [_tdfs[x] for x in _tts]
+                _d = math.exp(float(np.interp(_T, _tts, np.log(np.maximum(_tdfv, 1e-10)))))
+                if _d > 0:
+                    _z = -math.log(_d) / _T * 100.0
+                    _max_diff = max(_max_diff, abs(_z - _r))
+            # If max diff < 0.5bp across all test points, input is already zeros
+            if _max_diff < 0.005:
+                return par_df  # Already bootstrapped — return as-is
+    except Exception:
+        pass  # Guard failed, proceed with normal bootstrap
+
     dfs = {0.0: 1.0, SPOT: 1.0}
 
     def _dfi(t):
@@ -7706,6 +7745,8 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                         from zoneinfo import ZoneInfo as _ZI_src3
                         from datetime import datetime as _dt_src_now3
                         curve_df["_source_date"] = _dt_src_now3.now(_ZI_src3("Australia/Sydney")).strftime("%Y-%m-%d")
+                        # v0610a: store BBG par mids BEFORE bootstrap for swap_rates publish
+                        st.session_state["_usd_sofr_par"] = curve_df.copy()
                         # Bootstrap par rates → zero rates (USD SOFR OIS single curve)
                         curve_df = bootstrap_usd_sofr_ois(curve_df)
                 else:
@@ -7729,6 +7770,14 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                     st.session_state["config_curves"][ccy] = curve_df
                     set_timestamp("curves", ccy)
                     loaded["curves"] += 1
+                    # v0610b: auto-regenerate USD forward matrix on BBG config load
+                    if ccy == "USD":
+                        st.session_state["_gen_usd_fwd_requested"] = True
+                        _cids_cfg = st.session_state.setdefault("_curve_commit_ids", {})
+                        _cids_cfg["USD"] = _cids_cfg.get("USD", 0) + 1
+                        _fc_cfg = st.session_state.get("_fwd_ann_cache", {})
+                        for _k_cfg in [k for k in _fc_cfg if isinstance(k, tuple) and k and k[0] == "USD"]:
+                            del _fc_cfg[_k_cfg]
 
                 # USD: also load Fed Funds OIS, SOFR/FF basis, and morning rates
                 if ccy == "USD":
@@ -16711,6 +16760,16 @@ def vol_config_tab():
         st.warning("⚠️ This will overwrite the vol surface loaded from DB with data from your Excel file.")
     else:
         selected_type = {"SOD IRS - AUD & NZD": "curves_aud_nzd", "SOD IRS - USD & EUR": "curves_usd_eur"}[_commit_mode]
+
+    # v0610a: date picker for swap_rates publish — defaults to today, override for backfills
+    import datetime as _dt_commit
+    _commit_date = st.date_input(
+        "Publish as date",
+        value=_dt_commit.date.today(),
+        key="_commit_date_v0610a",
+        help="Date written to swap_rates. Change for backfills or weekend configs."
+    )
+
     if st.button(" Commit Selected Data", key="commit_btn", type="primary",
                  disabled=(upload is None or not can_upload_vol())):
         upload.seek(0)  # ensure BytesIO is at start
@@ -16832,13 +16891,11 @@ def vol_config_tab():
             # Save uploaded curves to swap_rates (AUD 6M BBSW/3M BBSW/AONIA, NZD 3M BKBM/NZONIA, USD SOFR)
             # AUD: publish PAR rates from _aud_par_qq / _aud_par_ss (not zero rates)
             # NZD/USD/OIS: config_curves/config_basis store BBG mids directly (par rates)
-            st.info("🔍 DEBUG swap_rates: block reached")
             if HAS_POSTGRES and is_admin():
                 try:
-                    import datetime as _dt
-                    _today = str(_dt.date.today())
+                    # v0610a: use date picker value, not today()
+                    _today = str(_commit_date)
                     _conn = get_db_connection()
-                    st.info(f"🔍 DEBUG swap_rates: _conn={'OK' if _conn else 'NONE'}, _today={_today}")
                     if _conn:
                         _cur = _conn.cursor()
                         _swap_rows_saved = 0
@@ -16894,19 +16951,17 @@ def vol_config_tab():
                         if _nzd_ois is not None and len(_nzd_ois) > 0:
                             _publish_df(_nzd_ois, "NZONIA", "NZD")
 
-                        # ── USD: BBG mids stored directly (par rates) ──
-                        _usd_df = st.session_state.get("config_curves", {}).get("USD")
-                        st.info(f"🔍 DEBUG swap_rates: USD df={'YES '+str(len(_usd_df))+' rows' if _usd_df is not None and len(_usd_df)>0 else 'NONE'}")
-                        if _usd_df is not None and len(_usd_df) > 0:
-                            st.info(f"🔍 DEBUG swap_rates: USD cols={list(_usd_df.columns)}")
-                            _publish_df(_usd_df, "SOFR", "USD")
+                        # ── USD SOFR: publish BBG par mids, NOT bootstrapped zeros ──
+                        # v0610a: _usd_sofr_par stores pre-bootstrap BBG mids from Excel
+                        _usd_par = st.session_state.get("_usd_sofr_par")
+                        if _usd_par is not None and len(_usd_par) > 0:
+                            _publish_df(_usd_par, "SOFR", "USD")
                         _usd_ff = st.session_state.get("config_basis", {}).get("USD", {}).get("ois")
                         if _usd_ff is None:
                             _usd_ff = st.session_state.get("config_basis", {}).get("USD", {}).get("fedfunds_ois")
                         if _usd_ff is not None and len(_usd_ff) > 0:
                             _publish_df(_usd_ff, "FEDFUNDS", "USD")
 
-                        st.info(f"🔍 DEBUG swap_rates: about to commit, _swap_rows_saved={_swap_rows_saved}")
                         # Show commit sanity warnings BEFORE success message
                         for _csw in _commit_sanity_warns:
                             st.error(f"🔴 COMMIT SANITY — {_csw}")
@@ -16914,7 +16969,7 @@ def vol_config_tab():
                         _cur.close()
                         _conn.close()
                         if _swap_rows_saved > 0:
-                            st.success(f"✅ Saved {_swap_rows_saved} curve points to swap_rates ({_today})")
+                            st.success(f"✅ Saved {_swap_rows_saved} curve points to swap_rates (date={_today})")
 
                         # Save USD SOFR/FF basis to benchmark_rates
                         _sofr_ff = st.session_state.get("config_basis",{}).get("USD",{}).get("sofr_ff_basis")
@@ -16952,7 +17007,7 @@ def vol_config_tab():
                 except Exception as _se:
                     st.warning(f"Curve save to swap_rates failed: {_se}")
             else:
-                st.warning("🔍 DEBUG swap_rates: HAS_POSTGRES or is_admin() is False — should not happen")
+                st.warning("swap_rates: HAS_POSTGRES or is_admin() is False")
         else:
             st.warning("No matching data found in file for selected option.")
     
@@ -17455,6 +17510,8 @@ def _load_usd_live_curve():
         del _fc[_k]
 
     st.session_state["_usd_live_meta"] = {"curve": zc, "snap_ldn": snap_ldn, "n": len(par)}
+    # v0610b: auto-regenerate forward matrix so it uses the fresh curve
+    st.session_state["_gen_usd_fwd_requested"] = True
     msg = f"USD SOFR live loaded: {len(par)} nodes, snapshot {snap_ldn.strftime('%H:%M %Z') if snap_ldn else '?'}"
     if age_min is not None and age_min > _USD_LIVE_STALE_MIN:
         msg += f" - WARNING: {age_min:.0f} min old"
@@ -38847,6 +38904,15 @@ def main():
                             st.session_state.setdefault("curves", {})[target_ccy] = _df
                             st.session_state.setdefault("config_curves", {})[target_ccy] = _df
                             set_timestamp("curves", target_ccy)
+                            # v0610b: auto-regenerate USD forward matrix on DB curve load
+                            if target_ccy == "USD":
+                                st.session_state["_gen_usd_fwd_requested"] = True
+                                # Invalidate forward/annuity cache
+                                _cids = st.session_state.setdefault("_curve_commit_ids", {})
+                                _cids["USD"] = _cids.get("USD", 0) + 1
+                                _fc_eod = st.session_state.get("_fwd_ann_cache", {})
+                                for _k_eod in [k for k in _fc_eod if isinstance(k, tuple) and k and k[0] == "USD"]:
+                                    del _fc_eod[_k_eod]
                             if target_ccy == "AUD":
                                 st.session_state["_aud_proj_curve"] = _df
                                 _zc_qq_s = {float(r["MaturityY"]): float(r["ZeroRatePct"]) for _, r in _df.iterrows() if float(r["MaturityY"]) <= 3.25}
