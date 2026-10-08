@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0610c"
+APP_VERSION = "v0810a"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -16637,9 +16637,28 @@ def vol_config_tab():
                                 "You need to upload RateEdge_Config.xlsx and Save to Database from a desktop session first."
                             )
             # v2109a: live USD SOFR from gateway 5-min feed (swap_rates_live)
+            # v0610c: auto-refresh every 10 min (was manual-only button).
+            # Timer fires on any tab via session_state timestamp check.
+            # Manual button still works for immediate refresh.
+            _USD_LIVE_AUTO_SEC = 600  # 10 minutes
+            from datetime import datetime as _dt_lvc
+            _lv_last_auto = st.session_state.get("_usd_live_auto_ts")
+            _lv_now = _dt_lvc.now(LONDON_TZ)
+            _lv_auto_due = (
+                _lv_last_auto is None
+                or (_lv_now - _lv_last_auto).total_seconds() > _USD_LIVE_AUTO_SEC
+            )
+            # Auto-fire if due (silent — no button click needed)
+            if _lv_auto_due and HAS_POSTGRES and get_db_url():
+                _lv_ok_a, _lv_msg_a = _load_usd_live_curve()
+                st.session_state["_usd_live_auto_ts"] = _lv_now
+                if _lv_ok_a:
+                    st.session_state["_usd_live_msg"] = _lv_msg_a
+
             if st.button("⚡ Load live USD", key="load_usd_live_btn", type="secondary",
-                         help="Latest 5-min USD SOFR snapshot from the RateEdge gateway. EOD loads unaffected."):
+                         help="Latest USD SOFR snapshot from the RateEdge gateway (auto-refreshes every 10 min)."):
                 _lv_ok, _lv_msg = _load_usd_live_curve()
+                st.session_state["_usd_live_auto_ts"] = _lv_now  # reset timer
                 if _lv_ok:
                     st.session_state["_usd_live_msg"] = _lv_msg
                     st.rerun()
@@ -16647,13 +16666,12 @@ def vol_config_tab():
                     st.warning(_lv_msg)
             _lv_meta = st.session_state.get("_usd_live_meta")
             if _lv_meta and st.session_state.get("config_curves", {}).get("USD") is _lv_meta.get("curve"):
-                from datetime import datetime as _dt_lvc
                 _lv_snap = _lv_meta.get("snap_ldn")
                 if _lv_snap is not None:
-                    _lv_age = (_dt_lvc.now(LONDON_TZ) - _lv_snap).total_seconds() / 60.0
-                    _lv_txt = f"USD curve = LIVE {_lv_snap.strftime('%H:%M %Z')} ({_lv_age:.0f} min ago)"
+                    _lv_age = (_lv_now - _lv_snap).total_seconds() / 60.0
+                    _lv_txt = f"USD curve = LIVE {_lv_snap.strftime('%H:%M %Z')} ({_lv_age:.0f} min ago) · auto every 10m"
                     if _lv_age > _USD_LIVE_STALE_MIN:
-                        st.warning(f"⚠️ {_lv_txt} - stale, click Load live USD again")
+                        st.warning(f"⚠️ {_lv_txt} - stale")
                     else:
                         st.caption(f"⚡ {_lv_txt}")
             _lv_toast = st.session_state.pop("_usd_live_msg", None)
@@ -44547,13 +44565,20 @@ def usd_sod_tab():
                     f"{_today_usd}-AM Tokyo Open Start-of-Day technical briefing. "
                     "The audience is institutional rates traders and portfolio managers "
                     "at a USD interest rate options desk opening in Tokyo.\n\n"
-                    "CRITICAL RULES:\n"
+                    "ABSOLUTE RULES — VIOLATION = FAILURE:\n"
+                    "• NEVER INVENT macro data. No Fed speaker names, no rate expectations, "
+                    "no economic data, no market pricing unless EXPLICITLY in the RAW NEWS input.\n"
+                    "• If RAW NEWS says 'No macro news provided', the MACRO CONTEXT section "
+                    "must say 'No notable macro inputs overnight.' — nothing else.\n"
+                    "• NEVER invent swap/futures pricing (e.g. 'markets price X hikes/cuts'). "
+                    "Only state what the user typed in RAW NEWS.\n"
+                    "• NEVER fabricate flow data. If no SDR or desk colour provided, "
+                    "say 'No flow data available.'\n"
+                    "• DO NOT make up numbers. Only cite what's in the data provided.\n"
                     "• 3-minute read MAX. Focus on OBSERVABLE TECHNICAL vol moves.\n"
-                    "• Macro context is MINIMAL — bullet points only, no editorial.\n"
                     "• Reference specific expiry×tenor cells with bp levels "
                     "(e.g. '3m10y +2.1bp to 73.5bp').\n"
                     "• Use bp units throughout for vol. Use market shorthand.\n"
-                    "• DO NOT make up numbers. Only cite what's in the data provided.\n"
                     "• American English spelling.\n"
                     "• DO NOT use bullet points EXCEPT in MACRO CONTEXT section.\n"
                     "• No geopolitical commentary beyond the MACRO CONTEXT bullets.\n"
@@ -44561,7 +44586,8 @@ def usd_sod_tab():
                     "STRUCTURE — follow exactly:\n\n"
                     "AT A GLANCE (2-3 lines MAX)\n"
                     "   Quick snapshot — key vol move, direction, repricing needed?\n\n"
-                    "1. MACRO CONTEXT (2-3 bullet points MAX, factual)\n\n"
+                    "1. MACRO CONTEXT (2-3 bullet points MAX — ONLY from RAW NEWS input. "
+                    "If no macro news was provided, write 'No notable macro inputs overnight.')\n\n"
                     "2. HEADLINE (one sentence — single biggest technical vol move)\n\n"
                     "3. SURFACE (2-3 sentences on shape changes)\n"
                     "   Describe: gamma zone (≤3m) vs mid vol (3m-2y) vs vega (2y+).\n\n"
@@ -44571,7 +44597,7 @@ def usd_sod_tab():
                     "   Flow data may appear in RAW NEWS, SDR FLOW section, or DESK COLOUR.\n"
                     "   Summarise the most notable prints — volume, concentration, outliers.\n"
                     "   Say 'No SDR flow data available' ONLY if zero trade data was provided anywhere.\n\n"
-                    "6. WATCH (1 sentence — technically interesting observation)\n\n"
+                    "6. WATCH (1 sentence — technically interesting observation FROM THE DATA)\n\n"
                     f"TODAY IS {_today_usd}. Start with "
                     f"'{_today_usd} AM — USD SOD Tokyo Open' as header.\n\n"
                     "Keep UNDER 300 words total.\n\n"
@@ -46284,13 +46310,20 @@ def sod_report_tab():
                         f"{_today_dayname}-AM Start-of-Day technical briefing for an "
                         "Australian interest-rate options desk. The audience is "
                         "institutional rates traders and portfolio managers.\n\n"
-                        "CRITICAL RULES:\n"
+                        "ABSOLUTE RULES — VIOLATION = FAILURE:\n"
+                        "• NEVER INVENT macro data. No central bank speaker names, no rate expectations, "
+                        "no economic data, no market pricing unless EXPLICITLY in the RAW NEWS input.\n"
+                        "• If RAW NEWS says 'No macro news provided', the MACRO CONTEXT section "
+                        "must say 'No notable macro inputs overnight.' — nothing else.\n"
+                        "• NEVER invent swap/futures pricing (e.g. 'markets price X hikes/cuts'). "
+                        "Only state what the user typed in RAW NEWS.\n"
+                        "• NEVER fabricate flow data. If no SDR or desk colour provided, "
+                        "say 'No flow data available.'\n"
+                        "• DO NOT make up numbers. Only cite what's in the data provided.\n"
                         "• 3-minute read MAX. Focus on OBSERVABLE TECHNICAL vol moves.\n"
-                        "• Macro context is MINIMAL — bullet points only, no editorial.\n"
                         "• Reference specific expiry×tenor cells with bp levels "
                         "(e.g. '3m10y +2.1bp to 73.5bp').\n"
                         "• Use bp units throughout for vol. Use market shorthand.\n"
-                        "• DO NOT make up numbers. Only cite what's in the data provided.\n"
                         "• Australian English spelling.\n"
                         "• DO NOT use bullet points EXCEPT in MACRO CONTEXT section.\n"
                         "• No geopolitical commentary beyond the MACRO CONTEXT bullets.\n"
@@ -46302,26 +46335,20 @@ def sod_report_tab():
                         "   Example: 'AT A GLANCE: AUD vol mixed — front gamma bid (+2bp 1m1y), "
                         "   belly offered (3m10y −4bp to 74.6bp), long-end flat. USD o/n −0.5bp avg. "
                         "   No urgent repricing at the open.'\n\n"
-                        "1. MACRO CONTEXT (2-3 bullet points MAX, factual, no analysis)\n"
-                        "   Example: • UST 10Y closed 4.29% (+1bp). • Fed Waller speaks 14:00 NYC.\n\n"
+                        "1. MACRO CONTEXT (2-3 bullet points MAX — ONLY from RAW NEWS input. "
+                        "If no macro news was provided, write 'No notable macro inputs overnight.')\n\n"
                         "2. HEADLINE (one sentence — the single biggest technical vol move)\n\n"
                         "3. SURFACE (2-3 sentences on shape changes)\n"
                         "   Describe: upper-left vs lower-right, belly vs wings, any axis "
-                        "   that moved uniformly. Reference the vol change grid provided.\n"
-                        "   Example: 'AUD front-end (1m-3m × 1Y-3Y) offered 1bp, while the "
-                        "   5Y belly held. Lower-right (10y+ × 15Y+) continues to compress.'\n\n"
-                        "4. TERM STRUCTURE (1-2 sentences on front/back vol spread)\n"
-                        "   Example: 'AUD 1m-1y spread compressed 2bp to 5.5bp at 1Y tenor.'\n\n"
+                        "   that moved uniformly. Reference the vol change grid provided.\n\n"
+                        "4. TERM STRUCTURE (1-2 sentences on front/back vol spread)\n\n"
                         "5. FLOW (1-2 sentences on notable activity)\n"
                         "   Use BOTH the trade data from the database AND any desk colour provided.\n"
                         "   Reference size, direction, location on surface. No platform names.\n"
-                        "   If desk colour mentions specific activity (e.g. 'sellers in 1yr', "
-                        "   '10yr gamma active'), weave it in naturally.\n"
                         "   CRITICAL: ONLY reference flow data that is explicitly provided below.\n"
-                        "   If no SDR data or desk colour is provided, state that flow was not available.\n"
+                        "   If no SDR data or desk colour is provided, say 'No flow data available.'\n"
                         "   NEVER invent trade details, notional amounts, or structure descriptions.\n\n"
-                        "6. WATCH (1 sentence — technically interesting observation)\n"
-                        "   Example: 'gamma looks offered into payrolls' or '5y5y at 6-month lows'\n\n"
+                        "6. WATCH (1 sentence — technically interesting observation FROM THE DATA)\n\n"
                         f"TODAY IS {_today_dayname}. Start with "
                         f"'{_today_dayname} AM — AUD SOD' as header.\n\n"
                         "Keep UNDER 300 words total.\n\n"
