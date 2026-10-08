@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0810a"
+APP_VERSION = "v0810b"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -3636,6 +3636,30 @@ def build_usd_sofr_schedule(expiry: float, tenor: float) -> List[Tuple[float, fl
     return schedule
 
 
+def build_usd_sofr_cap_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]:
+    """
+    v0810b: USD SOFR cap/floor quarterly schedule — ACT/360, mod-fol.
+    Bloomberg convention: Lookback (first fix NOT excluded), daily SOFR
+    compounded in arrears, quarterly pay, 1-day rate cut-off, 2BD pay delay.
+    Returns list of (time_in_years_from_today, act360_accrual).
+    """
+    today = _pricing_date()
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=2)  # T+2 NY BD
+    months_per_period = 3  # quarterly
+    total_months = int(round(tenor * 12))
+    n = max(1, int(round(total_months / months_per_period)))
+    schedule = []
+    prev = fwd_start
+    for i in range(1, n + 1):
+        raw = _add_months(fwd_start, min(i * months_per_period, total_months))
+        pay = _mod_fol(raw)
+        accrual = _act360(prev, pay)   # ACT/360 for USD SOFR
+        t_years = _act365(today, pay)  # time to payment in years (365 basis for discounting)
+        schedule.append((t_years, accrual))
+        prev = pay
+    return schedule
+
+
 def build_eur_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]:
     """
     v0805c: EUR vanilla swaption.
@@ -4157,7 +4181,8 @@ def price_caplets_with_vol_curve(ccy, tenor_y, caplet_vol_dict, notional_mm=1.0,
     """
     Price caplets using vol curve. Used by both bootstrap solver and pricer.
     expiry_y: forward start (0 = spot cap). Cap runs from expiry_y to expiry_y+tenor_y.
-    The first fixing at expiry_y is known (forward rate) and skipped.
+    v0810b: USD SOFR Lookback — first fixing NOT skipped (backward-looking).
+            AUD BBSW forward-looking — first fixing IS skipped (rate known at period start).
     Returns premium in bp per leg (not straddle).
     """
     _cc = st.session_state.get("config_curves", {}).get(ccy)
@@ -4167,24 +4192,29 @@ def price_caplets_with_vol_curve(ccy, tenor_y, caplet_vol_dict, notional_mm=1.0,
     if ois_curve is None:
         ois_curve = curve
     
-    # Build quarterly schedule from expiry_y to expiry_y + tenor_y
-    cap_start = expiry_y if expiry_y > 0 else 1.0 / 252.0
-    cap_end   = cap_start + tenor_y
-    
-    sched = []
-    t = cap_start
-    while t < cap_end - 1e-8:
-        t_next = min(t + 0.25, cap_end)
-        accrual = t_next - t
-        sched.append((t_next, accrual))
-        t = t_next
-    
+    # v0810b: USD uses proper ACT/360 quarterly schedule from actual dates
+    # (Bloomberg SOFR cap convention). AUD/others keep the simple 0.25 grid.
+    if ccy == "USD":
+        sched = build_usd_sofr_cap_schedule(expiry_y, tenor_y)
+    else:
+        cap_start = expiry_y if expiry_y > 0 else 1.0 / 252.0
+        cap_end   = cap_start + tenor_y
+        sched = []
+        t = cap_start
+        while t < cap_end - 1e-8:
+            t_next = min(t + 0.25, cap_end)
+            accrual = t_next - t
+            sched.append((t_next, accrual))
+            t = t_next
+
     total_pv = 0.0
-    
+
     for i, (T_fix, accrual) in enumerate(sched):
-        if i == 0:
-            continue  # Skip first fixing
-        
+        # v0810b: USD SOFR Lookback — first fixing is NOT known, include it.
+        # AUD BBSW forward-looking — first fixing IS known, skip it.
+        if i == 0 and ccy != "USD":
+            continue  # Skip first fixing (forward-looking ccys only)
+
         # Get vol from curve - use exact T_fix, don't round
         if T_fix in caplet_vol_dict:
             vol_bp = caplet_vol_dict[T_fix]
@@ -4203,9 +4233,9 @@ def price_caplets_with_vol_curve(ccy, tenor_y, caplet_vol_dict, notional_mm=1.0,
                         alpha = (T_fix - mats[j]) / (mats[j+1] - mats[j])
                         vol_bp = caplet_vol_dict[mats[j]] + alpha * (caplet_vol_dict[mats[j+1]] - caplet_vol_dict[mats[j]])
                         break
-        
+
         sigma = vol_bp / 10000.0
-        
+
         # Individual caplet forward
         period_start = max(T_fix - 0.25, 0.001)
         period_tenor = 0.25
@@ -4561,7 +4591,7 @@ def _build_listed_caplet_curve_by_date(
         return None
     # Build caplet fixing schedule for the strip (same logic as
     # price_caplets_with_vol_curve): quarterly from strip_expiry_y to
-    # strip_expiry_y+strip_tenor_y, FIRST FIXING SKIPPED.
+    # strip_expiry_y+strip_tenor_y. v0810b: first fixing INCLUDED (Lookback).
     # For each caplet, we record BOTH the accrual end (T_fix, the key in
     # caplet_vol_dict) and the accrual start (T_start, the date used to
     # find the closest SR3 contract).
@@ -4573,8 +4603,8 @@ def _build_listed_caplet_curve_by_date(
         t_next = min(t + 0.25, cap_end)
         caplet_pairs.append((t, round(t_next, 4)))
         t = t_next
-    # Skip first fixing (forward rate is known)
-    caplet_pairs = caplet_pairs[1:] if len(caplet_pairs) > 1 else caplet_pairs
+    # v0810b: USD SOFR Lookback — first fixing is NOT known at trade date.
+    # Include first caplet (Bloomberg convention). This function is USD SR3-only.
     # For each caplet, match by accrual START date to the closest white expiry.
     # (e.g. 3m→6m caplet's START is 3m from today; closest white to "3m from
     # today" is SFRM6 for whites starting 20-Apr-26.)
@@ -24193,19 +24223,26 @@ def caps_floors_tab(vol_mode: str):
         # e.g. 3m x 5Y = fwd starting in 3m for 5Y (NOT 4.75Y)
         fwd, _, _ = forward_and_annuity_from_curve(curve, ccy, first_fixing_y, tenor_y, ois_curve)
         
-        # Build QUARTERLY cap schedule   —   MUST use same 1/252 base as bootstrap
-        # so pricer T values exactly match the bootstrapped vol curve anchor points.
-        # Skip caplets where T_fix <= first_fixing_y (those fixings are "known").
+        # Build QUARTERLY cap schedule.
+        # v0810b: USD uses proper ACT/360 quarterly schedule from actual dates
+        # (Bloomberg SOFR cap convention: Lookback, ACT/360, quarterly).
+        # Schedule starts from first_fixing_y so no pre-structure caplets exist
+        # → first caplet is IN-structure and included (Lookback = don't skip).
+        # AUD/others keep the simple 1/252-base 0.25-step grid.
         base = 1.0 / 252.0
-        cap_start = base
-        cap_end   = tenor_y + base
-        sched = []
-        t = cap_start
-        while t < cap_end - 1e-8:
-            t_next = min(t + 0.25, cap_end)
-            accrual = t_next - t
-            sched.append((t_next, accrual))
-            t = t_next
+        if ccy == "USD":
+            _cap_tenor_usd = max(tenor_y - first_fixing_y, 0.25)
+            sched = build_usd_sofr_cap_schedule(first_fixing_y, _cap_tenor_usd)
+        else:
+            cap_start = base
+            cap_end   = tenor_y + base
+            sched = []
+            t = cap_start
+            while t < cap_end - 1e-8:
+                t_next = min(t + 0.25, cap_end)
+                accrual = t_next - t
+                sched.append((t_next, accrual))
+                t = t_next
     else:
         sched = [(i * 0.25, 0.25) for i in range(int(tenor_y / 0.25))]
         fwd = 0.04
