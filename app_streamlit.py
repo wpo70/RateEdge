@@ -1,4 +1,4 @@
-# v0904.r
+# v0910h
 
 import math
 import os
@@ -169,6 +169,97 @@ def add_au_bds(d: date, n: int) -> date:
         if is_au_bd(d):
             remaining -= 1
     return d
+
+# ══════════════════════════════════════════════════════════════════════════════
+# US (NEW YORK) BUSINESS DAY CALENDAR
+# SIFMA / Federal Reserve holiday calendar — used for USD SOFR/FF swaps.
+# Covers all Fed holidays that close NY money markets.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _us_holidays(year: int) -> set:
+    """
+    US Federal Reserve / SIFMA holidays for a given year.
+    These are the days NY money markets are closed.
+    """
+    h = set()
+
+    def _nth_weekday(yr, month, weekday, n):
+        """Return the nth occurrence of weekday (0=Mon) in month."""
+        first = date(yr, month, 1)
+        # days until first occurrence of weekday
+        diff = (weekday - first.weekday()) % 7
+        d = first + timedelta(days=diff + 7 * (n - 1))
+        return d
+
+    def _sub_nearest_weekday(d):
+        """If date falls on Sat→Fri, Sun→Mon (federal observance rule)."""
+        wd = d.weekday()
+        if wd == 5:  return d - timedelta(days=1)   # Sat → preceding Fri
+        if wd == 6:  return d + timedelta(days=1)    # Sun → following Mon
+        return d
+
+    # New Year's Day — 1 Jan
+    h.add(_sub_nearest_weekday(date(year, 1, 1)))
+    # Martin Luther King Jr. Day — 3rd Monday in January
+    h.add(_nth_weekday(year, 1, 0, 3))
+    # Presidents' Day — 3rd Monday in February
+    h.add(_nth_weekday(year, 2, 0, 3))
+    # Good Friday — SIFMA early close / many desks closed; Fed is open but
+    # bond markets close early. Include as holiday for swaption settlement.
+    gf, _ = _easter(year)
+    h.add(gf)
+    # Memorial Day — last Monday in May
+    may_mons = [date(year, 5, d) for d in range(25, 32) if date(year, 5, d).weekday() == 0]
+    h.add(may_mons[0])
+    # Juneteenth — 19 Jun (federal holiday since 2021)
+    h.add(_sub_nearest_weekday(date(year, 6, 19)))
+    # Independence Day — 4 Jul
+    h.add(_sub_nearest_weekday(date(year, 7, 4)))
+    # Labor Day — 1st Monday in September
+    h.add(_nth_weekday(year, 9, 0, 1))
+    # Columbus Day / Indigenous Peoples' Day — 2nd Monday in October
+    h.add(_nth_weekday(year, 10, 0, 2))
+    # Veterans Day — 11 Nov
+    h.add(_sub_nearest_weekday(date(year, 11, 11)))
+    # Thanksgiving Day — 4th Thursday in November
+    h.add(_nth_weekday(year, 11, 3, 4))
+    # Christmas Day — 25 Dec
+    h.add(_sub_nearest_weekday(date(year, 12, 25)))
+
+    return h
+
+_US_HOL_CACHE: dict = {}
+
+def is_us_bd(d: date) -> bool:
+    """True if d is a US (New York) business day."""
+    if d.weekday() >= 5:
+        return False
+    if d.year not in _US_HOL_CACHE:
+        _US_HOL_CACHE[d.year] = _us_holidays(d.year)
+    return d not in _US_HOL_CACHE[d.year]
+
+def next_us_bd(d: date) -> date:
+    """Return d if it is a US business day, else advance to next."""
+    while not is_us_bd(d):
+        d += timedelta(days=1)
+    return d
+
+def prev_us_bd(d: date) -> date:
+    """Return d if it is a US business day, else go back to preceding."""
+    while not is_us_bd(d):
+        d -= timedelta(days=1)
+    return d
+
+def add_us_bds(d: date, n: int) -> date:
+    """Add n US business days to date d."""
+    step = 1 if n >= 0 else -1
+    remaining = abs(n)
+    while remaining > 0:
+        d += timedelta(days=step)
+        if is_us_bd(d):
+            remaining -= 1
+    return d
+
 
 def au_spot_date(trade_date: date, ccy: str = "AUD") -> date:
     """
@@ -755,7 +846,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0910g"
+APP_VERSION = "v0910h"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -3509,11 +3600,31 @@ def df_from_curve(curve: pd.DataFrame, t: float) -> float:
     return math.exp(-z * t)
 
 
-def _next_bd(d: "date") -> "date":
-    """Next business day (Mon-Fri, no holiday calendar)."""
-    from datetime import date as _date, timedelta as _td
-    while d.weekday() >= 5:
+def _is_bd(d: "date", ccy: str = None) -> bool:
+    """Check if d is a business day for the given currency's financial centre.
+    ccy=None or unrecognised: Mon-Fri only (no holiday calendar).
+    ccy='AUD': Sydney/NSW calendar.  ccy='USD': NY Fed/SIFMA calendar.
+    """
+    if d.weekday() >= 5:
+        return False
+    if ccy == "AUD":
+        return is_au_bd(d)
+    if ccy == "USD":
+        return is_us_bd(d)
+    return True   # Mon-Fri, no holiday calendar
+
+def _next_bd(d: "date", ccy: str = None) -> "date":
+    """Next business day. ccy-aware: uses holiday calendar when available."""
+    from datetime import timedelta as _td
+    while not _is_bd(d, ccy):
         d += _td(days=1)
+    return d
+
+def _prev_bd(d: "date", ccy: str = None) -> "date":
+    """Preceding business day. ccy-aware."""
+    from datetime import timedelta as _td
+    while not _is_bd(d, ccy):
+        d -= _td(days=1)
     return d
 
 def _add_months(d: "date", months: int) -> "date":
@@ -3532,15 +3643,13 @@ def _add_years(d: "date", years: int) -> "date":
     except ValueError:
         return _date(d.year + years, d.month, 28)
 
-def _mod_fol(d: "date") -> "date":
-    """Modified following: if adjusted date falls in next month, go backward."""
+def _mod_fol(d: "date", ccy: str = None) -> "date":
+    """Modified following: if adjusted date falls in next month, go backward.
+    ccy-aware: uses the right holiday calendar."""
     from datetime import timedelta as _td
-    nd = _next_bd(d)
+    nd = _next_bd(d, ccy)
     if nd.month != d.month:
-        pd_ = d
-        while pd_.weekday() >= 5:
-            pd_ -= _td(days=1)
-        return pd_
+        return _prev_bd(d, ccy)
     return nd
 
 def _act365(d1: "date", d2: "date") -> float:
@@ -3557,35 +3666,37 @@ def _pricing_date() -> "date":
         pass
     return _date.today()
 
-def _spot_date(spot_lag_bd: int) -> "date":
-    """Spot date = today + spot_lag business days."""
+def _spot_date(spot_lag_bd: int, ccy: str = None) -> "date":
+    """Spot date = today + spot_lag business days. ccy-aware."""
     from datetime import timedelta as _td
     d = _pricing_date()
     count = 0
     while count < spot_lag_bd:
         d += _td(days=1)
-        if d.weekday() < 5:
+        if _is_bd(d, ccy):
             count += 1
     return d
 
-def _fwd_start_date(expiry_years: float, spot_lag_bd: int) -> "date":
-    """Forward start date: spot + expiry (mod-fol). Uses days for <1m, months otherwise."""
+def _fwd_start_date(expiry_years: float, spot_lag_bd: int, ccy: str = None) -> "date":
+    """Forward start date: spot + expiry (mod-fol). Uses days for <1m, months otherwise.
+    ccy-aware: skips holidays for USD/AUD when computing spot and rolling dates."""
     from datetime import timedelta as _td
-    spot = _spot_date(spot_lag_bd)
+    spot = _spot_date(spot_lag_bd, ccy)
     total_days = expiry_years * 365.25
     total_months = int(round(expiry_years * 12))
     if total_days < 27:
-        # Sub-monthly: add whole days then mod-fol
+        # Sub-monthly: add whole calendar days then mod-fol
         raw = spot + _td(days=int(round(total_days)))
     else:
         raw = _add_months(spot, total_months)
-    return _mod_fol(raw)
+    return _mod_fol(raw, ccy)
 
-def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_period: int) -> List[Tuple[float, float]]:
+def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_period: int, ccy: str = None) -> List[Tuple[float, float]]:
     """
     Build actual payment schedule using mod-fol date arithmetic.
     Returns list of (time_in_years_from_today, act365_accrual).
     Final cashflow uses total months (not rounded years) to handle 18m, 1.5Y etc correctly.
+    v0910h: ccy-aware mod-fol — uses AUD/USD holiday calendars.
     """
     today = _pricing_date()
     total_months = int(round(tenor_years * 12))
@@ -3595,7 +3706,7 @@ def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_perio
     for i in range(1, n + 1):
         # Always use months arithmetic - last cashflow uses total_months exactly
         raw = _add_months(fwd_start, i * months_per_period if i < n else total_months)
-        pay = _mod_fol(raw)
+        pay = _mod_fol(raw, ccy)
         accrual = _act365(prev, pay)
         t_years = _act365(today, pay)
         schedule.append((t_years, accrual))
@@ -3603,10 +3714,11 @@ def _build_date_schedule(fwd_start: "date", tenor_years: float, months_per_perio
     return schedule
 
 def build_aud_schedule(expiry: float, tenor: float) -> List[Tuple[float, float]]:
-    """AUD: T+1BD spot, mod-fol, Act/365. Q/Q (3m) for ≤3Y, S/S (6m) for >3Y."""
+    """AUD: T+1BD spot, mod-fol, Act/365. Q/Q (3m) for ≤3Y, S/S (6m) for >3Y.
+    v0910h: now uses AUD holiday calendar via ccy='AUD'."""
     months_per = 3 if tenor <= 3.0 else 6
-    fwd_start = _fwd_start_date(expiry, spot_lag_bd=1)
-    return _build_date_schedule(fwd_start, tenor, months_per)
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=1, ccy="AUD")
+    return _build_date_schedule(fwd_start, tenor, months_per, ccy="AUD")
 
 
 def _act360(d1: "date", d2: "date") -> float:
@@ -3618,9 +3730,11 @@ def build_usd_sofr_schedule(expiry: float, tenor: float) -> List[Tuple[float, fl
     """
     USD SOFR swaption: T+2 NY BD spot, mod-fol, Act/360, annual payments both legs.
     Returns list of (time_in_years_from_today, act360_accrual).
+    v0910h: uses US (NY) holiday calendar for spot date, mod-fol rolls, and
+    sub-monthly expiry day-count (1D option over Columbus Day → 3 cal days).
     """
     today = _pricing_date()
-    fwd_start = _fwd_start_date(expiry, spot_lag_bd=2)
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=2, ccy="USD")
     months_per_period = 12  # annual
     total_months = int(round(tenor * 12))
     n = int(round(tenor * (12 / months_per_period)))
@@ -3628,7 +3742,7 @@ def build_usd_sofr_schedule(expiry: float, tenor: float) -> List[Tuple[float, fl
     prev = fwd_start
     for i in range(1, n + 1):
         raw = _add_months(fwd_start, i * months_per_period if i < n else total_months)
-        pay = _mod_fol(raw)
+        pay = _mod_fol(raw, ccy="USD")
         accrual = _act360(prev, pay)   # Act/360 for USD SOFR
         t_years = _act365(today, pay)  # time to payment in years (365 basis for discounting)
         schedule.append((t_years, accrual))
@@ -3642,9 +3756,10 @@ def build_usd_sofr_cap_schedule(expiry: float, tenor: float) -> List[Tuple[float
     Bloomberg convention: Lookback (first fix NOT excluded), daily SOFR
     compounded in arrears, quarterly pay, 1-day rate cut-off, 2BD pay delay.
     Returns list of (time_in_years_from_today, act360_accrual).
+    v0910h: uses US (NY) holiday calendar.
     """
     today = _pricing_date()
-    fwd_start = _fwd_start_date(expiry, spot_lag_bd=2)  # T+2 NY BD
+    fwd_start = _fwd_start_date(expiry, spot_lag_bd=2, ccy="USD")  # T+2 NY BD
     months_per_period = 3  # quarterly
     total_months = int(round(tenor * 12))
     n = max(1, int(round(total_months / months_per_period)))
@@ -3652,7 +3767,7 @@ def build_usd_sofr_cap_schedule(expiry: float, tenor: float) -> List[Tuple[float
     prev = fwd_start
     for i in range(1, n + 1):
         raw = _add_months(fwd_start, min(i * months_per_period, total_months))
-        pay = _mod_fol(raw)
+        pay = _mod_fol(raw, ccy="USD")
         accrual = _act360(prev, pay)   # ACT/360 for USD SOFR
         t_years = _act365(today, pay)  # time to payment in years (365 basis for discounting)
         schedule.append((t_years, accrual))
@@ -22669,7 +22784,19 @@ def swaptions_tab(vol_mode: str):
                 _sw_today = _sw_date.today()
         else:
             _sw_today = _sw_date.today()
-        _calc_dt = modified_following(_sw_today + __import__('datetime').timedelta(days=int(expiry_y * 365.25)))
+        # v0910h: use correct holiday calendar for expiry date roll
+        _raw_exp_dt = _sw_today + __import__('datetime').timedelta(days=int(expiry_y * 365.25))
+        if ccy == "USD":
+            _calc_dt = _mod_fol(_raw_exp_dt, ccy="USD")
+        elif ccy in ("AUD",):
+            _calc_dt = modified_following(_raw_exp_dt)
+        else:
+            _calc_dt = _mod_fol(_raw_exp_dt)
+        # v0910h: recalculate expiry_y from actual rolled date (accounts for
+        # holidays / weekends between raw label date and rolled business day).
+        # e.g. 1D on Fri before Columbus Day Mon → _calc_dt is Tue, 4 cal days.
+        if not _sw_manual:
+            expiry_y = max((_calc_dt - _sw_today).days / 365.0, 1/365.0)
         # v0907u: Manual mode → box is empty by default so the date picker takes
         # over; standard mode → box pre-fills with the rolled tenor date.
         _default_dt_str = "" if _sw_manual else _calc_dt.strftime("%d/%m/%Y")
