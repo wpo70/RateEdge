@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0910e"
+APP_VERSION = "v0910g"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -39653,11 +39653,11 @@ def main():
 
 CBOT_TSY_CONTRACTS = [
     # (ticker, label, approx_swap_tenor_y, bbg_underlying, note)
-    ("TU", "2Y Note",     2,  "TUA Comdty",  "$200,000 par, 1/128 tick"),
-    ("FV", "5Y Note",     5,  "FVA Comdty",  "$100,000 par, 1/128 tick"),
-    ("TY", "10Y Note",   10,  "TYA Comdty",  "$100,000 par, 1/64 tick"),
-    ("US", "Bond (~20Y)", 20, "USA Comdty",  "$100,000 par, 1/64 tick"),
-    ("WN", "Ultra (~30Y)",30, "WNA Comdty",  "$100,000 par, 1/64 tick"),
+    ("TU", "2Y Note",     2,  "TUA Comdty",  "$200,000 par, 1/256 tick ($7.8125)"),
+    ("FV", "5Y Note",     5,  "FVA Comdty",  "$100,000 par, 1/128 tick ($7.8125)"),
+    ("TY", "10Y Note",   10,  "TYA Comdty",  "$100,000 par, 1/64 tick ($15.625)"),
+    ("US", "Bond (~20Y)", 20, "USA Comdty",  "$100,000 par, 1/32 tick ($31.25)"),
+    ("WN", "Ultra (~30Y)",30, "WNA Comdty",  "$100,000 par, 1/32 tick ($31.25)"),
 ]
 
 # Default DV01 ratios (futures DV01 / swap DV01 per bp) — approximate
@@ -39673,14 +39673,32 @@ CBOT_DEFAULT_DV01_RATIOS = {
 
 # Tick values per contract for reference
 CBOT_TICK_VALUES = {
-    "TU": {"par": 200000, "tick_frac": 128, "tick_value": 15.625},
-    "FV": {"par": 100000, "tick_frac": 128, "tick_value": 7.8125},
-    "TY": {"par": 100000, "tick_frac": 64,  "tick_value": 15.625},
-    "US": {"par": 100000, "tick_frac": 64,  "tick_value": 15.625},
-    "WN": {"par": 100000, "tick_frac": 64,  "tick_value": 15.625},
+    # OPTION tick values (straddle PX is in option ticks, not futures ticks)
+    # Verified from BBG DES on each option contract 09-Oct-2026
+    "TU": {"par": 200000, "tick_frac": 128, "tick_value": 15.625},  # opt 1/128; fut 1/256
+    "FV": {"par": 100000, "tick_frac": 128, "tick_value": 7.8125},  # opt 1/128; fut 1/128
+    "TY": {"par": 100000, "tick_frac": 64,  "tick_value": 15.625},  # opt 1/64;  fut 1/64
+    "US": {"par": 100000, "tick_frac": 64,  "tick_value": 15.625},  # opt 1/64;  fut 1/32
+    "WN": {"par": 100000, "tick_frac": 64,  "tick_value": 15.625},  # opt 1/64;  fut 1/32
 }
 
 CBOT_EXPIRY_LABELS = ["1W", "2W"]
+
+# Default futures prices from BBG OVDV (09-Oct-2026, front Nov-26 contract)
+CBOT_FUT_PX_DEFAULTS = {
+    "TU": 101.76, "FV": 103.45, "TY": 104.38, "US": 102.47, "WN": 103.90,
+}
+
+# BBG OVDV reference vols (09-Oct-2026) — normal vol in price points/year (Bachelier)
+# 1W ≈ Nov-26 (nearest standard expiry), 2W ≈ Dec-26 proxy
+# These are approximations; user overrides with actual weekly board data
+CBOT_OVDV_DEFAULTS = {
+    "TU": {"1W": 1.82, "2W": 1.91},
+    "FV": {"1W": 4.24, "2W": 4.43},
+    "TY": {"1W": 6.19, "2W": 6.42},
+    "US": {"1W": 12.53, "2W": 13.07},
+    "WN": {"1W": 13.75, "2W": 14.47},
+}
 
 
 def _cbot_compute_swap_bpv(curve, ois_curve, expiry_y: float, tenor_y: float) -> float:
@@ -39750,21 +39768,23 @@ def cbot_tsy_vol_tab():
         st.markdown("""
 | Contract | Underlying | Swap Tenor | Par | Tick | BPD (approx) |
 |----------|-----------|-----------|-----|------|-------------|
-| **TU** | 2Y T-Note | 2Y | $200k | 1/128 ($15.625) | ~$38/bp |
+| **TU** | 2Y T-Note | 2Y | $200k | 1/256 ($7.8125) | ~$38/bp |
 | **FV** | 5Y T-Note | 5Y | $100k | 1/128 ($7.8125) | ~$46/bp |
 | **TY** | 10Y T-Note | 10Y | $100k | 1/64 ($15.625) | ~$63/bp |
-| **US** | T-Bond (~20Y) | 20Y | $100k | 1/64 ($15.625) | ~$103/bp |
-| **WN** | Ultra T-Bond (~30Y) | 30Y | $100k | 1/64 ($15.625) | ~$146/bp |
+| **US** | T-Bond (~20Y) | 20Y | $100k | 1/32 ($31.25) | ~$103/bp |
+| **WN** | Ultra T-Bond (~30Y) | 30Y | $100k | 1/32 ($31.25) | ~$146/bp |
 
 **Conversion chain** (Cropper method):
-1. **Straddle PX** → listed ATM straddle price in ticks
-2. **Ann Vol** = `Straddle × TickValue / (FutPX × sqrt(DTE/365))` in price terms, then `× 10000 / FutPX` for bp
-3. **DV01 Ratio** = `Futures_BPV / Swap_BPV` — duration scaling (from BBG DLV, CTD analysis)
-4. **Correlation** = empirical futures-vs-swap rate correlation (from delivered ratio analysis)
-5. **Delivered Ratio** = `DV01_Ratio × Correlation` — the all-in conversion factor
-6. **Implied Swpn Vol** = `Futures_Vol_bp × Delivered_Ratio`
+1. **Straddle PX** → listed ATM straddle price in option ticks
+2. **Price Vol** = `strad_pts / (√(DTE/365) × √(2/π))` — Bachelier ATM inversion → **pts/yr** (matches BBG OVDV)
+3. **Rate Vol** = `Price_Vol × point_$ / BPD` — convert to **bp/yr** using CTD dollar value per bp
+4. **DV01 Ratio** = `BPD / Swap_BPV_$` — duration scaling (from BBG DLV, CTD analysis)
+5. **Correlation** = empirical futures-vs-swap rate correlation (from delivered ratio analysis)
+6. **Delivered Ratio** = `DV01_Ratio × Correlation`
+7. **Implied Swpn Vol** = `Rate_Vol_bp × Delivered_Ratio`
 
-Delivered ratio ≠ DV01 ratio tells you the correlation/basis component.
+Note: BPD cancels in the chain (σ_swpn = σ_price × point_$ / swap_BPV × corr), but displaying
+the intermediate rate vol helps spot mispricing. Delivered ratio ≠ DV01 ratio reveals the basis.
 """)
 
     st.markdown("---")
@@ -39788,13 +39808,13 @@ Delivered ratio ≠ DV01 ratio tells you the correlation/basis component.
     # ══════════════════════════════════════════════════════════════════
     st.markdown("#### 📊 Straddle Prices & Annualised Vols")
 
-    # Initialise session state
+    # Initialise session state — prepopulated from BBG OVDV 09-Oct-2026
     for ticker, _, _, _, _ in CBOT_TSY_CONTRACTS:
         for exp in CBOT_EXPIRY_LABELS:
             _defaults = {
-                f"cbot_{ticker}_futs_px": 0.0,
+                f"cbot_{ticker}_futs_px": CBOT_FUT_PX_DEFAULTS.get(ticker, 0.0),
                 f"cbot_{ticker}_{exp}_strad": 0.0,
-                f"cbot_{ticker}_{exp}_vol": 0.0,
+                f"cbot_{ticker}_{exp}_vol": CBOT_OVDV_DEFAULTS.get(ticker, {}).get(exp, 0.0),
                 f"cbot_{ticker}_dv01_ratio": CBOT_DEFAULT_DV01_RATIOS.get(ticker, 1.0),
                 f"cbot_{ticker}_correl": 1.0,
                 f"cbot_{ticker}_deliv_ratio": CBOT_DEFAULT_DV01_RATIOS.get(ticker, 1.0),
@@ -39809,8 +39829,8 @@ Delivered ratio ≠ DV01 ratio tells you the correlation/basis component.
     _hcols[1].markdown("**Fut PX**")
     _hcols[2].markdown("**1W Strad**")
     _hcols[3].markdown("**2W Strad**")
-    _hcols[4].markdown("**1W AnnVol**")
-    _hcols[5].markdown("**2W AnnVol**")
+    _hcols[4].markdown("**1W Vol (pts)**")
+    _hcols[5].markdown("**2W Vol (pts)**")
 
     # Input rows: futures price + straddle prices → computed annualised vols
     for ticker, label, tenor_y, bbg_und, note in CBOT_TSY_CONTRACTS:
@@ -39840,48 +39860,41 @@ Delivered ratio ≠ DV01 ratio tells you the correlation/basis component.
                 )
             _strad = st.session_state.get(f"cbot_{ticker}_{_exp}_strad", 0.0)
 
-            # Compute annualised vol from straddle
-            # Straddle PX (ticks) × tick_value = $ straddle
-            # Ann_vol_price = $ straddle / (fut_px_$ × sqrt(DTE/365))
-            # fut_px_$ = fut_px / 100 × par
-            # Then convert to bp: ann_vol_bp = ann_vol_price × 10000
-            _ann_vol_bp = 0.0
+            # Compute annualised vol from straddle — ABSOLUTE Bachelier normal vol
+            # in price points/year (same units as BBG OVDV)
+            # strad_pts = strad_ticks × tick_value / point_dollar
+            # σ_n = strad_pts / (√T × √(2/π))  [Bachelier ATM straddle inversion]
             if _strad > 0 and _fut_px > 0 and _dte > 0:
-                _fut_px_dollar = (_fut_px / 100.0) * _par
-                _strad_dollar = _strad * _tick_val
+                _point_dollar = _par / 100.0  # $/point: TY=1000, TU=2000
+                _strad_pts = _strad * _tick_val / _point_dollar  # straddle in price points
                 _sqrt_t = math.sqrt(_dte / 365.0)
-                # Normal vol approximation from ATM straddle:
-                # strad ≈ 2 × FutPX × N(0.5×vol×√T) × ... simplified to
-                # vol_ann ≈ strad / (√(2/π) × √T) in price terms, then to bp
-                # More precisely: ATM normal straddle ≈ 2 × σ_n × √T × √(1/(2π)) × 100
-                # But simpler: just use σ_n = strad_$ / (fut_px_$ × √T × √(2/π)) × 10000
-                # This is the standard Bachelier ATM straddle inversion
                 _sqrt_2_over_pi = math.sqrt(2.0 / math.pi)  # ≈ 0.7979
-                _ann_vol_price = _strad_dollar / (_fut_px_dollar * _sqrt_t * _sqrt_2_over_pi)
-                _ann_vol_bp = _ann_vol_price * 10000.0
-            # Store computed vol back for use in implied calc
-            st.session_state[f"cbot_{ticker}_{_exp}_vol"] = round(_ann_vol_bp, 1)
+                _ann_vol_pts = _strad_pts / (_sqrt_t * _sqrt_2_over_pi)
+                # Store computed vol (overrides OVDV default when straddle entered)
+                st.session_state[f"cbot_{ticker}_{_exp}_vol"] = round(_ann_vol_pts, 2)
+            # If no straddle entered, vol stays at OVDV default or user override
 
-        # Display computed annualised vols (read-only)
+        # Display annualised vols in price pts/yr (read-only)
         _v1w = st.session_state.get(f"cbot_{ticker}_1W_vol", 0.0)
         _v2w = st.session_state.get(f"cbot_{ticker}_2W_vol", 0.0)
         with _cols[4]:
             if _v1w > 0:
-                st.markdown(f"`{_v1w:.1f}`")
+                st.markdown(f"`{_v1w:.2f}`")
             else:
                 st.markdown("`—`")
         with _cols[5]:
             if _v2w > 0:
-                st.markdown(f"`{_v2w:.1f}`")
+                st.markdown(f"`{_v2w:.2f}`")
             else:
                 st.markdown("`—`")
 
-    st.caption("💡 Or enter annualised vols directly from BBG OVDV (skip straddle input):")
-    # Direct vol override inputs
+    st.caption("💡 Or enter vols directly from BBG OVDV in price pts/yr (skip straddle input). "
+               "Prepopulated from OVDV 09-Oct-2026.")
+    # Direct vol override inputs — units: price points/year (Bachelier normal)
     _ovcols = st.columns([1.0, 0.8, 0.8, 0.8])
     _ovcols[0].markdown("**Contract**")
-    _ovcols[1].markdown("**1W Vol (bp)**")
-    _ovcols[2].markdown("**2W Vol (bp)**")
+    _ovcols[1].markdown("**1W Vol (pts/yr)**")
+    _ovcols[2].markdown("**2W Vol (pts/yr)**")
     _ovcols[3].markdown("**Tenor**")
     for ticker, label, tenor_y, bbg_und, note in CBOT_TSY_CONTRACTS:
         _ovc = st.columns([1.0, 0.8, 0.8, 0.8])
@@ -39891,19 +39904,19 @@ Delivered ratio ≠ DV01 ratio tells you the correlation/basis component.
             _cur_1w = st.session_state.get(f"cbot_{ticker}_1W_vol", 0.0)
             _ov_1w = st.number_input(
                 f"{ticker} 1W Vol Override", min_value=0.0, max_value=500.0,
-                value=_cur_1w, step=0.1, format="%.1f",
+                value=_cur_1w, step=0.01, format="%.2f",
                 key=f"cbot_{ticker}_1W_vol_ov", label_visibility="collapsed",
             )
-            if _ov_1w != _cur_1w:
+            if abs(_ov_1w - _cur_1w) > 0.001:
                 st.session_state[f"cbot_{ticker}_1W_vol"] = _ov_1w
         with _ovc[2]:
             _cur_2w = st.session_state.get(f"cbot_{ticker}_2W_vol", 0.0)
             _ov_2w = st.number_input(
                 f"{ticker} 2W Vol Override", min_value=0.0, max_value=500.0,
-                value=_cur_2w, step=0.1, format="%.1f",
+                value=_cur_2w, step=0.01, format="%.2f",
                 key=f"cbot_{ticker}_2W_vol_ov", label_visibility="collapsed",
             )
-            if _ov_2w != _cur_2w:
+            if abs(_ov_2w - _cur_2w) > 0.001:
                 st.session_state[f"cbot_{ticker}_2W_vol"] = _ov_2w
         with _ovc[3]:
             st.markdown(f"`{tenor_y}Y`")
@@ -40014,15 +40027,14 @@ Delivered ratio ≠ DV01 ratio tells you the correlation/basis component.
                 if _strad > 0 and _fut_px > 0:
                     # BE in ticks = straddle / 2
                     _be_ticks = _strad / 2.0
-                    # BE in bp of futures price
-                    _be_dollar = _be_ticks * _tick_val
-                    _fut_dollar = (_fut_px / 100.0) * _par
-                    _be_bp = (_be_dollar / _fut_dollar) * 10000.0
+                    # BE in price points
+                    _point_dollar = _par / 100.0
+                    _be_pts = _be_ticks * _tick_val / _point_dollar
                     _row[f"{_exp} BE (ticks)"] = f"{_be_ticks:.1f}"
-                    _row[f"{_exp} BE (bp)"] = f"{_be_bp:.1f}"
+                    _row[f"{_exp} BE (pts)"] = f"{_be_pts:.4f}"
                 else:
                     _row[f"{_exp} BE (ticks)"] = "—"
-                    _row[f"{_exp} BE (bp)"] = "—"
+                    _row[f"{_exp} BE (pts)"] = "—"
             _be_rows.append(_row)
         if _be_rows:
             st.dataframe(pd.DataFrame(_be_rows), use_container_width=True, hide_index=True)
@@ -40035,8 +40047,11 @@ Delivered ratio ≠ DV01 ratio tells you the correlation/basis component.
     st.markdown("#### 🎯 Implied Swaption Vols (Normal, bp/yr)")
 
     _results = []
+    _bpd_default = {"TU": 38.0, "FV": 46.0, "TY": 63.0, "US": 103.0, "WN": 146.0}
     for ticker, label, tenor_y, bbg_und, note in CBOT_TSY_CONTRACTS:
         _futs_px = st.session_state.get(f"cbot_{ticker}_futs_px", 0.0)
+        _bpd = st.session_state.get(f"cbot_{ticker}_bpd", _bpd_default.get(ticker, 50.0))
+        _point_dollar = CBOT_TICK_VALUES.get(ticker, {}).get("par", 100000) / 100.0
 
         # Pick conversion ratio based on mode
         if _use_delivered:
@@ -40048,21 +40063,27 @@ Delivered ratio ≠ DV01 ratio tells you the correlation/basis component.
 
         for exp_lbl in CBOT_EXPIRY_LABELS:
             _exp_y = label_to_years(exp_lbl.lower())
-            _futs_vol = st.session_state.get(f"cbot_{ticker}_{exp_lbl}_vol", 0.0)
+            _futs_vol_pts = st.session_state.get(f"cbot_{ticker}_{exp_lbl}_vol", 0.0)
             _dte = _dte_map[exp_lbl]
+
+            # Convert price vol (pts/yr) → rate vol (bp/yr) using BPD
+            # σ_rate_bp = σ_pts × point_dollar / BPD
+            # Then: σ_swaption = σ_rate_bp × DV01_ratio × correlation (= delivered ratio)
+            _futs_rate_bp = (_futs_vol_pts * _point_dollar / _bpd) if _bpd > 0 else 0.0
 
             # Compute swap annuity for reference
             _swap_ann = _cbot_compute_swap_bpv(curve, ois_curve, _exp_y, float(tenor_y))
 
-            # Implied swaption vol = futures vol × ratio (DV01 or delivered)
-            _implied = _futs_vol * _ratio if _futs_vol > 0 else None
+            # Implied swaption vol = futures rate vol × ratio (DV01 or delivered)
+            _implied = _futs_rate_bp * _ratio if _futs_rate_bp > 0 else None
 
             _results.append({
                 "Expiry": exp_lbl,
                 "Tenor": f"{tenor_y}Y",
                 "Contract": ticker,
                 "DTE": _dte,
-                "Futures Vol (bp)": f"{_futs_vol:.1f}" if _futs_vol > 0 else "—",
+                "Fut Vol (pts)": f"{_futs_vol_pts:.2f}" if _futs_vol_pts > 0 else "—",
+                "Rate Vol (bp)": f"{_futs_rate_bp:.1f}" if _futs_rate_bp > 0 else "—",
                 "Ratio": f"{_ratio:.3f}",
                 "Implied Swpn (bp)": f"{_implied:.1f}" if _implied else "—",
                 "_implied_raw": _implied,
@@ -40077,13 +40098,13 @@ Delivered ratio ≠ DV01 ratio tells you the correlation/basis component.
         # ── 1W results ──
         st.markdown("##### 1W Expiry")
         _1w = _df[_df["Expiry"] == "1W"][["Contract", "Tenor", "DTE",
-               "Futures Vol (bp)", "Ratio", "Implied Swpn (bp)"]].reset_index(drop=True)
+               "Fut Vol (pts)", "Rate Vol (bp)", "Ratio", "Implied Swpn (bp)"]].reset_index(drop=True)
         st.dataframe(_1w, use_container_width=True, hide_index=True)
 
         # ── 2W results ──
         st.markdown("##### 2W Expiry")
         _2w = _df[_df["Expiry"] == "2W"][["Contract", "Tenor", "DTE",
-               "Futures Vol (bp)", "Ratio", "Implied Swpn (bp)"]].reset_index(drop=True)
+               "Fut Vol (pts)", "Rate Vol (bp)", "Ratio", "Implied Swpn (bp)"]].reset_index(drop=True)
         st.dataframe(_2w, use_container_width=True, hide_index=True)
 
     # ── Ratio matrix (Cropper's TU/TY ratio style) ───────────────────
@@ -40111,9 +40132,9 @@ Delivered ratio ≠ DV01 ratio tells you the correlation/basis component.
             _slope_rows.append({
                 "Contract": ticker,
                 "Tenor": f"{tenor_y}Y",
-                "1W Vol": f"{_v1:.1f}" if _v1 > 0 else "—",
-                "2W Vol": f"{_v2:.1f}" if _v2 > 0 else "—",
-                "Diff": f"{(_v1 - _v2):+.1f}" if (_v1 > 0 and _v2 > 0) else "—",
+                "1W Vol (pts)": f"{_v1:.2f}" if _v1 > 0 else "—",
+                "2W Vol (pts)": f"{_v2:.2f}" if _v2 > 0 else "—",
+                "Diff": f"{(_v1 - _v2):+.2f}" if (_v1 > 0 and _v2 > 0) else "—",
                 "Ratio": f"{(_v1 / _v2):.2f}x" if (_v1 > 0 and _v2 > 0) else "—",
             })
         st.dataframe(pd.DataFrame(_slope_rows), use_container_width=True, hide_index=True)
