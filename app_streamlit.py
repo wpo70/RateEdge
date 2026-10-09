@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0910b"
+APP_VERSION = "v0910c"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -44581,10 +44581,10 @@ def usd_sod_tab():
             if not _api_key:
                 _api_key = os.environ.get("ANTHROPIC_API_KEY")
             if not _api_key:
-                st.error(
+                st.session_state["_usd_sod_error"] = (
                     "ANTHROPIC_API_KEY not configured. "
                     "Add it in Streamlit Cloud → Manage app → Settings → Secrets "
-                    "as `ANTHROPIC_API_KEY = \"sk-ant-...\"` (or set as env var locally)."
+                    "as ANTHROPIC_API_KEY = \"sk-ant-...\" (or set as env var locally)."
                 )
             else:
                 from zoneinfo import ZoneInfo as _ZI_usd
@@ -44691,19 +44691,25 @@ def usd_sod_tab():
                         if _commentary:
                             st.session_state["_usd_sod_output"] = _commentary
                             st.session_state["_usd_sod_gen_date"] = _today_tky_str
-                            # Clear the text_area widget key so it picks up the new value
                             st.session_state.pop("_usd_sod_edit", None)
+                            st.session_state.pop("_usd_sod_error", None)
+                            st.rerun()
                         else:
-                            st.warning("Empty response from API. Try again.")
+                            st.session_state["_usd_sod_error"] = "Empty response from API. Try again."
                     except _ue2.HTTPError as _he:
                         _err_txt = _he.read().decode("utf-8", errors="replace")
-                        st.error(f"API error {_he.code}: {_err_txt[:500]}")
+                        st.session_state["_usd_sod_error"] = f"API error {_he.code}: {_err_txt[:500]}"
                     except _ue2.URLError as _urle:
-                        st.error(f"Network error: {_urle.reason}")
+                        st.session_state["_usd_sod_error"] = f"Network error: {_urle.reason}"
                     except Exception as _gen_e:
-                        st.error(f"Unexpected error: {_gen_e}")
+                        st.session_state["_usd_sod_error"] = f"Unexpected error: {_gen_e}"
           except Exception as _outer_e:
-            st.error(f"Commentary generator error: {_outer_e}")
+            st.session_state["_usd_sod_error"] = f"Commentary generator error: {_outer_e}"
+
+    # Display errors outside the expander so they survive collapse
+    _usd_sod_err = st.session_state.pop("_usd_sod_error", None)
+    if _usd_sod_err:
+        st.error(f"⚠️ USD SOD: {_usd_sod_err}")
 
     # Display generated commentary
     _usd_cached = st.session_state.get("_usd_sod_output")
