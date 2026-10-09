@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0810b"
+APP_VERSION = "v0910a"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -44671,7 +44671,7 @@ def usd_sod_tab():
 
                 _body_usd = _json_usd.dumps({
                     "model": "claude-sonnet-5",
-                    "max_tokens": 2000,
+                    "max_tokens": 4096,
                     "system": _sys_prompt_usd,
                     "messages": [{"role": "user", "content": _user_prompt_usd}],
                 }).encode("utf-8")
@@ -46435,7 +46435,7 @@ def sod_report_tab():
 
                     _body = _json_api.dumps({
                         "model": "claude-sonnet-5",
-                        "max_tokens": 2000,
+                        "max_tokens": 4096,
                         "system": _system_prompt,
                         "messages": [{"role": "user", "content": _user_prompt}],
                     }).encode("utf-8")
