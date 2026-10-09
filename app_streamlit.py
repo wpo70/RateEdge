@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0910a"
+APP_VERSION = "v0910b"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -38705,14 +38705,10 @@ def main():
             or (st.session_state.get("_sdr_filter_shadow", {}) or {}).get("sdr_refresh_interval")
             or "30s")
     _ref_ms = {"15s": 15000, "30s": 30000, "60s": 60000}.get(_ref)
-    # Never auto-refresh while the Vol Editor tab is active — a timed rerun there
-    # discards the user's unsaved dragged points on the loaded/fitted surface.
-    # v0307.cfs.d: ALSO suspended on the Caps & Floors (CFS) tab — the timed
-    # rerun keeps re-driving the CFS render while the pricer is being fixed
-    # ("calculation loop"). Re-enable by removing the second condition once
-    # the CFS tab is stable. SDR toasts still fire on every other tab.
-    _on_vol_editor = st.session_state.get("_main_nav") in ("✅ Vol Editor", "🔔 Caps & Floors")
-    if _ref_ms and not _on_vol_editor:
+    # v0910b: auto-refresh ONLY on SDR Live tab. Other tabs don't need
+    # the 15-30s rerun cycle and it causes noticeable lag.
+    _on_sdr = st.session_state.get("_main_nav") == "📡 SDR Live"
+    if _ref_ms and _on_sdr:
         try:
             from streamlit_autorefresh import st_autorefresh
             st_autorefresh(interval=_ref_ms, key="_sdr_global_autorefresh")
