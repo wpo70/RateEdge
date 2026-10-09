@@ -755,7 +755,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0910c"
+APP_VERSION = "v0910d"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -22344,17 +22344,20 @@ def swaptions_tab(vol_mode: str):
         st.warning(f"⚠️ {ccy} pricing coming soon. Currently supported: AUD, USD, EUR")
         return
     
-    # ── USD sub-nav: OTC Swaption Vols vs SR3 Listed Vols ─────────────
+    # ── USD sub-nav: OTC Swaption Vols vs SR3 Listed Vols vs CBOT Tsy ──
     if ccy == "USD":
         _usd_view = st.radio(
             "USD View",
-            ["💱 OTC Swaption Vols", "📉 SR3 Listed Vols"],
+            ["💱 OTC Swaption Vols", "📉 SR3 Listed Vols", "🏛️ CBOT Tsy Vols"],
             horizontal=True,
             key="usd_swap_subnav",
             label_visibility="collapsed",
         )
         if _usd_view == "📉 SR3 Listed Vols":
             sr3_vol_tab()
+            return
+        if _usd_view == "🏛️ CBOT Tsy Vols":
+            cbot_tsy_vol_tab()
             return
     
     # Get curves and data
@@ -39630,6 +39633,377 @@ def main():
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# CBOT Treasury Futures Vols → Implied Swaption Vols (v0910d)
+# ═══════════════════════════════════════════════════════════════════════
+# Maps listed CBOT Treasury option vols to implied swaption vols at
+# the equivalent expiry × tenor cell.
+#
+# Contracts:
+#   TU (2Y Note)  → 1W×2Y, 2W×2Y swaption
+#   FV (5Y Note)  → 1W×5Y, 2W×5Y swaption
+#   TY (10Y Note) → 1W×10Y, 2W×10Y swaption
+#   US (Bond ~20Y) → 1W×20Y, 2W×20Y swaption
+#   WN (Ultra ~30Y) → 1W×30Y, 2W×30Y swaption
+#
+# Conversion: Swaption_normal_vol = Futures_normal_vol × (Futs_BPV / Swap_BPV)
+#   where BPV = DV01 for the futures CTD, and Swap_BPV = annuity factor × notional / 10000
+#
+# Phase 1: manual input of board vols + DV01 ratios
+# Phase 2: automated feed from BBG
+
+CBOT_TSY_CONTRACTS = [
+    # (ticker, label, approx_swap_tenor_y, bbg_underlying, note)
+    ("TU", "2Y Note",     2,  "TUA Comdty",  "$200,000 par, 1/128 tick"),
+    ("FV", "5Y Note",     5,  "FVA Comdty",  "$100,000 par, 1/128 tick"),
+    ("TY", "10Y Note",   10,  "TYA Comdty",  "$100,000 par, 1/64 tick"),
+    ("US", "Bond (~20Y)", 20, "USA Comdty",  "$100,000 par, 1/64 tick"),
+    ("WN", "Ultra (~30Y)",30, "WNA Comdty",  "$100,000 par, 1/64 tick"),
+]
+
+# Default DV01 ratios (futures DV01 / swap DV01 per bp) — approximate
+# starting points from the Chicago spreadsheet data. User can override.
+# Ratio < 1 means futures vol > swaption vol (duration mismatch at CTD).
+CBOT_DEFAULT_DV01_RATIOS = {
+    "TU": 0.42,   # TU is ~2Y CTD vs 2Y swap — CTD duration < swap
+    "FV": 0.75,   # FV is ~4.5Y CTD vs 5Y swap
+    "TY": 0.85,   # TY is ~7Y CTD vs 10Y swap — CTD shorter
+    "US": 0.95,   # US Bond is ~17-20Y CTD vs 20Y swap — close
+    "WN": 0.90,   # WN Ultra is ~25Y CTD vs 30Y swap
+}
+
+# Tick values per contract for reference
+CBOT_TICK_VALUES = {
+    "TU": {"par": 200000, "tick_frac": 128, "tick_value": 15.625},
+    "FV": {"par": 100000, "tick_frac": 128, "tick_value": 7.8125},
+    "TY": {"par": 100000, "tick_frac": 64,  "tick_value": 15.625},
+    "US": {"par": 100000, "tick_frac": 64,  "tick_value": 15.625},
+    "WN": {"par": 100000, "tick_frac": 64,  "tick_value": 15.625},
+}
+
+CBOT_EXPIRY_LABELS = ["1W", "2W"]
+
+
+def _cbot_compute_swap_bpv(curve, ois_curve, expiry_y: float, tenor_y: float) -> float:
+    """Compute swap BPV (annuity per bp of notional) for a given expiry×tenor.
+    Returns annuity factor (PV of 1bp on the fixed leg)."""
+    if curve is None:
+        return 0.0
+    try:
+        _fwd, _ann, _ = forward_and_annuity_from_curve(
+            curve, "USD", expiry_y, tenor_y, ois_curve=ois_curve
+        )
+        return _ann  # annuity = PV01 per unit notional per rate-unit
+    except Exception:
+        return 0.0
+
+
+def _cbot_implied_swaption_vol(
+    futures_vol_bp: float,
+    futures_dv01: float,
+    swap_annuity: float,
+) -> Optional[float]:
+    """
+    Convert futures normal vol (bp) to implied swaption normal vol (bp).
+
+    futures_vol_bp: listed futures ATM vol in bp/annum (normal/Bachelier)
+    futures_dv01: DV01 of the futures contract per bp ($ per bp per contract)
+    swap_annuity: annuity factor of the swap (PV01 per unit notional per rate-unit)
+
+    The ratio futures_dv01 / (swap_annuity * notional / 10000) scales vol
+    between the two instruments. But since both vols are in bp (not $),
+    and we're comparing rate sensitivity, the practical conversion is:
+
+    swaption_vol_bp = futures_vol_bp × dv01_ratio
+
+    where dv01_ratio = futures_bpv / swap_bpv, both normalised to the same
+    notional equivalent. User inputs this ratio directly for now.
+    """
+    if futures_vol_bp is None or futures_vol_bp <= 0:
+        return None
+    # dv01_ratio is pre-computed by user from CTD analysis
+    # This function is the simple multiplication for now
+    return futures_vol_bp * futures_dv01 / swap_annuity if swap_annuity > 0 else None
+
+
+def cbot_tsy_vol_tab():
+    """CBOT Treasury Futures Vols → Implied Swaption Vols panel.
+    Manual input of listed board vols, with DV01-ratio conversion to
+    equivalent swaption normal vols for 1W and 2W expiries."""
+
+    st.subheader("🏛️ CBOT Treasury → Implied Swaption Vols")
+    st.caption(
+        "Enter listed CBOT Treasury option ATM vols (normal, bp/yr) and DV01 ratios "
+        "to derive implied 1W/2W swaption vols. Source: BBG OVDV, CME listed options."
+    )
+
+    # Get SOFR curve for swap annuity calculation
+    _cc = st.session_state.get("config_curves", {}).get("USD")
+    curve = _cc if _cc is not None else get_ccy_curve("USD")
+    ois_curve = curve  # USD SOFR = OIS = single curve
+
+    if curve is None:
+        st.warning("⚠️ USD SOFR curve not loaded. Load curves first for swap BPV calculation.")
+
+    # ── Reference info expander ──────────────────────────────────────
+    with st.expander("📐 CBOT Treasury Futures — Reference", expanded=False):
+        st.markdown("""
+| Contract | Underlying | Approx Tenor | Par | Tick | Delivery |
+|----------|-----------|-------------|-----|------|----------|
+| **TU** | 2Y T-Note | 2Y | $200k | 1/128 ($15.625) | Mar/Jun/Sep/Dec |
+| **FV** | 5Y T-Note | 5Y | $100k | 1/128 ($7.8125) | Mar/Jun/Sep/Dec |
+| **TY** | 10Y T-Note | 10Y | $100k | 1/64 ($15.625) | Mar/Jun/Sep/Dec |
+| **US** | T-Bond (~20Y) | 20Y | $100k | 1/64 ($15.625) | Mar/Jun/Sep/Dec |
+| **WN** | Ultra T-Bond (~30Y) | 30Y | $100k | 1/64 ($15.625) | Mar/Jun/Sep/Dec |
+
+**Vol convention**: Normal (Bachelier) bp/annum — same as OTC swaptions.
+BBG OVDV shows listed vols in this convention (model = Listed | Black or Normal).
+
+**DV01 Ratio**: `Futures_BPV / Swap_BPV`. Converts between futures and swap vol space.
+Depends on CTD bond, conversion factor, and delivery option value. Update from BBG DLV or OVDV.
+
+**Weekly options**: 1W and 2W expiries listed on Fridays. Map to short-dated swaption grid.
+""")
+
+    st.markdown("---")
+
+    # ── Input section: two columns — vols on left, DV01 ratios on right ──
+    st.markdown("#### 📊 Listed Vols & DV01 Ratios")
+
+    # Initialise session state for CBOT inputs
+    for ticker, _, _, _, _ in CBOT_TSY_CONTRACTS:
+        for exp in CBOT_EXPIRY_LABELS:
+            _k_vol = f"cbot_{ticker}_{exp}_vol"
+            _k_futs = f"cbot_{ticker}_futs_px"
+            _k_dv01 = f"cbot_{ticker}_dv01_ratio"
+            if _k_vol not in st.session_state:
+                st.session_state[_k_vol] = 0.0
+            if _k_futs not in st.session_state:
+                st.session_state[_k_futs] = 0.0
+            if _k_dv01 not in st.session_state:
+                st.session_state[_k_dv01] = CBOT_DEFAULT_DV01_RATIOS.get(ticker, 1.0)
+
+    # Header row
+    _hcols = st.columns([1.2, 1.0, 1.0, 1.0, 1.0, 0.8])
+    _hcols[0].markdown("**Contract**")
+    _hcols[1].markdown("**Futures PX**")
+    _hcols[2].markdown("**1W Vol (bp)**")
+    _hcols[3].markdown("**2W Vol (bp)**")
+    _hcols[4].markdown("**DV01 Ratio**")
+    _hcols[5].markdown("**Swap Tenor**")
+
+    # Input rows
+    for ticker, label, tenor_y, bbg_und, note in CBOT_TSY_CONTRACTS:
+        _cols = st.columns([1.2, 1.0, 1.0, 1.0, 1.0, 0.8])
+        with _cols[0]:
+            st.markdown(f"**{ticker}** {label}")
+        with _cols[1]:
+            st.number_input(
+                f"{ticker} Fut PX",
+                min_value=0.0,
+                max_value=200.0,
+                value=st.session_state.get(f"cbot_{ticker}_futs_px", 0.0),
+                step=0.01,
+                format="%.2f",
+                key=f"cbot_{ticker}_futs_px",
+                label_visibility="collapsed",
+            )
+        with _cols[2]:
+            st.number_input(
+                f"{ticker} 1W Vol",
+                min_value=0.0,
+                max_value=500.0,
+                value=st.session_state.get(f"cbot_{ticker}_1W_vol", 0.0),
+                step=0.1,
+                format="%.1f",
+                key=f"cbot_{ticker}_1W_vol",
+                label_visibility="collapsed",
+            )
+        with _cols[3]:
+            st.number_input(
+                f"{ticker} 2W Vol",
+                min_value=0.0,
+                max_value=500.0,
+                value=st.session_state.get(f"cbot_{ticker}_2W_vol", 0.0),
+                step=0.1,
+                format="%.1f",
+                key=f"cbot_{ticker}_2W_vol",
+                label_visibility="collapsed",
+            )
+        with _cols[4]:
+            st.number_input(
+                f"{ticker} DV01 Ratio",
+                min_value=0.01,
+                max_value=3.0,
+                value=st.session_state.get(f"cbot_{ticker}_dv01_ratio", CBOT_DEFAULT_DV01_RATIOS.get(ticker, 1.0)),
+                step=0.01,
+                format="%.3f",
+                key=f"cbot_{ticker}_dv01_ratio",
+                label_visibility="collapsed",
+                help=f"Futures BPV / Swap BPV. Default {CBOT_DEFAULT_DV01_RATIOS.get(ticker, 1.0):.2f}. Update from BBG DLV.",
+            )
+        with _cols[5]:
+            st.markdown(f"`{tenor_y}Y`")
+
+    st.markdown("---")
+
+    # ── Compute implied swaption vols ────────────────────────────────
+    st.markdown("#### 🎯 Implied Swaption Vols (Normal, bp/yr)")
+
+    _results = []
+    for ticker, label, tenor_y, bbg_und, note in CBOT_TSY_CONTRACTS:
+        _dv01_ratio = st.session_state.get(f"cbot_{ticker}_dv01_ratio", CBOT_DEFAULT_DV01_RATIOS.get(ticker, 1.0))
+        _futs_px = st.session_state.get(f"cbot_{ticker}_futs_px", 0.0)
+
+        for exp_lbl in CBOT_EXPIRY_LABELS:
+            _exp_y = label_to_years(exp_lbl.lower())
+            _futs_vol = st.session_state.get(f"cbot_{ticker}_{exp_lbl}_vol", 0.0)
+
+            # Compute swap annuity for reference
+            _swap_ann = _cbot_compute_swap_bpv(curve, ois_curve, _exp_y, float(tenor_y))
+
+            # Implied swaption vol = futures vol × DV01 ratio
+            # DV01 ratio already encodes the BPV scaling
+            _implied = _futs_vol * _dv01_ratio if _futs_vol > 0 else None
+
+            _results.append({
+                "Expiry": exp_lbl,
+                "Tenor": f"{tenor_y}Y",
+                "Contract": ticker,
+                "Futures Vol (bp)": f"{_futs_vol:.1f}" if _futs_vol > 0 else "—",
+                "DV01 Ratio": f"{_dv01_ratio:.3f}",
+                "Swap Annuity": f"{_swap_ann:.6f}" if _swap_ann > 0 else "—",
+                "Implied Swpn Vol (bp)": f"{_implied:.1f}" if _implied else "—",
+                "_implied_raw": _implied,
+                "_exp_lbl": exp_lbl,
+                "_tenor_y": tenor_y,
+            })
+
+    # Display as table
+    if _results:
+        _df = pd.DataFrame(_results)
+
+        # ── 1W results ──
+        st.markdown("##### 1W Expiry")
+        _1w = _df[_df["Expiry"] == "1W"][["Contract", "Tenor", "Futures Vol (bp)", "DV01 Ratio", "Implied Swpn Vol (bp)"]].reset_index(drop=True)
+        st.dataframe(_1w, use_container_width=True, hide_index=True)
+
+        # ── 2W results ──
+        st.markdown("##### 2W Expiry")
+        _2w = _df[_df["Expiry"] == "2W"][["Contract", "Tenor", "Futures Vol (bp)", "DV01 Ratio", "Implied Swpn Vol (bp)"]].reset_index(drop=True)
+        st.dataframe(_2w, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    # ── Comparison with OTC ATM surface ──────────────────────────────
+    st.markdown("#### 📈 vs OTC ATM Surface")
+
+    _atm_surf = get_published_atm_surface("USD")
+    if _atm_surf is not None and not _atm_surf.empty:
+        _comp_rows = []
+        for r in _results:
+            if r["_implied_raw"] is None:
+                continue
+            _exp_key = r["_exp_lbl"].lower()
+            _ten_key = f"{r['_tenor_y']}Y"
+            # Look up OTC ATM vol at this cell
+            _otc_val = None
+            if _ten_key in _atm_surf.columns:
+                _match = _atm_surf[_atm_surf["Expiry"].astype(str).str.lower() == _exp_key]
+                if not _match.empty:
+                    try:
+                        _otc_val = float(_match[_ten_key].iloc[0])
+                    except (ValueError, TypeError):
+                        pass
+            _diff = (r["_implied_raw"] - _otc_val) if (_otc_val and r["_implied_raw"]) else None
+            _comp_rows.append({
+                "Expiry": r["_exp_lbl"],
+                "Tenor": _ten_key,
+                "CBOT Implied (bp)": f"{r['_implied_raw']:.1f}",
+                "OTC ATM (bp)": f"{_otc_val:.1f}" if _otc_val else "—",
+                "Diff (bp)": f"{_diff:+.1f}" if _diff is not None else "—",
+            })
+        if _comp_rows:
+            st.dataframe(pd.DataFrame(_comp_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("Enter futures vols above to see comparison.")
+    else:
+        st.info("No OTC ATM surface loaded. Load the vol surface to see comparison.")
+
+    # ── Push to ATM surface button ───────────────────────────────────
+    st.markdown("---")
+    _any_implied = any(r["_implied_raw"] is not None for r in _results)
+    if _any_implied:
+        with st.expander("⬆️ Push CBOT Implied → ATM Surface", expanded=False):
+            st.warning(
+                "This will overwrite the 1W and/or 2W rows in the ATM vol surface "
+                "with CBOT-implied values. Only cells with non-zero futures vol input "
+                "will be updated."
+            )
+            if st.button("🔄 Push to ATM Surface", key="cbot_push_atm"):
+                _atm = get_working_atm_surface("USD")
+                if _atm is None or _atm.empty:
+                    st.error("No ATM surface loaded.")
+                else:
+                    _updated = 0
+                    for r in _results:
+                        if r["_implied_raw"] is None:
+                            continue
+                        _exp_key = r["_exp_lbl"].lower()
+                        _ten_key = f"{r['_tenor_y']}Y"
+                        if _ten_key not in _atm.columns:
+                            continue
+                        _mask = _atm["Expiry"].astype(str).str.lower() == _exp_key
+                        if _mask.any():
+                            _atm.loc[_mask, _ten_key] = round(r["_implied_raw"], 1)
+                            _updated += 1
+                        else:
+                            # Add row if 1w/2w doesn't exist
+                            _new_row = {"Expiry": r["_exp_lbl"].lower()}
+                            for c in _atm.columns:
+                                if c != "Expiry":
+                                    _new_row[c] = None
+                            _new_row[_ten_key] = round(r["_implied_raw"], 1)
+                            _atm = pd.concat([pd.DataFrame([_new_row]), _atm], ignore_index=True)
+                            _updated += 1
+
+                    if _updated > 0:
+                        # Sort expiries properly
+                        _exp_order = ["1w","2w","1m","2m","3m","6m","9m","1y","18m","2y","3y","5y","7y","10y","15y","20y"]
+                        _atm["_sort"] = _atm["Expiry"].astype(str).str.lower().map(
+                            {e: i for i, e in enumerate(_exp_order)}
+                        ).fillna(99)
+                        _atm = _atm.sort_values("_sort").drop(columns=["_sort"]).reset_index(drop=True)
+
+                        # Write back
+                        _vd = st.session_state.setdefault("vol_data", {}).setdefault("USD", {})
+                        _vd["atm"] = _atm
+                        st.success(f"✅ Pushed {_updated} CBOT-implied vols to ATM surface.")
+                        st.rerun()
+                    else:
+                        st.info("No matching cells found in ATM surface.")
+
+    # ── Chicago analysis reference ───────────────────────────────────
+    with st.expander("📋 DV01 & Ratio Analysis Notes", expanded=False):
+        st.markdown("""
+**How to compute DV01 ratios from BBG:**
+1. Open BBG `DLV` on the front Treasury future (e.g. `TYA Comdty DLV`)
+2. Note the CTD bond's DV01 and conversion factor
+3. Futures DV01 ≈ CTD DV01 / Conversion Factor
+4. Swap DV01 ≈ Annuity factor from SOFR curve (shown in Swap Annuity column above)
+5. DV01 Ratio = Futures DV01 / Swap DV01
+
+**Annualised vol from straddle prices:**
+- `Vol_ann = Straddle_PX / (Futures_PX × sqrt(DTE/365)) × 10000` (in bp)
+- Or read directly from BBG OVDV → ATM column
+
+**Key relationships:**
+- Short DTE (1W, 2W): vol typically higher (gamma, event risk)
+- DV01 ratio stable within expiry but shifts with CTD switches
+- Implied ratio ≈ DV01 ratio × vol ratio — cross-check from Chicago sheets
+""")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # SR3 Listed Vol Tab — USD CFS Build (v1704t, 19-Apr-2026)
 # ═══════════════════════════════════════════════════════════════════════
 # Reads/writes sr3_vol_history (separate table from vol_history).
@@ -39697,21 +40071,15 @@ SR3_QUARTERLY_MONTHS = [3, 6, 9, 12]  # Mar, Jun, Sep, Dec
 # Split point: rows 0-22 are standards/serials (23), rows 23-38 are mid-curves (16).
 SR3_CONTRACTS_CANONICAL = [
     # (code, type, exp_date, underlying, maturity_date)
-    # ── Standards & Serials — 23 rows ──
-    # Scaffold matches Excel SR3_VOL_BBG 1904_2030 exactly.
-    # Serial options exercise into their OWN future (SFRN6 Serial on SFRN6 future),
+    # ── Standards & Serials ──
+    # v0910d: removed 5 expired standards (K6,M6,N6,Q6,U6) + added SFRG7 serial (Feb-27).
+    # Serial options exercise into their OWN future (SFRV6 Serial on SFRV6 future),
     # not the next quarterly. Quarterlies exercise into their named future.
-    # NOTE: SFRM6s (Serial-1M) was dropped 20-Apr-2026 — was a scaffold artifact,
-    # not an actual BBG-listed contract. Replaced by SFRM6 Quarterly at same expiry.
-    ("SFRK6",  "Serial",     "2026-05-15", "SFRK6 Comdty", "2026-09-15"),
-    ("SFRM6",  "Quarterly",  "2026-06-12", "SFRM6 Comdty", "2026-09-15"),
-    ("SFRN6",  "Serial",     "2026-07-10", "SFRN6 Comdty", "2026-12-15"),
-    ("SFRQ6",  "Serial",     "2026-08-14", "SFRQ6 Comdty", "2026-12-15"),
-    ("SFRU6",  "Quarterly",  "2026-09-11", "SFRU6 Comdty", "2026-12-15"),
     ("SFRV6",  "Serial",     "2026-10-16", "SFRV6 Comdty", "2027-03-16"),
     ("SFRX6",  "Serial",     "2026-11-13", "SFRX6 Comdty", "2027-03-16"),
     ("SFRZ6",  "Quarterly",  "2026-12-11", "SFRZ6 Comdty", "2027-03-16"),
     ("SFRF7",  "Serial",     "2027-01-15", "SFRF7 Comdty", "2027-04-21"),
+    ("SFRG7",  "Serial",     "2027-02-12", "SFRG7 Comdty", "2027-06-15"),  # v0910d: added Feb-27
     ("SFRH7",  "Quarterly",  "2027-03-12", "SFRH7 Comdty", "2027-06-15"),
     ("SFRM7",  "Quarterly",  "2027-06-11", "SFRM7 Comdty", "2027-09-14"),
     ("SFRU7",  "Quarterly",  "2027-09-10", "SFRU7 Comdty", "2027-12-14"),
@@ -39728,21 +40096,16 @@ SR3_CONTRACTS_CANONICAL = [
     ("SFRM0",  "Quarterly",  "2030-06-14", "SFRM0 Comdty", "2030-09-17"),  # Gold
     ("SFRU0",  "Quarterly",  "2030-09-13", "SFRU0 Comdty", "2030-12-17"),  # Gold
     ("SFRZ0",  "Quarterly",  "2030-12-13", "SFRZ0 Comdty", "2031-03-18"),  # Gold — last liquid
-    # ── Mid-Curves — 16 rows ──
-    # Ticker uses UNDERLYING year: 0QM27 = 1Y MC expiring Jun-26, on SFRM27 = Jun-27 future.
-    # Per Excel 1904_2030, MC underlying cell holds own ticker (e.g. "0QM27 Comdty") —
+    # ── Mid-Curves ──
+    # v0910d: removed 6 expired MCs (0QM27,0QU27,2QM28,2QU28,3QM29,3QU29).
+    # Ticker uses UNDERLYING year: 0QZ27 = 1Y MC expiring Dec-26, on SFRZ27 = Dec-27 future.
+    # Per Excel 1904_2030, MC underlying cell holds own ticker (e.g. "0QZ27 Comdty") —
     # the REAL underlying future is derived from code convention, not this field.
     # We keep the comdty-string as-is for display; pricing uses the implied future.
-    ("0QM27",  "1Y MC",      "2026-06-12", "0QM27 Comdty", "2027-09-14"),
-    ("0QU27",  "1Y MC",      "2026-09-11", "0QU27 Comdty", "2027-12-14"),
     ("0QZ27",  "1Y MC",      "2026-12-11", "0QZ27 Comdty", "2028-03-14"),
     ("0QH28",  "1Y MC",      "2027-03-12", "0QH28 Comdty", "2028-06-20"),
-    ("2QM28",  "2Y MC",      "2026-06-12", "2QM28 Comdty", "2028-09-19"),
-    ("2QU28",  "2Y MC",      "2026-09-11", "2QU28 Comdty", "2028-12-19"),
     ("2QZ28",  "2Y MC",      "2026-12-11", "2QZ28 Comdty", "2029-03-20"),
     ("2QH29",  "2Y MC",      "2027-03-12", "2QH29 Comdty", "2029-06-18"),
-    ("3QM29",  "3Y MC",      "2026-06-12", "3QM29 Comdty", "2029-09-18"),
-    ("3QU29",  "3Y MC",      "2026-09-11", "3QU29 Comdty", "2029-12-18"),
     ("3QZ29",  "3Y MC",      "2026-12-11", "3QZ29 Comdty", "2030-03-19"),
     ("3QH30",  "3Y MC",      "2027-03-12", "3QH30 Comdty", "2030-06-18"),
     ("4QZ26",  "4Y MC",      "2026-12-11", "4QZ26 Comdty", "2031-03-18"),
@@ -39750,7 +40113,7 @@ SR3_CONTRACTS_CANONICAL = [
     ("5QZ26",  "5Y MC",      "2026-12-11", "5QZ26 Comdty", "2032-03-17"),
     ("5QH27",  "5Y MC",      "2027-03-12", "5QH27 Comdty", "2032-06-16"),
 ]
-SR3_SPLIT_INDEX = 25  # rows 0..24 = standards/serials, 25..40 = mid-curves
+SR3_SPLIT_INDEX = 21  # rows 0..20 = standards/serials, 21..30 = mid-curves
 
 
 def _sr3_parse_underlying(underlying: str, ref_year: int = 2026):
