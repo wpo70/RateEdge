@@ -846,7 +846,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v0910h"
+APP_VERSION = "v1310a"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -7891,6 +7891,8 @@ def load_config_excel(upload, load_type: str = "all") -> dict:
                         from datetime import datetime as _dt_src_now3
                         curve_df["_source_date"] = _dt_src_now3.now(_ZI_src3("Australia/Sydney")).strftime("%Y-%m-%d")
                         # v0610a: store BBG par mids BEFORE bootstrap for swap_rates publish
+                        # v0910i: use dedicated _config key so live feed can't overwrite
+                        st.session_state["_usd_sofr_par_config"] = curve_df.copy()
                         st.session_state["_usd_sofr_par"] = curve_df.copy()
                         # Bootstrap par rates → zero rates (USD SOFR OIS single curve)
                         curve_df = bootstrap_usd_sofr_ois(curve_df)
@@ -17115,8 +17117,10 @@ def vol_config_tab():
                             _publish_df(_nzd_ois, "NZONIA", "NZD")
 
                         # ── USD SOFR: publish BBG par mids, NOT bootstrapped zeros ──
-                        # v0610a: _usd_sofr_par stores pre-bootstrap BBG mids from Excel
-                        _usd_par = st.session_state.get("_usd_sofr_par")
+                        # v0910i: read from _config key (immune to live-feed overwrite)
+                        _usd_par = st.session_state.get("_usd_sofr_par_config")
+                        if _usd_par is None:
+                            _usd_par = st.session_state.get("_usd_sofr_par")
                         if _usd_par is not None and len(_usd_par) > 0:
                             _publish_df(_usd_par, "SOFR", "USD")
                         _usd_ff = st.session_state.get("config_basis", {}).get("USD", {}).get("ois")
