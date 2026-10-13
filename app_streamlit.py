@@ -846,7 +846,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1310a"
+APP_VERSION = "v1310b"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -42714,8 +42714,23 @@ def vol_lookup_tab():
     # v1505d: only match whitespace within a single line ([ \t]+ not \s*) so
     # adjacent rows like "5Y\n1M" don't get glued into a fake "5y1m" swaption.
     # Allow compound expiry like "1Y6M" (= 1.5y).
-    _vl_pattern = _re_vl.compile(r"\b((?:\d+[yY])?\d+[wWmMyY])[ \t]+(\d+[yY])\b")
-    _vl_raw_matches = _vl_pattern.findall(_vl_text)
+    # v1310a: also match joined form (3m2y, 1y10y) — expiry in w/m, tail in y,
+    # OR expiry in y and tail in y (1y1y, 5y5y) with NO separator required.
+    _vl_pattern = _re_vl.compile(
+        r"\b((?:\d+[yY])?\d+[wWmMyY])[ \t]+(\d+[yY])\b"          # spaced: 3m 2y
+        r"|\b(\d+[wWmM])(\d+[yY])\b"                              # joined m/w+y: 3m2y, 6m1y
+        r"|\b(\d+[yY])(\d+[yY])\b"                                # joined y+y: 1y1y, 5y5y
+    )
+    _vl_raw_matches_raw = _vl_pattern.findall(_vl_text)
+    # v1310a: collapse alternation groups → (expiry, tenor) pairs
+    _vl_raw_matches = []
+    for _g in _vl_raw_matches_raw:
+        if _g[0] and _g[1]:        # spaced match
+            _vl_raw_matches.append((_g[0], _g[1]))
+        elif _g[2] and _g[3]:      # joined m/w + y
+            _vl_raw_matches.append((_g[2], _g[3]))
+        elif _g[4] and _g[5]:      # joined y + y
+            _vl_raw_matches.append((_g[4], _g[5]))
     # v1505c: also detect standalone Ny tokens (cap requests). Find them in
     # text that's NOT already part of a swaption match.
     # v1505d: use regex.sub to strip ALL matched swaption pairs (handles tabs,
