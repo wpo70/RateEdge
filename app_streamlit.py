@@ -846,7 +846,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1410a"
+APP_VERSION = "v1310b"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -30349,31 +30349,6 @@ def vol_surface_editor_tab():
         _ve["working"][ccy] = _stamp_canon_expiry(_ve["working"][ccy])
     if ccy in _ve["base"]:
         _ve["base"][ccy] = _stamp_canon_expiry(_ve["base"][ccy])
-    # v1410a: auto-populate atm_prem_matrix BEFORE Vol Editor renders so the
-    # premium toggle always uses real pricer premiums (ratio-scaling path) and
-    # never falls back to the crude vol_to_premium() approximation.
-    # Also refresh if the stored vol surface differs from the current atm
-    # (stale after editor publish or vol load).
-    _need_atm_gen = ccy not in st.session_state.get("atm_prem_matrix", {})
-    if not _need_atm_gen and atm is not None:
-        _stored_vol = st.session_state.get("atm_prem_matrix", {}).get(ccy, {}).get("vol")
-        if _stored_vol is not None:
-            try:
-                if not atm.equals(_stored_vol):
-                    _need_atm_gen = True
-            except Exception:
-                _need_atm_gen = True
-    if _need_atm_gen:
-        _mc_auto = st.session_state.get("config_curves", {}).get(ccy)
-        if _mc_auto is not None and atm is not None and not atm.empty:
-            try:
-                _mb_auto = st.session_state.get("config_basis", {}).get(ccy, {}).get("6v3")
-                _pm_auto, _vm_auto = calculate_atm_premium_matrix(ccy, _mc_auto, atm, _mb_auto)
-                st.session_state.setdefault("atm_prem_matrix", {})[ccy] = {
-                    "vol": atm.copy(), "prem": _pm_auto, "vega": _vm_auto}
-            except Exception:
-                pass  # fail silently — editor still works, just with crude fallback
-
     # Render the unified editor with mode toggle (Hybrid vs 3D Drag)
     updated_surface = render_vol_surface_editor_unified(ccy, atm, curve, ois_curve)
 
