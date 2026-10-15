@@ -846,7 +846,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1510c"
+APP_VERSION = "v1510d"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -14285,7 +14285,7 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         continue
                                     if _tage2 < 0 or _tage2 > _av_hours:
                                         continue
-                                        _notmm = float(_tr.get('_notional_num', 0)) / 1e6
+                                    _notmm = float(_tr.get('_notional_num', 0)) / 1e6
                                     _plat = _tr.get("Platform", "")
                                     _label = (f"{_tr.get('Time','—')}  "
                                               f"{_tr.get('Opt Expiry','')}×{_tr.get('Swp Tenor','')}  "
