@@ -846,7 +846,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1510e"
+APP_VERSION = "v1510f"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -30497,8 +30497,8 @@ def vol_surface_editor_tab():
                     _beta_fixed = st.checkbox("Fix ~ (recommended)", value=True, key="sabr_fix_beta")
                     _beta_val = st.number_input("~ value", value=0.5, min_value=0.0, max_value=1.0, step=0.05, key="sabr_beta_fixed_val")
                 with _cc2:
-                    _rho_min = st.number_input("ρ,ν min", value=-0.5, min_value=-1.0, max_value=0.0, step=0.05, key="sabr_rho_min")
-                    _rho_max = st.number_input("ρ,ν max", value=0.0, min_value=-1.0, max_value=1.0, step=0.05, key="sabr_rho_max")
+                    _rho_min = st.number_input("ρ min", value=-0.90, min_value=-0.99, max_value=0.99, step=0.05, key="sabr_rho_min")
+                    _rho_max = st.number_input("ρ max", value=0.90, min_value=-0.99, max_value=0.99, step=0.05, key="sabr_rho_max")
                 with _cc3:
                     _nu_min = st.number_input("× min", value=0.1, min_value=0.0, max_value=2.0, step=0.05, key="sabr_nu_min")
                     _nu_max = st.number_input("× max", value=3.0, min_value=0.0, max_value=5.0, step=0.05, key="sabr_nu_max")
@@ -30506,19 +30506,29 @@ def vol_surface_editor_tab():
                     _alpha_min = st.number_input("~ min", value=0.001, min_value=0.0, step=0.001, format="%.4f", key="sabr_alpha_min")
                     _alpha_max = st.number_input("~ max", value=0.2, min_value=0.0, step=0.01, format="%.4f", key="sabr_alpha_max")
 
-                st.caption("Calibration fits each (expiry, tenor) cell independently using scipy.optimize.minimize with L-BFGS-B bounds.")
+                st.caption("Alpha solved from ATM vol (Newton). Rho/Nu preserved — calibrate skew via the OTM Grid's Live SABR Calibration panel.")
 
                 if st.button("🔬 Run Full SABR Calibration", key="run_full_sabr", type="primary"):
-                    from scipy.optimize import minimize
                     _expiry_col = "Expiry" if "Expiry" in _rc_atm.columns else _rc_atm.columns[0]
                     _expiries_rc = _rc_atm[_expiry_col].tolist()
                     _tenors_rc = [c for c in _rc_atm.columns if c != _expiry_col]
 
-                    # Build new param matrices
+                    # Build new param matrices — seed from existing data
                     _new_a = _rc_a.copy() if _rc_a is not None else _rc_atm.copy() * 0
                     _new_b = _rc_b.copy() if _rc_b is not None else _rc_atm.copy() * 0
-                    _new_r = _rc_r.copy() if _rc_r is not None else _rc_atm.copy() * 0
-                    _new_n = _rc_n.copy() if _rc_n is not None else _rc_atm.copy() * 0
+                    # Preserve existing rho/nu — only alpha changes
+                    _new_r = _rc_r.copy() if _rc_r is not None else None
+                    _new_n = _rc_n.copy() if _rc_n is not None else None
+
+                    # If no rho/nu loaded, create default matrices
+                    if _new_r is None:
+                        _new_r = _rc_atm.copy()
+                        for _tc in _tenors_rc:
+                            _new_r[_tc] = 0.20  # sensible default: slight payers-over skew
+                    if _new_n is None:
+                        _new_n = _rc_atm.copy()
+                        for _tc in _tenors_rc:
+                            _new_n[_tc] = 1.0
 
                     _prog = st.progress(0)
                     _n_cells = len(_expiries_rc) * len(_tenors_rc)
@@ -30543,38 +30553,29 @@ def vol_surface_editor_tab():
                                 _F_rc = 0.05
 
                             _target = _atm_bp_rc / 10000.0
+                            _b_opt = _beta_val if _beta_fixed else 0.5
 
-                            def _obj(params):
-                                _a_p = params[0]
-                                _b_p = _beta_val if _beta_fixed else params[1]
-                                _r_p = params[1 if _beta_fixed else 2]
-                                _n_p = params[2 if _beta_fixed else 3]
-                                _pred = sabr_normal_atm_vol(_F_rc, _exp_y_rc, _a_p, _b_p, _r_p, _n_p)
-                                return (_pred - _target) ** 2
-
-                            _x0 = [max(_alpha_min, 0.01), _rho_min * 0.5, _nu_min + (_nu_max - _nu_min) * 0.5]
-                            _bounds = [(_alpha_min, _alpha_max), (_rho_min, _rho_max), (_nu_min, _nu_max)]
-                            if not _beta_fixed:
-                                _x0.insert(1, 0.5)
-                                _bounds.insert(1, (0.0, 1.0))
+                            # Get current rho/nu for this cell (preserved, not re-fitted)
+                            _r_opt = get_matrix_value(_new_r, str(_exp_lbl), _ten_y_rc)
+                            _n_opt = get_matrix_value(_new_n, str(_exp_lbl), _ten_y_rc)
+                            if _r_opt is None: _r_opt = 0.20
+                            if _n_opt is None: _n_opt = 1.0
+                            _r_opt = max(_rho_min, min(_rho_max, _r_opt))
+                            _n_opt = max(_nu_min, min(_nu_max, _n_opt))
 
                             try:
-                                _res = minimize(_obj, _x0, method="L-BFGS-B", bounds=_bounds,
-                                                options={"maxiter": 200, "ftol": 1e-12})
-                                _a_opt = _res.x[0]
-                                _b_opt = _beta_val if _beta_fixed else _res.x[1]
-                                _r_opt = _res.x[1 if _beta_fixed else 2]
-                                _n_opt = _res.x[2 if _beta_fixed else 3]
-                                # Write back
+                                # Solve alpha from ATM vol via Newton (deterministic, exact)
+                                _a_opt = sabr_implied_alpha_from_atm(
+                                    _target, _F_rc, _exp_y_rc, _b_opt, _r_opt, _n_opt)
+                                if _a_opt is None or _a_opt <= 0:
+                                    _a_opt = _target / max(_F_rc ** _b_opt, 1e-8)
+
+                                # Write back alpha (rho/nu already in _new_r/_new_n)
                                 _exp_mask = _new_a[_expiry_col].astype(str).str.strip() == str(_exp_lbl).strip()
                                 if _tc_lbl in _new_a.columns:
                                     _new_a.loc[_exp_mask, _tc_lbl] = _a_opt
                                 if _tc_lbl in _new_b.columns:
                                     _new_b.loc[_exp_mask, _tc_lbl] = _b_opt
-                                if _tc_lbl in _new_r.columns:
-                                    _new_r.loc[_exp_mask, _tc_lbl] = _r_opt
-                                if _tc_lbl in _new_n.columns:
-                                    _new_n.loc[_exp_mask, _tc_lbl] = _n_opt
                             except Exception:
                                 _errors += 1
 
@@ -41949,6 +41950,7 @@ def otm_grids_tab():
     rr_data = []
     str_data = []
     _diag_data = []   # diagnostic: (exp, ten, rho, nu, alpha, fwd) for debug panel
+    _rho_fallback_count = 0  # count cells where rho defaulted to 0
 
     for ei, exp_lbl in enumerate(_EXP_LABELS):
         exp_y = _exp_to_y(exp_lbl)
@@ -41975,7 +41977,9 @@ def otm_grids_tab():
                 _r_val = get_matrix_value(sabr_rho, str(exp_lbl), ten_y)
                 _n_val = get_matrix_value(sabr_nu, str(exp_lbl), ten_y)
                 if _b_val is None: _b_val = 0.5
-                if _r_val is None: _r_val = 0.0
+                if _r_val is None:
+                    _r_val = 0.0
+                    _rho_fallback_count += 1
                 if _n_val is None: _n_val = 1.0  # normal SABR β=0.5 default (NOT 0.3 which is lognormal)
 
                 # ATM vol from the surface (bp) → solve SABR alpha
@@ -42087,8 +42091,28 @@ def otm_grids_tab():
             styled = _numeric.style.format("{:.1f}", na_rep="—")
         st.dataframe(styled, use_container_width=True, height=min(len(df) * 36 + 40, 820))
 
+    if _rho_fallback_count > 0:
+        st.warning(f"⚠️ {_rho_fallback_count} cell(s) have no ρ loaded — defaulting to ρ=0 (no skew). "
+                   f"Use **Live SABR Calibration** below to input market R/R and solve ρ/ν.")
     _otm_heatmap(_df_rr, f"{ccy} Risk Reversal — Payers Over (bp) ±{_otm_width_bp}bp OTM")
     _otm_heatmap(_df_str, f"{ccy} Strangle (bp) ±{_otm_width_bp}bp OTM")
+
+    # Build ρ matrix heatmap
+    _rho_grid = []
+    for ei, exp_lbl in enumerate(_EXP_LABELS):
+        _rho_row = []
+        exp_y = _exp_to_y(exp_lbl)
+        for ti, ten_lbl in enumerate(_TEN_LABELS):
+            ten_y = _ten_to_y(ten_lbl)
+            if exp_y and ten_y:
+                _rv = get_matrix_value(sabr_rho, str(exp_lbl), ten_y)
+                _rho_row.append(round(_rv, 4) if _rv is not None else None)
+            else:
+                _rho_row.append(None)
+        _rho_grid.append(_rho_row)
+    _df_rho = pd.DataFrame(_rho_grid, columns=_TEN_LABELS, index=_EXP_LABELS)
+    _df_rho.index.name = "Expiry"
+    _otm_heatmap(_df_rho, f"{ccy} SABR ρ (loaded values)", cmap="RdBu_r")
 
     # Build ν matrix heatmap for quick visual comparison with BBG Excel
     _nu_grid = []
