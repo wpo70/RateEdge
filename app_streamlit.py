@@ -846,7 +846,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1510d"
+APP_VERSION = "v1510e"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -14287,9 +14287,10 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                         continue
                                     _notmm = float(_tr.get('_notional_num', 0)) / 1e6
                                     _plat = _tr.get("Platform", "")
+                                    _bp = _tr.get("Nett Prem BP", "—")
                                     _label = (f"{_tr.get('Time','—')}  "
                                               f"{_tr.get('Opt Expiry','')}×{_tr.get('Swp Tenor','')}  "
-                                              f"{_notmm:.0f}mm  {_plat}")
+                                              f"{_notmm:.0f}mm  {_bp}bp  {_plat}")
                                     _av_eligible.append((_ti, _label))
 
                                 # Session-state key for trade selections
@@ -14304,6 +14305,13 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                     # they want, hits Apply, ONE rerun with all changes.
                                     with st.form("sdr_atm_trade_form"):
                                         st.markdown("**Trade selection** — tick to include, then Apply:")
+                                        _fc1, _fc2, _fc3, _ = st.columns([1, 1, 1, 3])
+                                        with _fc1:
+                                            _f_apply = st.form_submit_button("✅ Apply")
+                                        with _fc2:
+                                            _f_sel_all = st.form_submit_button("Select all")
+                                        with _fc3:
+                                            _f_desel_all = st.form_submit_button("Deselect all")
                                         _sel_data = []
                                         for _si, (_tidx, _label) in enumerate(_av_eligible):
                                             _sel_data.append({
@@ -14322,13 +14330,6 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                             },
                                             disabled=["Trade"],
                                         )
-                                        _fc1, _fc2, _fc3, _ = st.columns([1, 1, 1, 3])
-                                        with _fc1:
-                                            _f_apply = st.form_submit_button("✅ Apply")
-                                        with _fc2:
-                                            _f_sel_all = st.form_submit_button("Select all")
-                                        with _fc3:
-                                            _f_desel_all = st.form_submit_button("Deselect all")
 
                                     if _f_sel_all:
                                         st.session_state[_sel_key] = [True] * len(_av_eligible)
