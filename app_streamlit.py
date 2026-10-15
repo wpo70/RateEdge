@@ -846,7 +846,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1310b"
+APP_VERSION = "v1510a"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -14270,10 +14270,84 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
                                                 continue
                                 except Exception:
                                     pass
+
+                                # ── v1510a: Trade selector — include/exclude individual prints ──
+                                _av_eligible = []   # [(idx_in_paired, summary_dict), ...]
+                                for _ti, _tr in enumerate(_paired_rows):
+                                    if _tr.get("CCY") != _fit_ccy or _tr.get("Type") != "🔵 Straddle":
+                                        continue
+                                    _tdt2 = _tr.get("_time_dt")
+                                    if _tdt2 is None:
+                                        continue
+                                    try:
+                                        _tage2 = (_av_now - _tdt2).total_seconds() / 3600.0
+                                    except Exception:
+                                        continue
+                                    if _tage2 < 0 or _tage2 > _av_hours:
+                                        continue
+                                    _av_eligible.append((_ti, {
+                                        "Time": _tr.get("Time", "—"),
+                                        "Expiry": _tr.get("Opt Expiry", ""),
+                                        "Tenor": _tr.get("Swp Tenor", ""),
+                                        "Notl(mm)": f"{float(_tr.get('_notional_num', 0)) / 1e6:.0f}",
+                                        "Platform": _tr.get("Platform", ""),
+                                    }))
+
+                                # Session-state key for trade selections
+                                _sel_key = f"_sdr_atm_trade_sel_{_fit_ccy}"
+                                if (_sel_key not in st.session_state
+                                        or len(st.session_state[_sel_key]) != len(_av_eligible)):
+                                    st.session_state[_sel_key] = [True] * len(_av_eligible)
+
+                                _included_indices = set()   # indices into _paired_rows
+                                if _av_eligible:
+                                    st.markdown("**Trade selection** — tick to include in fit:")
+                                    _sc1, _sc2, _ = st.columns([1, 1, 4])
+                                    with _sc1:
+                                        if st.button("Select all", key="sdr_atm_sel_all"):
+                                            st.session_state[_sel_key] = [True] * len(_av_eligible)
+                                            st.rerun()
+                                    with _sc2:
+                                        if st.button("Deselect all", key="sdr_atm_desel_all"):
+                                            st.session_state[_sel_key] = [False] * len(_av_eligible)
+                                            st.rerun()
+
+                                    _sel_data = []
+                                    for _si, (_tidx, _tinfo) in enumerate(_av_eligible):
+                                        _sel_data.append({
+                                            "Include": st.session_state[_sel_key][_si],
+                                            **_tinfo,
+                                        })
+                                    _sel_df = pd.DataFrame(_sel_data)
+                                    _edited_sel = st.data_editor(
+                                        _sel_df,
+                                        key="sdr_atm_trade_editor",
+                                        use_container_width=True,
+                                        hide_index=True,
+                                        column_config={
+                                            "Include": st.column_config.CheckboxColumn("Include", default=True),
+                                        },
+                                        disabled=["Time", "Expiry", "Tenor", "Notl(mm)", "Platform"],
+                                    )
+                                    # Read back selections
+                                    _sel_back = _edited_sel["Include"].tolist()
+                                    st.session_state[_sel_key] = _sel_back
+                                    _included_indices = {
+                                        _av_eligible[_si][0]
+                                        for _si, _inc in enumerate(_sel_back) if _inc
+                                    }
+                                    _n_inc = len(_included_indices)
+                                    _n_exc = len(_av_eligible) - _n_inc
+                                    if _n_exc > 0:
+                                        st.caption(f"🔘 {_n_inc}/{len(_av_eligible)} trades selected · "
+                                                   f"{_n_exc} excluded from fit")
+                                # ── end trade selector ──
+
                                 _av_rejected_prints = []
                                 _ln2a = math.log(2.0); _hl_h = _av_hours / 2.0
-                                for _r in _paired_rows:
+                                for _ti_loop, _r in enumerate(_paired_rows):
                                     if _r.get("CCY") != _fit_ccy or _r.get("Type") != "🔵 Straddle": continue
+                                    if _av_eligible and _ti_loop not in _included_indices: continue
                                     _tdt = _r.get("_time_dt")
                                     if _tdt is None: continue
                                     try: _age_h = (_av_now - _tdt).total_seconds() / 3600.0
