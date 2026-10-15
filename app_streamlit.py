@@ -846,7 +846,7 @@ HAS_TICKET_TAB = True
 
 # ── Deploy version tag (bump this every deploy; shown in the sidebar so the
 # live build is always identifiable). Must match the DEPLOY_vXXXX filename.
-APP_VERSION = "v1510a"
+APP_VERSION = "v1510b"
 
 # ── JSCC cleared JPY IRS statistics (aggregate, T+3, NOT trade prints) ────────
 # v1407a: scrape the JSCC IRS statistics page for the current daily/monthly
@@ -14301,40 +14301,51 @@ Set-Content "C:\\Users\\willp\\RateEdge Swaption Pricer\\.env" "RATEEDGE_DB_URL=
 
                                 _included_indices = set()   # indices into _paired_rows
                                 if _av_eligible:
-                                    st.markdown("**Trade selection** — tick to include in fit:")
-                                    _sc1, _sc2, _ = st.columns([1, 1, 4])
-                                    with _sc1:
-                                        if st.button("Select all", key="sdr_atm_sel_all"):
-                                            st.session_state[_sel_key] = [True] * len(_av_eligible)
-                                            st.rerun()
-                                    with _sc2:
-                                        if st.button("Deselect all", key="sdr_atm_desel_all"):
-                                            st.session_state[_sel_key] = [False] * len(_av_eligible)
-                                            st.rerun()
+                                    # Form prevents rerun-per-checkbox — user ticks everything
+                                    # they want, hits Apply, ONE rerun with all changes.
+                                    with st.form("sdr_atm_trade_form"):
+                                        st.markdown("**Trade selection** — tick to include in fit, then Apply:")
+                                        _sel_data = []
+                                        for _si, (_tidx, _tinfo) in enumerate(_av_eligible):
+                                            _sel_data.append({
+                                                "Include": st.session_state[_sel_key][_si],
+                                                **_tinfo,
+                                            })
+                                        _sel_df = pd.DataFrame(_sel_data)
+                                        _edited_sel = st.data_editor(
+                                            _sel_df,
+                                            key="sdr_atm_trade_editor",
+                                            use_container_width=True,
+                                            hide_index=True,
+                                            column_config={
+                                                "Include": st.column_config.CheckboxColumn("Include", default=True),
+                                            },
+                                            disabled=["Time", "Expiry", "Tenor", "Notl(mm)", "Platform"],
+                                        )
+                                        _fc1, _fc2, _fc3, _ = st.columns([1, 1, 1, 3])
+                                        with _fc1:
+                                            _f_apply = st.form_submit_button("✅ Apply")
+                                        with _fc2:
+                                            _f_sel_all = st.form_submit_button("Select all")
+                                        with _fc3:
+                                            _f_desel_all = st.form_submit_button("Deselect all")
 
-                                    _sel_data = []
-                                    for _si, (_tidx, _tinfo) in enumerate(_av_eligible):
-                                        _sel_data.append({
-                                            "Include": st.session_state[_sel_key][_si],
-                                            **_tinfo,
-                                        })
-                                    _sel_df = pd.DataFrame(_sel_data)
-                                    _edited_sel = st.data_editor(
-                                        _sel_df,
-                                        key="sdr_atm_trade_editor",
-                                        use_container_width=True,
-                                        hide_index=True,
-                                        column_config={
-                                            "Include": st.column_config.CheckboxColumn("Include", default=True),
-                                        },
-                                        disabled=["Time", "Expiry", "Tenor", "Notl(mm)", "Platform"],
-                                    )
-                                    # Read back selections
-                                    _sel_back = _edited_sel["Include"].tolist()
-                                    st.session_state[_sel_key] = _sel_back
+                                    if _f_sel_all:
+                                        st.session_state[_sel_key] = [True] * len(_av_eligible)
+                                        st.session_state.pop("sdr_atm_trade_editor", None)
+                                        st.rerun()
+                                    elif _f_desel_all:
+                                        st.session_state[_sel_key] = [False] * len(_av_eligible)
+                                        st.session_state.pop("sdr_atm_trade_editor", None)
+                                        st.rerun()
+                                    elif _f_apply:
+                                        _sel_back = _edited_sel["Include"].tolist()
+                                        st.session_state[_sel_key] = _sel_back
+
+                                    # Build included set from current session state
                                     _included_indices = {
                                         _av_eligible[_si][0]
-                                        for _si, _inc in enumerate(_sel_back) if _inc
+                                        for _si, _inc in enumerate(st.session_state[_sel_key]) if _inc
                                     }
                                     _n_inc = len(_included_indices)
                                     _n_exc = len(_av_eligible) - _n_inc
